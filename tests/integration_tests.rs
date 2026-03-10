@@ -913,6 +913,247 @@ mod cross_format_tests {
             "SPDX 3.0 should not trigger SPDXRef- format violations: {spdxref_violations:?}"
         );
     }
+
+    // Phase 1: Security Profile Tests
+
+    #[test]
+    fn test_spdx3_security_profile_cvss_extraction() {
+        let path = fixture_path("spdx3/security-profile.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 security profile");
+
+        // Find the logging-lib component which has a CVSS assessment
+        let logging_lib = sbom
+            .components
+            .values()
+            .find(|c| c.name == "logging-lib")
+            .expect("logging-lib not found");
+
+        // Should have vulnerabilities from AFFECTS relationship + CVSS assessment
+        assert!(
+            !logging_lib.vulnerabilities.is_empty(),
+            "logging-lib should have vulnerabilities"
+        );
+
+        // Find the vulnerability with CVSS data (from the assessment)
+        let vuln_with_cvss = logging_lib
+            .vulnerabilities
+            .iter()
+            .find(|v| !v.cvss.is_empty())
+            .expect("Should have a vulnerability with CVSS scores from assessment");
+
+        assert_eq!(vuln_with_cvss.id, "CVE-2025-0001");
+
+        let cvss = &vuln_with_cvss.cvss[0];
+        assert!(
+            (cvss.base_score - 9.8).abs() < 0.01,
+            "CVSS score should be 9.8"
+        );
+        assert!(cvss.vector.is_some(), "Should have CVSS vector string");
+        assert!(
+            cvss.vector.as_ref().unwrap().starts_with("CVSS:3.1"),
+            "Vector should be CVSS v3.1"
+        );
+
+        // Severity should be derived from CVSS
+        assert!(
+            vuln_with_cvss.severity.is_some(),
+            "Severity should be set from CVSS score"
+        );
+    }
+
+    #[test]
+    fn test_spdx3_security_profile_vex_not_affected() {
+        let path = fixture_path("spdx3/security-profile.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 security profile");
+
+        // Find the crypto-lib component which has a VEX NotAffected assessment
+        let crypto_lib = sbom
+            .components
+            .values()
+            .find(|c| c.name == "crypto-lib")
+            .expect("crypto-lib not found");
+
+        // Should have VEX status set
+        let vex = crypto_lib
+            .vex_status
+            .as_ref()
+            .expect("crypto-lib should have VEX status");
+
+        assert_eq!(
+            vex.status,
+            sbom_tools::model::VexState::NotAffected,
+            "VEX status should be NotAffected"
+        );
+
+        assert!(
+            vex.justification.is_some(),
+            "Should have justification for NotAffected"
+        );
+        assert!(
+            vex.impact_statement.is_some(),
+            "Should have impact statement"
+        );
+    }
+
+    // Phase 2: Completeness Tests
+
+    #[test]
+    fn test_spdx3_snippet_parsing() {
+        let path = fixture_path("spdx3/security-profile.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0");
+
+        // Find the snippet component
+        let snippet = sbom
+            .components
+            .values()
+            .find(|c| c.name == "auth-handler.js")
+            .expect("auth-handler.js snippet not found");
+
+        assert_eq!(
+            snippet.component_type,
+            sbom_tools::model::ComponentType::File,
+            "Snippets should map to File type"
+        );
+
+        // Should have range info in description
+        assert!(
+            snippet
+                .description
+                .as_ref()
+                .is_some_and(|d| d.contains("bytes") && d.contains("lines")),
+            "Snippet should have byte/line range in description"
+        );
+    }
+
+    #[test]
+    fn test_spdx3_annotation_parsing() {
+        let path = fixture_path("spdx3/security-profile.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0");
+
+        // Find logging-lib which has a REVIEW annotation
+        let logging_lib = sbom
+            .components
+            .values()
+            .find(|c| c.name == "logging-lib")
+            .expect("logging-lib not found");
+
+        assert!(
+            !logging_lib.extensions.annotations.is_empty(),
+            "logging-lib should have annotations"
+        );
+
+        let ann = &logging_lib.extensions.annotations[0];
+        assert_eq!(ann.annotation_type, "REVIEW");
+        assert!(ann.comment.contains("security compliance"));
+
+        // webapp should also have annotation
+        let webapp = sbom
+            .components
+            .values()
+            .find(|c| c.name == "webapp")
+            .expect("webapp not found");
+        assert!(
+            !webapp.extensions.annotations.is_empty(),
+            "webapp should have annotations"
+        );
+    }
+
+    #[test]
+    fn test_spdx3_duplicate_element_detection() {
+        // Create a document with duplicate element IDs
+        let content = r#"{
+            "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+            "type": "SpdxDocument",
+            "spdxId": "urn:spdx:doc:dupe-test",
+            "creationInfo": { "specVersion": "3.0.1", "created": "2025-01-01T00:00:00Z" },
+            "element": [
+                {
+                    "type": "software_Package",
+                    "spdxId": "urn:spdx:pkg:dupe",
+                    "name": "package-a",
+                    "packageVersion": "1.0.0"
+                },
+                {
+                    "type": "software_Package",
+                    "spdxId": "urn:spdx:pkg:dupe",
+                    "name": "package-b",
+                    "packageVersion": "2.0.0"
+                }
+            ]
+        }"#;
+
+        // Should parse without panic, second element overwrites first
+        let sbom = parse_sbom_str(content).expect("Should parse despite duplicates");
+        // At least one component should be present
+        assert!(!sbom.components.is_empty());
+    }
+
+    #[test]
+    fn test_spdx3_data_license_in_extensions() {
+        let content = r#"{
+            "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+            "type": "SpdxDocument",
+            "spdxId": "urn:spdx:doc:data-lic-test",
+            "dataLicense": "CC0-1.0",
+            "creationInfo": { "specVersion": "3.0.1", "created": "2025-01-01T00:00:00Z" },
+            "element": []
+        }"#;
+
+        let sbom = parse_sbom_str(content).expect("Should parse");
+        assert!(
+            sbom.extensions.spdx.is_some(),
+            "Should have SPDX extensions with dataLicense"
+        );
+        let ext = sbom.extensions.spdx.as_ref().unwrap();
+        assert_eq!(ext["dataLicense"], "CC0-1.0");
+    }
+
+    // Phase 6: Compliance Refinement Tests
+
+    #[test]
+    fn test_spdx3_cra_security_profile_conformance_check() {
+        use sbom_tools::quality::{ComplianceChecker, ComplianceLevel};
+
+        let path = fixture_path("spdx3/security-profile.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 security profile");
+
+        let checker = ComplianceChecker::new(ComplianceLevel::CraPhase1);
+        let report = checker.check(&sbom);
+
+        // Security profile IS declared in this fixture, so no profile conformance warning
+        let profile_violations: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.requirement.contains("Security profile conformance"))
+            .collect();
+        assert!(
+            profile_violations.is_empty(),
+            "Should not have Security profile conformance violation when declared: {profile_violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_spdx3_cra_missing_security_profile_warning() {
+        use sbom_tools::quality::{ComplianceChecker, ComplianceLevel};
+
+        // The minimal fixture has vulns but no Security profile declaration
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0");
+
+        let checker = ComplianceChecker::new(ComplianceLevel::CraPhase1);
+        let report = checker.check(&sbom);
+
+        // Should warn about missing Security profile
+        let profile_warnings: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.message.contains("Security profile"))
+            .collect();
+        assert!(
+            !profile_warnings.is_empty(),
+            "Should warn about missing Security profile when vulns present"
+        );
+    }
 }
 
 // ============================================================================

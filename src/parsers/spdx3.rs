@@ -8,15 +8,16 @@
 //! Supported profiles: Core, Software, Security, SimpleLicensing.
 
 use crate::model::{
-    CanonicalId, Component, ComponentType, Creator, CreatorType, DependencyEdge, DependencyType,
-    DocumentMetadata, ExternalRefType, ExternalReference, Hash, HashAlgorithm, LicenseExpression,
-    NormalizedSbom, Organization, SbomFormat, SignatureInfo, VexState, VexStatus, VulnerabilityRef,
-    VulnerabilitySource,
+    Annotation, CanonicalId, Component, ComponentType, Creator, CreatorType, CvssScore,
+    CvssVersion, DependencyEdge, DependencyType, DocumentMetadata, ExternalRefType,
+    ExternalReference, Hash, HashAlgorithm, LicenseExpression, NormalizedSbom, Organization,
+    SbomFormat, Severity, SignatureInfo, VexJustification, VexResponse, VexState, VexStatus,
+    VulnerabilityRef, VulnerabilitySource,
 };
 use crate::parsers::traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Parser for SPDX 3.0 SBOM format (JSON-LD)
 pub struct Spdx3Parser {
@@ -58,15 +59,55 @@ impl Spdx3Parser {
         let mut relationships: Vec<Spdx3Relationship> = Vec::new();
         let mut packages: Vec<Spdx3Package> = Vec::new();
         let mut files: Vec<Spdx3File> = Vec::new();
+        let mut snippets: Vec<Spdx3Snippet> = Vec::new();
+        let mut annotations: Vec<Spdx3Annotation> = Vec::new();
+        let mut vuln_assessments: Vec<Spdx3VulnAssessment> = Vec::new();
         let mut license_elements: HashMap<String, String> = HashMap::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let mut duplicate_count: usize = 0;
 
         // First pass: categorize elements by type (move, not clone)
         if let Some(elements) = doc.element.take() {
             for element in elements {
+                // Track duplicate element IDs
+                let element_id = match &element {
+                    Spdx3Element::Package(pkg) => pkg.spdx_id.clone(),
+                    Spdx3Element::File(file) => file.spdx_id.clone(),
+                    Spdx3Element::Relationship(rel) => rel.spdx_id.clone(),
+                    Spdx3Element::Vulnerability(vuln) => vuln.spdx_id.clone(),
+                    Spdx3Element::Snippet(s) => s.spdx_id.clone(),
+                    Spdx3Element::Annotation(a) => a.spdx_id.clone(),
+                    Spdx3Element::VexAffected(va)
+                    | Spdx3Element::VexFixed(va)
+                    | Spdx3Element::VexNotAffected(va)
+                    | Spdx3Element::VexUnderInvestigation(va)
+                    | Spdx3Element::CvssV3Assessment(va)
+                    | Spdx3Element::CvssV4Assessment(va)
+                    | Spdx3Element::EpssAssessment(va)
+                    | Spdx3Element::SsvcAssessment(va) => va.spdx_id.clone(),
+                    Spdx3Element::Person(a)
+                    | Spdx3Element::Organization(a)
+                    | Spdx3Element::Tool(a)
+                    | Spdx3Element::SoftwareAgent(a) => a.spdx_id.clone(),
+                    Spdx3Element::LicenseExpression(l) => l.spdx_id.clone(),
+                    Spdx3Element::SimpleLicensingText(l) => l.spdx_id.clone(),
+                    _ => None,
+                };
+                if let Some(id) = &element_id {
+                    if !seen_ids.insert(id.clone()) {
+                        duplicate_count += 1;
+                        tracing::warn!(id = %id, "duplicate SPDX 3.0 element ID");
+                    }
+                }
+
                 match element {
                     Spdx3Element::Package(pkg) => packages.push(*pkg),
                     Spdx3Element::File(file) => files.push(*file),
-                    Spdx3Element::Relationship(rel) => relationships.push(rel),
+                    Spdx3Element::Snippet(snippet) => snippets.push(snippet),
+                    Spdx3Element::Relationship(rel)
+                    | Spdx3Element::LifecycleScopedRelationship(rel) => {
+                        relationships.push(rel);
+                    }
                     Spdx3Element::Person(agent)
                     | Spdx3Element::Organization(agent)
                     | Spdx3Element::Tool(agent)
@@ -80,6 +121,36 @@ impl Spdx3Parser {
                             let id = id.clone();
                             vuln_map.insert(id, *vuln);
                         }
+                    }
+                    Spdx3Element::VexAffected(mut a) => {
+                        a.resolved_vex_state = Some(VexState::Affected);
+                        vuln_assessments.push(a);
+                    }
+                    Spdx3Element::VexFixed(mut a) => {
+                        a.resolved_vex_state = Some(VexState::Fixed);
+                        vuln_assessments.push(a);
+                    }
+                    Spdx3Element::VexNotAffected(mut a) => {
+                        a.resolved_vex_state = Some(VexState::NotAffected);
+                        vuln_assessments.push(a);
+                    }
+                    Spdx3Element::VexUnderInvestigation(mut a) => {
+                        a.resolved_vex_state = Some(VexState::UnderInvestigation);
+                        vuln_assessments.push(a);
+                    }
+                    Spdx3Element::CvssV3Assessment(mut a) => {
+                        a.resolved_cvss_version = Some(CvssVersion::V3);
+                        vuln_assessments.push(a);
+                    }
+                    Spdx3Element::CvssV4Assessment(mut a) => {
+                        a.resolved_cvss_version = Some(CvssVersion::V4);
+                        vuln_assessments.push(a);
+                    }
+                    Spdx3Element::EpssAssessment(a) | Spdx3Element::SsvcAssessment(a) => {
+                        vuln_assessments.push(a);
+                    }
+                    Spdx3Element::Annotation(annotation) => {
+                        annotations.push(annotation);
                     }
                     Spdx3Element::LicenseExpression(lic) => {
                         if let (Some(id), Some(expr)) = (lic.spdx_id, lic.license_expression) {
@@ -95,6 +166,13 @@ impl Spdx3Parser {
                     _ => {} // Skip unknown element types
                 }
             }
+        }
+
+        if duplicate_count > 0 {
+            tracing::info!(
+                duplicate_count,
+                "SPDX 3.0 document contains duplicate element IDs"
+            );
         }
 
         // Build document metadata
@@ -119,6 +197,14 @@ impl Spdx3Parser {
             sbom.add_component(comp);
         }
 
+        // Convert snippets to components (Phase 2)
+        for snippet in &snippets {
+            let comp = self.convert_snippet(snippet);
+            let spdx_id = snippet.spdx_id.clone().unwrap_or_else(|| comp.name.clone());
+            id_map.insert(spdx_id, comp.canonical_id.clone());
+            sbom.add_component(comp);
+        }
+
         // Set primary component from rootElement
         if let Some(root_elements) = &doc.root_element {
             for root_id in root_elements {
@@ -132,6 +218,66 @@ impl Spdx3Parser {
         // Process relationships
         for rel in &relationships {
             self.process_relationship(rel, &id_map, &mut sbom, &vuln_map, &license_elements);
+        }
+
+        // Process vulnerability assessments (Phase 1: Security Profile)
+        for assessment in &vuln_assessments {
+            self.process_vuln_assessment(assessment, &id_map, &mut sbom, &vuln_map);
+        }
+
+        // Process annotations → attach to components (Phase 2)
+        for annotation in &annotations {
+            self.process_annotation(annotation, &id_map, &mut sbom);
+        }
+
+        // Store SPDX 3.0-specific data in extensions (Phases 2, 4)
+        let mut spdx_ext = serde_json::Map::new();
+        if let Some(data_license) = &doc.data_license {
+            spdx_ext.insert(
+                "dataLicense".to_string(),
+                serde_json::Value::String(data_license.clone()),
+            );
+        }
+        if let Some(ns_map) = &doc.namespace_map {
+            if !ns_map.is_empty() {
+                let ns_entries: Vec<_> = ns_map
+                    .iter()
+                    .filter_map(|ns| {
+                        Some(serde_json::json!({
+                            "prefix": ns.prefix.as_deref()?,
+                            "namespace": ns.namespace.as_deref()?
+                        }))
+                    })
+                    .collect();
+                if !ns_entries.is_empty() {
+                    spdx_ext.insert(
+                        "namespaceMap".to_string(),
+                        serde_json::Value::Array(ns_entries),
+                    );
+                }
+            }
+        }
+        if let Some(imports) = &doc.imports {
+            if !imports.is_empty() {
+                let import_entries: Vec<_> = imports
+                    .iter()
+                    .filter_map(|imp| {
+                        Some(serde_json::json!({
+                            "externalSpdxId": imp.external_spdx_id.as_deref()?,
+                            "locationHint": imp.location_hint
+                        }))
+                    })
+                    .collect();
+                if !import_entries.is_empty() {
+                    spdx_ext.insert(
+                        "imports".to_string(),
+                        serde_json::Value::Array(import_entries),
+                    );
+                }
+            }
+        }
+        if !spdx_ext.is_empty() {
+            sbom.extensions.spdx = Some(serde_json::Value::Object(spdx_ext));
         }
 
         sbom.calculate_content_hash();
@@ -377,6 +523,214 @@ impl Spdx3Parser {
         comp
     }
 
+    /// Convert an SPDX 3.0 Snippet element to a normalized Component (Phase 2)
+    fn convert_snippet(&self, snippet: &Spdx3Snippet) -> Component {
+        let format_id = snippet
+            .spdx_id
+            .clone()
+            .unwrap_or_else(|| snippet.name.clone().unwrap_or_default());
+        let name = snippet.name.clone().unwrap_or_default();
+        let mut comp = Component::new(name, format_id);
+        comp.component_type = ComponentType::File; // Snippets map to file-like components
+
+        // Store byte/line range in description if present
+        let mut range_info = Vec::new();
+        if let Some(byte_range) = &snippet.byte_range {
+            range_info.push(format!("bytes {byte_range}"));
+        }
+        if let Some(line_range) = &snippet.line_range {
+            range_info.push(format!("lines {line_range}"));
+        }
+        if !range_info.is_empty() {
+            comp.description = Some(format!("Snippet ({})", range_info.join(", ")));
+        }
+
+        // Set hashes
+        if let Some(methods) = &snippet.verified_using {
+            for method in methods {
+                if let (Some(algo_str), Some(value)) = (&method.algorithm, &method.hash_value) {
+                    let algorithm = map_spdx3_hash_algorithm(algo_str);
+                    comp.hashes.push(Hash::new(algorithm, value.clone()));
+                }
+            }
+        }
+
+        comp.copyright.clone_from(&snippet.copyright_text);
+
+        comp.calculate_content_hash();
+        comp
+    }
+
+    /// Process a VulnAssessment element (Phase 1: Security Profile)
+    ///
+    /// Maps CVSS scores, VEX status, justifications, and action statements
+    /// from VulnAssessment relationship elements to the affected components.
+    fn process_vuln_assessment(
+        &self,
+        assessment: &Spdx3VulnAssessment,
+        id_map: &HashMap<String, CanonicalId>,
+        sbom: &mut NormalizedSbom,
+        vuln_map: &HashMap<String, Spdx3Vulnerability>,
+    ) {
+        // The assessment's `from` field references the Vulnerability element
+        // The `assessedElement` or `to` field references the affected component
+        let vuln_ref_id = assessment.from.as_deref();
+        let assessed_id = assessment.assessed_element.as_deref().or_else(|| {
+            assessment
+                .to
+                .as_ref()
+                .and_then(|to| to.first().map(String::as_str))
+        });
+
+        let Some(assessed_id) = assessed_id else {
+            return;
+        };
+        let Some(canonical_id) = id_map.get(assessed_id) else {
+            return;
+        };
+
+        // Use resolved VEX state from enum variant discrimination
+        let vex_state = assessment.resolved_vex_state.clone();
+
+        // Extract CVSS score if present
+        let cvss_score = assessment.score.map(|score| {
+            // Infer version from vector string (more precise), fallback to variant type
+            let version = assessment.vector.as_deref().map_or_else(
+                || {
+                    assessment
+                        .resolved_cvss_version
+                        .clone()
+                        .unwrap_or(CvssVersion::V3)
+                },
+                |v| {
+                    if v.starts_with("CVSS:4") {
+                        CvssVersion::V4
+                    } else if v.starts_with("CVSS:3.1") {
+                        CvssVersion::V31
+                    } else if v.starts_with("CVSS:3") {
+                        CvssVersion::V3
+                    } else if v.starts_with("CVSS:2") || v.starts_with("AV:") {
+                        CvssVersion::V2
+                    } else {
+                        assessment
+                            .resolved_cvss_version
+                            .clone()
+                            .unwrap_or(CvssVersion::V3)
+                    }
+                },
+            );
+            let mut cs = CvssScore::new(version, score);
+            cs.vector.clone_from(&assessment.vector);
+            cs
+        });
+
+        // Map justification string to enum
+        let justification = assessment.justification.as_deref().map(|j| {
+            match j.to_lowercase().replace(['-', '_'], "").as_str() {
+                "componentnotpresent" => VexJustification::ComponentNotPresent,
+                "vulnerablecodenotpresent" => VexJustification::VulnerableCodeNotPresent,
+                "vulnerablecodenotinexecutepath" => {
+                    VexJustification::VulnerableCodeNotInExecutePath
+                }
+                "vulnerablecodecannotbecontrolledbyadversary" => {
+                    VexJustification::VulnerableCodeCannotBeControlledByAdversary
+                }
+                "inlinemitigationsalreadyexist" => VexJustification::InlineMitigationsAlreadyExist,
+                _ => VexJustification::VulnerableCodeNotPresent, // fallback
+            }
+        });
+
+        // Map response string to enum
+        let response = assessment.action_statement.as_deref().and_then(|a| {
+            let lower = a.to_lowercase();
+            if lower.contains("update") || lower.contains("upgrade") {
+                Some(VexResponse::Update)
+            } else if lower.contains("rollback") {
+                Some(VexResponse::Rollback)
+            } else if lower.contains("workaround") {
+                Some(VexResponse::Workaround)
+            } else if lower.contains("will not fix") || lower.contains("wontfix") {
+                Some(VexResponse::WillNotFix)
+            } else if lower.contains("cannot fix") || lower.contains("can not fix") {
+                Some(VexResponse::CanNotFix)
+            } else {
+                None
+            }
+        });
+
+        // Build VEX status
+        let vex_status = vex_state.map(|status| VexStatus {
+            status,
+            justification: justification.clone(),
+            action_statement: assessment.action_statement.clone(),
+            impact_statement: assessment.impact_statement.clone(),
+            response,
+            detail: assessment.status_notes.clone(),
+        });
+
+        // Look up the vulnerability element for the full VulnerabilityRef
+        if let Some(vuln_id) = vuln_ref_id {
+            if let Some(vuln) = vuln_map.get(vuln_id) {
+                let mut vuln_ref = self.convert_vulnerability(vuln);
+
+                // Add CVSS score from the assessment
+                if let Some(cs) = cvss_score {
+                    vuln_ref.severity = Some(Severity::from_cvss(cs.base_score));
+                    vuln_ref.cvss.push(cs);
+                }
+
+                // Set VEX status on the vulnerability ref
+                vuln_ref.vex_status = vex_status.clone();
+
+                if let Some(comp) = sbom.components.get_mut(canonical_id) {
+                    comp.vulnerabilities.push(vuln_ref);
+                    if let Some(vs) = vex_status {
+                        comp.vex_status = Some(vs);
+                    }
+                }
+            }
+        } else if let Some(comp) = sbom.components.get_mut(canonical_id) {
+            // Assessment without a specific vulnerability reference (standalone VEX)
+            if let Some(vs) = vex_status {
+                comp.vex_status = Some(vs);
+            }
+        }
+    }
+
+    /// Process an Annotation element → attach to referenced component (Phase 2)
+    fn process_annotation(
+        &self,
+        annotation: &Spdx3Annotation,
+        id_map: &HashMap<String, CanonicalId>,
+        sbom: &mut NormalizedSbom,
+    ) {
+        let Some(subject) = &annotation.subject else {
+            return;
+        };
+        let Some(canonical_id) = id_map.get(subject) else {
+            return;
+        };
+        let Some(comp) = sbom.components.get_mut(canonical_id) else {
+            return;
+        };
+
+        let ann_type = annotation
+            .annotation_type
+            .clone()
+            .unwrap_or_else(|| "OTHER".to_string());
+        let statement = annotation.statement.clone().unwrap_or_default();
+
+        comp.extensions.annotations.push(Annotation {
+            annotator: annotation
+                .spdx_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            annotation_date: Utc::now(), // SPDX 3.0 annotations don't always have timestamps
+            annotation_type: ann_type,
+            comment: statement,
+        });
+    }
+
     /// Process a Relationship element
     fn process_relationship(
         &self,
@@ -517,9 +871,10 @@ impl Spdx3Parser {
                 }
             }
 
-            // VEX assessment relationships — skipped for now
-            // (requires VulnAssessment element parsing with CVSS/VEX scoring)
-            "HAS_ASSESSMENT_FOR" => {}
+            // VEX assessment relationships — handled via VulnAssessment elements
+            "HAS_ASSESSMENT_FOR" => {
+                // These are processed in process_vuln_assessment()
+            }
 
             _ => {
                 // Unknown relationship type - store as Other if it connects known components
@@ -750,11 +1105,11 @@ struct Spdx3Document {
     creation_info: Option<Spdx3CreationInfo>,
     /// Data license (always CC0-1.0)
     data_license: Option<String>,
-    /// Namespace map for cross-document references
-    namespace_map: Option<Vec<serde_json::Value>>,
-    /// External document imports
+    /// Namespace map for cross-document references (Phase 4)
+    namespace_map: Option<Vec<Spdx3NamespaceMap>>,
+    /// External document imports (Phase 4)
     #[serde(rename = "import")]
-    imports: Option<Vec<serde_json::Value>>,
+    imports: Option<Vec<Spdx3ExternalMap>>,
     /// Root elements (URIs of primary elements)
     root_element: Option<Vec<String>>,
     /// All elements in the document
@@ -814,21 +1169,54 @@ enum Spdx3Element {
     /// SPDX 3.0 simple licensing text
     #[serde(alias = "simplelicensing_SimpleLicensingText", alias = "CustomLicense")]
     SimpleLicensingText(Spdx3SimpleLicensingText),
-    /// VEX assessment relationships
+    /// VEX Affected assessment
     #[serde(
         alias = "security_VexAffectedVulnAssessmentRelationship",
+        alias = "VexAffectedVulnAssessmentRelationship"
+    )]
+    VexAffected(Spdx3VulnAssessment),
+    /// VEX Fixed assessment
+    #[serde(
         alias = "security_VexFixedVulnAssessmentRelationship",
+        alias = "VexFixedVulnAssessmentRelationship"
+    )]
+    VexFixed(Spdx3VulnAssessment),
+    /// VEX Not Affected assessment
+    #[serde(
         alias = "security_VexNotAffectedVulnAssessmentRelationship",
-        alias = "security_VexUnderInvestigationVulnAssessmentRelationship",
-        alias = "security_CvssV3VulnAssessmentRelationship",
-        alias = "security_CvssV4VulnAssessmentRelationship",
-        alias = "security_EpssVulnAssessmentRelationship",
-        alias = "security_SsvcVulnAssessmentRelationship",
-        alias = "VexAffectedVulnAssessmentRelationship",
-        alias = "VexFixedVulnAssessmentRelationship",
         alias = "VexNotAffectedVulnAssessmentRelationship"
     )]
-    VulnAssessment(Spdx3VulnAssessment),
+    VexNotAffected(Spdx3VulnAssessment),
+    /// VEX Under Investigation assessment
+    #[serde(
+        alias = "security_VexUnderInvestigationVulnAssessmentRelationship",
+        alias = "VexUnderInvestigationVulnAssessmentRelationship"
+    )]
+    VexUnderInvestigation(Spdx3VulnAssessment),
+    /// CVSS v3 assessment
+    #[serde(
+        alias = "security_CvssV3VulnAssessmentRelationship",
+        alias = "CvssV3VulnAssessmentRelationship"
+    )]
+    CvssV3Assessment(Spdx3VulnAssessment),
+    /// CVSS v4 assessment
+    #[serde(
+        alias = "security_CvssV4VulnAssessmentRelationship",
+        alias = "CvssV4VulnAssessmentRelationship"
+    )]
+    CvssV4Assessment(Spdx3VulnAssessment),
+    /// EPSS assessment
+    #[serde(
+        alias = "security_EpssVulnAssessmentRelationship",
+        alias = "EpssVulnAssessmentRelationship"
+    )]
+    EpssAssessment(Spdx3VulnAssessment),
+    /// SSVC assessment
+    #[serde(
+        alias = "security_SsvcVulnAssessmentRelationship",
+        alias = "SsvcVulnAssessmentRelationship"
+    )]
+    SsvcAssessment(Spdx3VulnAssessment),
     /// Lifecycle-scoped relationship
     LifecycleScopedRelationship(Spdx3Relationship),
     /// Catch-all for unknown types (deserialized as raw JSON)
@@ -886,6 +1274,17 @@ struct Spdx3File {
 struct Spdx3Snippet {
     spdx_id: Option<String>,
     name: Option<String>,
+    copyright_text: Option<String>,
+    description: Option<String>,
+    /// Byte range within the containing file (e.g., "310:420")
+    byte_range: Option<String>,
+    /// Line range within the containing file (e.g., "5:23")
+    line_range: Option<String>,
+    /// Containing file reference
+    snippet_from_file: Option<String>,
+    /// Integrity methods (hashes)
+    verified_using: Option<Vec<Spdx3IntegrityMethod>>,
+    creation_info: Option<Spdx3CreationInfo>,
 }
 
 /// SPDX 3.0 Relationship (first-class element)
@@ -941,6 +1340,12 @@ struct Spdx3VulnAssessment {
     impact_statement: Option<String>,
     action_statement: Option<String>,
     vex_version: Option<String>,
+    /// Resolved VEX state (set during first-pass from enum variant)
+    #[serde(skip)]
+    resolved_vex_state: Option<VexState>,
+    /// Resolved CVSS version (set during first-pass from enum variant)
+    #[serde(skip)]
+    resolved_cvss_version: Option<CvssVersion>,
 }
 
 /// SPDX 3.0 Annotation
@@ -1058,6 +1463,30 @@ struct Spdx3SimpleLicensingText {
     spdx_id: Option<String>,
     license_text: Option<String>,
     license_name: Option<String>,
+}
+
+/// SPDX 3.0 Namespace Map entry (Phase 4: cross-document references)
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct Spdx3NamespaceMap {
+    /// Namespace prefix (short alias)
+    prefix: Option<String>,
+    /// Full namespace URI
+    namespace: Option<String>,
+}
+
+/// SPDX 3.0 External Map entry (imports from other documents) (Phase 4)
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct Spdx3ExternalMap {
+    /// External SPDX element ID
+    external_spdx_id: Option<String>,
+    /// Location URL of the external document
+    location_hint: Option<String>,
+    /// Integrity verification for the external document
+    verified_using: Option<Vec<Spdx3IntegrityMethod>>,
 }
 
 // =============================================================================

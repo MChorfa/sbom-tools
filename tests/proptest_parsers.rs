@@ -82,4 +82,20 @@ proptest! {
         let _ = parse_sbom_str(&input);
         let _ = detect_format(&input);
     }
+
+    #[test]
+    fn spdx3_security_profile_doesnt_panic(
+        score in 0.0f32..10.0f32,
+        vector in "[A-Z:/0-9]{0,50}",
+        extra in "\\PC{0,100}",
+    ) {
+        let input = format!(
+            r#"{{"@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld", "type": "SpdxDocument", "spdxId": "urn:test", "element": [
+                {{"type": "software_Package", "spdxId": "urn:pkg:a", "name": "a"}},
+                {{"type": "security_Vulnerability", "spdxId": "urn:vuln:1", "name": "CVE-TEST"}},
+                {{"type": "security_CvssV3VulnAssessmentRelationship", "spdxId": "urn:assess:1", "from": "urn:vuln:1", "assessedElement": "urn:pkg:a", "score": {score}, "vector": "{vector}", {extra}}}
+            ]}}"#
+        );
+        let _ = parse_sbom_str(&input);
+    }
 }

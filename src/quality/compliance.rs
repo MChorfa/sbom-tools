@@ -1165,6 +1165,62 @@ impl ComplianceChecker {
                 requirement: "CRA Art. 13(11): Component lifecycle monitoring".to_string(),
             });
         }
+
+        // SPDX 3.0 profile conformance checks (Phase 6)
+        if sbom.document.format == crate::model::SbomFormat::Spdx
+            && sbom.document.spec_version.starts_with("3.")
+        {
+            // Check if Security profile is declared when vulnerabilities are present
+            let has_vulns = sbom
+                .components
+                .values()
+                .any(|c| !c.vulnerabilities.is_empty());
+            let has_security_profile = sbom
+                .document
+                .distribution_classification
+                .as_ref()
+                .is_some_and(|p| p.to_lowercase().contains("security"));
+
+            if has_vulns && !has_security_profile {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Info,
+                    category: ViolationCategory::DocumentMetadata,
+                    message:
+                        "[CRA Art. 13(6)] SPDX 3.0 document contains vulnerabilities but does not declare Security profile conformance; declare profileConformance: [\"security\"] for CRA Art. 13(6) compliance"
+                            .to_string(),
+                    element: None,
+                    requirement: "CRA Art. 13(6): SPDX 3.0 Security profile conformance"
+                        .to_string(),
+                });
+            }
+
+            // Check if SimpleLicensing profile is declared when licenses are tracked
+            let has_licenses = sbom
+                .components
+                .values()
+                .any(|c| !c.licenses.declared.is_empty() || c.licenses.concluded.is_some());
+            let has_licensing_profile = sbom
+                .document
+                .distribution_classification
+                .as_ref()
+                .is_some_and(|p| {
+                    p.to_lowercase().contains("simplelicensing")
+                        || p.to_lowercase().contains("licensing")
+                });
+
+            if has_licenses && !has_licensing_profile {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Info,
+                    category: ViolationCategory::LicenseInfo,
+                    message:
+                        "[CRA Art. 13(5)] SPDX 3.0 document tracks licenses but does not declare SimpleLicensing profile conformance; declare profileConformance: [\"simpleLicensing\"] for completeness"
+                            .to_string(),
+                    element: None,
+                    requirement: "CRA Art. 13(5): SPDX 3.0 SimpleLicensing profile conformance"
+                        .to_string(),
+                });
+            }
+        }
     }
 
     /// NIST SP 800-218 Secure Software Development Framework checks
