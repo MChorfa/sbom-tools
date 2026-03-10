@@ -1,0 +1,167 @@
+{
+  "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+  "type": "SpdxDocument",
+  "spdxId": "urn:spdx:doc:minimal-spdx3",
+  "name": "Minimal SPDX 3.0 Test Document",
+  "creationInfo": {
+    "specVersion": "3.0.1",
+    "created": "2025-01-15T10:00:00Z",
+    "createdBy": ["urn:spdx:agent:tool-sbom-gen"],
+    "createdUsing": ["urn:spdx:tool:sbom-generator"]
+  },
+  "profileConformance": ["core", "software", "simpleLicensing"],
+  "rootElement": ["urn:spdx:pkg:my-app"],
+  "element": [
+    {
+      "type": "Organization",
+      "spdxId": "urn:spdx:agent:acme-corp",
+      "name": "Acme Corp"
+    },
+    {
+      "type": "Tool",
+      "spdxId": "urn:spdx:agent:tool-sbom-gen",
+      "name": "sbom-generator"
+    },
+    {
+      "type": "Tool",
+      "spdxId": "urn:spdx:tool:sbom-generator",
+      "name": "SBOM Generator 2.0"
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:spdx:pkg:my-app",
+      "name": "my-app",
+      "packageVersion": "1.0.0",
+      "packageUrl": "pkg:cargo/my-app@1.0.0",
+      "primaryPurpose": "application",
+      "suppliedBy": ["urn:spdx:agent:acme-corp"],
+      "copyrightText": "Copyright 2025 Acme Corp",
+      "description": "A test application",
+      "verifiedUsing": [
+        {
+          "type": "Hash",
+          "algorithm": "sha256",
+          "hashValue": "abc123def456789abcdef0123456789abcdef0123456789abcdef0123456789a"
+        }
+      ],
+      "externalIdentifier": [
+        {
+          "externalIdentifierType": "cpe23",
+          "identifier": "cpe:2.3:a:acme:my-app:1.0.0:*:*:*:*:*:*:*"
+        }
+      ],
+      "externalRef": [
+        {
+          "externalRefType": "vcs",
+          "locator": ["https://github.com/acme/my-app"]
+        }
+      ]
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:spdx:pkg:lib-core",
+      "name": "lib-core",
+      "packageVersion": "2.3.0",
+      "packageUrl": "pkg:cargo/lib-core@2.3.0",
+      "primaryPurpose": "library",
+      "verifiedUsing": [
+        {
+          "type": "Hash",
+          "algorithm": "sha256",
+          "hashValue": "def456abc789def0123456789abcdef0123456789abcdef0123456789abcdef01"
+        },
+        {
+          "type": "Hash",
+          "algorithm": "sha512",
+          "hashValue": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
+        }
+      ]
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:spdx:pkg:lib-utils",
+      "name": "lib-utils",
+      "packageVersion": "0.5.1",
+      "primaryPurpose": "library"
+    },
+    {
+      "type": "software_File",
+      "spdxId": "urn:spdx:file:readme",
+      "name": "README.md",
+      "copyrightText": "Copyright 2025 Acme Corp",
+      "verifiedUsing": [
+        {
+          "type": "Hash",
+          "algorithm": "sha256",
+          "hashValue": "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00"
+        }
+      ]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:app-depends-core",
+      "relationshipType": "DEPENDS_ON",
+      "from": "urn:spdx:pkg:my-app",
+      "to": ["urn:spdx:pkg:lib-core"]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:app-depends-utils",
+      "relationshipType": "DEPENDS_ON",
+      "from": "urn:spdx:pkg:my-app",
+      "to": ["urn:spdx:pkg:lib-utils"]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:app-contains-readme",
+      "relationshipType": "CONTAINS",
+      "from": "urn:spdx:pkg:my-app",
+      "to": ["urn:spdx:file:readme"]
+    },
+    {
+      "type": "simplelicensing_LicenseExpression",
+      "spdxId": "urn:spdx:lic:mit",
+      "licenseExpression": "MIT"
+    },
+    {
+      "type": "simplelicensing_LicenseExpression",
+      "spdxId": "urn:spdx:lic:apache2",
+      "licenseExpression": "Apache-2.0"
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:app-license-declared",
+      "relationshipType": "HAS_DECLARED_LICENSE",
+      "from": "urn:spdx:pkg:my-app",
+      "to": ["urn:spdx:lic:mit"]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:core-license-concluded",
+      "relationshipType": "HAS_CONCLUDED_LICENSE",
+      "from": "urn:spdx:pkg:lib-core",
+      "to": ["urn:spdx:lic:apache2"]
+    },
+    {
+      "type": "security_Vulnerability",
+      "spdxId": "urn:spdx:vuln:cve-2024-1234",
+      "name": "CVE-2024-1234",
+      "description": "A test vulnerability in lib-core",
+      "publishedTime": "2024-06-15T12:00:00Z",
+      "modifiedTime": "2024-07-01T14:30:00Z",
+      "externalIdentifier": [
+        {
+          "externalIdentifierType": "cve",
+          "identifier": "CVE-2024-1234"
+        }
+      ]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:vuln-affects-core",
+      "relationshipType": "AFFECTS",
+      "from": "urn:spdx:vuln:cve-2024-1234",
+      "to": ["urn:spdx:pkg:lib-core"]
+    }
+  ]
+}

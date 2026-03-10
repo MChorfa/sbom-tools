@@ -287,6 +287,8 @@ fn is_strong_hash(algo: &HashAlgorithm) -> bool {
             | HashAlgorithm::Blake2b384
             | HashAlgorithm::Blake2b512
             | HashAlgorithm::Blake3
+            | HashAlgorithm::Streebog256
+            | HashAlgorithm::Streebog512
     )
 }
 
@@ -305,6 +307,8 @@ fn hash_algorithm_label(algo: &HashAlgorithm) -> String {
         HashAlgorithm::Blake2b384 => "BLAKE2b-384".to_string(),
         HashAlgorithm::Blake2b512 => "BLAKE2b-512".to_string(),
         HashAlgorithm::Blake3 => "BLAKE3".to_string(),
+        HashAlgorithm::Streebog256 => "Streebog-256".to_string(),
+        HashAlgorithm::Streebog512 => "Streebog-512".to_string(),
         HashAlgorithm::Other(s) => s.clone(),
     }
 }
@@ -1085,6 +1089,10 @@ pub struct ProvenanceMetrics {
     pub completeness_declaration: CompletenessDeclaration,
     /// Whether the SBOM has a digital signature
     pub has_signature: bool,
+    /// Whether the SBOM has data provenance citations (CycloneDX 1.7+)
+    pub has_citations: bool,
+    /// Number of data provenance citations
+    pub citations_count: usize,
 }
 
 /// Freshness threshold in days
@@ -1125,6 +1133,8 @@ impl ProvenanceMetrics {
             lifecycle_phase: doc.lifecycle_phase.clone(),
             completeness_declaration: doc.completeness_declaration.clone(),
             has_signature: doc.signature.is_some(),
+            has_citations: doc.citations_count > 0,
+            citations_count: doc.citations_count,
         }
     }
 
@@ -1169,6 +1179,13 @@ impl ProvenanceMetrics {
                 score += weight;
             }
             total_weight += weight;
+
+            // Data provenance citations bonus (CycloneDX 1.7+)
+            let citations_weight = 5.0;
+            if self.has_citations {
+                score += citations_weight;
+            }
+            total_weight += citations_weight;
         }
 
         if total_weight > 0.0 {
@@ -1680,6 +1697,8 @@ mod tests {
             lifecycle_phase: Some("build".to_string()),
             completeness_declaration: CompletenessDeclaration::Complete,
             has_signature: true,
+            has_citations: true,
+            citations_count: 3,
         };
         // All checks pass for CycloneDX
         assert_eq!(metrics.quality_score(true), 100.0);
@@ -1700,8 +1719,10 @@ mod tests {
             lifecycle_phase: None,
             completeness_declaration: CompletenessDeclaration::Complete,
             has_signature: true,
+            has_citations: false,
+            citations_count: 0,
         };
-        // Lifecycle phase excluded for non-CDX
+        // Lifecycle phase and citations excluded for non-CDX
         assert_eq!(metrics.quality_score(false), 100.0);
     }
 

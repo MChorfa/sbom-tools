@@ -151,7 +151,7 @@ impl Violation {
     pub fn remediation_guidance(&self) -> &'static str {
         let req = self.requirement.to_lowercase();
         if req.contains("art. 13(4)") {
-            "Ensure the SBOM is produced in CycloneDX 1.4+ (JSON or XML) or SPDX 2.3+ (JSON or tag-value). Older format versions may not be recognized as machine-readable under the CRA."
+            "Ensure the SBOM is produced in CycloneDX 1.4+ (JSON or XML), SPDX 2.3+ (JSON or tag-value), or SPDX 3.0+ (JSON-LD). Older format versions may not be recognized as machine-readable under the CRA."
         } else if req.contains("art. 13(6)") && req.contains("vulnerability metadata") {
             "Add severity (e.g., CVSS score) and remediation details to each vulnerability entry. CycloneDX: use vulnerability.ratings[].score and vulnerability.analysis. SPDX: use annotation or externalRef."
         } else if req.contains("art. 13(6)") {
@@ -185,7 +185,7 @@ impl Violation {
         } else if req.contains("art. 13(3)") {
             "Regenerate the SBOM when components are added, removed, or updated. CRA Art. 13(3) requires timely updates reflecting the current state of the software."
         } else if req.contains("art. 13(5)") {
-            "Ensure every component has license information. CycloneDX: use component.licenses[]. SPDX: use PackageLicenseDeclared / PackageLicenseConcluded."
+            "Ensure every component has license information. CycloneDX: use component.licenses[]. SPDX 2.x: use PackageLicenseDeclared / PackageLicenseConcluded. SPDX 3.0: use HAS_DECLARED_LICENSE / HAS_CONCLUDED_LICENSE relationships."
         } else if req.contains("art. 13(9)") {
             "Include vulnerability data or add a vulnerability-assertion external reference stating no known vulnerabilities. CycloneDX: use the vulnerabilities array. SPDX: use annotations or external references."
         } else if req.contains("annex i") && req.contains("supply chain") {
@@ -195,7 +195,7 @@ impl Violation {
         } else if req.contains("nist ssdf") || req.contains("sp 800-218") {
             "Follow NIST SP 800-218 SSDF practices: include tool provenance, source VCS references, build metadata, and cryptographic hashes for all components."
         } else if req.contains("eo 14028") {
-            "Follow EO 14028 Section 4(e) requirements: use a machine-readable format (CycloneDX 1.4+ or SPDX 2.3+), auto-generate the SBOM, include unique identifiers, versions, hashes, dependencies, and supplier information."
+            "Follow EO 14028 Section 4(e) requirements: use a machine-readable format (CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+), auto-generate the SBOM, include unique identifiers, versions, hashes, dependencies, and supplier information."
         } else {
             "Review the requirement and update the SBOM accordingly. Consult the EU CRA regulation (EU 2024/2847) for detailed guidance."
         }
@@ -499,7 +499,7 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::FormatSpecific,
                     message: format!(
-                        "[CRA Art. 13(4)] SBOM format version {} {} may not meet CRA machine-readable requirements; use CycloneDX 1.4+ or SPDX 2.3+",
+                        "[CRA Art. 13(4)] SBOM format version {} {} may not meet CRA machine-readable requirements; use CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+",
                         sbom.document.format, sbom.document.spec_version
                     ),
                     element: None,
@@ -867,6 +867,8 @@ impl ComplianceChecker {
                                 | HashAlgorithm::Blake2b384
                                 | HashAlgorithm::Blake2b512
                                 | HashAlgorithm::Blake3
+                                | HashAlgorithm::Streebog256
+                                | HashAlgorithm::Streebog512
                         )
                     });
                     if !has_strong_hash {
@@ -1163,6 +1165,62 @@ impl ComplianceChecker {
                 requirement: "CRA Art. 13(11): Component lifecycle monitoring".to_string(),
             });
         }
+
+        // SPDX 3.0 profile conformance checks (Phase 6)
+        if sbom.document.format == crate::model::SbomFormat::Spdx
+            && sbom.document.spec_version.starts_with("3.")
+        {
+            // Check if Security profile is declared when vulnerabilities are present
+            let has_vulns = sbom
+                .components
+                .values()
+                .any(|c| !c.vulnerabilities.is_empty());
+            let has_security_profile = sbom
+                .document
+                .distribution_classification
+                .as_ref()
+                .is_some_and(|p| p.to_lowercase().contains("security"));
+
+            if has_vulns && !has_security_profile {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Info,
+                    category: ViolationCategory::DocumentMetadata,
+                    message:
+                        "[CRA Art. 13(6)] SPDX 3.0 document contains vulnerabilities but does not declare Security profile conformance; declare profileConformance: [\"security\"] for CRA Art. 13(6) compliance"
+                            .to_string(),
+                    element: None,
+                    requirement: "CRA Art. 13(6): SPDX 3.0 Security profile conformance"
+                        .to_string(),
+                });
+            }
+
+            // Check if SimpleLicensing profile is declared when licenses are tracked
+            let has_licenses = sbom
+                .components
+                .values()
+                .any(|c| !c.licenses.declared.is_empty() || c.licenses.concluded.is_some());
+            let has_licensing_profile = sbom
+                .document
+                .distribution_classification
+                .as_ref()
+                .is_some_and(|p| {
+                    p.to_lowercase().contains("simplelicensing")
+                        || p.to_lowercase().contains("licensing")
+                });
+
+            if has_licenses && !has_licensing_profile {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Info,
+                    category: ViolationCategory::LicenseInfo,
+                    message:
+                        "[CRA Art. 13(5)] SPDX 3.0 document tracks licenses but does not declare SimpleLicensing profile conformance; declare profileConformance: [\"simpleLicensing\"] for completeness"
+                            .to_string(),
+                    element: None,
+                    requirement: "CRA Art. 13(5): SPDX 3.0 SimpleLicensing profile conformance"
+                        .to_string(),
+                });
+            }
+        }
     }
 
     /// NIST SP 800-218 Secure Software Development Framework checks
@@ -1364,7 +1422,7 @@ impl ComplianceChecker {
                 category: ViolationCategory::FormatSpecific,
                 message: format!(
                     "SBOM format {} {} does not meet EO 14028 machine-readable requirements; \
-                    use CycloneDX 1.4+ or SPDX 2.3+",
+                    use CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+",
                     sbom.document.format, sbom.document.spec_version
                 ),
                 element: None,
@@ -1529,11 +1587,11 @@ impl ComplianceChecker {
         let version = &sbom.document.spec_version;
 
         // Warn about older versions
-        if version.starts_with("1.3") || version.starts_with("1.2") {
+        if version.starts_with("1.3") || version.starts_with("1.2") || version.starts_with("1.1") {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::FormatSpecific,
-                message: format!("CycloneDX {version} is outdated, consider upgrading to 1.5+"),
+                message: format!("CycloneDX {version} is outdated, consider upgrading to 1.7+"),
                 element: None,
                 requirement: "Current CycloneDX version".to_string(),
             });
@@ -1569,15 +1627,31 @@ impl ComplianceChecker {
             });
         }
 
-        // SPDX requires SPDXID for each element
+        // SPDX requires element identifiers
+        // SPDX 2.x uses SPDXRef- prefix; SPDX 3.0 uses URN-style IDs (e.g., urn:spdx:...)
+        let is_spdx3 = version.starts_with("3.");
         for comp in sbom.components.values() {
-            if !comp.identifiers.format_id.starts_with("SPDXRef-") {
+            let valid_id = if is_spdx3 {
+                // SPDX 3.0 uses URN/IRI identifiers
+                comp.identifiers.format_id.contains(':')
+            } else {
+                comp.identifiers.format_id.starts_with("SPDXRef-")
+            };
+            if !valid_id {
+                let expected = if is_spdx3 {
+                    "SPDX 3.0: URN/IRI identifier format"
+                } else {
+                    "SPDX 2.x: SPDXRef- identifier format"
+                };
                 violations.push(Violation {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::FormatSpecific,
-                    message: format!("Component '{}' has non-standard SPDXID format", comp.name),
+                    message: format!(
+                        "Component '{}' has non-standard SPDX identifier format",
+                        comp.name
+                    ),
                     element: Some(comp.name.clone()),
-                    requirement: "SPDX: SPDXRef- identifier format".to_string(),
+                    requirement: expected.to_string(),
                 });
             }
         }

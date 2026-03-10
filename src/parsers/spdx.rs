@@ -1,6 +1,7 @@
-//! SPDX SBOM parser.
+//! SPDX 2.x SBOM parser.
 //!
 //! Supports SPDX versions 2.2 and 2.3 in JSON, tag-value, and RDF/XML formats.
+//! For SPDX 3.0 (JSON-LD), see the [`super::spdx3`] module.
 
 use crate::model::{
     CanonicalId, Component, ComponentType, Creator, CreatorType, DependencyEdge, DependencyType,
@@ -860,6 +861,8 @@ impl SpdxParser {
             lifecycle_phase: None, // SPDX does not have lifecycle phase metadata
             completeness_declaration: crate::model::CompletenessDeclaration::Unknown,
             signature: None,
+            distribution_classification: None,
+            citations_count: 0,
         }
     }
 

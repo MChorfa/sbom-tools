@@ -5,7 +5,7 @@
 //! thresholds and detection behavior.
 
 use super::traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
-use super::{CycloneDxParser, SpdxParser};
+use super::{CycloneDxParser, Spdx3Parser, SpdxParser};
 use crate::model::NormalizedSbom;
 use std::io::BufRead;
 
@@ -18,6 +18,7 @@ pub const MIN_CONFIDENCE_THRESHOLD: f32 = 0.25;
 pub enum ParserKind {
     CycloneDx,
     Spdx,
+    Spdx3,
 }
 
 impl ParserKind {
@@ -26,7 +27,7 @@ impl ParserKind {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::CycloneDx => "CycloneDX",
-            Self::Spdx => "SPDX",
+            Self::Spdx | Self::Spdx3 => "SPDX",
         }
     }
 }
@@ -71,11 +72,23 @@ impl DetectionResult {
         }
     }
 
-    /// Create a result for SPDX detection.
+    /// Create a result for SPDX 2.x detection.
     #[must_use]
     pub fn spdx(detection: FormatDetection) -> Self {
         Self {
             parser: Some(ParserKind::Spdx),
+            confidence: detection.confidence,
+            variant: detection.variant,
+            version: detection.version,
+            warnings: detection.warnings,
+        }
+    }
+
+    /// Create a result for SPDX 3.0 detection.
+    #[must_use]
+    pub fn spdx3(detection: FormatDetection) -> Self {
+        Self {
+            parser: Some(ParserKind::Spdx3),
             confidence: detection.confidence,
             variant: detection.variant,
             version: detection.version,
@@ -96,6 +109,7 @@ impl DetectionResult {
 pub struct FormatDetector {
     cyclonedx: CycloneDxParser,
     spdx: SpdxParser,
+    spdx3: Spdx3Parser,
     min_confidence: f32,
 }
 
@@ -112,6 +126,7 @@ impl FormatDetector {
         Self {
             cyclonedx: CycloneDxParser::new(),
             spdx: SpdxParser::new(),
+            spdx3: Spdx3Parser::new(),
             min_confidence: MIN_CONFIDENCE_THRESHOLD,
         }
     }
@@ -122,6 +137,7 @@ impl FormatDetector {
         Self {
             cyclonedx: CycloneDxParser::new(),
             spdx: SpdxParser::new(),
+            spdx3: Spdx3Parser::new(),
             min_confidence: min_confidence.clamp(0.0, 1.0),
         }
     }
@@ -129,10 +145,25 @@ impl FormatDetector {
     /// Detect format from full content string.
     ///
     /// This performs full detection using each parser's `detect()` method.
+    /// SPDX 3.0 is checked first since its JSON-LD markers are more distinctive.
     #[must_use]
     pub fn detect_from_content(&self, content: &str) -> DetectionResult {
+        // Check SPDX 3.0 first - its markers (@context, type: SpdxDocument) are distinctive
+        let spdx3_detection = self.spdx3.detect(content);
+        if spdx3_detection.confidence.value() >= FormatConfidence::HIGH.value() {
+            return DetectionResult::spdx3(spdx3_detection);
+        }
+
         let cdx_detection = self.cyclonedx.detect(content);
         let spdx_detection = self.spdx.detect(content);
+
+        // If SPDX 3.0 had medium confidence but beat others, use it
+        if spdx3_detection.confidence.value() >= self.min_confidence
+            && spdx3_detection.confidence.value() > cdx_detection.confidence.value()
+            && spdx3_detection.confidence.value() > spdx_detection.confidence.value()
+        {
+            return DetectionResult::spdx3(spdx3_detection);
+        }
 
         self.select_best_parser(cdx_detection, spdx_detection)
     }
@@ -151,9 +182,23 @@ impl FormatDetector {
                 // Convert peek to string for detection
                 let preview = String::from_utf8_lossy(peek);
 
+                // Check SPDX 3.0 first (distinctive JSON-LD markers)
+                let spdx3_detection = self.spdx3.detect(&preview);
+                if spdx3_detection.confidence.value() >= FormatConfidence::HIGH.value() {
+                    return DetectionResult::spdx3(spdx3_detection);
+                }
+
                 // Use actual parser detection methods for consistency
                 let cdx_detection = self.cyclonedx.detect(&preview);
                 let spdx_detection = self.spdx.detect(&preview);
+
+                // Check if SPDX 3.0 beat others
+                if spdx3_detection.confidence.value() >= self.min_confidence
+                    && spdx3_detection.confidence.value() > cdx_detection.confidence.value()
+                    && spdx3_detection.confidence.value() > spdx_detection.confidence.value()
+                {
+                    return DetectionResult::spdx3(spdx3_detection);
+                }
 
                 self.select_best_parser(cdx_detection, spdx_detection)
             }
@@ -236,6 +281,7 @@ impl FormatDetector {
                 self.cyclonedx.parse_str(content)
             }
             Some(ParserKind::Spdx) if detection.can_parse() => self.spdx.parse_str(content),
+            Some(ParserKind::Spdx3) if detection.can_parse() => self.spdx3.parse_str(content),
             _ => Err(ParseError::UnknownFormat(
                 "Could not detect SBOM format. Expected CycloneDX or SPDX.".to_string(),
             )),
@@ -290,6 +336,14 @@ impl FormatDetector {
                 } else {
                     self.spdx.parse_json_reader(reader)
                 }
+            }
+            Some(ParserKind::Spdx3) if detection.can_parse() => {
+                // SPDX 3.0 is JSON-LD only - read full content and parse
+                let mut content = String::new();
+                reader
+                    .read_to_string(&mut content)
+                    .map_err(|e| ParseError::IoError(e.to_string()))?;
+                self.spdx3.parse_str(&content)
             }
             _ => Err(ParseError::UnknownFormat(
                 "Could not detect SBOM format. Expected CycloneDX or SPDX.".to_string(),
