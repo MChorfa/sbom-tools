@@ -613,6 +613,10 @@ pub struct Component {
     pub author: Option<String>,
     /// Group/namespace (e.g., Maven groupId)
     pub group: Option<String>,
+    /// Whether this component is external (expected from environment, not bundled)
+    pub is_external: bool,
+    /// Package URL Version Range (vers) syntax, only valid when is_external is true
+    pub version_range: Option<String>,
     /// Staleness information (populated by enrichment)
     pub staleness: Option<StalenessInfo>,
     /// End-of-life information (populated by enrichment)
@@ -646,6 +650,8 @@ impl Component {
             copyright: None,
             author: None,
             group: None,
+            is_external: false,
+            version_range: None,
             staleness: None,
             eol: None,
         }
@@ -699,6 +705,12 @@ impl Component {
         }
         for vuln in &self.vulnerabilities {
             hasher_input.extend(vuln.id.as_bytes());
+        }
+        if self.is_external {
+            hasher_input.push(b'E');
+        }
+        if let Some(vr) = &self.version_range {
+            hasher_input.extend(vr.as_bytes());
         }
 
         self.content_hash = xxh3_64(&hasher_input);

@@ -10,8 +10,8 @@
 //!
 //! ## Key Features
 //!
-//! - **Multi-Format Parsing**: Ingests CycloneDX (JSON) and SPDX (JSON, Tag-Value) files,
-//!   with automatic format detection.
+//! - **Multi-Format Parsing**: Ingests CycloneDX 1.4–1.7 (JSON, XML) and SPDX 2.2–2.3
+//!   (JSON, tag-value, RDF/XML) and SPDX 3.0 (JSON-LD), with automatic format detection.
 //! - **Intelligent Diffing**: Performs semantic diffs between two SBOMs to identify changes
 //!   in components, dependencies, licenses, and vulnerabilities.
 //! - **Data Enrichment**: Augments SBOMs with external data, including:

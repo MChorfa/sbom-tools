@@ -1,0 +1,118 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-01-15T10:30:00Z",
+    "tools": {
+      "components": [
+        {
+          "name": "sbom-generator",
+          "version": "3.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "acme-app",
+      "name": "acme-app",
+      "version": "2.0.0",
+      "purl": "pkg:cargo/acme-app@2.0.0"
+    },
+    "distributionConstraints": {
+      "tlp": "GREEN"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "lib-a",
+      "name": "lib-a",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/lib-a@1.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "aabbccddee00112233445566778899aabbccddee00112233445566778899aabb"
+        },
+        {
+          "alg": "STREEBOG-256",
+          "content": "1122334455667788990011223344556677889900112233445566778899001122"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        },
+        {
+          "expression": "Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "lib-b",
+      "name": "lib-b",
+      "version": "2.0.0",
+      "purl": "pkg:cargo/lib-b@2.0.0",
+      "isExternal": true,
+      "versionRange": "vers:cargo/>=1.0.0|<3.0.0"
+    },
+    {
+      "type": "cryptographic",
+      "bom-ref": "crypto-asset-1",
+      "name": "AES-256-GCM",
+      "version": "1.0.0",
+      "description": "Symmetric encryption algorithm"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "acme-app",
+      "dependsOn": [
+        "lib-a",
+        "lib-b"
+      ]
+    },
+    {
+      "ref": "lib-a",
+      "dependsOn": []
+    },
+    {
+      "ref": "lib-b",
+      "dependsOn": []
+    }
+  ],
+  "citations": [
+    {
+      "timestamp": "2026-01-15T10:00:00Z",
+      "attributedTo": "acme-app",
+      "pointers": [
+        "/components/0/name",
+        "/components/0/version"
+      ],
+      "note": "Component metadata sourced from Cargo.toml"
+    },
+    {
+      "timestamp": "2026-01-15T10:15:00Z",
+      "process": "lib-a",
+      "expressions": [
+        "$.components[0].hashes"
+      ],
+      "note": "Hash values computed during build"
+    }
+  ],
+  "compositions": [
+    {
+      "aggregate": "complete",
+      "assemblies": [
+        "acme-app",
+        "lib-a",
+        "lib-b"
+      ]
+    }
+  ]
+}

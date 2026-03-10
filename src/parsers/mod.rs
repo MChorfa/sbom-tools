@@ -29,12 +29,14 @@
 mod cyclonedx;
 mod detection;
 mod spdx;
+mod spdx3;
 pub mod streaming;
 mod traits;
 
 pub use cyclonedx::CycloneDxParser;
 pub use detection::{DetectionResult, FormatDetector, MIN_CONFIDENCE_THRESHOLD, ParserKind};
 pub use spdx::SpdxParser;
+pub use spdx3::Spdx3Parser;
 pub use streaming::{ParseEvent, ParseProgress, StreamingConfig, StreamingParser};
 pub use traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
 
@@ -170,6 +172,15 @@ mod tests {
         let content = r#"{"some": "random", "json": "content"}"#;
         let detected = detect_format(content);
         assert!(detected.is_none());
+    }
+
+    #[test]
+    fn test_detect_spdx3_json_ld() {
+        let content = r#"{"@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld", "type": "SpdxDocument", "spdxId": "urn:spdx:doc:test", "creationInfo": {"specVersion": "3.0.1"}}"#;
+        let detected = detect_format(content).expect("Should detect SPDX 3.0 format");
+        assert_eq!(detected.format_name, "SPDX");
+        assert!(detected.confidence >= 0.9);
+        assert_eq!(detected.variant, Some("JSON-LD".to_string()));
     }
 
     #[test]

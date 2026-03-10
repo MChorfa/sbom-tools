@@ -287,6 +287,8 @@ fn is_strong_hash(algo: &HashAlgorithm) -> bool {
             | HashAlgorithm::Blake2b384
             | HashAlgorithm::Blake2b512
             | HashAlgorithm::Blake3
+            | HashAlgorithm::Streebog256
+            | HashAlgorithm::Streebog512
     )
 }
 
@@ -305,6 +307,8 @@ fn hash_algorithm_label(algo: &HashAlgorithm) -> String {
         HashAlgorithm::Blake2b384 => "BLAKE2b-384".to_string(),
         HashAlgorithm::Blake2b512 => "BLAKE2b-512".to_string(),
         HashAlgorithm::Blake3 => "BLAKE3".to_string(),
+        HashAlgorithm::Streebog256 => "Streebog-256".to_string(),
+        HashAlgorithm::Streebog512 => "Streebog-512".to_string(),
         HashAlgorithm::Other(s) => s.clone(),
     }
 }

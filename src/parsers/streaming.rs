@@ -6,6 +6,10 @@
 //! - Yielding results via an iterator interface
 //! - Supporting progress callbacks
 //!
+//! Supports CycloneDX 1.4–1.7 (JSON/XML), SPDX 2.2–2.3 (JSON/tag-value/RDF),
+//! and SPDX 3.0 (JSON-LD). Note: SPDX 3.0 requires full document loading due
+//! to its graph-based element model with cross-references.
+//!
 //! # Usage
 //!
 //! ```no_run

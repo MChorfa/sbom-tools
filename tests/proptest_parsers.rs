@@ -71,4 +71,15 @@ proptest! {
         let input = format!(r#"{{"spdxVersion": "{}", "SPDXID": "SPDXRef-DOCUMENT", {}}}"#, version, extra);
         let _ = parse_sbom_str(&input);
     }
+
+    #[test]
+    fn spdx3_partial_json_doesnt_panic(
+        extra in "\\PC{0,200}",
+    ) {
+        let input = format!(
+            r#"{{"@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld", "type": "SpdxDocument", "spdxId": "urn:test", {extra}}}"#
+        );
+        let _ = parse_sbom_str(&input);
+        let _ = detect_format(&input);
+    }
 }

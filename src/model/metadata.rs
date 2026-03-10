@@ -48,6 +48,10 @@ pub struct DocumentMetadata {
     pub completeness_declaration: CompletenessDeclaration,
     /// Digital signature information (from CycloneDX signature field)
     pub signature: Option<SignatureInfo>,
+    /// Distribution classification (e.g., TLP: CLEAR, GREEN, AMBER, RED)
+    pub distribution_classification: Option<String>,
+    /// Number of data provenance citations (CycloneDX 1.7+)
+    pub citations_count: usize,
 }
 
 /// Self-declared completeness level of the SBOM
@@ -110,6 +114,8 @@ impl Default for DocumentMetadata {
             lifecycle_phase: None,
             completeness_declaration: CompletenessDeclaration::default(),
             signature: None,
+            distribution_classification: None,
+            citations_count: 0,
         }
     }
 }
@@ -241,6 +247,8 @@ pub enum HashAlgorithm {
     Blake2b384,
     Blake2b512,
     Blake3,
+    Streebog256,
+    Streebog512,
     Other(String),
 }
 
@@ -259,6 +267,8 @@ impl std::fmt::Display for HashAlgorithm {
             Self::Blake2b384 => write!(f, "BLAKE2b-384"),
             Self::Blake2b512 => write!(f, "BLAKE2b-512"),
             Self::Blake3 => write!(f, "BLAKE3"),
+            Self::Streebog256 => write!(f, "Streebog-256"),
+            Self::Streebog512 => write!(f, "Streebog-512"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }
@@ -317,6 +327,10 @@ pub enum ExternalRefType {
     Certification,
     QualityMetrics,
     Codified,
+    Citation,
+    Patent,
+    PatentAssertion,
+    PatentFamily,
     Other(String),
 }
 
@@ -360,6 +374,10 @@ impl std::fmt::Display for ExternalRefType {
             Self::Certification => write!(f, "certification-report"),
             Self::QualityMetrics => write!(f, "quality-metrics"),
             Self::Codified => write!(f, "codified"),
+            Self::Citation => write!(f, "citation"),
+            Self::Patent => write!(f, "patent"),
+            Self::PatentAssertion => write!(f, "patent-assertion"),
+            Self::PatentFamily => write!(f, "patent-family"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }

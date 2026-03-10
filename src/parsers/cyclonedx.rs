@@ -1,6 +1,6 @@
 //! `CycloneDX` SBOM parser.
 //!
-//! Supports `CycloneDX` versions 1.4, 1.5, and 1.6 in JSON and XML formats.
+//! Supports `CycloneDX` versions 1.4, 1.5, 1.6, and 1.7 in JSON and XML formats.
 
 use crate::model::{
     CanonicalId, CompletenessDeclaration, Component, ComponentType, Creator, CreatorType,
@@ -70,12 +70,14 @@ impl CycloneDxParser {
                 authors: None,
                 component: m.component,
                 lifecycles: None,
+                distribution_constraints: None,
             }),
             components: cdx.components.map(|c| c.component),
             dependencies: cdx.dependencies.map(|d| d.dependency),
             vulnerabilities: cdx.vulnerabilities.map(|v| v.vulnerability),
             compositions: None,
             signature: None,
+            citations: None,
         };
 
         Ok(self.convert_to_normalized(bom))
@@ -202,6 +204,30 @@ impl CycloneDxParser {
             }
         }
 
+        // Store citations in format extensions for lossless preservation (1.7+)
+        if let Some(citations) = &cdx.citations
+            && !citations.is_empty()
+        {
+            if let Ok(citations_json) = serde_json::to_value(
+                citations
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "timestamp": c.timestamp,
+                            "attributedTo": c.attributed_to,
+                            "process": c.process,
+                            "note": c.note,
+                            "pointers": c.pointers,
+                            "expressions": c.expressions,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ) {
+                sbom.extensions.cyclonedx =
+                    Some(serde_json::json!({ "citations": citations_json }));
+            }
+        }
+
         sbom.calculate_content_hash();
         sbom
     }
@@ -267,6 +293,16 @@ impl CycloneDxParser {
             has_value: sig.value.as_ref().is_some_and(|v| !v.is_empty()),
         });
 
+        // Extract distribution classification from 1.7+ metadata
+        let distribution_classification = cdx
+            .metadata
+            .as_ref()
+            .and_then(|m| m.distribution_constraints.as_ref())
+            .and_then(|dc| dc.tlp.clone());
+
+        // Count citations for provenance tracking (1.7+)
+        let citations_count = cdx.citations.as_ref().map_or(0, Vec::len);
+
         DocumentMetadata {
             format: SbomFormat::CycloneDx,
             format_version: cdx.spec_version.clone(),
@@ -285,6 +321,8 @@ impl CycloneDxParser {
             lifecycle_phase,
             completeness_declaration,
             signature,
+            distribution_classification,
+            citations_count,
         }
     }
 
@@ -315,6 +353,9 @@ impl CycloneDxParser {
             "file" => ComponentType::File,
             "machine-learning-model" => ComponentType::MachineLearningModel,
             "data" => ComponentType::Data,
+            "platform" => ComponentType::Platform,
+            "device-driver" => ComponentType::DeviceDriver,
+            "cryptographic" | "cryptographic-asset" => ComponentType::Cryptographic,
             other => ComponentType::Other(other.to_string()),
         };
 
@@ -362,6 +403,8 @@ impl CycloneDxParser {
                     "BLAKE2B-384" => HashAlgorithm::Blake2b384,
                     "BLAKE2B-512" => HashAlgorithm::Blake2b512,
                     "BLAKE3" => HashAlgorithm::Blake3,
+                    "STREEBOG-256" => HashAlgorithm::Streebog256,
+                    "STREEBOG-512" => HashAlgorithm::Streebog512,
                     other => HashAlgorithm::Other(other.to_string()),
                 };
                 comp.hashes.push(Hash::new(algorithm, h.content.clone()));
@@ -383,6 +426,10 @@ impl CycloneDxParser {
                     "license" => ExternalRefType::License,
                     "build-meta" => ExternalRefType::BuildMeta,
                     "release-notes" => ExternalRefType::ReleaseNotes,
+                    "citation" => ExternalRefType::Citation,
+                    "patent" => ExternalRefType::Patent,
+                    "patent-assertion" => ExternalRefType::PatentAssertion,
+                    "patent-family" => ExternalRefType::PatentFamily,
                     other => ExternalRefType::Other(other.to_string()),
                 };
                 comp.external_refs.push(ExternalReference {
@@ -409,6 +456,10 @@ impl CycloneDxParser {
         comp.group.clone_from(&cdx.group);
         comp.author.clone_from(&cdx.author);
         comp.copyright.clone_from(&cdx.copyright);
+
+        // Set 1.7+ fields
+        comp.is_external = cdx.is_external;
+        comp.version_range.clone_from(&cdx.version_range);
 
         comp.calculate_content_hash();
         comp
@@ -575,7 +626,7 @@ impl SbomParser for CycloneDxParser {
     }
 
     fn supported_versions(&self) -> Vec<&str> {
-        vec!["1.4", "1.5", "1.6"]
+        vec!["1.4", "1.5", "1.6", "1.7"]
     }
 
     fn format_name(&self) -> &'static str {
@@ -716,6 +767,8 @@ struct CycloneDxBom {
     vulnerabilities: Option<Vec<CdxVulnerability>>,
     compositions: Option<Vec<CdxComposition>>,
     signature: Option<CdxSignature>,
+    /// Data provenance citations (1.7+)
+    citations: Option<Vec<CdxCitation>>,
 }
 
 /// CycloneDX composition entry (1.4+)
@@ -728,6 +781,37 @@ struct CdxComposition {
     aggregate: Option<String>,
     /// References to components included in this composition
     assemblies: Option<Vec<String>>,
+}
+
+/// CycloneDX citation for data provenance (1.7+)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxCitation {
+    /// BOM reference
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    /// JSON Pointers (RFC 6901) identifying attributed BOM fields
+    pointers: Option<Vec<String>>,
+    /// Path expressions (JSONPath/XPath) identifying attributed BOM fields
+    expressions: Option<Vec<String>>,
+    /// When the attribution was made
+    timestamp: Option<String>,
+    /// Reference to the entity that supplied the data
+    attributed_to: Option<String>,
+    /// Reference to a formulation/workflow/task that generated the data
+    process: Option<String>,
+    /// Freeform description
+    note: Option<String>,
+}
+
+/// CycloneDX distribution constraints (1.7+)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxDistributionConstraints {
+    /// Traffic Light Protocol classification
+    tlp: Option<String>,
 }
 
 /// CycloneDX JSF signature (JSON Signature Format)
@@ -754,6 +838,8 @@ struct CdxMetadata {
     component: Option<CdxComponent>,
     /// Lifecycles field (1.5+) - contains phases like end-of-support dates
     lifecycles: Option<Vec<CdxLifecycle>>,
+    /// Distribution constraints (1.7+) with TLP classification
+    distribution_constraints: Option<CdxDistributionConstraints>,
 }
 
 /// `CycloneDX` lifecycle entry (1.5+)
@@ -917,6 +1003,11 @@ struct CdxComponent {
     hashes: Option<Vec<CdxHash>>,
     external_references: Option<Vec<CdxExternalReference>>,
     properties: Option<Vec<CdxProperty>>,
+    /// Whether this component is external (1.7+)
+    #[serde(default)]
+    is_external: bool,
+    /// Package URL Version Range syntax (1.7+, mutually exclusive with version)
+    version_range: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

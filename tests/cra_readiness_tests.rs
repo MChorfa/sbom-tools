@@ -32,6 +32,8 @@ fn base_document_metadata() -> DocumentMetadata {
         lifecycle_phase: None,
         completeness_declaration: CompletenessDeclaration::Unknown,
         signature: None,
+        distribution_classification: None,
+        citations_count: 0,
     }
 }
 

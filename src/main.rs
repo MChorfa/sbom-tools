@@ -31,8 +31,8 @@ const fn build_long_version() -> &'static str {
     concat!(
         env!("CARGO_PKG_VERSION"),
         "\n\nSupported SBOM Formats:",
-        "\n  CycloneDX: 1.4, 1.5, 1.6 (JSON, XML)",
-        "\n  SPDX:      2.2, 2.3 (JSON, tag-value, RDF/XML)",
+        "\n  CycloneDX: 1.4, 1.5, 1.6, 1.7 (JSON, XML)",
+        "\n  SPDX:      2.2, 2.3 (JSON, tag-value, RDF/XML), 3.0 (JSON-LD)",
         "\n\nOutput Formats:",
         "\n  tui, json, sarif, markdown, html, summary, table, side-by-side",
         "\n\nFeatures:",

@@ -197,6 +197,298 @@ mod parser_tests {
         let result = parse_sbom_str(unknown);
         assert!(result.is_err(), "Should fail for unknown format");
     }
+
+    #[test]
+    fn test_parse_cyclonedx_1_7() {
+        let path = fixture_path("cyclonedx/minimal-1.7.cdx.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX 1.7 SBOM");
+
+        // 4 components: metadata.component (acme-app) + lib-a + lib-b + crypto-asset-1
+        assert_eq!(sbom.component_count(), 4);
+        assert!(sbom.components.values().any(|c| c.name == "acme-app"));
+        assert!(sbom.components.values().any(|c| c.name == "lib-a"));
+        assert!(sbom.components.values().any(|c| c.name == "lib-b"));
+        assert!(sbom.components.values().any(|c| c.name == "AES-256-GCM"));
+
+        // Verify spec version
+        assert_eq!(sbom.document.spec_version, "1.7");
+        assert_eq!(sbom.document.format_version, "1.7");
+
+        // Primary component should be set
+        assert!(sbom.primary_component_id.is_some());
+
+        // Verify distribution classification (TLP)
+        assert_eq!(
+            sbom.document.distribution_classification.as_deref(),
+            Some("GREEN")
+        );
+
+        // Verify citations count
+        assert_eq!(sbom.document.citations_count, 2);
+
+        // Verify citations stored in format extensions
+        assert!(sbom.extensions.cyclonedx.is_some());
+        let ext = sbom.extensions.cyclonedx.as_ref().unwrap();
+        assert!(ext.get("citations").is_some());
+
+        // Verify completeness declaration
+        assert_eq!(
+            sbom.document.completeness_declaration,
+            sbom_tools::model::CompletenessDeclaration::Complete
+        );
+    }
+
+    #[test]
+    fn test_cyclonedx_1_7_is_external() {
+        let path = fixture_path("cyclonedx/minimal-1.7.cdx.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX 1.7 SBOM");
+
+        // lib-b has isExternal=true
+        let lib_b = sbom
+            .components
+            .values()
+            .find(|c| c.name == "lib-b")
+            .expect("lib-b not found");
+        assert!(lib_b.is_external);
+        assert_eq!(
+            lib_b.version_range.as_deref(),
+            Some("vers:cargo/>=1.0.0|<3.0.0")
+        );
+
+        // lib-a does not
+        let lib_a = sbom
+            .components
+            .values()
+            .find(|c| c.name == "lib-a")
+            .expect("lib-a not found");
+        assert!(!lib_a.is_external);
+        assert!(lib_a.version_range.is_none());
+    }
+
+    #[test]
+    fn test_cyclonedx_1_7_streebog_hash() {
+        let path = fixture_path("cyclonedx/minimal-1.7.cdx.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX 1.7 SBOM");
+
+        let lib_a = sbom
+            .components
+            .values()
+            .find(|c| c.name == "lib-a")
+            .expect("lib-a not found");
+        assert_eq!(lib_a.hashes.len(), 2);
+
+        let has_sha256 = lib_a
+            .hashes
+            .iter()
+            .any(|h| h.algorithm == sbom_tools::model::HashAlgorithm::Sha256);
+        let has_streebog = lib_a
+            .hashes
+            .iter()
+            .any(|h| h.algorithm == sbom_tools::model::HashAlgorithm::Streebog256);
+        assert!(has_sha256, "Should have SHA-256 hash");
+        assert!(has_streebog, "Should have Streebog-256 hash");
+    }
+
+    #[test]
+    fn test_cyclonedx_1_7_cryptographic_component() {
+        let path = fixture_path("cyclonedx/minimal-1.7.cdx.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX 1.7 SBOM");
+
+        let crypto = sbom
+            .components
+            .values()
+            .find(|c| c.name == "AES-256-GCM")
+            .expect("crypto component not found");
+        assert_eq!(
+            crypto.component_type,
+            sbom_tools::model::ComponentType::Cryptographic
+        );
+    }
+
+    #[test]
+    fn test_cyclonedx_1_7_mixed_licenses() {
+        let path = fixture_path("cyclonedx/minimal-1.7.cdx.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX 1.7 SBOM");
+
+        let lib_a = sbom
+            .components
+            .values()
+            .find(|c| c.name == "lib-a")
+            .expect("lib-a not found");
+        // Should have both a license object (MIT) and an expression (Apache-2.0)
+        assert_eq!(lib_a.licenses.declared.len(), 2);
+    }
+
+    #[test]
+    fn test_cyclonedx_1_7_backward_compat_with_1_5() {
+        // Ensure existing 1.5 fixtures still parse correctly
+        let path_15 = fixture_path("cyclonedx/minimal.cdx.json");
+        let sbom_15 = parse_sbom(&path_15).expect("Failed to parse CycloneDX 1.5 SBOM");
+        assert_eq!(sbom_15.component_count(), 3);
+        assert_eq!(sbom_15.document.spec_version, "1.5");
+
+        // 1.7-specific fields should be None/default for 1.5 documents
+        assert!(sbom_15.document.distribution_classification.is_none());
+        assert_eq!(sbom_15.document.citations_count, 0);
+        for comp in sbom_15.components.values() {
+            assert!(!comp.is_external);
+            assert!(comp.version_range.is_none());
+        }
+    }
+
+    // ========================================================================
+    // SPDX 3.0 Parser Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_spdx3_minimal() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        assert_eq!(sbom.document.format, sbom_tools::model::SbomFormat::Spdx);
+        assert_eq!(sbom.document.spec_version, "3.0.1");
+        assert_eq!(
+            sbom.document.name,
+            Some("Minimal SPDX 3.0 Test Document".to_string())
+        );
+        // 3 packages + 1 file = 4 components
+        assert_eq!(sbom.component_count(), 4);
+    }
+
+    #[test]
+    fn test_spdx3_creators() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        // Should resolve agent references to creator entries
+        assert!(!sbom.document.creators.is_empty());
+        let creator_names: Vec<&str> = sbom.document.creators.iter().map(|c| c.name.as_str()).collect();
+        assert!(creator_names.contains(&"sbom-generator"), "Expected 'sbom-generator' in creators: {creator_names:?}");
+    }
+
+    #[test]
+    fn test_spdx3_packages_and_files() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        // Check that packages are converted with correct types
+        let components: Vec<_> = sbom.components.values().collect();
+
+        let my_app = components.iter().find(|c| c.name == "my-app").expect("my-app not found");
+        assert_eq!(my_app.component_type, sbom_tools::model::ComponentType::Application);
+        assert_eq!(my_app.version.as_deref(), Some("1.0.0"));
+        assert!(my_app.identifiers.purl.is_some());
+        assert_eq!(my_app.copyright.as_deref(), Some("Copyright 2025 Acme Corp"));
+
+        let lib_core = components.iter().find(|c| c.name == "lib-core").expect("lib-core not found");
+        assert_eq!(lib_core.component_type, sbom_tools::model::ComponentType::Library);
+        assert_eq!(lib_core.version.as_deref(), Some("2.3.0"));
+        // Should have 2 hashes (sha256 + sha512)
+        assert_eq!(lib_core.hashes.len(), 2);
+
+        let readme = components.iter().find(|c| c.name == "README.md").expect("README.md not found");
+        assert_eq!(readme.component_type, sbom_tools::model::ComponentType::File);
+    }
+
+    #[test]
+    fn test_spdx3_dependency_edges() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        // Should have dependency edges: app->core, app->utils, app->readme(CONTAINS)
+        assert!(sbom.edges.len() >= 3, "Expected at least 3 edges, got {}", sbom.edges.len());
+    }
+
+    #[test]
+    fn test_spdx3_license_relationships() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        // my-app should have declared license MIT
+        let my_app = sbom.components.values().find(|c| c.name == "my-app").expect("my-app not found");
+        assert!(!my_app.licenses.declared.is_empty(), "my-app should have declared license");
+        assert!(
+            my_app.licenses.declared.iter().any(|l| l.expression.contains("MIT")),
+            "Expected MIT license for my-app"
+        );
+
+        // lib-core should have concluded license Apache-2.0
+        let lib_core = sbom.components.values().find(|c| c.name == "lib-core").expect("lib-core not found");
+        assert!(
+            lib_core.licenses.concluded.is_some(),
+            "lib-core should have concluded license"
+        );
+        assert!(
+            lib_core.licenses.concluded.as_ref().unwrap().expression.contains("Apache-2.0"),
+            "Expected Apache-2.0 concluded license for lib-core"
+        );
+    }
+
+    #[test]
+    fn test_spdx3_vulnerability() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        // lib-core should have CVE-2024-1234
+        let lib_core = sbom.components.values().find(|c| c.name == "lib-core").expect("lib-core not found");
+        assert!(!lib_core.vulnerabilities.is_empty(), "lib-core should have vulnerabilities");
+        assert!(
+            lib_core.vulnerabilities.iter().any(|v| v.id == "CVE-2024-1234"),
+            "Expected CVE-2024-1234 on lib-core"
+        );
+    }
+
+    #[test]
+    fn test_spdx3_supplier() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        let my_app = sbom.components.values().find(|c| c.name == "my-app").expect("my-app not found");
+        assert!(my_app.supplier.is_some(), "my-app should have supplier");
+        assert_eq!(my_app.supplier.as_ref().unwrap().name, "Acme Corp");
+    }
+
+    #[test]
+    fn test_spdx3_external_identifiers() {
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
+
+        let my_app = sbom.components.values().find(|c| c.name == "my-app").expect("my-app not found");
+        // Should have CPE from externalIdentifier
+        assert!(!my_app.identifiers.cpe.is_empty(), "my-app should have CPE");
+        assert!(my_app.identifiers.cpe[0].starts_with("cpe:2.3:"));
+        // Should have VCS external ref
+        assert!(!my_app.external_refs.is_empty(), "my-app should have external refs");
+    }
+
+    #[test]
+    fn test_spdx3_cross_format_diff_with_cyclonedx() {
+        // Test that SPDX 3.0 and CycloneDX SBOMs can be diffed against each other
+        let spdx3_path = fixture_path("spdx3/minimal.spdx3.json");
+        let cdx_path = fixture_path("cyclonedx/minimal.cdx.json");
+
+        let spdx3_sbom = parse_sbom(&spdx3_path).expect("Failed to parse SPDX 3.0");
+        let cdx_sbom = parse_sbom(&cdx_path).expect("Failed to parse CycloneDX");
+
+        let engine = DiffEngine::new();
+        let diff = engine.diff(&spdx3_sbom, &cdx_sbom).expect("Diff should succeed");
+
+        // Both have components; diff should produce results without panicking
+        let total = diff.components.added.len() + diff.components.removed.len() + diff.components.modified.len();
+        assert!(total > 0, "Cross-format diff should have component changes");
+    }
+
+    #[test]
+    fn test_spdx3_format_detection() {
+        use sbom_tools::parsers::detect_format;
+
+        let content = std::fs::read_to_string(fixture_path("spdx3/minimal.spdx3.json"))
+            .expect("Failed to read fixture");
+        let detected = detect_format(&content).expect("Should detect SPDX 3.0 format");
+        assert_eq!(detected.format_name, "SPDX");
+        assert!(detected.confidence >= 0.9, "Expected high confidence for SPDX 3.0, got {}", detected.confidence);
+        assert_eq!(detected.variant, Some("JSON-LD".to_string()));
+    }
 }
 
 // ============================================================================
@@ -496,6 +788,46 @@ mod cross_format_tests {
         assert!(
             result.summary.components_removed <= 1,
             "Only the root app component should be unmatched"
+        );
+    }
+
+    #[test]
+    fn test_spdx3_quality_scoring() {
+        use sbom_tools::quality::ScoringProfile;
+
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0");
+
+        let scorer = sbom_tools::quality::QualityScorer::new(ScoringProfile::Standard);
+        let report = scorer.score(&sbom);
+
+        // SPDX 3.0 should score reasonably well - it has components, hashes, licenses
+        assert!(
+            report.overall_score > 0.0,
+            "SPDX 3.0 quality score should be > 0, got {}",
+            report.overall_score
+        );
+    }
+
+    #[test]
+    fn test_spdx3_compliance_no_false_positives() {
+        use sbom_tools::quality::{ComplianceChecker, ComplianceLevel};
+
+        let path = fixture_path("spdx3/minimal.spdx3.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0");
+
+        let checker = ComplianceChecker::new(ComplianceLevel::Minimum);
+        let report = checker.check(&sbom);
+
+        // SPDX 3.0 URN-style IDs should not trigger false SPDXRef- format violations
+        let spdxref_violations: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.requirement.contains("SPDXRef-"))
+            .collect();
+        assert!(
+            spdxref_violations.is_empty(),
+            "SPDX 3.0 should not trigger SPDXRef- format violations: {spdxref_violations:?}"
         );
     }
 }
@@ -1648,5 +1980,27 @@ mod streaming_tests {
             sbom_tools::ReportFormat::Json,
             "NdjsonReporter should implement WriterReporter"
         );
+    }
+
+    #[test]
+    fn test_streaming_spdx3_via_reader() {
+        use sbom_tools::parsers::parse_sbom;
+        use std::path::Path;
+
+        // SPDX 3.0 should work through the reader path (used by streaming parser)
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/spdx3/minimal.spdx3.json"
+        ));
+        let file = std::fs::File::open(path).expect("Failed to open fixture");
+        let reader = std::io::BufReader::new(file);
+
+        let detector = sbom_tools::parsers::FormatDetector::new();
+        let sbom = detector
+            .parse_reader(reader)
+            .expect("SPDX 3.0 should parse via reader path");
+
+        assert_eq!(sbom.document.spec_version, "3.0.1");
+        assert_eq!(sbom.component_count(), 4);
     }
 }

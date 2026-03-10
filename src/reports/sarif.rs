@@ -1094,7 +1094,7 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             id: "SBOM-CRA-ART-13-4".to_string(),
             name: "CraMachineReadableFormat".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(4): SBOM must be in a machine-readable format (CycloneDX 1.4+ or SPDX 2.3+)".to_string(),
+                text: "CRA Art. 13(4): SBOM must be in a machine-readable format (CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+)".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
