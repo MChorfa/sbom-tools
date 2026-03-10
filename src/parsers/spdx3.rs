@@ -131,13 +131,7 @@ impl Spdx3Parser {
 
         // Process relationships
         for rel in &relationships {
-            self.process_relationship(
-                rel,
-                &id_map,
-                &mut sbom,
-                &vuln_map,
-                &license_elements,
-            );
+            self.process_relationship(rel, &id_map, &mut sbom, &vuln_map, &license_elements);
         }
 
         sbom.calculate_content_hash();
@@ -206,10 +200,7 @@ impl Spdx3Parser {
             .unwrap_or_else(|| "3.0".to_string());
 
         // Extract profile conformance
-        let profile_conformance = doc
-            .profile_conformance
-            .as_ref()
-            .map(|ps| ps.join(", "));
+        let profile_conformance = doc.profile_conformance.as_ref().map(|ps| ps.join(", "));
 
         // Signature from document if present
         let signature = doc.verified_using.as_ref().and_then(|methods| {
@@ -317,10 +308,7 @@ impl Spdx3Parser {
             for supplier_ref in supplied_by {
                 if let Some(agent) = agent_map.get(supplier_ref) {
                     comp.supplier = Some(Organization::new(
-                        agent
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| supplier_ref.clone()),
+                        agent.name.clone().unwrap_or_else(|| supplier_ref.clone()),
                     ));
                     break;
                 }
@@ -330,19 +318,17 @@ impl Spdx3Parser {
         // Set external references
         if let Some(ext_refs) = &pkg.external_ref {
             for ext_ref in ext_refs {
-                let ref_type = ext_ref
-                    .external_ref_type
-                    .as_deref()
-                    .map_or(ExternalRefType::Other("unknown".to_string()), |t| {
-                        match t.to_lowercase().as_str() {
-                            "securityadvisory" | "advisories" => ExternalRefType::Advisories,
-                            "documentation" => ExternalRefType::Documentation,
-                            "vcs" => ExternalRefType::Vcs,
-                            "issuetracker" | "issue-tracker" => ExternalRefType::IssueTracker,
-                            "bom" => ExternalRefType::Bom,
-                            other => ExternalRefType::Other(other.to_string()),
-                        }
-                    });
+                let ref_type = ext_ref.external_ref_type.as_deref().map_or(
+                    ExternalRefType::Other("unknown".to_string()),
+                    |t| match t.to_lowercase().as_str() {
+                        "securityadvisory" | "advisories" => ExternalRefType::Advisories,
+                        "documentation" => ExternalRefType::Documentation,
+                        "vcs" => ExternalRefType::Vcs,
+                        "issuetracker" | "issue-tracker" => ExternalRefType::IssueTracker,
+                        "bom" => ExternalRefType::Bom,
+                        other => ExternalRefType::Other(other.to_string()),
+                    },
+                );
                 if let Some(locators) = &ext_ref.locator {
                     for url in locators {
                         comp.external_refs.push(ExternalReference {
@@ -441,12 +427,7 @@ impl Spdx3Parser {
                 self.add_dependency_edge(rel, id_map, sbom, DependencyType::VariantOf);
             }
             "DISTRIBUTION_ARTIFACT" => {
-                self.add_dependency_edge(
-                    rel,
-                    id_map,
-                    sbom,
-                    DependencyType::DistributionArtifact,
-                );
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DistributionArtifact);
             }
             "PATCH_FOR" | "PATCH_APPLIED" => {
                 self.add_dependency_edge(rel, id_map, sbom, DependencyType::PatchFor);
@@ -586,12 +567,11 @@ impl Spdx3Parser {
             .external_identifier
             .as_ref()
             .and_then(|ids| {
-                ids.iter().find_map(|id| {
-                    match id.external_identifier_type.as_deref() {
+                ids.iter()
+                    .find_map(|id| match id.external_identifier_type.as_deref() {
                         Some("cve") | Some("securityOther") => Some(id.identifier.clone()),
                         _ => None,
-                    }
-                })
+                    })
             })
             .or_else(|| vuln.name.clone())
             .unwrap_or_else(|| {
@@ -832,10 +812,7 @@ enum Spdx3Element {
     )]
     LicenseExpression(Spdx3LicenseExpression),
     /// SPDX 3.0 simple licensing text
-    #[serde(
-        alias = "simplelicensing_SimpleLicensingText",
-        alias = "CustomLicense"
-    )]
+    #[serde(alias = "simplelicensing_SimpleLicensingText", alias = "CustomLicense")]
     SimpleLicensingText(Spdx3SimpleLicensingText),
     /// VEX assessment relationships
     #[serde(

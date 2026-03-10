@@ -362,8 +362,16 @@ mod parser_tests {
 
         // Should resolve agent references to creator entries
         assert!(!sbom.document.creators.is_empty());
-        let creator_names: Vec<&str> = sbom.document.creators.iter().map(|c| c.name.as_str()).collect();
-        assert!(creator_names.contains(&"sbom-generator"), "Expected 'sbom-generator' in creators: {creator_names:?}");
+        let creator_names: Vec<&str> = sbom
+            .document
+            .creators
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert!(
+            creator_names.contains(&"sbom-generator"),
+            "Expected 'sbom-generator' in creators: {creator_names:?}"
+        );
     }
 
     #[test]
@@ -374,20 +382,41 @@ mod parser_tests {
         // Check that packages are converted with correct types
         let components: Vec<_> = sbom.components.values().collect();
 
-        let my_app = components.iter().find(|c| c.name == "my-app").expect("my-app not found");
-        assert_eq!(my_app.component_type, sbom_tools::model::ComponentType::Application);
+        let my_app = components
+            .iter()
+            .find(|c| c.name == "my-app")
+            .expect("my-app not found");
+        assert_eq!(
+            my_app.component_type,
+            sbom_tools::model::ComponentType::Application
+        );
         assert_eq!(my_app.version.as_deref(), Some("1.0.0"));
         assert!(my_app.identifiers.purl.is_some());
-        assert_eq!(my_app.copyright.as_deref(), Some("Copyright 2025 Acme Corp"));
+        assert_eq!(
+            my_app.copyright.as_deref(),
+            Some("Copyright 2025 Acme Corp")
+        );
 
-        let lib_core = components.iter().find(|c| c.name == "lib-core").expect("lib-core not found");
-        assert_eq!(lib_core.component_type, sbom_tools::model::ComponentType::Library);
+        let lib_core = components
+            .iter()
+            .find(|c| c.name == "lib-core")
+            .expect("lib-core not found");
+        assert_eq!(
+            lib_core.component_type,
+            sbom_tools::model::ComponentType::Library
+        );
         assert_eq!(lib_core.version.as_deref(), Some("2.3.0"));
         // Should have 2 hashes (sha256 + sha512)
         assert_eq!(lib_core.hashes.len(), 2);
 
-        let readme = components.iter().find(|c| c.name == "README.md").expect("README.md not found");
-        assert_eq!(readme.component_type, sbom_tools::model::ComponentType::File);
+        let readme = components
+            .iter()
+            .find(|c| c.name == "README.md")
+            .expect("README.md not found");
+        assert_eq!(
+            readme.component_type,
+            sbom_tools::model::ComponentType::File
+        );
     }
 
     #[test]
@@ -396,7 +425,11 @@ mod parser_tests {
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
 
         // Should have dependency edges: app->core, app->utils, app->readme(CONTAINS)
-        assert!(sbom.edges.len() >= 3, "Expected at least 3 edges, got {}", sbom.edges.len());
+        assert!(
+            sbom.edges.len() >= 3,
+            "Expected at least 3 edges, got {}",
+            sbom.edges.len()
+        );
     }
 
     #[test]
@@ -405,21 +438,42 @@ mod parser_tests {
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
 
         // my-app should have declared license MIT
-        let my_app = sbom.components.values().find(|c| c.name == "my-app").expect("my-app not found");
-        assert!(!my_app.licenses.declared.is_empty(), "my-app should have declared license");
+        let my_app = sbom
+            .components
+            .values()
+            .find(|c| c.name == "my-app")
+            .expect("my-app not found");
         assert!(
-            my_app.licenses.declared.iter().any(|l| l.expression.contains("MIT")),
+            !my_app.licenses.declared.is_empty(),
+            "my-app should have declared license"
+        );
+        assert!(
+            my_app
+                .licenses
+                .declared
+                .iter()
+                .any(|l| l.expression.contains("MIT")),
             "Expected MIT license for my-app"
         );
 
         // lib-core should have concluded license Apache-2.0
-        let lib_core = sbom.components.values().find(|c| c.name == "lib-core").expect("lib-core not found");
+        let lib_core = sbom
+            .components
+            .values()
+            .find(|c| c.name == "lib-core")
+            .expect("lib-core not found");
         assert!(
             lib_core.licenses.concluded.is_some(),
             "lib-core should have concluded license"
         );
         assert!(
-            lib_core.licenses.concluded.as_ref().unwrap().expression.contains("Apache-2.0"),
+            lib_core
+                .licenses
+                .concluded
+                .as_ref()
+                .unwrap()
+                .expression
+                .contains("Apache-2.0"),
             "Expected Apache-2.0 concluded license for lib-core"
         );
     }
@@ -430,10 +484,20 @@ mod parser_tests {
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
 
         // lib-core should have CVE-2024-1234
-        let lib_core = sbom.components.values().find(|c| c.name == "lib-core").expect("lib-core not found");
-        assert!(!lib_core.vulnerabilities.is_empty(), "lib-core should have vulnerabilities");
+        let lib_core = sbom
+            .components
+            .values()
+            .find(|c| c.name == "lib-core")
+            .expect("lib-core not found");
         assert!(
-            lib_core.vulnerabilities.iter().any(|v| v.id == "CVE-2024-1234"),
+            !lib_core.vulnerabilities.is_empty(),
+            "lib-core should have vulnerabilities"
+        );
+        assert!(
+            lib_core
+                .vulnerabilities
+                .iter()
+                .any(|v| v.id == "CVE-2024-1234"),
             "Expected CVE-2024-1234 on lib-core"
         );
     }
@@ -443,7 +507,11 @@ mod parser_tests {
         let path = fixture_path("spdx3/minimal.spdx3.json");
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
 
-        let my_app = sbom.components.values().find(|c| c.name == "my-app").expect("my-app not found");
+        let my_app = sbom
+            .components
+            .values()
+            .find(|c| c.name == "my-app")
+            .expect("my-app not found");
         assert!(my_app.supplier.is_some(), "my-app should have supplier");
         assert_eq!(my_app.supplier.as_ref().unwrap().name, "Acme Corp");
     }
@@ -453,12 +521,19 @@ mod parser_tests {
         let path = fixture_path("spdx3/minimal.spdx3.json");
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 SBOM");
 
-        let my_app = sbom.components.values().find(|c| c.name == "my-app").expect("my-app not found");
+        let my_app = sbom
+            .components
+            .values()
+            .find(|c| c.name == "my-app")
+            .expect("my-app not found");
         // Should have CPE from externalIdentifier
         assert!(!my_app.identifiers.cpe.is_empty(), "my-app should have CPE");
         assert!(my_app.identifiers.cpe[0].starts_with("cpe:2.3:"));
         // Should have VCS external ref
-        assert!(!my_app.external_refs.is_empty(), "my-app should have external refs");
+        assert!(
+            !my_app.external_refs.is_empty(),
+            "my-app should have external refs"
+        );
     }
 
     #[test]
@@ -471,10 +546,14 @@ mod parser_tests {
         let cdx_sbom = parse_sbom(&cdx_path).expect("Failed to parse CycloneDX");
 
         let engine = DiffEngine::new();
-        let diff = engine.diff(&spdx3_sbom, &cdx_sbom).expect("Diff should succeed");
+        let diff = engine
+            .diff(&spdx3_sbom, &cdx_sbom)
+            .expect("Diff should succeed");
 
         // Both have components; diff should produce results without panicking
-        let total = diff.components.added.len() + diff.components.removed.len() + diff.components.modified.len();
+        let total = diff.components.added.len()
+            + diff.components.removed.len()
+            + diff.components.modified.len();
         assert!(total > 0, "Cross-format diff should have component changes");
     }
 
@@ -486,7 +565,11 @@ mod parser_tests {
             .expect("Failed to read fixture");
         let detected = detect_format(&content).expect("Should detect SPDX 3.0 format");
         assert_eq!(detected.format_name, "SPDX");
-        assert!(detected.confidence >= 0.9, "Expected high confidence for SPDX 3.0, got {}", detected.confidence);
+        assert!(
+            detected.confidence >= 0.9,
+            "Expected high confidence for SPDX 3.0, got {}",
+            detected.confidence
+        );
         assert_eq!(detected.variant, Some("JSON-LD".to_string()));
     }
 }
