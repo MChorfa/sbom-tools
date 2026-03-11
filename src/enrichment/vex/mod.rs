@@ -1,12 +1,14 @@
 //! VEX (Vulnerability Exploitability eXchange) enrichment.
 //!
-//! Parses external VEX documents (OpenVEX format) and applies VEX status
-//! to matching vulnerabilities in an SBOM.
+//! Parses external VEX documents (OpenVEX and CycloneDX VEX formats) and
+//! applies VEX status to matching vulnerabilities in an SBOM.
 
+pub(crate) mod cyclonedx_vex;
 pub(crate) mod openvex;
 
 use crate::model::{NormalizedSbom, VexStatus};
-use openvex::{VexParseError, extract_product_purl, parse_openvex_file, vex_status_from_statement};
+use cyclonedx_vex::{is_cyclonedx_vex, parse_cyclonedx_vex};
+use openvex::{VexParseError, extract_product_purl, parse_openvex, vex_status_from_statement};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -39,8 +41,9 @@ pub struct VexEnricher {
 }
 
 impl VexEnricher {
-    /// Load VEX data from one or more OpenVEX files.
+    /// Load VEX data from one or more VEX files.
     ///
+    /// Supports both OpenVEX and CycloneDX VEX formats (auto-detected).
     /// Files are processed in order; later files override earlier entries
     /// for the same `(vuln_id, purl)` key.
     pub fn from_files(paths: &[PathBuf]) -> Result<Self, VexParseError> {
@@ -50,33 +53,55 @@ impl VexEnricher {
         let mut statements_parsed = 0;
 
         for path in paths {
-            let doc = parse_openvex_file(path)?;
-            documents_loaded += 1;
+            // Auto-detect format by peeking at file content
+            let content = std::fs::read_to_string(path)?;
 
-            for stmt in &doc.statements {
-                statements_parsed += 1;
-                let vuln_id = stmt.vulnerability.name.clone();
-                let status = vex_status_from_statement(stmt);
+            if is_cyclonedx_vex(&content) {
+                let result = parse_cyclonedx_vex(&content)?;
+                documents_loaded += 1;
+                statements_parsed += result.statements_parsed;
 
-                if stmt.products.is_empty() {
-                    // No products = applies to all components with this vuln
-                    vuln_only.insert(vuln_id.clone(), status.clone());
+                // CycloneDX VEX uses bom-ref as key (often a PURL)
+                for ((vuln_id, bom_ref), status) in result.scoped {
+                    lookup.insert((vuln_id, bom_ref), status);
+                }
+                for (vuln_id, status) in result.unscoped {
+                    vuln_only.insert(vuln_id, status);
+                }
+            } else {
+                // Default: try OpenVEX
+                let doc = parse_openvex(&content)?;
+                documents_loaded += 1;
 
-                    // Also insert for aliases
-                    for alias in &stmt.vulnerability.aliases {
-                        vuln_only.insert(alias.clone(), status.clone());
+                for stmt in &doc.statements {
+                    statements_parsed += 1;
+                    let vuln_id = &stmt.vulnerability.name;
+
+                    // Skip statements with empty vulnerability names
+                    if vuln_id.is_empty() {
+                        tracing::warn!("skipping OpenVEX statement with empty vulnerability name");
+                        continue;
                     }
-                } else {
-                    for product in &stmt.products {
-                        if let Some(purl) = extract_product_purl(product) {
-                            lookup.insert((vuln_id.clone(), purl.to_string()), status.clone());
-                            // Also insert for aliases
-                            for alias in &stmt.vulnerability.aliases {
-                                lookup.insert((alias.clone(), purl.to_string()), status.clone());
+
+                    let status = vex_status_from_statement(stmt);
+
+                    if stmt.products.is_empty() {
+                        vuln_only.insert(vuln_id.clone(), status.clone());
+                        for alias in &stmt.vulnerability.aliases {
+                            vuln_only.insert(alias.clone(), status.clone());
+                        }
+                    } else {
+                        for product in &stmt.products {
+                            if let Some(purl) = extract_product_purl(product) {
+                                lookup.insert((vuln_id.clone(), purl.to_string()), status.clone());
+                                for alias in &stmt.vulnerability.aliases {
+                                    lookup
+                                        .insert((alias.clone(), purl.to_string()), status.clone());
+                                }
                             }
-                        } else {
-                            // Product without extractable PURL — treat as vuln-only
-                            vuln_only.insert(vuln_id.clone(), status.clone());
+                            // Products without PURLs are skipped — don't promote
+                            // scoped statements to global scope, as that could
+                            // apply VEX status to unintended components.
                         }
                     }
                 }
@@ -356,5 +381,43 @@ mod tests {
         // The log4j vuln had existing VEX so wasn't "matched" by enricher
         // my-lib CVE-2024-0001 has no VEX and no lookup entry
         assert_eq!(stats.vulns_matched, 0);
+    }
+
+    #[test]
+    fn test_scoped_match_takes_priority_over_vuln_only() {
+        let purl = "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1";
+
+        // Scoped says NotAffected
+        let mut lookup = HashMap::new();
+        lookup.insert(
+            ("CVE-2021-44228".to_string(), purl.to_string()),
+            VexStatus::new(VexState::NotAffected),
+        );
+
+        // vuln_only says Affected (less specific, should lose)
+        let mut vuln_only = HashMap::new();
+        vuln_only.insert(
+            "CVE-2021-44228".to_string(),
+            VexStatus::new(VexState::Affected),
+        );
+
+        let mut enricher = VexEnricher {
+            lookup,
+            vuln_only,
+            stats: VexEnrichmentStats::default(),
+        };
+
+        let mut sbom = make_sbom_with_vulns();
+        enricher.enrich_sbom(&mut sbom);
+
+        for comp in sbom.components.values() {
+            if comp.name == "log4j-core" {
+                assert_eq!(
+                    comp.vulnerabilities[0].vex_status.as_ref().unwrap().status,
+                    VexState::NotAffected,
+                    "scoped (vuln_id, purl) match should take priority over vuln_only"
+                );
+            }
+        }
     }
 }
