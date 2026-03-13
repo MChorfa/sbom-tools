@@ -423,17 +423,11 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
     if comp.vulnerabilities.is_empty() {
         lines.push(Line::from(vec![
             Span::styled("Vulns:     ", label_style),
-            Span::styled(
-                "0 (clean)",
-                Style::default().fg(scheme.success),
-            ),
+            Span::styled("0 (clean)", Style::default().fg(scheme.success)),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(
-                "Vulns:     ",
-                Style::default().fg(scheme.critical).bold(),
-            ),
+            Span::styled("Vulns:     ", Style::default().fg(scheme.critical).bold()),
             Span::styled(
                 format!("{}", comp.vulnerabilities.len()),
                 Style::default().fg(scheme.critical).bold(),
@@ -504,10 +498,7 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
             _ => scheme.muted,
         };
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} End-of-Life: ", eol.status.icon()),
-                label_style,
-            ),
+            Span::styled(format!("{} End-of-Life: ", eol.status.icon()), label_style),
             Span::styled(
                 format!(" {} ", eol.status.label()),
                 Style::default()
@@ -532,10 +523,7 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
         lines.push(Line::from(vec![
             Span::styled("  Product: ", label_style),
             Span::styled(&eol.product, Style::default().fg(scheme.text)),
-            Span::styled(
-                format!(" (cycle {})", eol.cycle),
-                label_style,
-            ),
+            Span::styled(format!(" (cycle {})", eol.cycle), label_style),
         ]));
         if let Some(date) = eol.eol_date {
             lines.push(Line::from(vec![
@@ -1048,7 +1036,10 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
         lines.push(Line::from(vec![
             Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
             Span::styled(format!("{count:>5}"), Style::default().fg(scheme.text)),
-            Span::styled(format!(" {pct:>2}% "), Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!(" {pct:>2}% "),
+                Style::default().fg(scheme.text_muted),
+            ),
             Span::styled(bar, Style::default().fg(*color)),
         ]));
     }
@@ -1083,7 +1074,10 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
         lines.push(Line::from(vec![
             Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
             Span::styled(format!("{count:>5}"), Style::default().fg(scheme.text)),
-            Span::styled(format!(" {pct:>2}% "), Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!(" {pct:>2}% "),
+                Style::default().fg(scheme.text_muted),
+            ),
             Span::styled(bar, Style::default().fg(*color)),
         ]));
     }
@@ -1134,7 +1128,10 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
             lines.push(Line::from(vec![
                 Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
                 Span::styled(format!("{count:>5}"), Style::default().fg(scheme.text)),
-                Span::styled(format!(" {pct:>2}% "), Style::default().fg(scheme.text_muted)),
+                Span::styled(
+                    format!(" {pct:>2}% "),
+                    Style::default().fg(scheme.text_muted),
+                ),
                 Span::styled(bar, Style::default().fg(*color)),
             ]));
         }
