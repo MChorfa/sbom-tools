@@ -190,17 +190,4 @@ impl DiffComplianceState {
             self.selected_violation -= 1;
         }
     }
-
-    /// Adjust `scroll_offset` to keep the selected violation visible within the viewport.
-    pub const fn adjust_scroll(&mut self, viewport_height: usize) {
-        if viewport_height == 0 {
-            return;
-        }
-        // Keep 1 row of padding when possible
-        if self.selected_violation < self.scroll_offset {
-            self.scroll_offset = self.selected_violation;
-        } else if self.selected_violation >= self.scroll_offset + viewport_height {
-            self.scroll_offset = self.selected_violation + 1 - viewport_height;
-        }
-    }
 }

@@ -25,6 +25,7 @@ mod events;
 pub(crate) mod export;
 pub(crate) mod license_conflicts;
 pub(crate) mod license_utils;
+pub(crate) mod render_context;
 pub(crate) mod security;
 pub(crate) mod shared;
 pub mod state;
@@ -58,7 +59,7 @@ pub use viewmodel::{
 };
 
 // Legacy/Diff TUI exports
-pub use app::{App, AppMode, TabKind, TabStates};
+pub use app::{App, AppMode, ModeStates, TabKind};
 pub use events::Event;
 pub use ui::run_tui;
 
