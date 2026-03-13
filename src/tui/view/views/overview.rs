@@ -445,24 +445,25 @@ fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
 fn render_details_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let has_edges = !app.sbom.edges.is_empty();
 
-    let remaining = area.height.saturating_sub(11);
+    let doc_info_height = compute_doc_info_height(&app.sbom.document);
+    let remaining = area.height.saturating_sub(doc_info_height);
     let half = remaining / 2;
 
     let chunks = if has_edges {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(11),   // Document info
-                Constraint::Length(half), // Top vulnerable components
-                Constraint::Min(6),       // Top depended-on components
+                Constraint::Length(doc_info_height), // Document info
+                Constraint::Length(half),            // Top vulnerable components
+                Constraint::Min(6),                  // Top depended-on components
             ])
             .split(area)
     } else {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(11), // Document info
-                Constraint::Min(6),     // Top components with vulns
+                Constraint::Length(doc_info_height), // Document info
+                Constraint::Min(6),                  // Top components with vulns
             ])
             .split(area)
     };
@@ -479,35 +480,99 @@ fn render_details_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
     }
 }
 
+/// Compute the height needed for the document info panel.
+///
+/// Counts identity lines + trust/compliance section + security section + export hint + borders.
+fn compute_doc_info_height(doc: &crate::model::DocumentMetadata) -> u16 {
+    use crate::model::CompletenessDeclaration;
+
+    // Identity group: format + created are always shown (2 lines minimum)
+    let mut lines: u16 = 2;
+    if doc.name.is_some() {
+        lines += 1;
+    }
+    let has_authors = doc.creators.iter().any(|c| {
+        matches!(
+            c.creator_type,
+            crate::model::CreatorType::Person | crate::model::CreatorType::Organization
+        )
+    });
+    if has_authors {
+        lines += 1;
+    }
+    if doc
+        .creators
+        .iter()
+        .any(|c| matches!(c.creator_type, crate::model::CreatorType::Tool))
+    {
+        lines += 1;
+    }
+    if doc.serial_number.is_some() {
+        lines += 1;
+    }
+
+    // Trust & Compliance group
+    let has_completeness = !matches!(
+        doc.completeness_declaration,
+        CompletenessDeclaration::Unknown | CompletenessDeclaration::NotSpecified
+    );
+    let trust_lines = u16::from(has_completeness)
+        + u16::from(doc.signature.is_some())
+        + u16::from(doc.lifecycle_phase.is_some())
+        + u16::from(doc.distribution_classification.is_some())
+        + u16::from(doc.citations_count > 0);
+    if trust_lines > 0 {
+        lines += 1 + trust_lines; // section header + fields
+    }
+
+    // Security group
+    let security_lines = u16::from(doc.security_contact.is_some())
+        + u16::from(doc.vulnerability_disclosure_url.is_some())
+        + u16::from(doc.support_end_date.is_some());
+    if security_lines > 0 {
+        lines += 1 + security_lines; // section header + fields
+    }
+
+    // Export hint (empty line + hint line) + borders (top + bottom)
+    lines += 2 + 2;
+
+    lines
+}
+
 fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    use crate::model::CompletenessDeclaration;
+
     let scheme = colors();
     let doc = &app.sbom.document;
 
     let mut lines = vec![];
+    let label_style = Style::default().fg(scheme.muted);
+
+    // ── Group 1: Identity ──
 
     if let Some(name) = &doc.name {
         lines.push(Line::from(vec![
-            Span::styled("Name: ", Style::default().fg(scheme.muted)),
+            Span::styled("Name:    ", label_style),
             Span::styled(name, Style::default().fg(scheme.text).bold()),
         ]));
     }
 
     lines.push(Line::from(vec![
-        Span::styled("Format: ", Style::default().fg(scheme.muted)),
+        Span::styled("Format:  ", label_style),
         Span::styled(
-            format!("{} {}", doc.format, doc.format_version),
-            Style::default().fg(scheme.primary),
+            format!(" {} {} ", doc.format, doc.format_version),
+            Style::default().fg(scheme.badge_fg_dark).bg(scheme.primary),
         ),
     ]));
 
     let (age_str, age_color) = format_age(doc.created);
     lines.push(Line::from(vec![
-        Span::styled("Created: ", Style::default().fg(scheme.muted)),
+        Span::styled("Created: ", label_style),
         Span::raw(doc.created.format("%Y-%m-%d %H:%M:%S").to_string()),
         Span::styled(format!("  ({age_str})"), Style::default().fg(age_color)),
     ]));
 
-    // Get creators (people and orgs)
+    // Creators (people and orgs)
     let authors: Vec<_> = doc
         .creators
         .iter()
@@ -521,12 +586,12 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .collect();
     if !authors.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("Creators: ", Style::default().fg(scheme.muted)),
+            Span::styled("Authors: ", label_style),
             Span::raw(authors.join(", ")),
         ]));
     }
 
-    // Get tools
+    // Tools
     let tools: Vec<_> = doc
         .creators
         .iter()
@@ -535,27 +600,161 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .collect();
     if !tools.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("Tools: ", Style::default().fg(scheme.muted)),
+            Span::styled("Tools:   ", label_style),
             Span::raw(tools.join(", ")),
         ]));
     }
 
     if let Some(serial) = &doc.serial_number {
         lines.push(Line::from(vec![
-            Span::styled("Serial: ", Style::default().fg(scheme.muted)),
-            Span::raw(if serial.len() > 40 {
-                format!("{}...", &serial[..40])
-            } else {
-                serial.clone()
-            }),
+            Span::styled("Serial:  ", label_style),
+            Span::styled(
+                if serial.len() > 36 {
+                    format!("{}...", &serial[..36])
+                } else {
+                    serial.clone()
+                },
+                Style::default().fg(scheme.text_muted),
+            ),
         ]));
     }
 
+    // ── Group 2: Trust & Compliance (conditional) ──
+
+    let has_completeness = !matches!(
+        doc.completeness_declaration,
+        CompletenessDeclaration::Unknown | CompletenessDeclaration::NotSpecified
+    );
+    let has_signature = doc.signature.is_some();
+    let has_lifecycle = doc.lifecycle_phase.is_some();
+    let has_distribution = doc.distribution_classification.is_some();
+    let has_citations = doc.citations_count > 0;
+
+    if has_completeness || has_signature || has_lifecycle || has_distribution || has_citations {
+        lines.push(Line::styled(
+            "── Trust & Compliance ──",
+            Style::default().fg(scheme.border),
+        ));
+
+        if has_completeness {
+            let (badge_label, badge_fg, badge_bg) = match doc.completeness_declaration {
+                CompletenessDeclaration::Complete => {
+                    (" Complete ", scheme.badge_fg_dark, scheme.success)
+                }
+                CompletenessDeclaration::Incomplete
+                | CompletenessDeclaration::IncompleteFirstPartyOnly
+                | CompletenessDeclaration::IncompleteThirdPartyOnly => {
+                    (" Incomplete ", scheme.badge_fg_dark, scheme.warning)
+                }
+                // Unknown/NotSpecified filtered above
+                _ => (" Unknown ", scheme.text, scheme.muted),
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Completeness: ", label_style),
+                Span::styled(badge_label, Style::default().fg(badge_fg).bg(badge_bg)),
+            ]));
+        }
+
+        if let Some(sig) = &doc.signature {
+            let (badge_label, badge_fg, badge_bg) = if sig.has_value {
+                (
+                    format!(" Signed ({}) ", sig.algorithm),
+                    scheme.badge_fg_dark,
+                    scheme.success,
+                )
+            } else {
+                (" Unsigned ".to_string(), scheme.text, scheme.muted)
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Signature:    ", label_style),
+                Span::styled(badge_label, Style::default().fg(badge_fg).bg(badge_bg)),
+            ]));
+        }
+
+        if let Some(phase) = &doc.lifecycle_phase {
+            lines.push(Line::from(vec![
+                Span::styled("Lifecycle:    ", label_style),
+                Span::styled(
+                    format!(" {phase} "),
+                    Style::default().fg(scheme.badge_fg_dark).bg(scheme.primary),
+                ),
+            ]));
+        }
+
+        if let Some(classification) = &doc.distribution_classification {
+            let bg = match classification.to_uppercase().as_str() {
+                s if s.contains("RED") => scheme.critical,
+                s if s.contains("AMBER") => scheme.warning,
+                s if s.contains("GREEN") => scheme.success,
+                _ => scheme.primary,
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Distribution: ", label_style),
+                Span::styled(
+                    format!(" {classification} "),
+                    Style::default().fg(scheme.badge_fg_dark).bg(bg),
+                ),
+            ]));
+        }
+
+        if has_citations {
+            lines.push(Line::from(vec![
+                Span::styled("Citations:    ", label_style),
+                Span::styled(
+                    format!("{} provenance citations", doc.citations_count),
+                    Style::default().fg(scheme.accent),
+                ),
+            ]));
+        }
+    }
+
+    // ── Group 3: Security (conditional) ──
+
+    let has_contact = doc.security_contact.is_some();
+    let has_disclosure = doc.vulnerability_disclosure_url.is_some();
+    let has_eol = doc.support_end_date.is_some();
+
+    if has_contact || has_disclosure || has_eol {
+        lines.push(Line::styled(
+            "── Security ──",
+            Style::default().fg(scheme.border),
+        ));
+
+        if let Some(contact) = &doc.security_contact {
+            lines.push(Line::from(vec![
+                Span::styled("Contact:  ", label_style),
+                Span::styled(contact, Style::default().fg(scheme.accent)),
+            ]));
+        }
+
+        if let Some(url) = &doc.vulnerability_disclosure_url {
+            let display_url = if url.len() > 40 {
+                format!("{}...", &url[..40])
+            } else {
+                url.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Disclose: ", label_style),
+                Span::styled(display_url, Style::default().fg(scheme.text_muted)),
+            ]));
+        }
+
+        if let Some(eol) = doc.support_end_date {
+            let (eol_str, eol_color) = format_support_eol(eol);
+            lines.push(Line::from(vec![
+                Span::styled("EOL:      ", label_style),
+                Span::raw(eol.format("%Y-%m-%d").to_string()),
+                Span::styled(format!("  ({eol_str})"), Style::default().fg(eol_color)),
+            ]));
+        }
+    }
+
     // Export hint
+    lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("[e]", Style::default().fg(scheme.accent)),
         Span::styled(
-            " Export to JSON/CSV/Markdown",
+            " Export (JSON, SARIF, Markdown, HTML, CSV)",
             Style::default().fg(scheme.muted),
         ),
     ]));
@@ -568,6 +767,41 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
     );
 
     frame.render_widget(para, area);
+}
+
+/// Format support end-of-life date with color coding.
+fn format_support_eol(eol: chrono::DateTime<chrono::Utc>) -> (String, Color) {
+    let scheme = colors();
+    let days_until = (eol - chrono::Utc::now()).num_days();
+
+    let label = if days_until < 0 {
+        let days_past = -days_until;
+        if days_past < 30 {
+            format!("expired {days_past}d ago")
+        } else if days_past < 365 {
+            format!("expired {}mo ago", days_past / 30)
+        } else {
+            format!("expired {}y ago", days_past / 365)
+        }
+    } else if days_until == 0 {
+        "expires today".to_string()
+    } else if days_until < 30 {
+        format!("{days_until}d remaining")
+    } else if days_until < 365 {
+        format!("{}mo remaining", days_until / 30)
+    } else {
+        format!("{}y remaining", days_until / 365)
+    };
+
+    let color = if days_until < 0 {
+        scheme.critical
+    } else if days_until < 90 {
+        scheme.warning
+    } else {
+        scheme.success
+    };
+
+    (label, color)
 }
 
 fn render_top_vulnerable(frame: &mut Frame, area: Rect, app: &ViewApp) {

@@ -199,6 +199,21 @@ pub fn detect_component_type(name: &str) -> &'static str {
     "file"
 }
 
+/// Get a human-readable label for a detected component type code.
+///
+/// Returns `None` for generic types ("file") where the label adds no value
+/// over the SBOM `ComponentType`.
+pub fn detect_component_label(name: &str) -> Option<&'static str> {
+    match detect_component_type(name) {
+        "lib" => Some("Shared library"),
+        "bin" => Some("Binary / ELF"),
+        "cert" => Some("Certificate"),
+        "fs" => Some("Filesystem image"),
+        "unk" => Some("Unknown format"),
+        _ => None,
+    }
+}
+
 /// State for the tree widget.
 #[derive(Debug, Clone, Default)]
 pub struct TreeState {
