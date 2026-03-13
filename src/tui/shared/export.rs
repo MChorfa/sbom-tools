@@ -139,9 +139,6 @@ fn format_row<'a>(row: &FormatRow, scheme: &crate::tui::theme::ColorScheme) -> L
             format!(" {:<10}", row.name),
             Style::default().fg(scheme.text).bold(),
         ),
-        Span::styled(
-            row.desc.to_string(),
-            Style::default().fg(scheme.text_muted),
-        ),
+        Span::styled(row.desc.to_string(), Style::default().fg(scheme.text_muted)),
     ])
 }

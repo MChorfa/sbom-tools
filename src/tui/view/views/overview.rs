@@ -454,7 +454,7 @@ fn render_details_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(doc_info_height), // Document info
-                Constraint::Length(half),             // Top vulnerable components
+                Constraint::Length(half),            // Top vulnerable components
                 Constraint::Min(6),                  // Top depended-on components
             ])
             .split(area)
@@ -500,7 +500,11 @@ fn compute_doc_info_height(doc: &crate::model::DocumentMetadata) -> u16 {
     if has_authors {
         lines += 1;
     }
-    if doc.creators.iter().any(|c| matches!(c.creator_type, crate::model::CreatorType::Tool)) {
+    if doc
+        .creators
+        .iter()
+        .any(|c| matches!(c.creator_type, crate::model::CreatorType::Tool))
+    {
         lines += 1;
     }
     if doc.serial_number.is_some() {
@@ -639,11 +643,9 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 }
                 CompletenessDeclaration::Incomplete
                 | CompletenessDeclaration::IncompleteFirstPartyOnly
-                | CompletenessDeclaration::IncompleteThirdPartyOnly => (
-                    " Incomplete ",
-                    scheme.badge_fg_dark,
-                    scheme.warning,
-                ),
+                | CompletenessDeclaration::IncompleteThirdPartyOnly => {
+                    (" Incomplete ", scheme.badge_fg_dark, scheme.warning)
+                }
                 // Unknown/NotSpecified filtered above
                 _ => (" Unknown ", scheme.text, scheme.muted),
             };
@@ -674,9 +676,7 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Span::styled("Lifecycle:    ", label_style),
                 Span::styled(
                     format!(" {phase} "),
-                    Style::default()
-                        .fg(scheme.badge_fg_dark)
-                        .bg(scheme.primary),
+                    Style::default().fg(scheme.badge_fg_dark).bg(scheme.primary),
                 ),
             ]));
         }
