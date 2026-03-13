@@ -168,7 +168,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp, filtered_coun
 fn render_detail_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let scheme = colors();
     let border_color = if app.focus_panel == FocusPanel::Right {
-        scheme.primary
+        scheme.border_focused
     } else {
         scheme.border
     };
@@ -205,7 +205,7 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
         render_group_stats_panel(frame, area, app, &group_label, &child_ids, border_color);
     } else {
         // No component selected - show quick stats overview
-        render_component_stats_panel(frame, area, app, scheme.border);
+        render_component_stats_panel(frame, area, app, border_color);
     }
 }
 
@@ -256,40 +256,122 @@ fn render_component_tab_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
 /// Render the Overview tab - basic component info
 fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_color: Color) {
     let scheme = colors();
+    let label_style = Style::default().fg(scheme.text_muted);
+    let absent = Style::default().fg(scheme.muted);
+    let panel_width = area.width.saturating_sub(4) as usize;
     let mut lines = vec![];
 
-    // Component name (with bookmark indicator)
+    // ── Identity ──
+
+    // Display name (short, extracted from path if needed)
+    let display_name = crate::tui::widgets::extract_display_name(&comp.name);
     lines.push(Line::from(vec![Span::styled(
-        &comp.name,
+        display_name.clone(),
         Style::default().fg(scheme.text).bold(),
     )]));
 
-    // Version
-    if let Some(ver) = &comp.version {
+    // Full path (when name contains a path and display name is shorter)
+    if display_name != comp.name {
+        let truncated_name = if comp.name.len() > panel_width {
+            let max = panel_width.saturating_sub(3);
+            format!("{}...", &comp.name[..max.min(comp.name.len())])
+        } else {
+            comp.name.clone()
+        };
         lines.push(Line::from(vec![
-            Span::styled("Version: ", Style::default().fg(scheme.text_muted)),
-            Span::styled(ver, Style::default().fg(scheme.accent)),
+            Span::styled("Path:      ", label_style),
+            Span::styled(truncated_name, Style::default().fg(scheme.text_muted)),
         ]));
     }
 
-    // Ecosystem
-    if let Some(eco) = &comp.ecosystem {
-        lines.push(Line::from(vec![
-            Span::styled("Ecosystem: ", Style::default().fg(scheme.text_muted)),
-            Span::styled(eco.to_string(), Style::default().fg(scheme.success)),
-        ]));
-    }
-
-    // Type
+    // Version (always shown)
     lines.push(Line::from(vec![
-        Span::styled("Type: ", Style::default().fg(scheme.text_muted)),
+        Span::styled("Version:   ", label_style),
+        if let Some(ver) = &comp.version {
+            Span::styled(ver, Style::default().fg(scheme.accent))
+        } else {
+            Span::styled("—", absent)
+        },
+    ]));
+
+    // Ecosystem (always shown)
+    lines.push(Line::from(vec![
+        Span::styled("Ecosystem: ", label_style),
+        if let Some(eco) = &comp.ecosystem {
+            Span::styled(eco.to_string(), Style::default().fg(scheme.success))
+        } else {
+            Span::styled("—", absent)
+        },
+    ]));
+
+    // Type + detected file category
+    let mut type_spans = vec![
+        Span::styled("Type:      ", label_style),
         Span::styled(
             comp.component_type.to_string(),
             Style::default().fg(scheme.highlight),
         ),
+    ];
+    if let Some(detected) = crate::tui::widgets::detect_component_label(&comp.name) {
+        type_spans.push(Span::styled(
+            format!("  ({detected})"),
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
+    lines.push(Line::from(type_spans));
+
+    // Canonical ID (when it differs from both name and display name)
+    let canonical = comp.canonical_id.value();
+    if canonical != comp.name && canonical != display_name {
+        let display_id = if canonical.len() > panel_width.saturating_sub(12) {
+            let max = panel_width.saturating_sub(15);
+            format!("{}...", &canonical[..max.min(canonical.len())])
+        } else {
+            canonical.to_string()
+        };
+        lines.push(Line::from(vec![
+            Span::styled("ID:        ", label_style),
+            Span::styled(display_id, Style::default().fg(scheme.text_muted)),
+        ]));
+    }
+
+    // ── Identifiers ──
+
+    // PURL (always shown)
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("PURL:      ", label_style),
+        if let Some(purl) = &comp.identifiers.purl {
+            let display = if purl.len() > panel_width.saturating_sub(12) {
+                let max = panel_width.saturating_sub(15);
+                format!("{}...", &purl[..max.min(purl.len())])
+            } else {
+                purl.clone()
+            };
+            Span::styled(display, Style::default().fg(scheme.info))
+        } else {
+            Span::styled("—", absent)
+        },
     ]));
 
-    // Supplier
+    // Hash summary (always shown)
+    lines.push(Line::from(vec![
+        Span::styled("Hash:      ", label_style),
+        if let Some(hash) = comp.hashes.first() {
+            let algo = hash.algorithm.to_string();
+            let val = if hash.value.len() > 16 {
+                format!("{}...", &hash.value[..16])
+            } else {
+                hash.value.clone()
+            };
+            Span::styled(format!("{algo}: {val}"), Style::default().fg(scheme.text))
+        } else {
+            Span::styled("—", absent)
+        },
+    ]));
+
+    // ── Supplier ──
+
     if let Some(supplier) = &comp.supplier {
         lines.push(Line::from(""));
         lines.push(Line::styled(
@@ -302,57 +384,70 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
         ]));
         if let Some(url) = supplier.urls.first() {
             lines.push(Line::from(vec![
-                Span::styled("  URL: ", Style::default().fg(scheme.text_muted)),
+                Span::styled("  URL: ", label_style),
                 Span::styled(url, Style::default().fg(scheme.info)),
             ]));
         }
     }
 
-    // Licenses summary
-    if !comp.licenses.declared.is_empty() {
-        lines.push(Line::from(""));
+    // ── Licenses (always shown) ──
+
+    lines.push(Line::from(""));
+    if comp.licenses.declared.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Licenses:  ", label_style),
+            Span::styled("None declared", absent),
+        ]));
+    } else {
         lines.push(Line::styled(
             "Licenses:",
             Style::default().fg(scheme.success).bold(),
         ));
         for lic in comp.licenses.declared.iter().take(3) {
             lines.push(Line::from(vec![
-                Span::styled("  • ", Style::default().fg(scheme.text_muted)),
+                Span::styled("  • ", label_style),
                 Span::raw(&lic.expression),
             ]));
         }
         if comp.licenses.declared.len() > 3 {
             lines.push(Line::from(vec![Span::styled(
                 format!("  ... and {} more", comp.licenses.declared.len() - 3),
-                Style::default().fg(scheme.text_muted),
+                label_style,
             )]));
         }
     }
 
-    // Vulnerability summary
-    if !comp.vulnerabilities.is_empty() {
-        lines.push(Line::from(""));
+    // ── Vulnerabilities (always shown) ──
+
+    lines.push(Line::from(""));
+    if comp.vulnerabilities.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Vulns:     ", label_style),
+            Span::styled(
+                "0 (clean)",
+                Style::default().fg(scheme.success),
+            ),
+        ]));
+    } else {
         lines.push(Line::from(vec![
             Span::styled(
-                "Vulnerabilities: ",
+                "Vulns:     ",
                 Style::default().fg(scheme.critical).bold(),
             ),
             Span::styled(
                 format!("{}", comp.vulnerabilities.len()),
                 Style::default().fg(scheme.critical).bold(),
             ),
-            Span::styled(
-                " (see [3] Vulnerabilities tab)",
-                Style::default().fg(scheme.text_muted),
-            ),
+            Span::styled(" (see [3] tab)", label_style),
         ]));
     }
 
-    // VEX status
+    // ── VEX status ──
+
     if let Some(vex) = &comp.vex_status {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("VEX Status: ", Style::default().fg(scheme.text_muted)),
+            Span::styled("VEX Status: ", label_style),
             Span::styled(
                 vex.status.to_string(),
                 Style::default().fg(scheme.highlight).bold(),
@@ -360,13 +455,14 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
         ]));
         if let Some(just) = &vex.justification {
             lines.push(Line::from(vec![
-                Span::styled("  Justification: ", Style::default().fg(scheme.text_muted)),
+                Span::styled("  Justification: ", label_style),
                 Span::raw(just.to_string()),
             ]));
         }
     }
 
-    // Staleness info
+    // ── Staleness ──
+
     if let Some(staleness) = &comp.staleness {
         use crate::model::StalenessLevel;
         lines.push(Line::from(""));
@@ -378,7 +474,7 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
             StalenessLevel::Archived => scheme.error,
         };
         lines.push(Line::from(vec![
-            Span::styled("Staleness: ", Style::default().fg(scheme.text_muted)),
+            Span::styled("Staleness: ", label_style),
             Span::styled(
                 format!(" {} ", staleness.level.label()),
                 Style::default()
@@ -389,13 +485,14 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
         ]));
         if let Some(days) = staleness.days_since_update {
             lines.push(Line::from(vec![
-                Span::styled("  Last release: ", Style::default().fg(scheme.text_muted)),
+                Span::styled("  Last release: ", label_style),
                 Span::styled(format!("{days} days ago"), Style::default().fg(stale_color)),
             ]));
         }
     }
 
-    // End-of-Life info
+    // ── End-of-Life ──
+
     if let Some(eol) = &comp.eol {
         use crate::model::EolStatus;
         lines.push(Line::from(""));
@@ -409,7 +506,7 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{} End-of-Life: ", eol.status.icon()),
-                Style::default().fg(scheme.text_muted),
+                label_style,
             ),
             Span::styled(
                 format!(" {} ", eol.status.label()),
@@ -419,7 +516,6 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
                     .bold(),
             ),
         ]));
-        // Days countdown
         if let Some(days) = eol.days_until_eol {
             let days_text = if days < 0 {
                 format!("{} days past EOL", days.abs())
@@ -433,26 +529,23 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
                 Span::styled(days_text, Style::default().fg(eol_color)),
             ]));
         }
-        // Product and cycle
         lines.push(Line::from(vec![
-            Span::styled("  Product: ", Style::default().fg(scheme.text_muted)),
+            Span::styled("  Product: ", label_style),
             Span::styled(&eol.product, Style::default().fg(scheme.text)),
             Span::styled(
                 format!(" (cycle {})", eol.cycle),
-                Style::default().fg(scheme.text_muted),
+                label_style,
             ),
         ]));
-        // EOL date
         if let Some(date) = eol.eol_date {
             lines.push(Line::from(vec![
-                Span::styled("  EOL Date: ", Style::default().fg(scheme.text_muted)),
+                Span::styled("  EOL Date: ", label_style),
                 Span::styled(date.to_string(), Style::default().fg(eol_color)),
             ]));
         }
-        // LTS indicator
         if eol.is_lts {
             lines.push(Line::from(vec![
-                Span::styled("  LTS: ", Style::default().fg(scheme.text_muted)),
+                Span::styled("  LTS: ", label_style),
                 Span::styled(
                     " Yes ",
                     Style::default()
@@ -462,14 +555,13 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
                 ),
             ]));
         }
-        // Latest version in cycle
         if let Some(latest) = &eol.latest_in_cycle {
             let is_outdated = comp
                 .version
                 .as_deref()
                 .is_some_and(|v| v != latest.as_str());
             lines.push(Line::from(vec![
-                Span::styled("  Latest: ", Style::default().fg(scheme.text_muted)),
+                Span::styled("  Latest: ", label_style),
                 Span::styled(
                     latest,
                     Style::default().fg(if is_outdated {
@@ -486,6 +578,35 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
             ]));
         }
     }
+
+    // ── Data completeness indicator ──
+
+    let field_count = 6;
+    let present = u8::from(comp.version.is_some())
+        + u8::from(comp.ecosystem.is_some())
+        + u8::from(comp.identifiers.purl.is_some())
+        + u8::from(!comp.licenses.declared.is_empty())
+        + u8::from(!comp.hashes.is_empty())
+        + u8::from(comp.supplier.is_some());
+    let filled = "█".repeat(present as usize);
+    let empty = "░".repeat(field_count - present as usize);
+    let completeness_color = if present >= 5 {
+        scheme.success
+    } else if present >= 3 {
+        scheme.warning
+    } else {
+        scheme.critical
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Data:      ", label_style),
+        Span::styled(filled, Style::default().fg(completeness_color)),
+        Span::styled(empty, Style::default().fg(scheme.muted)),
+        Span::styled(
+            format!(" {present}/{field_count} fields"),
+            Style::default().fg(scheme.text_muted),
+        ),
+    ]));
 
     let panel = Paragraph::new(lines)
         .block(
@@ -900,6 +1021,7 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
         Style::default().fg(scheme.highlight).bold(),
     ));
 
+    let total = app.stats.component_count.max(1);
     let type_order = vec![
         ("lib", "Libraries", scheme.info),
         ("bin", "Binaries", scheme.accent),
@@ -909,13 +1031,14 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
     ];
 
     let max_type_count = type_counts.values().copied().max().unwrap_or(1);
-    let bar_width = width.saturating_sub(20).min(30);
+    let bar_width = width.saturating_sub(26).min(30);
 
     for (key, label, color) in &type_order {
         let count = type_counts.get(key).copied().unwrap_or(0);
         if count == 0 {
             continue;
         }
+        let pct = (count * 100) / total;
         let bar_len = if max_type_count > 0 {
             (count * bar_width) / max_type_count
         } else {
@@ -924,7 +1047,8 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
         let bar = "█".repeat(bar_len);
         lines.push(Line::from(vec![
             Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
-            Span::styled(format!("{count:>5} "), Style::default().fg(scheme.text)),
+            Span::styled(format!("{count:>5}"), Style::default().fg(scheme.text)),
+            Span::styled(format!(" {pct:>2}% "), Style::default().fg(scheme.text_muted)),
             Span::styled(bar, Style::default().fg(*color)),
         ]));
     }
@@ -949,6 +1073,7 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
 
     for (key, label, color) in &vuln_order {
         let count = vuln_counts.get(key).copied().unwrap_or(0);
+        let pct = (count * 100) / total;
         let bar_len = if max_vuln_count > 0 {
             (count * bar_width) / max_vuln_count
         } else {
@@ -957,13 +1082,15 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
         let bar = "█".repeat(bar_len);
         lines.push(Line::from(vec![
             Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
-            Span::styled(format!("{count:>5} "), Style::default().fg(scheme.text)),
+            Span::styled(format!("{count:>5}"), Style::default().fg(scheme.text)),
+            Span::styled(format!(" {pct:>2}% "), Style::default().fg(scheme.text_muted)),
             Span::styled(bar, Style::default().fg(*color)),
         ]));
     }
 
     // EOL Status section (only when enriched)
     if app.stats.eol_enriched {
+        lines.push(Line::from(""));
         lines.push(Line::styled(
             "EOL Status:",
             Style::default().fg(scheme.warning).bold(),
@@ -997,6 +1124,7 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
             if count == 0 {
                 continue;
             }
+            let pct = (count * 100) / total;
             let bar_len = if max_eol_count > 0 {
                 (count * bar_width) / max_eol_count
             } else {
@@ -1005,41 +1133,12 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
             let bar = "█".repeat(bar_len);
             lines.push(Line::from(vec![
                 Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
-                Span::styled(format!("{count:>5} "), Style::default().fg(scheme.text)),
+                Span::styled(format!("{count:>5}"), Style::default().fg(scheme.text)),
+                Span::styled(format!(" {pct:>2}% "), Style::default().fg(scheme.text_muted)),
                 Span::styled(bar, Style::default().fg(*color)),
             ]));
         }
-
-        lines.push(Line::from(""));
     }
-
-    lines.push(Line::from(""));
-
-    // Navigation hints
-    lines.push(Line::styled(
-        "Navigation:",
-        Style::default().fg(scheme.text_muted),
-    ));
-    lines.push(Line::from(vec![
-        Span::styled("  [↑↓]", Style::default().fg(scheme.accent)),
-        Span::styled(" select component", Style::default().fg(scheme.text_muted)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  [←→]", Style::default().fg(scheme.accent)),
-        Span::styled(" expand/collapse", Style::default().fg(scheme.text_muted)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  [g]", Style::default().fg(scheme.accent)),
-        Span::styled(" change grouping", Style::default().fg(scheme.text_muted)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  [f]", Style::default().fg(scheme.accent)),
-        Span::styled(" filter components", Style::default().fg(scheme.text_muted)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  [/]", Style::default().fg(scheme.accent)),
-        Span::styled(" search", Style::default().fg(scheme.text_muted)),
-    ]));
 
     let panel = Paragraph::new(lines)
         .block(

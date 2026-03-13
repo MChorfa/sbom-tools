@@ -783,34 +783,31 @@ impl FooterHints {
 
         match tab.to_lowercase().as_str() {
             "components" => {
-                hints.insert(0, ("f", "filter: All→Added→Removed→Modified"));
-                hints.insert(1, ("s", "sort: Name→Version→Ecosystem"));
+                hints.insert(0, ("f", "filter"));
+                hints.insert(1, ("s", "sort"));
             }
             "dependencies" => {
-                hints.insert(0, ("t", "toggle transitive"));
-                hints.insert(1, ("h", "toggle highlight"));
-                hints.insert(2, ("Enter", "expand/collapse"));
-                hints.insert(3, ("c", "go to component"));
+                hints.insert(0, ("t", "transitive"));
+                hints.insert(1, ("h", "highlight"));
+                hints.insert(2, ("Enter", "expand"));
+                hints.insert(3, ("c", "component"));
             }
             "licenses" => {
-                hints.insert(0, ("g", "group: License→Component→Compat"));
+                hints.insert(0, ("g", "group"));
             }
             "vulnerabilities" | "vulns" => {
-                hints.insert(0, ("f", "filter: All→Intro→Resolved→Critical→High"));
+                hints.insert(0, ("f", "filter"));
             }
             "sidebyside" | "side-by-side" | "diff" => {
-                hints.insert(0, ("←→/p", "switch panel"));
-                hints.insert(1, ("↑↓/jk", "scroll focused"));
-                hints.insert(2, ("J/K", "scroll both"));
+                hints.insert(0, ("←→/p", "panel"));
+                hints.insert(1, ("J/K", "scroll both"));
             }
             "quality" => {
-                hints.insert(0, ("v", "view: Summary→Metrics→Recs"));
-                hints.insert(1, ("↑↓", "select recommendation"));
+                hints.insert(0, ("v", "view"));
             }
             "graphchanges" | "graph" => {
-                hints.insert(0, ("↑↓/jk", "select change"));
-                hints.insert(1, ("PgUp/Dn", "page scroll"));
-                hints.insert(2, ("Home/End", "first/last"));
+                hints.insert(0, ("↑↓", "select"));
+                hints.insert(1, ("PgUp/Dn", "page"));
             }
             _ => {}
         }
@@ -825,34 +822,33 @@ impl FooterHints {
 
         match tab.to_lowercase().as_str() {
             "tree" | "components" => {
-                hints.insert(0, ("g", "group: Eco→License→Vuln→Flat"));
-                hints.insert(1, ("f", "filter: All→HasVuln→Critical"));
-                hints.insert(2, ("p", "toggle panel focus"));
-                hints.insert(3, ("Enter", "expand/select"));
-                hints.insert(4, ("[ ]", "detail tabs"));
+                hints.insert(0, ("g", "group"));
+                hints.insert(1, ("f", "filter"));
+                hints.insert(2, ("p", "panel"));
+                hints.insert(3, ("Enter", "select"));
+                hints.insert(4, ("[/]", "detail tabs"));
             }
             "vulnerabilities" | "vulns" => {
-                hints.insert(0, ("f", "filter: All→Critical→High"));
-                hints.insert(1, ("g", "group: Severity→Component→Flat"));
-                hints.insert(2, ("d", "deduplicate by CVE"));
-                hints.insert(3, ("Enter", "jump to component"));
+                hints.insert(0, ("f", "filter"));
+                hints.insert(1, ("g", "group"));
+                hints.insert(2, ("d", "dedup"));
+                hints.insert(3, ("Enter", "component"));
             }
             "licenses" => {
-                hints.insert(0, ("g", "group: License→Category"));
+                hints.insert(0, ("g", "group"));
             }
             "dependencies" => {
                 hints.insert(0, ("Enter/→", "expand"));
                 hints.insert(1, ("←", "collapse"));
             }
             "quality" => {
-                hints.insert(0, ("v", "view: Summary→Metrics→Recs"));
-                hints.insert(1, ("↑↓", "select recommendation"));
+                hints.insert(0, ("v", "view"));
             }
             "source" => {
                 hints.insert(0, ("v", "tree/raw"));
-                hints.insert(1, ("p", "panel focus"));
-                hints.insert(2, ("H/L", "collapse/expand all"));
-                hints.insert(3, ("Enter", "expand/jump"));
+                hints.insert(1, ("p", "panel"));
+                hints.insert(2, ("H/L", "fold all"));
+                hints.insert(3, ("Enter", "select"));
             }
             _ => {}
         }
@@ -865,28 +861,46 @@ impl FooterHints {
     pub fn global() -> Vec<(&'static str, &'static str)> {
         vec![
             ("Tab", "switch"),
-            ("↑↓/jk", "navigate"),
             ("/", "search"),
             ("e", "export"),
-            ("l", "legend"),
-            ("T", "theme"),
             ("?", "help"),
             ("q", "quit"),
         ]
     }
+
+    /// Number of global hints (used to insert separator).
+    pub const GLOBAL_COUNT: usize = 5;
 }
 
-/// Render footer hints as spans
+/// Render footer hints as spans with badge-style keys.
+///
+/// If the hint list contains more items than `FooterHints::GLOBAL_COUNT`,
+/// a `│` separator is inserted between tab-specific and global hints.
 #[must_use]
 pub fn render_footer_hints(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let scheme = colors();
     let mut spans = Vec::new();
+    let tab_count = hints.len().saturating_sub(FooterHints::GLOBAL_COUNT);
 
     for (i, (key, desc)) in hints.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
-        spans.push(Span::styled(format!("[{key}]"), Styles::shortcut_key()));
-        spans.push(Span::styled(desc.to_string(), Styles::shortcut_desc()));
+        // Insert separator between tab-specific and global hints
+        if i == tab_count && tab_count > 0 {
+            spans.push(Span::styled("│ ", Style::default().fg(scheme.muted)));
+        }
+        spans.push(Span::styled(
+            format!(" {key} "),
+            Style::default()
+                .fg(scheme.badge_fg_dark)
+                .bg(scheme.accent)
+                .bold(),
+        ));
+        spans.push(Span::styled(
+            desc.to_string(),
+            Style::default().fg(scheme.text_muted),
+        ));
     }
 
     spans

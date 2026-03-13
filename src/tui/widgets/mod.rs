@@ -6,7 +6,10 @@ mod severity_badge;
 mod tree;
 
 pub use severity_badge::{SeverityBadge, SeverityBar};
-pub use tree::{Tree, TreeNode, TreeState, detect_component_type, extract_display_name};
+pub use tree::{
+    Tree, TreeNode, TreeState, detect_component_label, detect_component_type,
+    extract_display_name,
+};
 
 use crate::tui::theme::colors;
 use ratatui::{
