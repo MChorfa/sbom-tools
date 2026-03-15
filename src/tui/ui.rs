@@ -232,7 +232,7 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         (TabKind::Components, "2", "Components"),
         (TabKind::Dependencies, "3", "Dependencies"),
         (TabKind::Licenses, "4", "Licenses"),
-        (TabKind::Vulnerabilities, "5", "Vulns"),
+        (TabKind::Vulnerabilities, "5", "Vulnerabilities"),
         (TabKind::Quality, "6", "Quality"),
     ];
 

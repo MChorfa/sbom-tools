@@ -214,7 +214,7 @@ fn render_component_table(
             widgets::render_empty_state_enhanced(
                 frame,
                 area,
-                "📦",
+                "--",
                 "No components found",
                 Some("The SBOM contains no component entries"),
                 None,
@@ -556,7 +556,7 @@ fn render_empty_detail(frame: &mut Frame, area: Rect, focused: bool) {
         frame,
         area,
         " Component Details ",
-        "📦",
+        "--",
         "Select a component to view details",
         &[("[↑↓]", " navigate  "), ("[p]", " toggle focus")],
         focused,

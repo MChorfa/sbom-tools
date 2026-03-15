@@ -247,7 +247,7 @@ pub fn render_flagged_lines(
     let mut badge_spans = vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            " 🚩 FLAGGED ",
+            " ! FLAGGED ",
             Style::default()
                 .fg(scheme.badge_fg_dark)
                 .bg(scheme.warning)

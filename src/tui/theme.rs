@@ -100,7 +100,7 @@ impl ColorScheme {
             background_alt: Color::Rgb(30, 30, 40),
             text: Color::White,
             text_muted: Color::Gray,
-            selection: Color::DarkGray,
+            selection: Color::Rgb(50, 50, 70),
             highlight: Color::Yellow,
 
             // Status
@@ -155,7 +155,7 @@ impl ColorScheme {
             background_alt: Color::Rgb(30, 30, 40),
             text: Color::White,
             text_muted: Color::Gray,
-            selection: Color::DarkGray,
+            selection: Color::Rgb(50, 50, 70),
             highlight: Color::Yellow,
 
             // Status
@@ -794,6 +794,10 @@ impl FooterHints {
             }
             "licenses" => {
                 hints.insert(0, ("g", "group"));
+                hints.insert(1, ("s", "sort"));
+                hints.insert(2, ("r", "risk"));
+                hints.insert(3, ("c", "compat"));
+                hints.insert(4, ("Tab", "panel"));
             }
             "vulnerabilities" | "vulns" => {
                 hints.insert(0, ("f", "filter"));
@@ -822,11 +826,10 @@ impl FooterHints {
 
         match tab.to_lowercase().as_str() {
             "tree" | "components" => {
-                hints.insert(0, ("g", "group"));
-                hints.insert(1, ("f", "filter"));
-                hints.insert(2, ("p", "panel"));
-                hints.insert(3, ("Enter", "select"));
-                hints.insert(4, ("[/]", "detail tabs"));
+                // g/f/search already shown in filter bar at top
+                hints.insert(0, ("p", "panel"));
+                hints.insert(1, ("Enter", "select"));
+                hints.insert(2, ("1-4", "detail tabs"));
             }
             "vulnerabilities" | "vulns" => {
                 hints.insert(0, ("f", "filter"));
@@ -836,10 +839,14 @@ impl FooterHints {
             }
             "licenses" => {
                 hints.insert(0, ("g", "group"));
+                hints.insert(1, ("Enter", "inspect"));
+                hints.insert(2, ("K/J", "scroll"));
             }
             "dependencies" => {
-                hints.insert(0, ("Enter/→", "expand"));
+                hints.insert(0, ("Enter", "expand/inspect"));
                 hints.insert(1, ("←", "collapse"));
+                hints.insert(2, ("p", "panel"));
+                hints.insert(3, ("J/K", "scroll"));
             }
             "quality" => {
                 hints.insert(0, ("v", "view"));

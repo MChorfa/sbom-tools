@@ -35,11 +35,19 @@ pub struct ViewApp {
     /// Whether tree search is active
     pub(crate) tree_search_active: bool,
 
+    /// Cached tree nodes — rebuilt only when group_by, filter, or search_query change
+    pub(crate) cached_tree_nodes: Vec<crate::tui::widgets::TreeNode>,
+    /// Cache key for tree nodes
+    tree_cache_key: Option<TreeCacheKey>,
+
     /// Selected component ID (for detail panel)
     pub(crate) selected_component: Option<String>,
 
     /// Component detail sub-tab
     pub(crate) component_tab: ComponentDetailTab,
+
+    /// Scroll offset for the component detail panel (Overview/Identifiers etc.)
+    pub(crate) component_detail_scroll: u16,
 
     /// Vulnerability explorer state
     pub(crate) vuln_state: VulnExplorerState,
@@ -148,8 +156,11 @@ impl ViewApp {
             tree_filter: TreeFilter::All,
             tree_search_query: String::new(),
             tree_search_active: false,
+            cached_tree_nodes: Vec::new(),
+            tree_cache_key: None,
             selected_component: None,
             component_tab: ComponentDetailTab::Overview,
+            component_detail_scroll: 0,
             vuln_state: VulnExplorerState::new(),
             license_state: LicenseViewState::new(),
             dependency_state: DependencyViewState::new(),
@@ -365,9 +376,9 @@ impl ViewApp {
             self.tree_state.expand(group_id);
         }
 
-        let nodes = self.build_tree_nodes();
+        self.ensure_tree_cache();
         let mut flat_items = Vec::new();
-        flatten_tree_for_selection(&nodes, &self.tree_state, &mut flat_items);
+        flatten_tree_for_selection(&self.cached_tree_nodes, &self.tree_state, &mut flat_items);
 
         if let Some(index) = flat_items
             .iter()
@@ -394,7 +405,7 @@ impl ViewApp {
     pub fn get_selected_group_info(&self) -> Option<(String, Vec<String>)> {
         let nodes = self.build_tree_nodes();
         let mut flat_items = Vec::new();
-        flatten_tree_for_selection(&nodes, &self.tree_state, &mut flat_items);
+        flatten_tree_for_selection(nodes, &self.tree_state, &mut flat_items);
 
         let selected = flat_items.get(self.tree_state.selected)?;
         match selected {
@@ -432,7 +443,7 @@ impl ViewApp {
                     }
                     None
                 }
-                find_group_children(&nodes, group_id)
+                find_group_children(nodes, group_id)
             }
             SelectedTreeNode::Component(_) => None,
         }
@@ -521,6 +532,7 @@ impl ViewApp {
             ComponentDetailTab::Vulnerabilities => ComponentDetailTab::Dependencies,
             ComponentDetailTab::Dependencies => ComponentDetailTab::Overview,
         };
+        self.component_detail_scroll = 0;
     }
 
     /// Cycle to previous component detail tab.
@@ -531,11 +543,13 @@ impl ViewApp {
             ComponentDetailTab::Vulnerabilities => ComponentDetailTab::Identifiers,
             ComponentDetailTab::Dependencies => ComponentDetailTab::Vulnerabilities,
         };
+        self.component_detail_scroll = 0;
     }
 
     /// Select a specific component detail tab.
     pub(crate) const fn select_component_tab(&mut self, tab: ComponentDetailTab) {
         self.component_tab = tab;
+        self.component_detail_scroll = 0;
     }
 
     /// Toggle help overlay.
@@ -815,45 +829,106 @@ impl ViewApp {
             }
             ViewTab::Vulnerabilities => {
                 // In grouped mode, check if we're on a group header
-                if self.vuln_state.group_by != VulnGroupBy::Flat
-                    && let Some(cache) = &self.vuln_state.cached_data
-                {
-                    let items = super::views::build_display_items(
-                        &cache.vulns,
-                        &self.vuln_state.group_by,
-                        &self.vuln_state.expanded_groups,
-                    );
-                    if let Some(item) = items.get(self.vuln_state.selected) {
+                if self.vuln_state.group_by != VulnGroupBy::Flat {
+                    if let Some(item) = self
+                        .vuln_state
+                        .cached_display_items
+                        .get(self.vuln_state.selected)
+                    {
                         match item {
                             super::views::VulnDisplayItem::GroupHeader { label, .. } => {
                                 let label = label.clone();
                                 self.vuln_state.toggle_vuln_group(&label);
                                 return;
                             }
-                            super::views::VulnDisplayItem::Vuln(_) => {
+                            super::views::VulnDisplayItem::SubGroupHeader {
+                                parent_label,
+                                label,
+                                ..
+                            } => {
+                                let key = format!("{parent_label}::{label}");
+                                self.vuln_state.toggle_vuln_group(&key);
+                                return;
+                            }
+                            super::views::VulnDisplayItem::Vuln { .. } => {
                                 // Fall through to normal navigation
                             }
                         }
                     }
                 }
-                // Select vulnerability's component - push breadcrumb for back navigation
-                if let Some((comp_id, vuln)) = self.vuln_state.get_selected(&self.sbom) {
-                    // Push breadcrumb so we can go back
-                    self.navigation_ctx.push_breadcrumb(
-                        ViewTab::Vulnerabilities,
-                        vuln.id.clone(),
-                        self.vuln_state.selected,
-                    );
-                    self.selected_component = Some(comp_id);
-                    self.component_tab = ComponentDetailTab::Overview;
-                    self.active_tab = ViewTab::Tree;
+                // Navigate to component in Tree tab with proper targeting
+                if let Some(cache) = &self.vuln_state.cached_data.clone() {
+                    if let Some((comp_id, vuln_id)) = self.vuln_state.get_nav_component_id(cache) {
+                        // Push breadcrumb so Backspace returns here
+                        self.navigation_ctx.push_breadcrumb(
+                            ViewTab::Vulnerabilities,
+                            vuln_id.clone(),
+                            self.vuln_state.selected,
+                        );
+                        self.selected_component = Some(comp_id.clone());
+                        self.component_tab = ComponentDetailTab::Overview;
+                        self.active_tab = ViewTab::Tree;
+                        self.focus_panel = FocusPanel::Right;
+                        self.jump_to_component_in_tree(&comp_id);
+                        self.set_status_message(format!("→ {vuln_id} (Backspace to return)"));
+                    }
+                }
+            }
+            ViewTab::Licenses => {
+                // Navigate to the first component with this license in the Tree tab
+                let license_data = super::views::build_license_data_from_app(self);
+                let selected_idx = self
+                    .license_state
+                    .selected
+                    .min(license_data.len().saturating_sub(1));
+                if let Some((license, _, _)) = license_data.get(selected_idx) {
+                    if let Some(comp_id) =
+                        super::views::get_first_component_id_for_license(self, license)
+                    {
+                        self.navigation_ctx.push_breadcrumb(
+                            ViewTab::Licenses,
+                            license.clone(),
+                            self.license_state.selected,
+                        );
+                        self.selected_component = Some(comp_id.clone());
+                        self.component_tab = ComponentDetailTab::Overview;
+                        self.active_tab = ViewTab::Tree;
+                        self.focus_panel = FocusPanel::Right;
+                        self.jump_to_component_in_tree(&comp_id);
+                        self.set_status_message(format!("→ {license} (Backspace to return)"));
+                    }
                 }
             }
             ViewTab::Dependencies => {
-                // Toggle expand on the selected dependency node
-                // Node ID is calculated from the flattened view
                 if let Some(node_id) = self.get_selected_dependency_node_id() {
-                    self.dependency_state.toggle_expand(&node_id);
+                    // If node has children, toggle expand; if leaf, navigate to Tree tab
+                    let is_leaf = self
+                        .dependency_state
+                        .cached_flat_nodes
+                        .get(self.dependency_state.selected)
+                        .is_some_and(|n| !n.has_children);
+                    if is_leaf {
+                        // Cross-tab navigation: jump to component in Tree view
+                        let display_name = self
+                            .dependency_state
+                            .cached_flat_nodes
+                            .get(self.dependency_state.selected)
+                            .map(|n| n.name.clone())
+                            .unwrap_or_default();
+                        self.navigation_ctx.push_breadcrumb(
+                            ViewTab::Dependencies,
+                            display_name.clone(),
+                            self.dependency_state.selected,
+                        );
+                        self.selected_component = Some(node_id.clone());
+                        self.component_tab = ComponentDetailTab::Overview;
+                        self.active_tab = ViewTab::Tree;
+                        self.focus_panel = FocusPanel::Right;
+                        self.jump_to_component_in_tree(&node_id);
+                        self.set_status_message(format!("→ {display_name} (Backspace to return)"));
+                    } else {
+                        self.dependency_state.toggle_expand(&node_id);
+                    }
                 }
             }
             ViewTab::Compliance => {
@@ -899,7 +974,7 @@ impl ViewApp {
                     self.quality_state.view_mode = QualityViewMode::Recommendations;
                 }
             }
-            ViewTab::Licenses | ViewTab::Overview => {}
+            ViewTab::Overview => {}
         }
     }
 
@@ -1004,7 +1079,15 @@ impl ViewApp {
     /// Get the currently selected dependency node ID (if any).
     #[must_use]
     pub fn get_selected_dependency_node_id(&self) -> Option<String> {
-        // Build the flattened list of visible dependency nodes
+        // Use cached flat nodes if available (much faster than rebuilding tree)
+        if !self.dependency_state.cached_flat_nodes.is_empty() {
+            return self
+                .dependency_state
+                .cached_flat_nodes
+                .get(self.dependency_state.selected)
+                .map(|n| n.id.clone());
+        }
+        // Fallback: build the flattened list (only before first render)
         let mut visible_nodes = Vec::new();
         self.collect_visible_dependency_nodes(&mut visible_nodes);
         visible_nodes.get(self.dependency_state.selected).cloned()
@@ -1076,21 +1159,35 @@ impl ViewApp {
     fn get_selected_tree_node(&self) -> Option<SelectedTreeNode> {
         let nodes = self.build_tree_nodes();
         let mut flat_items = Vec::new();
-        flatten_tree_for_selection(&nodes, &self.tree_state, &mut flat_items);
+        flatten_tree_for_selection(nodes, &self.tree_state, &mut flat_items);
 
         flat_items.get(self.tree_state.selected).cloned()
     }
 
-    /// Build tree nodes based on current grouping.
-    #[must_use]
-    pub fn build_tree_nodes(&self) -> Vec<crate::tui::widgets::TreeNode> {
-        match self.tree_group_by {
-            TreeGroupBy::Ecosystem => self.build_ecosystem_tree(),
-            TreeGroupBy::License => self.build_license_tree(),
-            TreeGroupBy::VulnStatus => self.build_vuln_status_tree(),
-            TreeGroupBy::ComponentType => self.build_type_tree(),
-            TreeGroupBy::Flat => self.build_flat_tree(),
+    /// Ensure tree node cache is valid, rebuilding if needed.
+    pub fn ensure_tree_cache(&mut self) {
+        let current_key = TreeCacheKey {
+            group_by: self.tree_group_by,
+            filter: self.tree_filter,
+            search_query: self.tree_search_query.clone(),
+        };
+        if self.tree_cache_key.as_ref() != Some(&current_key) {
+            self.cached_tree_nodes = match self.tree_group_by {
+                TreeGroupBy::Ecosystem => self.build_ecosystem_tree(),
+                TreeGroupBy::License => self.build_license_tree(),
+                TreeGroupBy::VulnStatus => self.build_vuln_status_tree(),
+                TreeGroupBy::ComponentType => self.build_type_tree(),
+                TreeGroupBy::Flat => self.build_flat_tree(),
+            };
+            self.tree_cache_key = Some(current_key);
         }
+    }
+
+    /// Get tree nodes from cache (returns empty slice if cache not yet built).
+    /// For render paths, call `ensure_tree_cache()` first.
+    /// For event handlers that only need to read, the cache is always warm after first render.
+    pub fn build_tree_nodes(&self) -> &[crate::tui::widgets::TreeNode] {
+        &self.cached_tree_nodes
     }
 
     fn build_ecosystem_tree(&self) -> Vec<crate::tui::widgets::TreeNode> {
@@ -1708,9 +1805,26 @@ pub(crate) struct VulnExplorerState {
     cache_key: Option<VulnCacheKey>,
     /// Cached vulnerability list for performance (Arc-wrapped for zero-cost cloning)
     pub cached_data: Option<super::views::VulnCacheRef>,
+    /// Cached display items (group headers + vuln indices) — rebuilt only when
+    /// cache or expanded_groups change, NOT every frame
+    pub cached_display_items: Vec<super::views::VulnDisplayItem>,
+    /// Snapshot of expanded_groups when display items were last built
+    display_items_expanded_snapshot: HashSet<String>,
+    /// Snapshot of group_by when display items were last built
+    display_items_group_by: VulnGroupBy,
+    /// Index into affected_component_ids for cycling with [n]/[p] after inspect
+    pub inspect_component_idx: usize,
 }
 
 /// Cache key for vulnerability list - rebuild when any of these change
+/// Cache key for tree node list
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeCacheKey {
+    group_by: TreeGroupBy,
+    filter: TreeFilter,
+    search_query: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VulnCacheKey {
     filter_severity: Option<String>,
@@ -1725,7 +1839,7 @@ impl VulnExplorerState {
             selected: 0,
             total: 0,
             scroll_offset: 0,
-            group_by: VulnGroupBy::Severity,
+            group_by: VulnGroupBy::Component,
             sort_by: VulnSortBy::Severity,
             filter_severity: None,
             deduplicate: true,
@@ -1735,6 +1849,10 @@ impl VulnExplorerState {
             expanded_groups: HashSet::new(),
             cache_key: None,
             cached_data: None,
+            cached_display_items: Vec::new(),
+            display_items_expanded_snapshot: HashSet::new(),
+            display_items_group_by: VulnGroupBy::Component,
+            inspect_component_idx: 0,
         }
     }
 
@@ -1748,9 +1866,17 @@ impl VulnExplorerState {
         }
     }
 
-    /// Check if cache is valid
+    /// Check if cache is valid (allocation-free comparison)
     pub fn is_cache_valid(&self) -> bool {
-        self.cache_key.as_ref() == Some(&self.current_cache_key()) && self.cached_data.is_some()
+        if let Some(key) = &self.cache_key {
+            self.cached_data.is_some()
+                && key.filter_severity == self.filter_severity
+                && key.deduplicate == self.deduplicate
+                && key.sort_by == self.sort_by
+                && key.search_query == self.search_query
+        } else {
+            false
+        }
     }
 
     /// Store cache with current settings (wraps in Arc for cheap cloning)
@@ -1763,12 +1889,34 @@ impl VulnExplorerState {
     pub fn invalidate_cache(&mut self) {
         self.cache_key = None;
         self.cached_data = None;
+        self.cached_display_items.clear();
+    }
+
+    /// Check if display items need rebuilding (expanded_groups or group_by changed)
+    pub fn are_display_items_valid(&self) -> bool {
+        !self.cached_display_items.is_empty()
+            && self.display_items_expanded_snapshot == self.expanded_groups
+            && self.display_items_group_by == self.group_by
+    }
+
+    /// Rebuild and cache display items
+    pub fn rebuild_display_items(&mut self) {
+        if let Some(cache) = &self.cached_data {
+            self.cached_display_items = super::views::build_display_items(
+                &cache.vulns,
+                &self.group_by,
+                &self.expanded_groups,
+            );
+            self.display_items_expanded_snapshot = self.expanded_groups.clone();
+            self.display_items_group_by = self.group_by;
+        }
     }
 
     pub const fn select_next(&mut self) {
         if self.total > 0 && self.selected < self.total.saturating_sub(1) {
             self.selected += 1;
             self.detail_scroll = 0;
+            self.inspect_component_idx = 0;
         }
     }
 
@@ -1776,6 +1924,7 @@ impl VulnExplorerState {
         if self.selected > 0 {
             self.selected -= 1;
             self.detail_scroll = 0;
+            self.inspect_component_idx = 0;
         }
     }
 
@@ -1798,6 +1947,33 @@ impl VulnExplorerState {
         }
     }
 
+    /// Get the selected VulnRow from the cached display items.
+    /// Returns the vuln row and its index into `VulnCache.vulns`.
+    pub fn get_selected_vuln_row<'a>(
+        &self,
+        cache: &'a super::views::VulnCache,
+    ) -> Option<&'a super::views::VulnRow> {
+        let item = self.cached_display_items.get(self.selected)?;
+        match item {
+            super::views::VulnDisplayItem::Vuln { idx, .. } => cache.vulns.get(*idx),
+            _ => None,
+        }
+    }
+
+    /// Get the component ID to navigate to for the selected vuln.
+    /// Uses `inspect_component_idx` to cycle through multi-affected components.
+    pub fn get_nav_component_id(
+        &self,
+        cache: &super::views::VulnCache,
+    ) -> Option<(String, String)> {
+        let vuln = self.get_selected_vuln_row(cache)?;
+        let idx = self
+            .inspect_component_idx
+            .min(vuln.affected_component_ids.len().saturating_sub(1));
+        let comp_id = vuln.affected_component_ids.get(idx)?;
+        Some((comp_id.clone(), vuln.vuln_id.clone()))
+    }
+
     pub fn toggle_group(&mut self) {
         self.group_by = match self.group_by {
             VulnGroupBy::Severity => VulnGroupBy::Component,
@@ -1815,6 +1991,67 @@ impl VulnExplorerState {
             self.expanded_groups.remove(group_id);
         } else {
             self.expanded_groups.insert(group_id.to_string());
+        }
+    }
+
+    /// Expand all groups.
+    pub fn expand_all_groups(&mut self, labels: &[String]) {
+        for label in labels {
+            self.expanded_groups.insert(label.clone());
+        }
+    }
+
+    /// Collapse all groups.
+    pub fn collapse_all_groups(&mut self) {
+        self.expanded_groups.clear();
+    }
+
+    /// Jump to next group header using cached display items.
+    pub fn jump_next_group_cached(&mut self) {
+        for (i, item) in self
+            .cached_display_items
+            .iter()
+            .enumerate()
+            .skip(self.selected + 1)
+        {
+            if matches!(item, super::views::VulnDisplayItem::GroupHeader { .. }) {
+                self.selected = i;
+                self.detail_scroll = 0;
+                return;
+            }
+        }
+        // Wrap to first group
+        for (i, item) in self.cached_display_items.iter().enumerate() {
+            if matches!(item, super::views::VulnDisplayItem::GroupHeader { .. }) {
+                self.selected = i;
+                self.detail_scroll = 0;
+                return;
+            }
+        }
+    }
+
+    /// Jump to previous group header using cached display items.
+    pub fn jump_prev_group_cached(&mut self) {
+        for (i, item) in self
+            .cached_display_items
+            .iter()
+            .enumerate()
+            .take(self.selected)
+            .rev()
+        {
+            if matches!(item, super::views::VulnDisplayItem::GroupHeader { .. }) {
+                self.selected = i;
+                self.detail_scroll = 0;
+                return;
+            }
+        }
+        // Wrap to last group
+        for (i, item) in self.cached_display_items.iter().enumerate().rev() {
+            if matches!(item, super::views::VulnDisplayItem::GroupHeader { .. }) {
+                self.selected = i;
+                self.detail_scroll = 0;
+                return;
+            }
         }
     }
 
@@ -2155,6 +2392,12 @@ pub(crate) struct DependencyViewState {
     pub detail_scroll: u16,
     /// Whether roots have been auto-expanded on first visit
     pub roots_initialized: bool,
+    /// Snapshot of expanded set when flat nodes were last built
+    expanded_snapshot: HashSet<String>,
+    /// Cached flattened tree nodes
+    pub cached_flat_nodes: Vec<super::views::FlatDepNode>,
+    /// Cached search match count (query, count)
+    cached_search_match: (String, Option<usize>),
 }
 
 impl DependencyViewState {
@@ -2168,6 +2411,9 @@ impl DependencyViewState {
             search_active: false,
             detail_scroll: 0,
             roots_initialized: false,
+            expanded_snapshot: HashSet::new(),
+            cached_flat_nodes: Vec::new(),
+            cached_search_match: (String::new(), None),
         }
     }
 
@@ -2210,6 +2456,35 @@ impl DependencyViewState {
 
     pub fn search_pop(&mut self) {
         self.search_query.pop();
+    }
+
+    /// Check if cached flat nodes are still valid
+    pub fn are_flat_nodes_valid(&self) -> bool {
+        !self.cached_flat_nodes.is_empty() && self.expanded_snapshot == self.expanded
+    }
+
+    /// Cache flat nodes and snapshot expanded state
+    pub fn set_cached_flat_nodes(&mut self, nodes: Vec<super::views::FlatDepNode>) {
+        self.cached_flat_nodes = nodes;
+        self.expanded_snapshot = self.expanded.clone();
+    }
+
+    /// Get cached search match count, recomputing only when query changed
+    pub fn get_search_match_count(&mut self) -> Option<usize> {
+        if self.search_query.is_empty() {
+            return None;
+        }
+        if self.cached_search_match.0 == self.search_query {
+            return self.cached_search_match.1;
+        }
+        let q = self.search_query.to_lowercase();
+        let count = self
+            .cached_flat_nodes
+            .iter()
+            .filter(|n| n.name.to_lowercase().contains(&q))
+            .count();
+        self.cached_search_match = (self.search_query.clone(), Some(count));
+        Some(count)
     }
 }
 

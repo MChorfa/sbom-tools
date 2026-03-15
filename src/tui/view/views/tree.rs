@@ -26,14 +26,15 @@ fn render_tree_panel(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         .constraints([Constraint::Length(2), Constraint::Min(5)])
         .split(area);
 
-    // Tree
-    let nodes = app.build_tree_nodes();
+    // Ensure tree nodes are cached (rebuilds only when group/filter/search change)
+    app.ensure_tree_cache();
+
     let scheme = colors();
 
     let is_filtered =
         !app.tree_search_query.is_empty() || !matches!(app.tree_filter, TreeFilter::All);
     let filtered_count = if is_filtered {
-        Some(count_tree_leaves(&nodes))
+        Some(count_tree_leaves(&app.cached_tree_nodes))
     } else {
         None
     };
@@ -53,7 +54,7 @@ fn render_tree_panel(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         format!(" Components ({}) ", app.stats.component_count)
     };
 
-    let tree = Tree::new(&nodes)
+    let tree = Tree::new(&app.cached_tree_nodes)
         .block(
             Block::default()
                 .title(title)
@@ -64,7 +65,8 @@ fn render_tree_panel(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
             Style::default()
                 .bg(scheme.selection)
                 .add_modifier(Modifier::BOLD),
-        );
+        )
+        .search_query(&app.tree_search_query);
 
     frame.render_stateful_widget(tree, chunks[1], &mut app.tree_state);
 }
@@ -185,19 +187,21 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
         render_component_tab_bar(frame, chunks[0], app);
 
+        let scroll = app.component_detail_scroll;
+
         // Render tab content based on selected tab
         match app.component_tab {
             ComponentDetailTab::Overview => {
-                render_overview_tab(frame, chunks[1], comp, border_color);
+                render_overview_tab(frame, chunks[1], comp, border_color, scroll);
             }
             ComponentDetailTab::Identifiers => {
-                render_identifiers_tab(frame, chunks[1], comp, border_color);
+                render_identifiers_tab(frame, chunks[1], comp, border_color, scroll);
             }
             ComponentDetailTab::Vulnerabilities => {
-                render_vulnerabilities_tab(frame, chunks[1], comp, border_color);
+                render_vulnerabilities_tab(frame, chunks[1], comp, border_color, scroll);
             }
             ComponentDetailTab::Dependencies => {
-                render_dependencies_tab(frame, chunks[1], app, comp, border_color);
+                render_dependencies_tab(frame, chunks[1], app, comp, border_color, scroll);
             }
         }
     } else if let Some((group_label, child_ids)) = app.get_selected_group_info() {
@@ -220,6 +224,16 @@ fn render_component_tab_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
     };
 
     let mut spans = Vec::new();
+    // Left arrow hint
+    spans.push(Span::styled(
+        "◀ ",
+        Style::default().fg(if selected_idx > 0 {
+            scheme.accent
+        } else {
+            scheme.border
+        }),
+    ));
+
     for (i, tab) in tabs.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" │ ", Style::default().fg(scheme.border)));
@@ -235,6 +249,7 @@ fn render_component_tab_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .fg(scheme.badge_fg_dark)
                 .bg(scheme.accent)
                 .bold()
+                .add_modifier(Modifier::UNDERLINED)
         } else {
             Style::default().fg(scheme.text_muted)
         };
@@ -243,46 +258,39 @@ fn render_component_tab_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
         spans.push(Span::styled(format!(" {} ", tab.title()), label_style));
     }
 
-    spans.push(Span::styled("  ", Style::default()));
-    spans.push(Span::styled("[[]/[]]", Style::default().fg(scheme.accent)));
+    // Right arrow hint
     spans.push(Span::styled(
-        " cycle",
-        Style::default().fg(scheme.text_muted),
+        " ▶",
+        Style::default().fg(if selected_idx < tabs.len() - 1 {
+            scheme.accent
+        } else {
+            scheme.border
+        }),
     ));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render the Overview tab - basic component info
-fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_color: Color) {
+fn render_overview_tab(
+    frame: &mut Frame,
+    area: Rect,
+    comp: &Component,
+    border_color: Color,
+    scroll: u16,
+) {
     let scheme = colors();
     let label_style = Style::default().fg(scheme.text_muted);
     let absent = Style::default().fg(scheme.muted);
-    let panel_width = area.width.saturating_sub(4) as usize;
     let mut lines = vec![];
 
     // ── Identity ──
 
-    // Display name (short, extracted from path if needed)
-    let display_name = crate::tui::widgets::extract_display_name(&comp.name);
+    // Full component name (wrap handles overflow for long paths)
     lines.push(Line::from(vec![Span::styled(
-        display_name.clone(),
+        comp.name.clone(),
         Style::default().fg(scheme.text).bold(),
     )]));
-
-    // Full path (when name contains a path and display name is shorter)
-    if display_name != comp.name {
-        let truncated_name = if comp.name.len() > panel_width {
-            let max = panel_width.saturating_sub(3);
-            format!("{}...", &comp.name[..max.min(comp.name.len())])
-        } else {
-            comp.name.clone()
-        };
-        lines.push(Line::from(vec![
-            Span::styled("Path:      ", label_style),
-            Span::styled(truncated_name, Style::default().fg(scheme.text_muted)),
-        ]));
-    }
 
     // Version (always shown)
     lines.push(Line::from(vec![
@@ -320,55 +328,36 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
     }
     lines.push(Line::from(type_spans));
 
-    // Canonical ID (when it differs from both name and display name)
-    let canonical = comp.canonical_id.value();
-    if canonical != comp.name && canonical != display_name {
-        let display_id = if canonical.len() > panel_width.saturating_sub(12) {
-            let max = panel_width.saturating_sub(15);
-            format!("{}...", &canonical[..max.min(canonical.len())])
-        } else {
-            canonical.to_string()
-        };
-        lines.push(Line::from(vec![
-            Span::styled("ID:        ", label_style),
-            Span::styled(display_id, Style::default().fg(scheme.text_muted)),
-        ]));
-    }
-
     // ── Identifiers ──
 
-    // PURL (always shown)
+    // PURL (always shown, full value — wrap handles overflow)
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("PURL:      ", label_style),
         if let Some(purl) = &comp.identifiers.purl {
-            let display = if purl.len() > panel_width.saturating_sub(12) {
-                let max = panel_width.saturating_sub(15);
-                format!("{}...", &purl[..max.min(purl.len())])
-            } else {
-                purl.clone()
-            };
-            Span::styled(display, Style::default().fg(scheme.info))
+            Span::styled(purl.as_str(), Style::default().fg(scheme.info))
         } else {
             Span::styled("—", absent)
         },
     ]));
 
-    // Hash summary (always shown)
-    lines.push(Line::from(vec![
-        Span::styled("Hash:      ", label_style),
-        if let Some(hash) = comp.hashes.first() {
-            let algo = hash.algorithm.to_string();
-            let val = if hash.value.len() > 16 {
-                format!("{}...", &hash.value[..16])
-            } else {
-                hash.value.clone()
-            };
-            Span::styled(format!("{algo}: {val}"), Style::default().fg(scheme.text))
-        } else {
-            Span::styled("—", absent)
-        },
-    ]));
+    // Hash (always shown, full value — wrap handles overflow)
+    if let Some(hash) = comp.hashes.first() {
+        let algo = hash.algorithm.to_string();
+        lines.push(Line::from(vec![
+            Span::styled("Hash:      ", label_style),
+            Span::styled(format!("{algo}:"), Style::default().fg(scheme.text_muted)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("           ", label_style),
+            Span::styled(&hash.value, Style::default().fg(scheme.text)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("Hash:      ", label_style),
+            Span::styled("—", absent),
+        ]));
+    }
 
     // ── Supplier ──
 
@@ -603,13 +592,20 @@ fn render_overview_tab(frame: &mut Frame, area: Rect, comp: &Component, border_c
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: true })
+        .scroll((scroll, 0));
 
     frame.render_widget(panel, area);
 }
 
 /// Render the Identifiers tab - PURL, CPE, SWID, hashes
-fn render_identifiers_tab(frame: &mut Frame, area: Rect, comp: &Component, border_color: Color) {
+fn render_identifiers_tab(
+    frame: &mut Frame,
+    area: Rect,
+    comp: &Component,
+    border_color: Color,
+    scroll: u16,
+) {
     let scheme = colors();
     let mut lines = vec![];
     let width = area.width as usize;
@@ -712,6 +708,21 @@ fn render_identifiers_tab(frame: &mut Frame, area: Rect, comp: &Component, borde
         }
     }
 
+    // Canonical ID (when it differs from name)
+    let display_name = crate::tui::widgets::extract_display_name(&comp.name);
+    let canonical = comp.canonical_id.value();
+    if canonical != comp.name && canonical != display_name {
+        lines.push(Line::styled(
+            "Canonical ID:",
+            Style::default().fg(scheme.text_muted).bold(),
+        ));
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::raw(canonical),
+        ]));
+        lines.push(Line::from(""));
+    }
+
     // Show message if no identifiers
     if lines.is_empty() {
         lines.push(Line::from(""));
@@ -728,7 +739,8 @@ fn render_identifiers_tab(frame: &mut Frame, area: Rect, comp: &Component, borde
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: true })
+        .scroll((scroll, 0));
 
     frame.render_widget(panel, area);
 }
@@ -739,6 +751,7 @@ fn render_vulnerabilities_tab(
     area: Rect,
     comp: &Component,
     border_color: Color,
+    scroll: u16,
 ) {
     let scheme = colors();
     let mut lines = vec![];
@@ -817,7 +830,8 @@ fn render_vulnerabilities_tab(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: true })
+        .scroll((scroll, 0));
 
     frame.render_widget(panel, area);
 }
@@ -829,6 +843,7 @@ fn render_dependencies_tab(
     app: &ViewApp,
     comp: &Component,
     border_color: Color,
+    scroll: u16,
 ) {
     let scheme = colors();
     let mut lines = vec![];
@@ -952,7 +967,8 @@ fn render_dependencies_tab(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: true })
+        .scroll((scroll, 0));
 
     frame.render_widget(panel, area);
 }

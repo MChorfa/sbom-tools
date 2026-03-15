@@ -500,11 +500,18 @@ fn render_source_map(frame: &mut Frame, area: Rect, app: &mut ViewApp, is_focuse
             }
         }
 
-        // Highlight selected row
+        // Highlight selected row with readable contrast
         if is_map_selected {
             for col in x..right_edge {
                 if let Some(cell) = buf.cell_mut((col, y)) {
                     cell.set_bg(scheme.selection);
+                    // Override muted fg colors so text stays readable
+                    if cell.fg == scheme.muted
+                        || cell.fg == scheme.text_muted
+                        || cell.fg == scheme.border
+                    {
+                        cell.set_fg(scheme.text);
+                    }
                 }
             }
         }

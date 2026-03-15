@@ -180,7 +180,7 @@ fn render_diff_licenses(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         crate::tui::widgets::render_empty_state_enhanced(
             frame,
             area,
-            "📜",
+            "--",
             "No license data available",
             Some("License analysis requires a completed diff"),
             None,
@@ -400,10 +400,7 @@ fn render_compatibility_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
             lines.push(Line::from(vec![
                 Span::styled(format!("  {icon} "), Style::default().fg(color)),
-                Span::raw(widgets::truncate_str(
-                    &issue.message,
-                    area.width as usize - 6,
-                )),
+                Span::raw(issue.message.clone()),
             ]));
         }
 
@@ -460,11 +457,12 @@ fn render_compatibility_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext
                 format!("    {}: ", conflict.rule.conflict_type),
                 Style::default().fg(scheme.text_muted),
             )]));
-            // Show truncated description
-            let desc = widgets::truncate_str(&conflict.rule.description, area.width as usize - 6);
             lines.push(Line::from(vec![
                 Span::styled("    ", Style::default()),
-                Span::styled(desc, Style::default().fg(scheme.text).italic()),
+                Span::styled(
+                    conflict.rule.description.clone(),
+                    Style::default().fg(scheme.text).italic(),
+                ),
             ]));
         }
 
@@ -503,7 +501,9 @@ fn render_compatibility_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.border));
 
-    let paragraph = Paragraph::new(lines).block(block);
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: true });
 
     frame.render_widget(paragraph, area);
 }
@@ -628,8 +628,8 @@ fn render_license_table(
                         RiskLevel::Critical => scheme.error,
                     };
                     Row::new(vec![
-                        Cell::from(widgets::truncate_str(&entry.license, 20)),
-                        Cell::from(widgets::truncate_str(&entry.family, 10)),
+                        Cell::from(entry.license.as_str()),
+                        Cell::from(entry.family.as_str()),
                         Cell::from(Span::styled(
                             entry.risk_level.as_str(),
                             Style::default().fg(risk_color),
@@ -656,7 +656,7 @@ fn render_license_table(
                         RiskLevel::Critical => scheme.error,
                     };
                     Row::new(vec![
-                        Cell::from(widgets::truncate_str(&entry.license, 20)),
+                        Cell::from(entry.license.as_str()),
                         Cell::from(Span::styled(
                             entry.risk_level.as_str(),
                             Style::default().fg(risk_color),
@@ -673,7 +673,7 @@ fn render_license_table(
             let widths = [
                 Constraint::Min(15),
                 Constraint::Length(6),
-                Constraint::Length(12),
+                Constraint::Length(14),
             ];
             let rows: Vec<Row> = licenses
                 .iter()
@@ -681,16 +681,16 @@ fn render_license_table(
                     let cat_color = crate::tui::shared::licenses::category_color(entry.category);
 
                     let license_display = if entry.is_dual_licensed {
-                        format!("{} ⊕", widgets::truncate_str(&entry.license, 18))
+                        format!("{} ⊕", entry.license)
                     } else {
-                        widgets::truncate_str(&entry.license, 20)
+                        entry.license.clone()
                     };
 
                     Row::new(vec![
                         Cell::from(license_display),
                         Cell::from(entry.components.len().to_string()),
                         Cell::from(Span::styled(
-                            widgets::truncate_str(entry.category.as_str(), 12),
+                            entry.category.as_str(),
                             Style::default().fg(cat_color),
                         )),
                     ])
@@ -781,6 +781,22 @@ fn render_license_details(
         entry.is_dual_licensed,
     ));
 
+    // Show parsed SPDX structure for compound licenses
+    if entry.is_dual_licensed || entry.license.contains(" AND ") {
+        lines.push(Line::from(""));
+        let structure = if entry.license.contains(" OR ") {
+            let parts: Vec<&str> = entry.license.split(" OR ").collect();
+            format!("Choice: {}", parts.join(" | "))
+        } else {
+            let parts: Vec<&str> = entry.license.split(" AND ").collect();
+            format!("All required: {}", parts.join(" + "))
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Expression: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(structure, Style::default().fg(scheme.accent)),
+        ]));
+    }
+
     lines.push(Line::from(""));
 
     lines
@@ -794,7 +810,7 @@ fn render_license_details(
         Style::default().fg(scheme.primary).bold(),
     ));
 
-    let max_components = (area.height as usize).saturating_sub(22).max(3);
+    let max_components = (area.height as usize).saturating_sub(24).max(3);
     for comp in entry.components.iter().take(max_components) {
         // Check if component has vulnerabilities
         let has_vulns = diff_result.is_some_and(|r| {
@@ -811,9 +827,10 @@ fn render_license_details(
             Span::raw("")
         };
 
+        let display_name = crate::tui::widgets::extract_display_name(comp);
         lines.push(Line::from(vec![
             Span::styled("  • ", Style::default().fg(scheme.text_muted)),
-            Span::raw(widgets::truncate_str(comp, area.width as usize - 8)),
+            Span::styled(display_name, Style::default().fg(scheme.text)),
             vuln_indicator,
         ]));
     }

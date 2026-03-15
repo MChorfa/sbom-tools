@@ -5,7 +5,7 @@ use crate::tui::state::ListNavigation;
 use crate::tui::theme::colors;
 use crate::tui::view::app::{FocusPanel, ViewApp};
 use crate::tui::view::severity::severity_category;
-use crate::tui::widgets::{self, SeverityBadge, truncate_str};
+use crate::tui::widgets::{self, SeverityBadge, extract_display_name, truncate_str};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
@@ -54,18 +54,18 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
 }
 
 /// A flattened dependency node for rendering.
-#[allow(dead_code)]
-struct FlatDepNode {
-    id: String, // Used for expand/collapse tracking via get_selected_dependency_node_id
-    name: String,
-    depth: usize,
-    is_last: bool,
-    has_children: bool,
-    is_expanded: bool,
-    vuln_count: usize,
-    max_severity: Option<String>,
-    relationship: Option<DependencyType>,
-    ancestors_last: Vec<bool>,
+#[derive(Debug, Clone)]
+pub struct FlatDepNode {
+    pub id: String,
+    pub name: String,
+    pub depth: usize,
+    pub is_last: bool,
+    pub has_children: bool,
+    pub is_expanded: bool,
+    pub vuln_count: usize,
+    pub max_severity: Option<String>,
+    pub relationship: Option<DependencyType>,
+    pub ancestors_last: Vec<bool>,
 }
 
 fn render_dependency_tree(
@@ -82,35 +82,29 @@ fn render_dependency_tree(
         .constraints([Constraint::Length(2), Constraint::Min(5)])
         .split(area);
 
-    // Flatten the tree based on expanded state
-    let flat_nodes = flatten_dependency_tree(deps, &app.dependency_state.expanded);
+    // Flatten the tree based on expanded state — cached, only rebuilt when expanded set changes
+    if !app.dependency_state.are_flat_nodes_valid() {
+        let flat_nodes = flatten_dependency_tree(deps, &app.dependency_state.expanded);
+        app.dependency_state.set_cached_flat_nodes(flat_nodes);
+    }
 
-    // Count search matches for the filter bar
+    // Count search matches — cached, only recomputed when query changes
+    let match_count = app.dependency_state.get_search_match_count();
     let search_query = app.dependency_state.search_query.clone();
-    let match_count = if search_query.is_empty() {
-        None
-    } else {
-        let q = search_query.to_lowercase();
-        Some(
-            flat_nodes
-                .iter()
-                .filter(|n| n.name.to_lowercase().contains(&q))
-                .count(),
-        )
-    };
 
     // Render filter bar
     render_filter_bar(frame, chunks[0], app, match_count);
 
     // Update the total count for navigation bounds
-    app.dependency_state.total = flat_nodes.len();
+    let node_count = app.dependency_state.cached_flat_nodes.len();
+    app.dependency_state.total = node_count;
     app.dependency_state.clamp_selection();
 
     let title = if !search_query.is_empty() {
         let filtered = match_count.unwrap_or(0);
-        format!(" Dependency Tree ({filtered}/{} nodes) ", flat_nodes.len())
+        format!(" Dependency Tree ({filtered}/{node_count} nodes) ")
     } else {
-        format!(" Dependency Tree ({} nodes) ", flat_nodes.len())
+        format!(" Dependency Tree ({node_count} nodes) ")
     };
 
     // P6: Focused panel border highlighting
@@ -135,11 +129,13 @@ fn render_dependency_tree(
         }
     }
 
+    let flat_nodes = &app.dependency_state.cached_flat_nodes;
+
     if flat_nodes.is_empty() {
         widgets::render_empty_state_enhanced(
             frame,
             inner_area,
-            "🔗",
+            "--",
             "No dependency relationships found",
             Some("This SBOM does not contain dependency graph information"),
             Some("SBOM may only include component inventory without relationships"),
@@ -396,7 +392,7 @@ fn render_dependency_tree(
     // Render scrollbar if needed
     if flat_nodes.len() > visible_height {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .thumb_style(Style::default().fg(scheme.primary))
+            .thumb_style(Style::default().fg(scheme.accent))
             .track_style(Style::default().fg(scheme.muted));
         let mut scrollbar_state = ScrollbarState::new(flat_nodes.len()).position(selected);
         frame.render_stateful_widget(scrollbar, inner_area, &mut scrollbar_state);
@@ -457,11 +453,15 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp, match_count: 
     spans.push(Span::styled("[/]", Style::default().fg(scheme.accent)));
     spans.push(Span::raw(" search  "));
     spans.push(Span::styled("[e]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" expand all  "));
+    spans.push(Span::raw(" expand  "));
     spans.push(Span::styled("[E]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" collapse all  "));
+    spans.push(Span::raw(" collapse  "));
     spans.push(Span::styled("[c]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" go to component"));
+    spans.push(Span::raw(" component  "));
+    spans.push(Span::styled("[p]", Style::default().fg(scheme.accent)));
+    spans.push(Span::raw(" panel  "));
+    spans.push(Span::styled("[J/K]", Style::default().fg(scheme.accent)));
+    spans.push(Span::raw(" scroll"));
 
     let para = Paragraph::new(Line::from(spans));
     frame.render_widget(para, area);
@@ -557,6 +557,18 @@ fn flatten_node(
     visited.remove(node_id);
 }
 
+/// Calculate how many list items can fit in the remaining detail panel space.
+/// `area_height` is the total panel height, `used_lines` is how many lines are already used,
+/// `reserved` is extra lines to keep for following sections.
+fn available_detail_slots(area_height: u16, used_lines: usize, reserved: usize) -> usize {
+    let total = area_height as usize;
+    // Leave room for border (2) + reserved lines
+    total
+        .saturating_sub(used_lines)
+        .saturating_sub(reserved + 2)
+        .max(3) // always show at least 3
+}
+
 fn render_dependency_stats(
     frame: &mut Frame,
     area: Rect,
@@ -572,7 +584,7 @@ fn render_dependency_stats(
     let total_components = deps.names.len();
     let total_edges: usize = deps.edges.values().map(Vec::len).sum();
     let root_count = deps.roots.len();
-    let max_depth = calculate_max_depth(deps);
+    let max_depth = deps.max_depth;
 
     lines.push(Line::styled(
         "Dependency Statistics",
@@ -793,11 +805,7 @@ fn render_dependency_stats(
 
             // Dependency counts (inline)
             let dep_count = deps.edges.get(&node_id).map_or(0, Vec::len);
-            let depended_on_count = deps
-                .edges
-                .values()
-                .filter(|children| children.contains(&node_id))
-                .count();
+            let depended_on_count = deps.reverse_edges.get(&node_id).map_or(0, Vec::len);
 
             lines.push(Line::from(vec![
                 Span::styled("Deps: ", Style::default().fg(scheme.muted)),
@@ -885,11 +893,7 @@ fn render_dependency_stats(
         } else {
             // No component found — still show dependency counts
             let dep_count = deps.edges.get(&node_id).map_or(0, Vec::len);
-            let depended_on_count = deps
-                .edges
-                .values()
-                .filter(|children| children.contains(&node_id))
-                .count();
+            let depended_on_count = deps.reverse_edges.get(&node_id).map_or(0, Vec::len);
 
             lines.push(Line::from(vec![
                 Span::styled("Deps: ", Style::default().fg(scheme.muted)),
@@ -906,6 +910,34 @@ fn render_dependency_stats(
             ]));
         }
 
+        // "Used by" (parent) listing
+        if let Some(parents) = deps.reverse_edges.get(&node_id) {
+            if !parents.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::styled(
+                    format!("Used by ({}):", format_thousands(parents.len())),
+                    Style::default().fg(scheme.secondary).bold(),
+                ));
+                let max_parents = available_detail_slots(area.height, lines.len(), 2);
+                for parent_id in parents.iter().take(max_parents) {
+                    let parent_name = deps
+                        .names
+                        .get(parent_id)
+                        .map_or(parent_id.as_str(), String::as_str);
+                    lines.push(Line::from(vec![
+                        Span::styled("  ← ", Style::default().fg(scheme.muted)),
+                        Span::styled(parent_name, Style::default().fg(scheme.text)),
+                    ]));
+                }
+                if parents.len() > max_parents {
+                    lines.push(Line::styled(
+                        format!("  ... and {} more", parents.len() - max_parents),
+                        Style::default().fg(scheme.muted),
+                    ));
+                }
+            }
+        }
+
         // Direct dependencies with relationship tags
         if let Some(children) = deps.edges.get(&node_id) {
             lines.push(Line::from(""));
@@ -913,7 +945,8 @@ fn render_dependency_stats(
                 format!("Dependencies ({}):", format_thousands(children.len())),
                 Style::default().fg(scheme.primary).bold(),
             ));
-            for child_id in children.iter().take(5) {
+            let max_deps = available_detail_slots(area.height, lines.len(), 2);
+            for child_id in children.iter().take(max_deps) {
                 let child_name = deps
                     .names
                     .get(child_id)
@@ -925,10 +958,7 @@ fn render_dependency_stats(
                     .unwrap_or("");
                 let mut spans = vec![
                     Span::styled("  → ", Style::default().fg(scheme.muted)),
-                    Span::styled(
-                        truncate_str(child_name, area.width.saturating_sub(12) as usize),
-                        Style::default().fg(scheme.text),
-                    ),
+                    Span::styled(child_name, Style::default().fg(scheme.text)),
                 ];
                 let tag = tag.trim();
                 if !tag.is_empty() {
@@ -939,9 +969,9 @@ fn render_dependency_stats(
                 }
                 lines.push(Line::from(spans));
             }
-            if children.len() > 5 {
+            if children.len() > max_deps {
                 lines.push(Line::styled(
-                    format!("  ... and {} more", children.len() - 5),
+                    format!("  ... and {} more", children.len() - max_deps),
                     Style::default().fg(scheme.muted),
                 ));
             }
@@ -1022,6 +1052,10 @@ struct DependencyGraph {
     max_severities: HashMap<String, String>,
     /// (from_id, to_id) -> relationship type
     relationships: HashMap<(String, String), DependencyType>,
+    /// Reverse edges: node ID -> list of parent IDs (pre-computed for O(1) "used by" lookup)
+    reverse_edges: HashMap<String, Vec<String>>,
+    /// Max depth of the dependency tree (pre-computed)
+    max_depth: usize,
 }
 
 fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
@@ -1035,10 +1069,11 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
     // Build name mapping, vuln counts, and max severities
     for (id, comp) in &app.sbom.components {
         let id_str = id.value().to_string();
+        let clean_name = extract_display_name(&comp.name);
         let display_name = comp
             .version
             .as_ref()
-            .map_or_else(|| comp.name.clone(), |v| format!("{}@{}", comp.name, v));
+            .map_or_else(|| clean_name.clone(), |v| format!("{clean_name}@{v}"));
         names.insert(id_str.clone(), display_name);
         vuln_counts.insert(id_str.clone(), comp.vulnerabilities.len());
 
@@ -1064,6 +1099,17 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
         }
     }
 
+    // Build reverse edges for O(1) "used by" lookups
+    let mut reverse_edges: HashMap<String, Vec<String>> = HashMap::new();
+    for (parent, children) in &edges {
+        for child in children {
+            reverse_edges
+                .entry(child.clone())
+                .or_default()
+                .push(parent.clone());
+        }
+    }
+
     // Find roots (components with no incoming edges), sorted for stable ordering
     let mut roots: Vec<_> = names
         .keys()
@@ -1072,14 +1118,18 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
         .collect();
     roots.sort();
 
-    DependencyGraph {
+    let mut graph = DependencyGraph {
         names,
         edges,
         roots,
         vuln_counts,
         max_severities,
         relationships,
-    }
+        reverse_edges,
+        max_depth: 0,
+    };
+    graph.max_depth = calculate_max_depth(&graph);
+    graph
 }
 
 fn dependency_tag(rel: &DependencyType) -> &'static str {

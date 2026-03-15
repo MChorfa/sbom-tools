@@ -209,6 +209,14 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
                 app.select_component_tab(ComponentDetailTab::Dependencies);
                 return;
             }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.component_detail_scroll = app.component_detail_scroll.saturating_sub(1);
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.component_detail_scroll = app.component_detail_scroll.saturating_add(1);
+                return;
+            }
             _ => {}
         }
     }
@@ -450,6 +458,37 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
             }
         }
         // 'l' or Right arrow with Ctrl to toggle focus between panels
+        KeyCode::Char('p') if app.active_tab == ViewTab::Vulnerabilities => {
+            // Previous affected component for multi-component vulns
+            if let Some(cache) = &app.vuln_state.cached_data.clone() {
+                if let Some(vuln) = app.vuln_state.get_selected_vuln_row(cache) {
+                    let total = vuln.affected_component_ids.len();
+                    if total > 1 {
+                        let new_idx = if app.vuln_state.inspect_component_idx == 0 {
+                            total - 1
+                        } else {
+                            app.vuln_state.inspect_component_idx - 1
+                        };
+                        app.vuln_state.inspect_component_idx = new_idx;
+                        let comp_name = vuln
+                            .affected_components
+                            .get(new_idx)
+                            .map(|s| s.as_str())
+                            .unwrap_or("?");
+                        app.set_status_message(format!(
+                            "Component {}/{total}: {comp_name}",
+                            new_idx + 1
+                        ));
+                    } else {
+                        app.toggle_focus();
+                    }
+                } else {
+                    app.toggle_focus();
+                }
+            } else {
+                app.toggle_focus();
+            }
+        }
         KeyCode::Char('p') => {
             app.toggle_focus();
         }
@@ -510,6 +549,54 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
         KeyCode::Char('d') => {
             if app.active_tab == ViewTab::Vulnerabilities {
                 app.vuln_state.toggle_deduplicate();
+            }
+        }
+        KeyCode::Char('i') if app.active_tab == ViewTab::Vulnerabilities => {
+            // Inspect: jump to component in Tree tab (same as Enter on a Vuln item)
+            if let Some(cache) = &app.vuln_state.cached_data.clone() {
+                if let Some((comp_id, vuln_id)) = app.vuln_state.get_nav_component_id(cache) {
+                    app.navigation_ctx.push_breadcrumb(
+                        ViewTab::Vulnerabilities,
+                        vuln_id.clone(),
+                        app.vuln_state.selected,
+                    );
+                    app.selected_component = Some(comp_id.clone());
+                    app.component_tab = ComponentDetailTab::Overview;
+                    app.active_tab = ViewTab::Tree;
+                    app.focus_panel = FocusPanel::Right;
+                    app.jump_to_component_in_tree(&comp_id);
+                    let vuln = app.vuln_state.get_selected_vuln_row(cache);
+                    let total = vuln.map_or(1, |v| v.affected_component_ids.len());
+                    let idx = app.vuln_state.inspect_component_idx + 1;
+                    if total > 1 {
+                        app.set_status_message(format!(
+                            "→ {vuln_id} [{idx}/{total}] (Backspace to return, [n]/[p] to cycle)"
+                        ));
+                    } else {
+                        app.set_status_message(format!("→ {vuln_id} (Backspace to return)"));
+                    }
+                }
+            }
+        }
+        KeyCode::Char('n') if app.active_tab == ViewTab::Vulnerabilities => {
+            // Next affected component for multi-component vulns
+            if let Some(cache) = &app.vuln_state.cached_data.clone() {
+                if let Some(vuln) = app.vuln_state.get_selected_vuln_row(cache) {
+                    let total = vuln.affected_component_ids.len();
+                    if total > 1 {
+                        let new_idx = (app.vuln_state.inspect_component_idx + 1) % total;
+                        app.vuln_state.inspect_component_idx = new_idx;
+                        let comp_name = vuln
+                            .affected_components
+                            .get(new_idx)
+                            .map(|s| s.as_str())
+                            .unwrap_or("?");
+                        app.set_status_message(format!(
+                            "Component {}/{total}: {comp_name}",
+                            new_idx + 1
+                        ));
+                    }
+                }
             }
         }
         KeyCode::Char('c') if app.active_tab == ViewTab::Dependencies => {
@@ -622,6 +709,59 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
                 _ => {}
             }
         }
+        KeyCode::Char('E') if app.active_tab == ViewTab::Vulnerabilities => {
+            // Expand all vuln groups — use cached display items
+            let labels: Vec<String> = app
+                .vuln_state
+                .cached_display_items
+                .iter()
+                .filter_map(|item| match item {
+                    super::views::VulnDisplayItem::GroupHeader { label, .. } => Some(label.clone()),
+                    _ => None,
+                })
+                .collect();
+            app.vuln_state.expand_all_groups(&labels);
+            // Rebuild to reveal sub-groups, then expand those too
+            app.vuln_state.rebuild_display_items();
+            let sub_labels: Vec<String> = app
+                .vuln_state
+                .cached_display_items
+                .iter()
+                .filter_map(|item| match item {
+                    super::views::VulnDisplayItem::SubGroupHeader {
+                        parent_label,
+                        label,
+                        ..
+                    } => Some(format!("{parent_label}::{label}")),
+                    _ => None,
+                })
+                .collect();
+            if !sub_labels.is_empty() {
+                app.vuln_state.expand_all_groups(&sub_labels);
+                app.vuln_state.rebuild_display_items();
+            }
+        }
+        KeyCode::Char('C') if app.active_tab == ViewTab::Vulnerabilities => {
+            // Collapse all vuln groups
+            app.vuln_state.collapse_all_groups();
+            app.vuln_state.rebuild_display_items();
+            // Move selection to nearest group header
+            if let Some(pos) =
+                app.vuln_state.cached_display_items.iter().position(|item| {
+                    matches!(item, super::views::VulnDisplayItem::GroupHeader { .. })
+                })
+            {
+                app.vuln_state.selected = pos;
+            }
+        }
+        KeyCode::Tab if app.active_tab == ViewTab::Vulnerabilities => {
+            // Jump to next group header — use cached display items
+            app.vuln_state.jump_next_group_cached();
+        }
+        KeyCode::BackTab if app.active_tab == ViewTab::Vulnerabilities => {
+            // Jump to previous group header — use cached display items
+            app.vuln_state.jump_prev_group_cached();
+        }
         KeyCode::Char('E') if app.active_tab == ViewTab::Dependencies => {
             // Collapse all dependency nodes
             app.dependency_state.collapse_all();
@@ -692,7 +832,7 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
 fn get_selected_node_id(app: &ViewApp) -> Option<String> {
     let nodes = app.build_tree_nodes();
     let mut flat_items: Vec<String> = Vec::new();
-    flatten_tree_ids(&nodes, &app.tree_state, &mut flat_items);
+    flatten_tree_ids(nodes, &app.tree_state, &mut flat_items);
 
     flat_items.get(app.tree_state.selected).cloned()
 }
@@ -844,22 +984,27 @@ pub fn handle_mouse_event(app: &mut ViewApp, mouse: event::MouseEvent) {
 
 /// Handle click on tab bar
 fn handle_tab_click(app: &mut ViewApp, x: u16) {
-    // Approximate tab positions based on typical tab widths
-    // Each tab is roughly 12-15 chars wide
-    let tabs = [
-        (0, 12, ViewTab::Overview),         // "1:Overview"
-        (12, 26, ViewTab::Tree),            // "2:Components"
-        (26, 44, ViewTab::Vulnerabilities), // "3:Vulnerabilities"
-        (44, 56, ViewTab::Licenses),        // "4:Licenses"
-        (56, 72, ViewTab::Dependencies),    // "5:Dependencies"
-        (72, 84, ViewTab::Quality),         // "6:Quality"
+    // Tab labels matching view/ui.rs render_tabs (format: "[N] Title " + " | " separator)
+    let tab_labels: &[(&str, ViewTab)] = &[
+        ("Overview", ViewTab::Overview),
+        ("Components", ViewTab::Tree),
+        ("Vulnerabilities", ViewTab::Vulnerabilities),
+        ("Licenses", ViewTab::Licenses),
+        ("Dependencies", ViewTab::Dependencies),
+        ("Quality", ViewTab::Quality),
+        ("Compliance", ViewTab::Compliance),
+        ("Source", ViewTab::Source),
     ];
 
-    for (start, end, tab) in tabs {
-        if x >= start && x < end {
-            app.select_tab(tab);
+    // Compute cumulative positions: each tab is "[N] Title " (4 + title.len + 1) + 3 for separator
+    let mut pos: u16 = 0;
+    for (label, tab) in tab_labels {
+        let width = 4 + label.len() as u16 + 1; // "[N] " + title + " "
+        if x >= pos && x < pos + width {
+            app.select_tab(*tab);
             return;
         }
+        pos += width + 3; // " | " separator
     }
 }
 
@@ -870,7 +1015,7 @@ fn handle_list_click(app: &mut ViewApp, clicked_index: usize, _x: u16) {
             // For tree view, just select the item
             let nodes = app.build_tree_nodes();
             let mut flat_count = 0;
-            count_visible_tree_nodes(&nodes, &app.tree_state, &mut flat_count);
+            count_visible_tree_nodes(nodes, &app.tree_state, &mut flat_count);
             if clicked_index < flat_count {
                 app.tree_state.selected = clicked_index;
             }

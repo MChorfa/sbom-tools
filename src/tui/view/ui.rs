@@ -175,9 +175,9 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let tabs_data = [
         (ViewTab::Overview, "1", "Overview"),
         (ViewTab::Tree, "2", "Components"),
-        (ViewTab::Vulnerabilities, "3", "Vulns"),
+        (ViewTab::Vulnerabilities, "3", "Vulnerabilities"),
         (ViewTab::Licenses, "4", "Licenses"),
-        (ViewTab::Dependencies, "5", "Deps"),
+        (ViewTab::Dependencies, "5", "Dependencies"),
         (ViewTab::Quality, "6", "Quality"),
         (ViewTab::Compliance, "7", "Compliance"),
         (ViewTab::Source, "8", "Source"),
