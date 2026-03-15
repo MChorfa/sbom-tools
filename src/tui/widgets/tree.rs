@@ -133,7 +133,7 @@ pub fn extract_display_name(name: &str) -> String {
                         && !is_hash_like(part)
                         && part.len() > 2
                     {
-                        return format!("{}/{}", part, filename);
+                        return format!("{part}/{filename}");
                     }
                 }
             }

@@ -832,7 +832,7 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
 fn get_selected_node_id(app: &ViewApp) -> Option<String> {
     let nodes = app.build_tree_nodes();
     let mut flat_items: Vec<String> = Vec::new();
-    flatten_tree_ids(&nodes, &app.tree_state, &mut flat_items);
+    flatten_tree_ids(nodes, &app.tree_state, &mut flat_items);
 
     flat_items.get(app.tree_state.selected).cloned()
 }
@@ -1015,7 +1015,7 @@ fn handle_list_click(app: &mut ViewApp, clicked_index: usize, _x: u16) {
             // For tree view, just select the item
             let nodes = app.build_tree_nodes();
             let mut flat_count = 0;
-            count_visible_tree_nodes(&nodes, &app.tree_state, &mut flat_count);
+            count_visible_tree_nodes(nodes, &app.tree_state, &mut flat_count);
             if clicked_index < flat_count {
                 app.tree_state.selected = clicked_index;
             }

@@ -405,7 +405,7 @@ impl ViewApp {
     pub fn get_selected_group_info(&self) -> Option<(String, Vec<String>)> {
         let nodes = self.build_tree_nodes();
         let mut flat_items = Vec::new();
-        flatten_tree_for_selection(&nodes, &self.tree_state, &mut flat_items);
+        flatten_tree_for_selection(nodes, &self.tree_state, &mut flat_items);
 
         let selected = flat_items.get(self.tree_state.selected)?;
         match selected {
@@ -443,7 +443,7 @@ impl ViewApp {
                     }
                     None
                 }
-                find_group_children(&nodes, group_id)
+                find_group_children(nodes, group_id)
             }
             SelectedTreeNode::Component(_) => None,
         }
@@ -1159,7 +1159,7 @@ impl ViewApp {
     fn get_selected_tree_node(&self) -> Option<SelectedTreeNode> {
         let nodes = self.build_tree_nodes();
         let mut flat_items = Vec::new();
-        flatten_tree_for_selection(&nodes, &self.tree_state, &mut flat_items);
+        flatten_tree_for_selection(nodes, &self.tree_state, &mut flat_items);
 
         flat_items.get(self.tree_state.selected).cloned()
     }
