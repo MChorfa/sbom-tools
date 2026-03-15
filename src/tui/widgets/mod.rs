@@ -155,7 +155,7 @@ pub fn render_no_results_state(
 ) {
     let lines = vec![
         Line::from(""),
-        Line::styled("🔍", Style::default().fg(colors().text_muted)),
+        Line::styled("(empty)", Style::default().fg(colors().text_muted)),
         Line::from(""),
         Line::styled("No results found", Style::default().fg(colors().text)),
         Line::from(""),

@@ -127,24 +127,23 @@ pub fn extract_display_name(name: &str) -> String {
             // Try to find a meaningful parent directory
             let parts: Vec<&str> = name.split('/').collect();
             if parts.len() >= 2 {
-                // Look for meaningful directory names
                 for part in parts.iter().rev().skip(1) {
                     if !part.is_empty()
                         && !part.starts_with('.')
                         && !is_hash_like(part)
                         && part.len() > 2
                     {
-                        return format!("{}/{}", part, truncate_name(filename, 20));
+                        return format!("{}/{}", part, filename);
                     }
                 }
             }
-            return truncate_name(filename, 25);
+            return filename.to_string();
         }
 
         return clean.to_string();
     }
 
-    truncate_name(name, 30)
+    name.to_string()
 }
 
 /// Check if a name looks like a hash (hex digits and dashes)
@@ -155,15 +154,6 @@ fn is_hash_like(name: &str) -> bool {
     let clean = name.replace(['-', '_'], "");
     clean.chars().all(|c| c.is_ascii_hexdigit())
         || (clean.chars().filter(char::is_ascii_digit).count() > clean.len() / 2)
-}
-
-/// Truncate a name with ellipsis
-fn truncate_name(name: &str, max_len: usize) -> String {
-    if name.len() <= max_len {
-        name.to_string()
-    } else {
-        format!("{}...", &name[..max_len.saturating_sub(3)])
-    }
 }
 
 /// Get component type from path/name
@@ -296,7 +286,7 @@ pub struct Tree<'a> {
     highlight_style: Style,
     highlight_symbol: &'a str,
     group_style: Style,
-    component_style: Style,
+    search_query: String,
 }
 
 impl<'a> Tree<'a> {
@@ -310,7 +300,7 @@ impl<'a> Tree<'a> {
                 .add_modifier(Modifier::BOLD),
             highlight_symbol: "▶ ",
             group_style: Style::default().fg(scheme.primary).bold(),
-            component_style: Style::default().fg(scheme.text),
+            search_query: String::new(),
         }
     }
 
@@ -321,6 +311,11 @@ impl<'a> Tree<'a> {
 
     pub(crate) const fn highlight_style(mut self, style: Style) -> Self {
         self.highlight_style = style;
+        self
+    }
+
+    pub(crate) fn search_query(mut self, query: &str) -> Self {
+        self.search_query = query.to_lowercase();
         self
     }
 
@@ -424,11 +419,11 @@ impl StatefulWidget for Tree<'_> {
                 }
             }
 
-            // Add expand/collapse indicator for groups
+            // Add expand/collapse indicator for groups, leaf dot for components
             let expand_indicator = if item.is_group {
                 if item.is_expanded { "▼ " } else { "▶ " }
             } else {
-                "  "
+                "· "
             };
 
             // Build the line
@@ -456,7 +451,7 @@ impl StatefulWidget for Tree<'_> {
                 if x < area.x + area.width {
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         cell.set_char(ch)
-                            .set_style(Style::default().fg(scheme.muted));
+                            .set_style(Style::default().fg(scheme.text_muted));
                     }
                     x += 1;
                 }
@@ -466,7 +461,7 @@ impl StatefulWidget for Tree<'_> {
             let indicator_style = if item.is_group {
                 Style::default().fg(scheme.accent)
             } else {
-                Style::default()
+                Style::default().fg(scheme.muted)
             };
             for ch in expand_indicator.chars() {
                 if x < area.x + area.width {
@@ -478,12 +473,31 @@ impl StatefulWidget for Tree<'_> {
             }
 
             // Label — truncate to fit with room for vuln badge
+            // Search match highlighting (accent+bold when query matches)
+            let is_search_match = !self.search_query.is_empty()
+                && item.label.to_lowercase().contains(&self.search_query);
+
+            // Depth-based color gradient for component names
+            let depth_color = if item.is_group {
+                scheme.primary
+            } else {
+                match item.depth {
+                    0 | 1 => scheme.text,
+                    2 => Color::Rgb(180, 180, 180),
+                    _ => scheme.text_muted,
+                }
+            };
+
             let label_style = if is_selected {
                 self.highlight_style
+            } else if is_search_match {
+                Style::default().fg(scheme.accent).bold()
             } else if item.is_group {
                 self.group_style
+            } else if item.depth == 0 {
+                Style::default().fg(depth_color).bold()
             } else {
-                self.component_style
+                Style::default().fg(depth_color)
             };
 
             let vuln_badge_width: u16 = if item.vuln_count > 0 {

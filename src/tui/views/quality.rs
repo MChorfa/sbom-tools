@@ -48,7 +48,7 @@ fn render_no_quality_data(frame: &mut Frame, area: Rect) {
     widgets::render_empty_state_enhanced(
         frame,
         area,
-        "📊",
+        "--",
         "Quality analysis unavailable",
         Some("Quality scoring requires a valid SBOM to analyze"),
         Some("Ensure the SBOM was successfully parsed"),
@@ -201,7 +201,7 @@ fn render_empty_metrics(frame: &mut Frame, area: Rect, label: &str) {
     crate::tui::widgets::render_empty_state_enhanced(
         frame,
         area,
-        "📊",
+        "--",
         &format!("No {} metrics available", label.to_lowercase()),
         Some("Quality analysis could not be performed for this SBOM"),
         Some("SBOM may lack the required metadata for scoring"),

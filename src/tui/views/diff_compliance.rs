@@ -53,7 +53,7 @@ pub fn render_diff_compliance(frame: &mut Frame, area: Rect, ctx: &RenderContext
         crate::tui::widgets::render_empty_state_enhanced(
             frame,
             area,
-            "📋",
+            "--",
             "No compliance data available",
             Some("Compliance analysis requires both old and new SBOMs"),
             Some("Ensure both SBOMs were successfully parsed"),

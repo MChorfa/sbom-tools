@@ -10,13 +10,14 @@ mod tree;
 mod vulnerabilities;
 
 pub use compliance::{StandardComplianceState, compute_compliance_results, render_compliance};
-pub use dependencies::render_dependencies;
+pub use dependencies::{FlatDepNode, render_dependencies};
 pub use licenses::render_licenses;
+pub(crate) use licenses::{build_license_data_from_app, get_first_component_id_for_license};
 pub use overview::render_overview;
 pub use quality::render_quality;
 pub use source::render_source;
 pub use tree::render_tree;
 pub(crate) use vulnerabilities::build_vuln_cache;
 pub use vulnerabilities::{
-    VulnCache, VulnCacheRef, VulnDisplayItem, build_display_items, render_vulnerabilities,
+    VulnCache, VulnCacheRef, VulnDisplayItem, VulnRow, build_display_items, render_vulnerabilities,
 };

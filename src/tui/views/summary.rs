@@ -22,7 +22,7 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         crate::tui::widgets::render_empty_state_enhanced(
             frame,
             area,
-            "📊",
+            "--",
             "No diff data loaded",
             Some("Summary requires a completed diff analysis"),
             None,

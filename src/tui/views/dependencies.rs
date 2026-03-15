@@ -353,7 +353,7 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     if show_breadcrumbs {
         let breadcrumb_display = ctx.dependencies.get_breadcrumb_display();
         let breadcrumb_line = Line::from(vec![
-            Span::styled("📍 ", Style::default().fg(scheme.accent)),
+            Span::styled("> ", Style::default().fg(scheme.accent)),
             Span::styled(breadcrumb_display, Style::default().fg(scheme.text_muted)),
             Span::styled("  │  ", Style::default().fg(scheme.border)),
             Span::styled("[b]", Style::default().fg(scheme.accent)),

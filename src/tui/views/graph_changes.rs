@@ -278,7 +278,7 @@ fn render_change_detail(
             frame,
             area,
             " Change Details ",
-            "🔀",
+            "--",
             "Select a change to view details",
             &[("[↑↓]", " navigate")],
             false,
