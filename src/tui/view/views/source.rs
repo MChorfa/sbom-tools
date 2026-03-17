@@ -1,11 +1,10 @@
 //! Source tab rendering for `ViewApp` with SBOM Map panel.
 
-use crate::model::CreatorType;
-use crate::model::NormalizedSbom;
+use crate::model::{Component, CreatorType, NormalizedSbom};
 use crate::tui::app_states::source::{JsonTreeNode, SourceViewMode};
 use crate::tui::shared::source::{render_source_panel, render_str};
 use crate::tui::theme::colors;
-use crate::tui::view::app::{FocusPanel, SbomStats, ViewApp};
+use crate::tui::view::app::{FocusPanel, SbomStats, ViewApp, ViewTab};
 use ratatui::{
     buffer::Buffer,
     prelude::*,
@@ -20,6 +19,47 @@ pub fn render_source(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(area);
+
+    // Pre-compute link labels for navigable references (visible items only)
+    app.source_state.ensure_flat_cache();
+    let scroll = app.source_state.scroll_offset;
+    let visible = app.source_state.viewport_height.max(50);
+    let mut labels = HashMap::new();
+    match app.source_state.view_mode {
+        SourceViewMode::Tree => {
+            let range_end = (scroll + visible + 5).min(app.source_state.cached_flat_items.len());
+            for idx in scroll.saturating_sub(2)..range_end {
+                if let Some(item) = app.source_state.cached_flat_items.get(idx) {
+                    if let Some(link) = resolve_source_reference(item, &app.sbom) {
+                        labels.insert(idx, link.display_label);
+                    }
+                }
+            }
+        }
+        SourceViewMode::Raw => {
+            let range_end = (scroll + visible + 5).min(app.source_state.raw_lines.len());
+            for line_idx in scroll.saturating_sub(2)..range_end {
+                if let Some(node_id) = app
+                    .source_state
+                    .raw_line_node_ids
+                    .get(line_idx)
+                    .filter(|nid| !nid.is_empty())
+                {
+                    if let Some(item) = app
+                        .source_state
+                        .cached_flat_items
+                        .iter()
+                        .find(|i| i.node_id == *node_id)
+                    {
+                        if let Some(link) = resolve_source_reference(item, &app.sbom) {
+                            labels.insert(line_idx, link.display_label);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    app.source_state.link_labels = labels;
 
     let is_source_focused = app.focus_panel == FocusPanel::Left;
     render_source_panel(
@@ -175,6 +215,136 @@ fn semantic_breadcrumb(node_id: &str, sbom: &NormalizedSbom) -> String {
     }
 
     result.join(" > ")
+}
+
+// ============================================================================
+// Cross-Tab Reference Resolution
+// ============================================================================
+
+/// A resolved cross-tab reference from the Source tab.
+#[derive(Debug, Clone)]
+pub(crate) struct SourceLink {
+    /// Which tab to navigate to
+    pub tab: ViewTab,
+    /// Entity ID to select in the target tab (canonical component ID or vuln ID)
+    pub entity_id: String,
+    /// Human-readable label for status message
+    pub display_label: String,
+}
+
+/// Try to resolve a `FlatJsonItem` into a navigable cross-tab link.
+///
+/// Recognizes:
+/// - `ref` / `bom-ref` fields pointing to components (CycloneDX)
+/// - `spdxElementId` / `SPDXID` fields pointing to components (SPDX)
+/// - `dependsOn` array entries (dependency refs → component)
+/// - `id` inside vulnerabilities section (CVE IDs → Vulnerabilities tab)
+/// - `affects.[n].ref` inside vulnerabilities (affected component → Tree tab)
+/// - Expandable component objects (components.[N]) → Tree tab
+pub(crate) fn resolve_source_reference(
+    item: &crate::tui::shared::source::FlatJsonItem,
+    sbom: &NormalizedSbom,
+) -> Option<SourceLink> {
+    // --- Expandable component/vulnerability objects ---
+    if item.is_expandable {
+        return resolve_expandable_object(item, sbom);
+    }
+
+    if item.value_preview.is_empty() {
+        return None;
+    }
+    // Strip surrounding quotes from the value
+    let val = item.value_preview.trim_matches('"');
+    if val.is_empty() {
+        return None;
+    }
+
+    let node_id = &item.node_id;
+    let key = &item.display_key;
+    let section = current_section_from_node_id(node_id);
+
+    // --- Vulnerability ID (e.g., CVE-2024-1234) ---
+    if section.as_deref() == Some("vulnerabilities") && key == "id" {
+        return Some(SourceLink {
+            tab: ViewTab::Vulnerabilities,
+            entity_id: val.to_string(),
+            display_label: val.to_string(),
+        });
+    }
+
+    // --- Component references (bom-ref, SPDXID, ref, dependsOn entries) ---
+    let is_ref_field = matches!(
+        key.as_str(),
+        "ref" | "bom-ref" | "spdxElementId" | "SPDXID" | "spdxElement"
+    );
+    let is_depends_on_entry = node_id.contains("dependsOn.");
+
+    if is_ref_field || is_depends_on_entry {
+        // Try to resolve the reference value to a component
+        if let Some((cid, comp)) = find_component_by_format_id(sbom, val) {
+            let label = comp
+                .version
+                .as_ref()
+                .map_or_else(|| comp.name.clone(), |v| format!("{}@{v}", comp.name));
+            return Some(SourceLink {
+                tab: ViewTab::Tree,
+                entity_id: cid,
+                display_label: label,
+            });
+        }
+    }
+
+    None
+}
+
+/// Resolve an expandable object node (e.g., components.[3], vulnerabilities.[0]).
+///
+/// Uses the array index from the node_id to look up the corresponding entity.
+fn resolve_expandable_object(
+    item: &crate::tui::shared::source::FlatJsonItem,
+    sbom: &NormalizedSbom,
+) -> Option<SourceLink> {
+    let section = current_section_from_node_id(&item.node_id)?;
+    let idx = extract_array_index(&item.node_id)?;
+
+    match section.as_str() {
+        "components" => {
+            let (cid, comp) = sbom.components.iter().nth(idx)?;
+            let label = comp
+                .version
+                .as_ref()
+                .map_or_else(|| comp.name.clone(), |v| format!("{}@{v}", comp.name));
+            Some(SourceLink {
+                tab: ViewTab::Tree,
+                entity_id: cid.value().to_string(),
+                display_label: label,
+            })
+        }
+        "vulnerabilities" => {
+            let vuln = sbom
+                .components
+                .values()
+                .flat_map(|c| &c.vulnerabilities)
+                .nth(idx)?;
+            Some(SourceLink {
+                tab: ViewTab::Vulnerabilities,
+                entity_id: vuln.id.clone(),
+                display_label: vuln.id.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Find a component by its format-specific ID (bom-ref, SPDXID).
+fn find_component_by_format_id<'a>(
+    sbom: &'a NormalizedSbom,
+    format_id: &str,
+) -> Option<(String, &'a Component)> {
+    sbom.components
+        .iter()
+        .find(|(_, c)| c.identifiers.format_id == format_id)
+        .map(|(id, c)| (id.value().to_string(), c))
 }
 
 /// Pre-compute search match counts per section.
@@ -386,6 +556,20 @@ fn render_source_map(frame: &mut Frame, area: Rect, app: &mut ViewApp, is_focuse
     let mut nav_idx = 0usize;
     let mut rendered = 0usize;
 
+    // Pre-compute max count width for column alignment
+    let max_count_width = sections
+        .iter()
+        .filter(|s| s.is_expandable)
+        .map(|s| {
+            if s.is_object {
+                format!("{{{}}}", s.child_count).len()
+            } else {
+                format!("[{}]", s.child_count).len()
+            }
+        })
+        .max()
+        .unwrap_or(0);
+
     for section in &sections {
         if !section.is_expandable {
             continue;
@@ -412,8 +596,10 @@ fn render_source_map(frame: &mut Frame, area: Rect, app: &mut ViewApp, is_focuse
         } else {
             format!("[{}]", section.child_count)
         };
+        // Right-pad count to fixed width for column alignment
+        let count_padded = format!("{count_str:>max_count_width$}");
         let match_str = if match_count > 0 {
-            format!("({match_count})")
+            format!(" ({match_count})")
         } else {
             String::new()
         };
@@ -423,7 +609,7 @@ fn render_source_map(frame: &mut Frame, area: Rect, app: &mut ViewApp, is_focuse
             &app.stats,
             &app.sbom,
             (width as usize).saturating_sub(
-                section.key.len() + count_str.len() + match_str.len() + marker.len() + 8,
+                section.key.len() + count_padded.len() + match_str.len() + marker.len() + 8,
             ),
         );
 
@@ -439,7 +625,7 @@ fn render_source_map(frame: &mut Frame, area: Rect, app: &mut ViewApp, is_focuse
         render_str(buf, x, y, &left, width, style);
 
         // Right side: " count match  badge marker" — right-aligned
-        let mut right = format!(" {count_str}{match_str}");
+        let mut right = format!(" {count_padded}{match_str}");
         if !badge.is_empty() {
             let _ = write!(right, "  {badge}");
         }
@@ -449,8 +635,8 @@ fn render_source_map(frame: &mut Frame, area: Rect, app: &mut ViewApp, is_focuse
         if width > right_len {
             let rx = right_edge - right_len;
 
-            // Render count portion
-            let count_full = format!(" {count_str}");
+            // Render count portion (padded for alignment)
+            let count_full = format!(" {count_padded}");
             let count_style = if is_current {
                 Style::default().fg(scheme.accent)
             } else {
@@ -742,7 +928,16 @@ fn render_context(
             }),
         SourceViewMode::Raw => {
             let section = current_section_for_raw_line(app.source_state.selected, sections);
-            (section, None, None)
+            // Extract array_idx from raw_line_node_ids mapping
+            let (idx, nid) = app
+                .source_state
+                .raw_line_node_ids
+                .get(app.source_state.selected)
+                .filter(|nid| !nid.is_empty())
+                .map_or((None, None), |nid| {
+                    (extract_array_index(nid), Some(nid.clone()))
+                });
+            (section, idx, nid)
         }
     };
 
@@ -776,6 +971,47 @@ fn render_context(
     y += 1;
     if y >= max_y {
         return;
+    }
+
+    // Raw mode: compact line info (line number + preview on single line)
+    if app.source_state.view_mode == SourceViewMode::Raw {
+        let line_num = app.source_state.selected + 1;
+        let total = app.source_state.raw_lines.len();
+        let preview = app
+            .source_state
+            .raw_lines
+            .get(app.source_state.selected)
+            .map(|l| l.trim())
+            .filter(|t| !t.is_empty())
+            .unwrap_or("");
+        let line_info = format!(" L{line_num}/{total}");
+        if preview.is_empty() {
+            render_str(
+                buf,
+                x,
+                y,
+                &line_info,
+                width,
+                Style::default().fg(scheme.muted),
+            );
+        } else {
+            let info_len = line_info.len() + 3; // " · " separator
+            let remaining = (width as usize).saturating_sub(info_len);
+            let truncated = truncate_map_str(preview, remaining);
+            render_str(
+                buf,
+                x,
+                y,
+                &format!("{line_info} \u{00b7} {truncated}"),
+                width,
+                Style::default().fg(scheme.muted),
+            );
+        }
+        y += 1;
+        if y >= max_y {
+            return;
+        }
+        // Fall through to component/vulnerability detail below
     }
 
     // Component context
@@ -1049,68 +1285,6 @@ fn render_context(
             }
             return;
         }
-    }
-
-    // Raw mode: show JSON path breadcrumb + line info
-    if app.source_state.view_mode == SourceViewMode::Raw {
-        // JSON path breadcrumb from raw_line_node_ids mapping
-        if let Some(node_id) = app
-            .source_state
-            .raw_line_node_ids
-            .get(app.source_state.selected)
-        {
-            if !node_id.is_empty() {
-                let bc = semantic_breadcrumb(node_id, &app.sbom);
-                if !bc.is_empty() {
-                    render_str(
-                        buf,
-                        x,
-                        y,
-                        &format!(
-                            " {}",
-                            truncate_map_str(&bc, (width as usize).saturating_sub(2))
-                        ),
-                        width,
-                        Style::default().fg(scheme.text).bold(),
-                    );
-                    y += 1;
-                    if y >= max_y {
-                        return;
-                    }
-                }
-            }
-        }
-
-        let line_num = app.source_state.selected + 1;
-        let total = app.source_state.raw_lines.len();
-        render_str(
-            buf,
-            x,
-            y,
-            &format!(" Line {line_num}/{total}"),
-            width,
-            Style::default().fg(scheme.muted),
-        );
-        y += 1;
-        if y >= max_y {
-            return;
-        }
-
-        if let Some(raw_line) = app.source_state.raw_lines.get(app.source_state.selected) {
-            let trimmed = raw_line.trim();
-            let preview = truncate_map_str(trimmed, (width as usize).saturating_sub(2));
-            if !preview.is_empty() {
-                render_str(
-                    buf,
-                    x,
-                    y,
-                    &format!(" {preview}"),
-                    width,
-                    Style::default().fg(scheme.text_muted),
-                );
-            }
-        }
-        return;
     }
 
     // Document summary (root level or non-component section)

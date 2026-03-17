@@ -478,6 +478,25 @@ fn render_source_tree(
                     remaining - x,
                     val_style,
                 );
+                let val_w = UnicodeWidthStr::width(display_val.as_str());
+                x += val_w.min(max_w) as u16;
+            }
+        }
+
+        // Link indicator for navigable references (e.g., " → lodash@4.17.21 ⏎")
+        if let Some(label) = state.link_labels.get(&abs_idx) {
+            let link_text = format!(" \u{2192} {label} \u{23ce}");
+            if x + 4 < remaining {
+                let avail = (remaining - x) as usize;
+                let truncated = crate::tui::widgets::truncate_str(&link_text, avail);
+                render_str(
+                    frame.buffer_mut(),
+                    x,
+                    y,
+                    &truncated,
+                    remaining - x,
+                    Style::default().fg(scheme.primary).italic(),
+                );
             }
         }
 
@@ -797,6 +816,32 @@ fn render_source_raw(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // Link indicator for navigable references in raw mode
+        if let Some(label) = state.link_labels.get(&abs_idx) {
+            if !is_folded_start && !is_structural {
+                let link_text = format!(" \u{2192} {label} \u{23ce}");
+                // Estimate current x position from content
+                let line_display_len = if state.word_wrap || state.h_scroll_offset == 0 {
+                    UnicodeWidthStr::width(line.as_str())
+                } else {
+                    UnicodeWidthStr::width(skip_display_chars(line, state.h_scroll_offset).as_str())
+                };
+                let link_x = content_x + (line_display_len as u16).min(remaining - content_x);
+                if link_x + 4 < remaining {
+                    let avail = (remaining - link_x) as usize;
+                    let truncated = crate::tui::widgets::truncate_str(&link_text, avail);
+                    render_str(
+                        frame.buffer_mut(),
+                        link_x,
+                        y,
+                        &truncated,
+                        remaining - link_x,
+                        Style::default().fg(scheme.primary).italic(),
+                    );
                 }
             }
         }

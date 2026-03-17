@@ -17,6 +17,7 @@ pub(crate) use licenses::{build_license_data_from_app, get_first_component_id_fo
 pub use overview::render_overview;
 pub use quality::render_quality;
 pub use source::render_source;
+pub(crate) use source::{SourceLink, resolve_source_reference};
 pub use tree::render_tree;
 pub(crate) use vulnerabilities::build_vuln_cache;
 pub use vulnerabilities::{

@@ -1,6 +1,7 @@
 //! Event handling for the `ViewApp`.
 
 use super::app::{ComponentDetailTab, FocusPanel, ViewApp, ViewTab};
+use super::views::resolve_source_reference;
 use crate::config::TuiPreferences;
 use crate::tui::app_states::SourceViewMode;
 use crate::tui::toggle_theme;
@@ -11,6 +12,50 @@ use std::io;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+/// Action for Enter key on Source tab (computed before borrow to avoid borrow conflicts).
+enum SourceEnterAction {
+    ToggleExpand(String),
+    Link(super::views::SourceLink),
+}
+
+/// Determine the Enter action for the Source tab, handling both tree and raw modes.
+fn source_enter_action(app: &ViewApp) -> Option<SourceEnterAction> {
+    match app.source_state.view_mode {
+        SourceViewMode::Tree => {
+            let item = app
+                .source_state
+                .cached_flat_items
+                .get(app.source_state.selected)?;
+            // Try cross-tab link first (works for both leaf refs AND expandable components)
+            if let Some(link) = resolve_source_reference(item, &app.sbom) {
+                // For expandable items that resolve (component/vuln objects), navigate
+                // For leaf refs, navigate
+                return Some(SourceEnterAction::Link(link));
+            }
+            // Expandable but not a navigable object → toggle expand
+            if item.is_expandable {
+                return Some(SourceEnterAction::ToggleExpand(item.node_id.clone()));
+            }
+            None
+        }
+        SourceViewMode::Raw => {
+            // Bridge raw line → tree node via raw_line_node_ids mapping
+            let node_id = app
+                .source_state
+                .raw_line_node_ids
+                .get(app.source_state.selected)
+                .filter(|nid| !nid.is_empty())?;
+            // Find the matching FlatJsonItem by node_id
+            let item = app
+                .source_state
+                .cached_flat_items
+                .iter()
+                .find(|i| i.node_id == *node_id)?;
+            resolve_source_reference(item, &app.sbom).map(SourceEnterAction::Link)
+        }
+    }
+}
 
 /// Terminal events.
 #[allow(dead_code)]
@@ -426,18 +471,39 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
 
         // Actions
         KeyCode::Enter => {
-            if app.active_tab == ViewTab::Source
-                && app.source_state.view_mode == SourceViewMode::Tree
-            {
+            if app.active_tab == ViewTab::Source {
                 app.source_state.ensure_flat_cache();
-                if let Some(item) = app
-                    .source_state
-                    .cached_flat_items
-                    .get(app.source_state.selected)
-                    && item.is_expandable
-                {
-                    let node_id = item.node_id.clone();
-                    app.source_state.toggle_expand(&node_id);
+                // Resolve the current item — works for both tree and raw mode
+                let action = source_enter_action(app);
+                match action {
+                    Some(SourceEnterAction::ToggleExpand(node_id)) => {
+                        app.source_state.toggle_expand(&node_id);
+                    }
+                    Some(SourceEnterAction::Link(link)) => {
+                        app.navigation_ctx.push_breadcrumb(
+                            ViewTab::Source,
+                            link.display_label.clone(),
+                            app.source_state.selected,
+                        );
+                        match link.tab {
+                            ViewTab::Tree => {
+                                app.selected_component = Some(link.entity_id.clone());
+                                app.component_tab = ComponentDetailTab::Overview;
+                                app.focus_panel = FocusPanel::Right;
+                                app.jump_to_component_in_tree(&link.entity_id);
+                            }
+                            ViewTab::Vulnerabilities => {
+                                app.jump_to_vuln_by_id(&link.entity_id);
+                            }
+                            _ => {}
+                        }
+                        app.active_tab = link.tab;
+                        app.set_status_message(format!(
+                            "\u{2192} {} (Backspace to return)",
+                            link.display_label
+                        ));
+                    }
+                    None => {}
                 }
             } else {
                 app.handle_enter();
@@ -613,6 +679,63 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
                 app.component_tab = ComponentDetailTab::Overview;
                 app.focus_panel = FocusPanel::Right;
                 app.jump_to_component_in_tree(&node_id);
+            }
+        }
+        // Reverse navigation: jump to Source tab for the selected entity
+        KeyCode::Char('S')
+            if matches!(
+                app.active_tab,
+                ViewTab::Tree | ViewTab::Vulnerabilities | ViewTab::Dependencies
+            ) =>
+        {
+            let ref_value = match app.active_tab {
+                ViewTab::Tree => app.selected_component.as_ref().and_then(|comp_id| {
+                    app.sbom
+                        .components
+                        .iter()
+                        .find(|(id, _)| id.value() == comp_id)
+                        .map(|(_, c)| (c.identifiers.format_id.clone(), comp_id.clone()))
+                }),
+                ViewTab::Vulnerabilities => app
+                    .vuln_state
+                    .cached_data
+                    .as_ref()
+                    .and_then(|cache| app.vuln_state.get_selected_vuln_row(cache))
+                    .map(|v| (v.vuln_id.clone(), v.vuln_id.clone())),
+                ViewTab::Dependencies => app.get_selected_dependency_node_id().and_then(|nid| {
+                    app.sbom
+                        .components
+                        .iter()
+                        .find(|(id, _)| id.value() == nid)
+                        .map(|(_, c)| (c.identifiers.format_id.clone(), nid))
+                }),
+                _ => None,
+            };
+            if let Some((format_id, label)) = ref_value {
+                let sel_index = match app.active_tab {
+                    ViewTab::Tree => app.tree_state.selected,
+                    ViewTab::Vulnerabilities => app.vuln_state.selected,
+                    ViewTab::Dependencies => app.dependency_state.selected,
+                    _ => 0,
+                };
+                if let Some(source_idx) = app.find_source_item_for_ref(&format_id) {
+                    app.navigation_ctx
+                        .push_breadcrumb(app.active_tab, label.clone(), sel_index);
+                    app.source_state.selected = source_idx;
+                    app.source_state.view_mode = SourceViewMode::Tree;
+                    // Ensure the item is visible by adjusting scroll
+                    if source_idx < app.source_state.scroll_offset
+                        || source_idx
+                            >= app.source_state.scroll_offset + app.source_state.viewport_height
+                    {
+                        app.source_state.scroll_offset =
+                            source_idx.saturating_sub(app.source_state.viewport_height / 3);
+                    }
+                    app.active_tab = ViewTab::Source;
+                    app.set_status_message(format!("Source: {label} (Backspace to return)"));
+                } else {
+                    app.set_status_message("Reference not found in source".to_string());
+                }
             }
         }
         KeyCode::Char('w') if app.active_tab == ViewTab::Source => {
