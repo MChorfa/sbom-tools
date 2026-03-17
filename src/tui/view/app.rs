@@ -737,10 +737,19 @@ impl ViewApp {
             .as_ref()
             .and_then(|r| r.get(self.compliance_state.selected_standard))
             .map_or(0, |r| {
-                r.violations
-                    .iter()
-                    .filter(|v| self.compliance_state.severity_filter.matches(v.severity))
-                    .count()
+                if self.compliance_state.grouped {
+                    // In grouped mode, count is the number of groups
+                    super::views::build_groups(
+                        r,
+                        self.compliance_state.severity_filter,
+                    )
+                    .len()
+                } else {
+                    r.violations
+                        .iter()
+                        .filter(|v| self.compliance_state.severity_filter.matches(v.severity))
+                        .count()
+                }
             })
     }
 
@@ -959,6 +968,7 @@ impl ViewApp {
                         true,
                         &[],
                         self.source_state.sort_mode,
+                        "",
                     );
                     if let Some(item) = items.get(self.source_state.selected)
                         && item.is_expandable
@@ -1015,6 +1025,7 @@ impl ViewApp {
                     true,
                     &[],
                     self.source_state.sort_mode,
+                    "",
                 );
                 if let Some(idx) = items.iter().position(|item| item.node_id == target_id) {
                     self.source_state.selected = idx;
@@ -1060,6 +1071,7 @@ impl ViewApp {
             true,
             &[],
             self.source_state.sort_mode,
+            "",
         );
         let item = items.get(self.source_state.selected)?;
         let parts: Vec<&str> = item.node_id.split('.').collect();

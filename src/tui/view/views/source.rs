@@ -1051,8 +1051,36 @@ fn render_context(
         }
     }
 
-    // Raw mode: show current line info
+    // Raw mode: show JSON path breadcrumb + line info
     if app.source_state.view_mode == SourceViewMode::Raw {
+        // JSON path breadcrumb from raw_line_node_ids mapping
+        if let Some(node_id) = app
+            .source_state
+            .raw_line_node_ids
+            .get(app.source_state.selected)
+        {
+            if !node_id.is_empty() {
+                let bc = semantic_breadcrumb(node_id, &app.sbom);
+                if !bc.is_empty() {
+                    render_str(
+                        buf,
+                        x,
+                        y,
+                        &format!(
+                            " {}",
+                            truncate_map_str(&bc, (width as usize).saturating_sub(2))
+                        ),
+                        width,
+                        Style::default().fg(scheme.text).bold(),
+                    );
+                    y += 1;
+                    if y >= max_y {
+                        return;
+                    }
+                }
+            }
+        }
+
         let line_num = app.source_state.selected + 1;
         let total = app.source_state.raw_lines.len();
         render_str(
