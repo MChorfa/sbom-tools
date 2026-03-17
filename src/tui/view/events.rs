@@ -1148,10 +1148,8 @@ pub fn get_yank_text(app: &ViewApp) -> Option<String> {
             let results = app.compliance_results.as_ref()?;
             let result = results.get(app.compliance_state.selected_standard)?;
             if app.compliance_state.grouped {
-                let groups = super::views::build_groups(
-                    result,
-                    app.compliance_state.severity_filter,
-                );
+                let groups =
+                    super::views::build_groups(result, app.compliance_state.severity_filter);
                 groups
                     .get(app.compliance_state.selected_violation)
                     .map(|g| format!("{} ({})", g.pattern, g.violations.len()))

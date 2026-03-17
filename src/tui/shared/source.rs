@@ -716,7 +716,11 @@ fn render_source_raw(
 
             if is_folded_start {
                 // [Feature 4] Show fold summary instead of content
-                let fold_end = state.bracket_pairs.get(&abs_idx).copied().unwrap_or(abs_idx);
+                let fold_end = state
+                    .bracket_pairs
+                    .get(&abs_idx)
+                    .copied()
+                    .unwrap_or(abs_idx);
                 let hidden = fold_end - abs_idx;
                 let trimmed = line.trim();
                 let summary = format!("{trimmed} \u{2026} ({hidden} lines)");
@@ -927,10 +931,7 @@ fn build_visible_lines(state: &mut SourcePanelState, visible_height: usize) -> V
 /// Check if a raw line is purely structural (just braces, brackets, commas).
 fn is_structural_line(line: &str) -> bool {
     let trimmed = line.trim();
-    matches!(
-        trimmed,
-        "{" | "}" | "}," | "[" | "]" | "]," | "{}" | "[]"
-    )
+    matches!(trimmed, "{" | "}" | "}," | "[" | "]" | "]," | "{}" | "[]")
 }
 
 /// Render a raw JSON line with syntax highlighting.
