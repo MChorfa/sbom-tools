@@ -321,6 +321,7 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
                 if let Some(comp_id) = app.get_map_context_component_id() {
                     app.selected_component = Some(comp_id);
                     app.active_tab = ViewTab::Vulnerabilities;
+                    app.focus_panel = FocusPanel::Left;
                 }
                 return;
             }
@@ -1038,6 +1039,7 @@ fn handle_search_key(app: &mut ViewApp, key: KeyEvent) {
                         app.selected_component = Some(component_id.clone());
                         app.jump_to_component_in_tree(&component_id);
                         app.active_tab = ViewTab::Vulnerabilities;
+                        app.focus_panel = FocusPanel::Left;
                     }
                 }
                 app.stop_search();
