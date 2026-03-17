@@ -199,7 +199,7 @@ impl ViewApp {
         }
     }
 
-    /// Switch to the next tab.
+    /// Switch to the next tab, resetting focus to left panel.
     pub const fn next_tab(&mut self) {
         self.active_tab = match self.active_tab {
             ViewTab::Overview => ViewTab::Tree,
@@ -211,9 +211,10 @@ impl ViewApp {
             ViewTab::Compliance => ViewTab::Source,
             ViewTab::Source => ViewTab::Overview,
         };
+        self.focus_panel = FocusPanel::Left;
     }
 
-    /// Switch to the previous tab.
+    /// Switch to the previous tab, resetting focus to left panel.
     pub const fn prev_tab(&mut self) {
         self.active_tab = match self.active_tab {
             ViewTab::Overview => ViewTab::Source,
@@ -225,11 +226,13 @@ impl ViewApp {
             ViewTab::Compliance => ViewTab::Quality,
             ViewTab::Source => ViewTab::Compliance,
         };
+        self.focus_panel = FocusPanel::Left;
     }
 
-    /// Select a specific tab.
+    /// Select a specific tab, resetting focus to the left (list) panel.
     pub const fn select_tab(&mut self, tab: ViewTab) {
         self.active_tab = tab;
+        self.focus_panel = FocusPanel::Left;
     }
 
     // ========================================================================
