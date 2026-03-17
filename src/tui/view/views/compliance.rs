@@ -431,6 +431,7 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
 // Grouped violations view
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn render_grouped_violations(
     frame: &mut Frame,
     area: Rect,
