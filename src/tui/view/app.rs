@@ -399,6 +399,47 @@ impl ViewApp {
         false
     }
 
+    /// Jump to a vulnerability by its ID (e.g., "CVE-2024-1234") in the Vulnerabilities tab.
+    ///
+    /// Returns `true` if the vulnerability was found and selected.
+    pub fn jump_to_vuln_by_id(&mut self, vuln_id: &str) -> bool {
+        // Ensure cache is built
+        if self.vuln_state.cached_data.is_none() {
+            let cache = super::views::build_vuln_cache(self);
+            self.vuln_state.cached_data = Some(std::sync::Arc::new(cache));
+        }
+        let Some(cache) = &self.vuln_state.cached_data else {
+            return false;
+        };
+        // Find the vuln in the cache by ID
+        if let Some(vuln_idx) = cache.vulns.iter().position(|v| v.vuln_id == vuln_id) {
+            // In flat mode, the display item index matches the vuln index
+            // In grouped mode, we need to find the VulnDisplayItem that wraps this vuln
+            let display_idx = self
+                .vuln_state
+                .cached_display_items
+                .iter()
+                .position(|item| {
+                    matches!(item, super::views::VulnDisplayItem::Vuln { idx, .. } if *idx == vuln_idx)
+                })
+                .unwrap_or(vuln_idx);
+            self.vuln_state.selected = display_idx;
+            return true;
+        }
+        false
+    }
+
+    /// Find a source tree item whose value matches a given reference string (bom-ref, CVE ID, etc.)
+    /// and return its index in `cached_flat_items`.
+    pub fn find_source_item_for_ref(&mut self, ref_value: &str) -> Option<usize> {
+        self.source_state.ensure_flat_cache();
+        let quoted = format!("\"{ref_value}\"");
+        self.source_state
+            .cached_flat_items
+            .iter()
+            .position(|item| item.value_preview == quoted || item.value_preview == ref_value)
+    }
+
     /// Get the currently selected tree node info (Group label + children component IDs,
     /// or None if a component is selected or nothing is selected).
     #[must_use]

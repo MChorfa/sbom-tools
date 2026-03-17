@@ -860,6 +860,9 @@ pub struct SourcePanelState {
     pub folded_lines: HashSet<usize>,
     /// Show indent guides in raw mode.
     pub show_indent_guides: bool,
+    /// Pre-computed link labels for navigable references (item index → display label).
+    /// Populated before render by the ViewApp's source renderer.
+    pub link_labels: HashMap<usize, String>,
 }
 
 impl SourcePanelState {
@@ -965,6 +968,7 @@ impl SourcePanelState {
             bracket_pairs_reverse,
             folded_lines: HashSet::new(),
             show_indent_guides: true,
+            link_labels: HashMap::new(),
         }
     }
 

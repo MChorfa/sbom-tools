@@ -228,6 +228,46 @@ impl ViewState for SourceView {
                 }
                 EventResult::Consumed
             }
+            // Fold toggle (raw mode) — active panel only, folds are position-specific
+            KeyCode::Char('z') => {
+                if self.inner.active_panel_mut().view_mode == SourceViewMode::Raw {
+                    self.inner.active_panel_mut().toggle_fold();
+                }
+                EventResult::Consumed
+            }
+            // Fold all / unfold all (raw mode) — synced: both panels
+            KeyCode::Char('Z') => {
+                if self.inner.active_panel_mut().view_mode == SourceViewMode::Raw {
+                    if self.inner.active_panel_mut().folded_lines.is_empty() {
+                        self.inner.active_panel_mut().fold_all_top_level();
+                        if self.inner.is_synced() {
+                            self.inner.inactive_panel_mut().fold_all_top_level();
+                        }
+                    } else {
+                        self.inner.active_panel_mut().unfold_all();
+                        if self.inner.is_synced() {
+                            self.inner.inactive_panel_mut().unfold_all();
+                        }
+                    }
+                }
+                EventResult::Consumed
+            }
+            // Jump to matching bracket (raw mode) — active panel only
+            KeyCode::Char('%') => {
+                if self.inner.active_panel_mut().view_mode == SourceViewMode::Raw {
+                    self.inner.active_panel_mut().jump_to_matching_bracket();
+                }
+                EventResult::Consumed
+            }
+            // Toggle indent guides — synced: both panels
+            KeyCode::Char('|') => {
+                let new_val = !self.inner.active_panel_mut().show_indent_guides;
+                self.inner.active_panel_mut().show_indent_guides = new_val;
+                if self.inner.is_synced() {
+                    self.inner.inactive_panel_mut().show_indent_guides = new_val;
+                }
+                EventResult::Consumed
+            }
             // Fold depth presets
             KeyCode::Char('!') => {
                 self.inner.active_panel_mut().expand_to_depth(1);
@@ -271,6 +311,8 @@ impl ViewState for SourceView {
             Shortcut::new("/", "Search"),
             Shortcut::new("H/L", "Collapse/Expand all"),
             Shortcut::new("!/@@/#", "Fold depth"),
+            Shortcut::new("z/Z", "Fold/Unfold"),
+            Shortcut::new("%", "Match bracket"),
             Shortcut::new("m", "Bookmark"),
             Shortcut::new("d", "Detail"),
         ]
