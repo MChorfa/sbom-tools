@@ -130,8 +130,8 @@ pub fn render_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Standard selector tabs
-            Constraint::Length(7),  // Category breakdown summary
+            Constraint::Length(3), // Standard selector tabs
+            Constraint::Length(7), // Category breakdown summary
             Constraint::Min(10),   // Violations list (grouped or flat)
             Constraint::Length(3), // Help bar
         ])
@@ -331,12 +331,10 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
         .split(area);
 
     // Left panel: status line + top category breakdown bars
-    let mut lines: Vec<Line> = vec![Line::from(vec![
-        Span::styled(
-            format!("  {status_text}"),
-            Style::default().fg(status_color).bold(),
-        ),
-    ])];
+    let mut lines: Vec<Line> = vec![Line::from(vec![Span::styled(
+        format!("  {status_text}"),
+        Style::default().fg(status_color).bold(),
+    )])];
 
     // Show up to 4 categories with proportional bars
     let bar_max = (h_chunks[0].width as usize).saturating_sub(30).clamp(8, 40);
@@ -359,14 +357,8 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
                 format!("  {:<10}", cat.short_name()),
                 Style::default().fg(scheme.muted),
             ),
-            Span::styled(
-                "\u{2588}".repeat(filled),
-                Style::default().fg(bar_color),
-            ),
-            Span::styled(
-                "\u{2591}".repeat(empty),
-                Style::default().fg(scheme.border),
-            ),
+            Span::styled("\u{2588}".repeat(filled), Style::default().fg(bar_color)),
+            Span::styled("\u{2591}".repeat(empty), Style::default().fg(scheme.border)),
             Span::styled(
                 format!(" {count:>5} ({pct:.1}%)"),
                 Style::default().fg(scheme.text),
@@ -413,12 +405,10 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
                 Style::default().fg(scheme.info),
             ),
         ]),
-        Line::from(vec![
-            Span::styled(
-                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-                Style::default().fg(scheme.border),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            Style::default().fg(scheme.border),
+        )]),
         Line::from(vec![
             Span::styled(" Total:    ", Style::default().fg(scheme.muted)),
             Span::styled(
@@ -521,25 +511,23 @@ fn render_grouped_violations(
         " Violations (grouped: {total_groups} patterns, {total_violations} total){filter_label} ",
     );
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(if result.is_compliant {
-                    scheme.warning
-                } else {
-                    scheme.error
-                })),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if result.is_compliant {
+                scheme.warning
+            } else {
+                scheme.error
+            })),
+    );
 
     frame.render_widget(table, h_chunks[0]);
 
     // Scrollbar for left panel
     if total_groups > viewport_height {
-        let mut scrollbar_state =
-            ScrollbarState::new(total_groups.saturating_sub(viewport_height)).position(scroll_offset);
+        let mut scrollbar_state = ScrollbarState::new(total_groups.saturating_sub(viewport_height))
+            .position(scroll_offset);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None);
@@ -665,8 +653,9 @@ fn render_affected_elements(
             let prefix_display = if common_prefix.len() > max_width.saturating_sub(4) {
                 format!(
                     "\u{2026}{}",
-                    &common_prefix
-                        [common_prefix.len().saturating_sub(max_width.saturating_sub(5))..]
+                    &common_prefix[common_prefix
+                        .len()
+                        .saturating_sub(max_width.saturating_sub(5))..]
                 )
             } else {
                 common_prefix.clone()
@@ -678,10 +667,7 @@ fn render_affected_elements(
             ]));
         } else {
             content_lines.push(Line::from(""));
-            content_lines.push(Line::styled(
-                "  Paths:",
-                Style::default().fg(scheme.muted),
-            ));
+            content_lines.push(Line::styled("  Paths:", Style::default().fg(scheme.muted)));
         }
 
         // Group paths by first directory component after common prefix
@@ -752,8 +738,7 @@ fn render_affected_elements(
 
     // Scrollbar for affected panel
     if total_lines > viewport_height {
-        let mut scrollbar_state =
-            ScrollbarState::new(max_scroll).position(effective_scroll);
+        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(effective_scroll);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None);
@@ -887,34 +872,27 @@ fn render_flat_violations(
             filter_label,
         )
     } else {
-        format!(
-            " Violations ({}){} ",
-            filtered.len(),
-            filter_label,
-        )
+        format!(" Violations ({}){} ", filtered.len(), filter_label,)
     };
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(if result.is_compliant {
-                    scheme.warning
-                } else {
-                    scheme.error
-                })),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if result.is_compliant {
+                scheme.warning
+            } else {
+                scheme.error
+            })),
+    );
 
     frame.render_widget(table, area);
 
     // Scrollbar
     if filtered.len() > viewport_height {
-        let mut scrollbar_state = ScrollbarState::new(
-            filtered.len().saturating_sub(viewport_height),
-        )
-        .position(scroll_offset);
+        let mut scrollbar_state =
+            ScrollbarState::new(filtered.len().saturating_sub(viewport_height))
+                .position(scroll_offset);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None);
@@ -1008,12 +986,7 @@ fn render_empty_compliance(
 // Help bar
 // ---------------------------------------------------------------------------
 
-fn render_help_bar(
-    frame: &mut Frame,
-    area: Rect,
-    severity_filter: SeverityFilter,
-    grouped: bool,
-) {
+fn render_help_bar(frame: &mut Frame, area: Rect, severity_filter: SeverityFilter, grouped: bool) {
     let scheme = colors();
 
     let group_label = if grouped { "Grouped" } else { "Flat" };

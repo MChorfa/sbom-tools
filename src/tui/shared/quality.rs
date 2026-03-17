@@ -504,15 +504,14 @@ pub fn render_quality_summary(
         (rec_count as u16) * 2 + 3 // 2 lines per item + title/border
     };
     // Cap chart height: enough for bars + labels + border, max 18
-    let chart_height =
-        18_u16.min(area.height.saturating_sub(4 + 4 + rec_height).max(10));
+    let chart_height = 18_u16.min(area.height.saturating_sub(4 + 4 + rec_height).max(10));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),            // Compact header
             Constraint::Length(4),            // Insights panel (2 lines + border)
             Constraint::Length(chart_height), // Bar chart + checklist (capped)
-            Constraint::Min(rec_height),     // Recommendations get remaining space
+            Constraint::Min(rec_height),      // Recommendations get remaining space
         ])
         .split(area);
 
@@ -762,7 +761,11 @@ fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) 
 
     // SBOM age
     let age = prov.timestamp_age_days;
-    let age_color = if prov.is_fresh { scheme.success } else { scheme.warning };
+    let age_color = if prov.is_fresh {
+        scheme.success
+    } else {
+        scheme.warning
+    };
     line1.push(Span::styled("Age: ", Style::default().fg(scheme.muted)));
     line1.push(Span::styled(
         format!("{age}d"),
@@ -781,7 +784,10 @@ fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) 
             ComplexityLevel::High => ("High", scheme.warning),
             ComplexityLevel::VeryHigh => ("Very High", scheme.error),
         };
-        line1.push(Span::styled("Complexity: ", Style::default().fg(scheme.muted)));
+        line1.push(Span::styled(
+            "Complexity: ",
+            Style::default().fg(scheme.muted),
+        ));
         line1.push(Span::styled(label, Style::default().fg(color)));
     }
 
@@ -810,19 +816,13 @@ fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) 
         ));
     }
     if lm.noassertion_count > 0 {
-        flags.push((
-            format!("{} NOASSERTION", lm.noassertion_count),
-            scheme.high,
-        ));
+        flags.push((format!("{} NOASSERTION", lm.noassertion_count), scheme.high));
     }
     if dep.cycle_count > 0 {
         flags.push((format!("{} cycles", dep.cycle_count), scheme.error));
     }
     if dep.orphan_components > 0 {
-        flags.push((
-            format!("{} orphans", dep.orphan_components),
-            scheme.muted,
-        ));
+        flags.push((format!("{} orphans", dep.orphan_components), scheme.muted));
     }
 
     let mut line2: Vec<Span> = Vec::new();
@@ -832,7 +832,10 @@ fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) 
             Style::default().fg(scheme.success),
         ));
     } else {
-        line2.push(Span::styled(" \u{26a0} ", Style::default().fg(scheme.warning)));
+        line2.push(Span::styled(
+            " \u{26a0} ",
+            Style::default().fg(scheme.warning),
+        ));
         for (i, (label, color)) in flags.iter().enumerate() {
             if i > 0 {
                 line2.push(Span::styled("  ", Style::default()));
@@ -984,10 +987,7 @@ fn render_top_recommendations(
             };
 
             lines.push(Line::from(vec![
-                Span::styled(
-                    prefix,
-                    Style::default().fg(scheme.primary).bg(sel_bg),
-                ),
+                Span::styled(prefix, Style::default().fg(scheme.primary).bg(sel_bg)),
                 Span::styled(
                     format!("[P{}] ", rec.priority),
                     priority_style(rec.priority).bg(sel_bg),
@@ -1013,7 +1013,10 @@ fn render_top_recommendations(
                     Style::default().fg(scheme.muted),
                 ),
                 Span::styled("  |  ", Style::default().fg(scheme.border)),
-                Span::styled(format!("+{:.1}pts", rec.impact), Style::default().fg(pts_color)),
+                Span::styled(
+                    format!("+{:.1}pts", rec.impact),
+                    Style::default().fg(pts_color),
+                ),
             ]));
         }
     }

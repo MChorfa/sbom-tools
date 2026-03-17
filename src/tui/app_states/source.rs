@@ -533,7 +533,9 @@ impl JsonTreeNode {
             .iter()
             .find(|c| c.key() == "license")
             .and_then(|lic| lic.children())
-            .and_then(|fields| find_leaf_str(fields, "id").or_else(|| find_leaf_str(fields, "name")))
+            .and_then(|fields| {
+                find_leaf_str(fields, "id").or_else(|| find_leaf_str(fields, "name"))
+            })
             .unwrap_or_default()
     }
 
@@ -574,7 +576,12 @@ impl JsonTreeNode {
         let related = find_leaf_str(children, "relatedSpdxElement");
         match (element, rel_type, related) {
             (Some(e), Some(t), Some(r)) => {
-                format!("{} {} {}", truncate_value(&e, 20), t, truncate_value(&r, 20))
+                format!(
+                    "{} {} {}",
+                    truncate_value(&e, 20),
+                    t,
+                    truncate_value(&r, 20)
+                )
             }
             (_, Some(t), _) => t,
             _ => String::new(),
@@ -614,7 +621,10 @@ fn truncate_value(s: &str, max_len: usize) -> String {
 fn find_leaf_str(children: &[JsonTreeNode], key: &str) -> Option<String> {
     children.iter().find_map(|c| {
         if let JsonTreeNode::Leaf {
-            key: k, value, value_type: JsonValueType::String, ..
+            key: k,
+            value,
+            value_type: JsonValueType::String,
+            ..
         } = c
             && k == key
         {
@@ -711,9 +721,7 @@ fn build_raw_line_mapping(raw_lines: &[String]) -> Vec<String> {
 
 /// Compute bracket pairs from pretty-printed JSON lines.
 /// Returns (opening→closing, closing→opening) mappings.
-fn compute_bracket_pairs(
-    raw_lines: &[String],
-) -> (HashMap<usize, usize>, HashMap<usize, usize>) {
+fn compute_bracket_pairs(raw_lines: &[String]) -> (HashMap<usize, usize>, HashMap<usize, usize>) {
     let mut forward = HashMap::new();
     let mut reverse = HashMap::new();
     let mut stack: Vec<usize> = Vec::new();

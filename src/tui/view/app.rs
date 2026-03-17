@@ -739,11 +739,7 @@ impl ViewApp {
             .map_or(0, |r| {
                 if self.compliance_state.grouped {
                     // In grouped mode, count is the number of groups
-                    super::views::build_groups(
-                        r,
-                        self.compliance_state.severity_filter,
-                    )
-                    .len()
+                    super::views::build_groups(r, self.compliance_state.severity_filter).len()
                 } else {
                     r.violations
                         .iter()

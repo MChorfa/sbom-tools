@@ -651,7 +651,9 @@ fn render_dependency_stats(
             ]));
         } else {
             // Multiple types — show bar chart
-            let bar_width = (area.width.saturating_sub(4) as usize).saturating_sub(20).min(30);
+            let bar_width = (area.width.saturating_sub(4) as usize)
+                .saturating_sub(20)
+                .min(30);
             lines.push(Line::styled(
                 "Relationship Types:",
                 Style::default().fg(scheme.info).bold(),
@@ -682,7 +684,9 @@ fn render_dependency_stats(
     }
 
     // Vulnerability severity bar chart with percentage headline
-    let bar_width = (area.width.saturating_sub(4) as usize).saturating_sub(22).min(30);
+    let bar_width = (area.width.saturating_sub(4) as usize)
+        .saturating_sub(22)
+        .min(30);
 
     let mut vuln_severity_counts: HashMap<&str, usize> = HashMap::new();
     vuln_severity_counts.insert("critical", 0);
@@ -720,7 +724,10 @@ fn render_dependency_stats(
             0.0
         };
         lines.push(Line::from(vec![
-            Span::styled("Vulnerabilities:  ", Style::default().fg(scheme.critical).bold()),
+            Span::styled(
+                "Vulnerabilities:  ",
+                Style::default().fg(scheme.critical).bold(),
+            ),
             Span::styled(
                 format!("{pct:.1}% affected"),
                 Style::default().fg(scheme.warning).bold(),
@@ -749,10 +756,7 @@ fn render_dependency_stats(
             .max(if count > 0 { 1 } else { 0 }); // at least 1 char if non-zero
             let bar = "█".repeat(bar_len);
 
-            let badge_style = Style::default()
-                .fg(scheme.badge_fg_dark)
-                .bg(*color)
-                .bold();
+            let badge_style = Style::default().fg(scheme.badge_fg_dark).bg(*color).bold();
             lines.push(Line::from(vec![
                 Span::styled(format!(" [{badge}]"), badge_style),
                 Span::styled(format!(" {label:8}"), Style::default().fg(*color)),
@@ -808,7 +812,10 @@ fn render_dependency_stats(
                 Span::raw("  "),
                 Span::styled(
                     format!("[{type_tag}]"),
-                    Style::default().fg(scheme.badge_fg_dark).bg(type_color).bold(),
+                    Style::default()
+                        .fg(scheme.badge_fg_dark)
+                        .bg(type_color)
+                        .bold(),
                 ),
             ];
             if is_root {
@@ -889,7 +896,11 @@ fn render_dependency_stats(
             // Line 4: Hash (best available, truncated)
             if let Some(hash) = comp.hashes.first() {
                 let hash_display = if hash.value.len() > 16 {
-                    format!("{}...{}", &hash.value[..8], &hash.value[hash.value.len() - 8..])
+                    format!(
+                        "{}...{}",
+                        &hash.value[..8],
+                        &hash.value[hash.value.len() - 8..]
+                    )
                 } else {
                     hash.value.clone()
                 };
@@ -1025,7 +1036,12 @@ fn render_dependency_stats(
 
                 let pos_end = (effective_scroll + visible_slots).min(total);
                 let pos_indicator = if total > visible_slots {
-                    format!("  {}-{}/{}", effective_scroll + 1, pos_end, format_thousands(total))
+                    format!(
+                        "  {}-{}/{}",
+                        effective_scroll + 1,
+                        pos_end,
+                        format_thousands(total)
+                    )
                 } else {
                     String::new()
                 };
@@ -1057,11 +1073,7 @@ fn render_dependency_stats(
                     let preview: Vec<&str> = parents
                         .iter()
                         .take(3)
-                        .map(|id| {
-                            deps.names
-                                .get(id)
-                                .map_or(id.as_str(), String::as_str)
-                        })
+                        .map(|id| deps.names.get(id).map_or(id.as_str(), String::as_str))
                         .collect();
                     let mut spans = vec![
                         Span::styled(
@@ -1093,8 +1105,7 @@ fn render_dependency_stats(
 
                     let dep_scroll = app.dependency_state.detail_scroll as usize;
                     let total_deps = children.len();
-                    let effective_scroll =
-                        dep_scroll.min(total_deps.saturating_sub(visible_slots));
+                    let effective_scroll = dep_scroll.min(total_deps.saturating_sub(visible_slots));
 
                     let pos_end = (effective_scroll + visible_slots).min(total_deps);
                     let pos_indicator = if total_deps > visible_slots {
@@ -1115,9 +1126,7 @@ fn render_dependency_stats(
                         Span::styled(pos_indicator, Style::default().fg(scheme.text_muted)),
                     ]));
 
-                    for child_id in
-                        children.iter().skip(effective_scroll).take(visible_slots)
-                    {
+                    for child_id in children.iter().skip(effective_scroll).take(visible_slots) {
                         let child_name = deps
                             .names
                             .get(child_id)
