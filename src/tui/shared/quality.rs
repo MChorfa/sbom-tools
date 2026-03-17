@@ -496,30 +496,37 @@ pub fn render_quality_summary(
     selected_rec: usize,
 ) {
     let scheme = colors();
-    // Adaptive layout: size recommendations panel to content, give remaining space to bar chart
-    let rec_count = report.recommendations.len().min(5);
+    // Adaptive layout: cap bar chart height, give more space to recommendations
+    let rec_count = report.recommendations.len().min(6);
     let rec_height = if rec_count == 0 {
         5_u16 // "No issues found" + border
     } else {
         (rec_count as u16) * 2 + 3 // 2 lines per item + title/border
     };
+    // Cap chart height: enough for bars + labels + border, max 18
+    let chart_height =
+        18_u16.min(area.height.saturating_sub(4 + 4 + rec_height).max(10));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),          // Compact header
-            Constraint::Min(10),            // Bar chart + checklist (gets remaining space)
-            Constraint::Length(rec_height), // Recommendations sized to content
+            Constraint::Length(4),            // Compact header
+            Constraint::Length(4),            // Insights panel (2 lines + border)
+            Constraint::Length(chart_height), // Bar chart + checklist (capped)
+            Constraint::Min(rec_height),     // Recommendations get remaining space
         ])
         .split(area);
 
-    // --- Compact header (items 2+3) ---
+    // --- Compact header ---
     render_compact_header(frame, chunks[0], report);
+
+    // --- Insights panel ---
+    render_insights_panel(frame, chunks[1], report);
 
     // Middle row: bar chart (left) + checklist (right)
     let mid_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(chunks[1]);
+        .split(chunks[2]);
 
     // Bar chart with 8 category scores
     // Use max(1) so even 0% bars have a stub for the text_value to render on
@@ -617,8 +624,8 @@ pub fn render_quality_summary(
 
     render_completeness_checklist(frame, mid_chunks[1], report);
 
-    // Bottom row: full-width recommendations (items 4+7)
-    render_top_recommendations(frame, chunks[2], report, selected_rec);
+    // Bottom row: full-width recommendations
+    render_top_recommendations(frame, chunks[3], report, selected_rec);
 }
 
 /// Render a compact 4-line header with grade, inline bar, score, profile, and strongest/weakest.
@@ -711,6 +718,175 @@ fn render_compact_header(frame: &mut Frame, area: Rect, report: &QualityReport) 
     frame.render_widget(widget, area);
 }
 
+/// Render a 2-line insights panel with component stats, ecosystems, age, and risk flags.
+fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) {
+    let scheme = colors();
+    let cm = &report.completeness_metrics;
+    let id = &report.identifier_metrics;
+    let dep = &report.dependency_metrics;
+    let prov = &report.provenance_metrics;
+    let lm = &report.license_metrics;
+    let lc = &report.lifecycle_metrics;
+    let hq = &report.hash_quality_metrics;
+
+    // --- Line 1: component count, ecosystems, SBOM age, complexity ---
+    let mut line1 = vec![Span::styled(
+        format!(" {} components", cm.total_components),
+        Style::default().fg(scheme.text).bold(),
+    )];
+
+    // Ecosystem badges (top 4)
+    if !id.ecosystems.is_empty() {
+        line1.push(Span::styled("  ", Style::default()));
+        for (i, eco) in id.ecosystems.iter().take(4).enumerate() {
+            if i > 0 {
+                line1.push(Span::styled(" ", Style::default()));
+            }
+            line1.push(Span::styled(
+                eco.to_string(),
+                Style::default().fg(scheme.primary),
+            ));
+        }
+        if id.ecosystems.len() > 4 {
+            line1.push(Span::styled(
+                format!(" +{}", id.ecosystems.len() - 4),
+                Style::default().fg(scheme.muted),
+            ));
+        }
+    }
+
+    line1.push(Span::styled(
+        "  \u{2502}  ",
+        Style::default().fg(scheme.border),
+    ));
+
+    // SBOM age
+    let age = prov.timestamp_age_days;
+    let age_color = if prov.is_fresh { scheme.success } else { scheme.warning };
+    line1.push(Span::styled("Age: ", Style::default().fg(scheme.muted)));
+    line1.push(Span::styled(
+        format!("{age}d"),
+        Style::default().fg(age_color),
+    ));
+
+    // Complexity level
+    if let Some(ref level) = dep.complexity_level {
+        line1.push(Span::styled(
+            "  \u{2502}  ",
+            Style::default().fg(scheme.border),
+        ));
+        let (label, color) = match level {
+            ComplexityLevel::Low => ("Low", scheme.success),
+            ComplexityLevel::Moderate => ("Moderate", scheme.info),
+            ComplexityLevel::High => ("High", scheme.warning),
+            ComplexityLevel::VeryHigh => ("Very High", scheme.error),
+        };
+        line1.push(Span::styled("Complexity: ", Style::default().fg(scheme.muted)));
+        line1.push(Span::styled(label, Style::default().fg(color)));
+    }
+
+    // --- Line 2: risk flags (conditional, only non-zero) ---
+    let mut flags: Vec<(String, Color)> = Vec::new();
+
+    if lc.eol_components > 0 {
+        flags.push((format!("{} EOL", lc.eol_components), scheme.error));
+    }
+    if lc.deprecated_components > 0 {
+        flags.push((
+            format!("{} deprecated", lc.deprecated_components),
+            scheme.warning,
+        ));
+    }
+    if id.missing_all_identifiers > 0 {
+        flags.push((
+            format!("{} no-ID", id.missing_all_identifiers),
+            scheme.warning,
+        ));
+    }
+    if !lm.copyleft_license_ids.is_empty() {
+        flags.push((
+            format!("{} copyleft", lm.copyleft_license_ids.len()),
+            scheme.warning,
+        ));
+    }
+    if lm.noassertion_count > 0 {
+        flags.push((
+            format!("{} NOASSERTION", lm.noassertion_count),
+            scheme.high,
+        ));
+    }
+    if dep.cycle_count > 0 {
+        flags.push((format!("{} cycles", dep.cycle_count), scheme.error));
+    }
+    if dep.orphan_components > 0 {
+        flags.push((
+            format!("{} orphans", dep.orphan_components),
+            scheme.muted,
+        ));
+    }
+
+    let mut line2: Vec<Span> = Vec::new();
+    if flags.is_empty() {
+        line2.push(Span::styled(
+            " \u{2713} No risk signals detected",
+            Style::default().fg(scheme.success),
+        ));
+    } else {
+        line2.push(Span::styled(" \u{26a0} ", Style::default().fg(scheme.warning)));
+        for (i, (label, color)) in flags.iter().enumerate() {
+            if i > 0 {
+                line2.push(Span::styled("  ", Style::default()));
+            }
+            line2.push(Span::styled(label, Style::default().fg(*color)));
+        }
+    }
+
+    // Hash strength summary after separator
+    let total_with_hash = hq.components_with_any_hash;
+    if total_with_hash > 0 || cm.total_components > 0 {
+        line2.push(Span::styled(
+            "  \u{2502}  ",
+            Style::default().fg(scheme.border),
+        ));
+        let strong_pct = if cm.total_components > 0 {
+            (hq.components_with_strong_hash as f32 / cm.total_components as f32) * 100.0
+        } else {
+            0.0
+        };
+        let weak_pct = if cm.total_components > 0 {
+            (hq.components_with_weak_only as f32 / cm.total_components as f32) * 100.0
+        } else {
+            0.0
+        };
+        let hash_color = if strong_pct >= 80.0 {
+            scheme.success
+        } else if strong_pct >= 50.0 {
+            scheme.warning
+        } else {
+            scheme.error
+        };
+        line2.push(Span::styled("Hashes: ", Style::default().fg(scheme.muted)));
+        line2.push(Span::styled(
+            format!("{strong_pct:.0}% strong"),
+            Style::default().fg(hash_color),
+        ));
+        if hq.components_with_weak_only > 0 {
+            line2.push(Span::styled(
+                format!(" {weak_pct:.0}% weak-only"),
+                Style::default().fg(scheme.warning),
+            ));
+        }
+    }
+
+    let widget = Paragraph::new(vec![Line::from(line1), Line::from(line2)]).block(
+        Block::default()
+            .title(" Insights ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(scheme.info)),
+    );
+    frame.render_widget(widget, area);
+}
+
 fn render_completeness_checklist(frame: &mut Frame, area: Rect, report: &QualityReport) {
     let scheme = colors();
     let m = &report.completeness_metrics;
@@ -722,6 +898,9 @@ fn render_completeness_checklist(frame: &mut Frame, area: Rect, report: &Quality
             Span::styled("  \u{2717} ", Style::default().fg(scheme.error))
         }
     };
+
+    // Use available panel width for coverage bars (minus label, pct, borders, padding)
+    let bar_width = (area.width as usize).saturating_sub(22).clamp(8, 30);
 
     let pct_bar = |label: &str, pct: f32, width: usize| -> Line<'static> {
         let filled = if pct > 0.0 {
@@ -750,12 +929,12 @@ fn render_completeness_checklist(frame: &mut Frame, area: Rect, report: &Quality
     ]));
     lines.push(Line::from(""));
 
-    // Component field coverage bars (wider for better visual resolution)
-    lines.push(pct_bar("Versions", m.components_with_version, 15));
-    lines.push(pct_bar("PURLs", m.components_with_purl, 15));
-    lines.push(pct_bar("Licenses", m.components_with_licenses, 15));
-    lines.push(pct_bar("Suppliers", m.components_with_supplier, 15));
-    lines.push(pct_bar("Hashes", m.components_with_hashes, 15));
+    // Component field coverage bars (adaptive width)
+    lines.push(pct_bar("Versions", m.components_with_version, bar_width));
+    lines.push(pct_bar("PURLs", m.components_with_purl, bar_width));
+    lines.push(pct_bar("Licenses", m.components_with_licenses, bar_width));
+    lines.push(pct_bar("Suppliers", m.components_with_supplier, bar_width));
+    lines.push(pct_bar("Hashes", m.components_with_hashes, bar_width));
 
     let widget = Paragraph::new(lines).block(
         Block::default()
@@ -790,27 +969,43 @@ fn render_top_recommendations(
             ),
         ]));
     } else {
-        for (i, rec) in report.recommendations.iter().take(5).enumerate() {
+        for (i, rec) in report.recommendations.iter().take(6).enumerate() {
             let is_selected = i == selected_rec;
             let prefix = if is_selected { "> " } else { "  " };
+            let sel_bg = if is_selected {
+                scheme.selection
+            } else {
+                Color::Reset
+            };
             let msg_style = if is_selected {
-                Style::default().fg(scheme.text).bold()
+                Style::default().fg(scheme.text).bold().bg(sel_bg)
             } else {
                 Style::default().fg(scheme.text)
             };
 
             lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(scheme.primary)),
+                Span::styled(
+                    prefix,
+                    Style::default().fg(scheme.primary).bg(sel_bg),
+                ),
                 Span::styled(
                     format!("[P{}] ", rec.priority),
-                    priority_style(rec.priority),
+                    priority_style(rec.priority).bg(sel_bg),
                 ),
                 Span::styled(
                     format!("[{}] ", rec.category.name()),
-                    Style::default().fg(scheme.info),
+                    Style::default().fg(scheme.info).bg(sel_bg),
                 ),
                 Span::styled(&rec.message, msg_style),
             ]));
+            // Color-code the +pts value based on impact magnitude
+            let pts_color = if rec.impact >= 5.0 {
+                scheme.success
+            } else if rec.impact >= 2.0 {
+                scheme.warning
+            } else {
+                scheme.muted
+            };
             lines.push(Line::from(vec![
                 Span::raw("       "),
                 Span::styled(
@@ -818,10 +1013,7 @@ fn render_top_recommendations(
                     Style::default().fg(scheme.muted),
                 ),
                 Span::styled("  |  ", Style::default().fg(scheme.border)),
-                Span::styled(
-                    format!("+{:.1}pts", rec.impact),
-                    Style::default().fg(scheme.success),
-                ),
+                Span::styled(format!("+{:.1}pts", rec.impact), Style::default().fg(pts_color)),
             ]));
         }
     }

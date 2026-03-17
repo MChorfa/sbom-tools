@@ -10,6 +10,7 @@ mod tree;
 mod vulnerabilities;
 
 pub use compliance::{StandardComplianceState, compute_compliance_results, render_compliance};
+pub(crate) use compliance::build_groups;
 pub use dependencies::{FlatDepNode, render_dependencies};
 pub use licenses::render_licenses;
 pub(crate) use licenses::{build_license_data_from_app, get_first_component_id_for_license};

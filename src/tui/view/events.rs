@@ -498,15 +498,17 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
             ViewTab::Tree => app.toggle_tree_grouping(),
             ViewTab::Vulnerabilities => app.vuln_state.toggle_group(),
             ViewTab::Licenses => app.license_state.toggle_group(),
+            ViewTab::Compliance => app.compliance_state.toggle_grouped(),
             _ => {}
         },
-        // Scroll component list in License details / Dependency stats (K/J)
+        // Scroll component list in License details / Dependency stats / Compliance affected (K/J)
         KeyCode::Char('K') => match app.active_tab {
             ViewTab::Licenses => app.license_state.scroll_components_up(),
             ViewTab::Dependencies => {
                 app.dependency_state.detail_scroll =
                     app.dependency_state.detail_scroll.saturating_sub(1);
             }
+            ViewTab::Compliance => app.compliance_state.affected_scroll_up(),
             _ => {}
         },
         KeyCode::Char('J') => match app.active_tab {
@@ -516,6 +518,10 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
             }
             ViewTab::Dependencies => {
                 app.dependency_state.detail_scroll += 1;
+            }
+            ViewTab::Compliance => {
+                // Max lines is approximate — the panel will clamp
+                app.compliance_state.affected_scroll_down(500);
             }
             _ => {}
         },
@@ -657,6 +663,32 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
             if app.source_state.view_mode == SourceViewMode::Tree {
                 app.source_state.cycle_sort();
             }
+        }
+        // Source: Toggle fold at current line (raw mode)
+        KeyCode::Char('z') if app.active_tab == ViewTab::Source => {
+            if app.source_state.view_mode == SourceViewMode::Raw {
+                app.source_state.toggle_fold();
+            }
+        }
+        // Source: Fold all top-level / Unfold all (raw mode)
+        KeyCode::Char('Z') if app.active_tab == ViewTab::Source => {
+            if app.source_state.view_mode == SourceViewMode::Raw {
+                if app.source_state.folded_lines.is_empty() {
+                    app.source_state.fold_all_top_level();
+                } else {
+                    app.source_state.unfold_all();
+                }
+            }
+        }
+        // Source: Jump to matching bracket (raw mode)
+        KeyCode::Char('%') if app.active_tab == ViewTab::Source => {
+            if app.source_state.view_mode == SourceViewMode::Raw {
+                app.source_state.jump_to_matching_bracket();
+            }
+        }
+        // Source: Toggle indent guides
+        KeyCode::Char('|') if app.active_tab == ViewTab::Source => {
+            app.source_state.show_indent_guides = !app.source_state.show_indent_guides;
         }
         KeyCode::Char('v') => {
             if app.active_tab == ViewTab::Quality {
@@ -1115,14 +1147,24 @@ pub fn get_yank_text(app: &ViewApp) -> Option<String> {
         ViewTab::Compliance => {
             let results = app.compliance_results.as_ref()?;
             let result = results.get(app.compliance_state.selected_standard)?;
-            let violations: Vec<_> = result
-                .violations
-                .iter()
-                .filter(|v| app.compliance_state.severity_filter.matches(v.severity))
-                .collect();
-            violations
-                .get(app.compliance_state.selected_violation)
-                .map(|v| v.message.clone())
+            if app.compliance_state.grouped {
+                let groups = super::views::build_groups(
+                    result,
+                    app.compliance_state.severity_filter,
+                );
+                groups
+                    .get(app.compliance_state.selected_violation)
+                    .map(|g| format!("{} ({})", g.pattern, g.violations.len()))
+            } else {
+                let violations: Vec<_> = result
+                    .violations
+                    .iter()
+                    .filter(|v| app.compliance_state.severity_filter.matches(v.severity))
+                    .collect();
+                violations
+                    .get(app.compliance_state.selected_violation)
+                    .map(|v| v.message.clone())
+            }
         }
         ViewTab::Source => match app.source_state.view_mode {
             SourceViewMode::Tree => {

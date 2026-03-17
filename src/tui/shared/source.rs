@@ -24,6 +24,8 @@ pub struct FlatJsonItem {
     pub is_expandable: bool,
     pub is_expanded: bool,
     pub child_count_label: String,
+    /// Smart preview label for collapsed array elements (e.g., "lodash@4.17.21").
+    pub preview: String,
     pub is_last_sibling: bool,
     pub ancestors_last: Vec<bool>,
 }
@@ -39,6 +41,7 @@ pub fn flatten_json_tree(
     is_last_sibling: bool,
     ancestors_last: &[bool],
     sort_mode: SourceSortMode,
+    parent_key: &str,
 ) {
     let node_id = node.node_id(parent_path);
     let is_expanded = expanded.contains(&node_id);
@@ -53,6 +56,13 @@ pub fn flatten_json_tree(
         _ => None,
     };
 
+    // Smart preview for collapsed array element objects
+    let preview = if node.is_expandable() {
+        node.preview_label(parent_key)
+    } else {
+        String::new()
+    };
+
     items.push(FlatJsonItem {
         node_id: node_id.clone(),
         depth,
@@ -62,6 +72,7 @@ pub fn flatten_json_tree(
         is_expandable: node.is_expandable(),
         is_expanded,
         child_count_label: node.child_count_label(),
+        preview,
         is_last_sibling,
         ancestors_last: ancestors_last.to_vec(),
     });
@@ -69,6 +80,15 @@ pub fn flatten_json_tree(
     if is_expanded && let Some(children) = node.children() {
         let mut current_ancestors = ancestors_last.to_vec();
         current_ancestors.push(is_last_sibling);
+
+        // Determine the key to pass as parent context for child previews
+        let this_key = node.key();
+        let child_parent_key = if this_key.is_empty() {
+            // Array element (index-based) — pass through the parent key
+            parent_key
+        } else {
+            this_key
+        };
 
         // Optionally sort children by key
         let sorted_children: Vec<&JsonTreeNode>;
@@ -106,6 +126,7 @@ pub fn flatten_json_tree(
                 child_is_last,
                 &current_ancestors,
                 sort_mode,
+                child_parent_key,
             );
         }
     }
@@ -417,10 +438,21 @@ fn render_source_tree(
             }
         }
 
-        // Value or child count
+        // Value or child count (with smart preview for collapsed array elements)
         if x < remaining {
             let max_w = (remaining - x) as usize;
-            if item.is_expandable {
+            if item.is_expandable && !item.is_expanded && !item.preview.is_empty() {
+                // Smart preview for collapsed array elements
+                let preview_str = crate::tui::widgets::truncate_str(&item.preview, max_w);
+                render_str(
+                    frame.buffer_mut(),
+                    x,
+                    y,
+                    &preview_str,
+                    remaining - x,
+                    Style::default().fg(scheme.text),
+                );
+            } else if item.is_expandable {
                 render_str(
                     frame.buffer_mut(),
                     x,
@@ -512,7 +544,8 @@ fn render_source_tree(
     }
 }
 
-/// Render the raw text view with line numbers.
+/// Render the raw text view with line numbers, indent guides, bracket matching,
+/// structural dimming, and code folding.
 fn render_source_raw(
     frame: &mut Frame,
     area: Rect,
@@ -534,6 +567,11 @@ fn render_source_raw(
     let wrap_hint = if state.word_wrap { " [Wrap]" } else { "" };
     let col_hint = if !state.word_wrap && state.h_scroll_offset > 0 {
         format!(" col:{}", state.h_scroll_offset)
+    } else {
+        String::new()
+    };
+    let fold_hint = if !state.folded_lines.is_empty() {
+        format!(" [{} folded]", state.folded_lines.len())
     } else {
         String::new()
     };
@@ -560,7 +598,7 @@ fn render_source_raw(
 
     let block = Block::default()
         .title(format!(
-            " {title} [Raw] ({total_lines} lines){col_hint}{wrap_hint}{mode_hint} ",
+            " {title} [Raw] ({total_lines} lines){col_hint}{wrap_hint}{fold_hint}{mode_hint} ",
         ))
         .title_style(Style::default().fg(border_color).bold())
         .title_bottom(
@@ -588,14 +626,11 @@ fn render_source_raw(
     let visible_height = inner.height as usize;
     state.viewport_height = visible_height;
 
-    // Scroll adjustment
-    if visible_height > 0 {
-        if state.selected >= state.scroll_offset + visible_height {
-            state.scroll_offset = state.selected.saturating_sub(visible_height - 1);
-        } else if state.selected < state.scroll_offset {
-            state.scroll_offset = state.selected;
-        }
-    }
+    // Build visible line indices (skipping folded interiors)
+    let visible_lines = build_visible_lines(state, visible_height);
+
+    // Scroll adjustment using visible lines
+    // (The scroll_offset for raw mode with folds is handled by build_visible_lines)
 
     let gutter_width = if state.raw_lines.is_empty() {
         1
@@ -605,17 +640,23 @@ fn render_source_raw(
 
     let remaining = inner.x + inner.width;
 
-    for (i, line) in state
-        .raw_lines
-        .iter()
-        .skip(state.scroll_offset)
-        .take(visible_height)
-        .enumerate()
-    {
+    // [Feature 2] Pre-compute matching bracket for selected line
+    let match_line = state.matching_bracket(state.selected);
+
+    for (i, &abs_idx) in visible_lines.iter().enumerate() {
         let y = inner.y + i as u16;
-        let line_num = state.scroll_offset + i + 1;
-        let abs_idx = state.scroll_offset + i;
+        if y >= inner.y + inner.height {
+            break;
+        }
+        let line_num = abs_idx + 1;
         let is_selected = abs_idx == state.selected;
+        let is_bracket_match = match_line == Some(abs_idx);
+
+        let line = &state.raw_lines[abs_idx];
+        let is_folded_start = state.folded_lines.contains(&abs_idx);
+
+        // [Feature 5] Structural line dimming
+        let is_structural = is_structural_line(line);
 
         // Bookmark indicator
         if state.bookmarks.contains(&abs_idx) {
@@ -629,56 +670,130 @@ fn render_source_raw(
             );
         }
 
-        // Line number gutter
-        let num_str = format!("{line_num:>gutter_width$} \u{2502} ");
+        // Line number gutter — [Feature 2] highlight matching bracket line number
+        let gutter_style = if is_bracket_match {
+            Style::default().fg(scheme.accent).bold()
+        } else if is_structural {
+            Style::default().fg(scheme.muted)
+        } else {
+            Style::default().fg(scheme.text_muted)
+        };
+
+        // [Feature 4] Fold indicator in gutter
+        let fold_char = if is_folded_start {
+            "\u{25b6}" // ▶ (folded)
+        } else if state.bracket_pairs.contains_key(&abs_idx) {
+            "\u{25bc}" // ▼ (foldable, expanded)
+        } else {
+            " "
+        };
+        let num_str = format!("{fold_char}{line_num:>gutter_width$} \u{2502} ");
         render_str(
             frame.buffer_mut(),
             inner.x,
             y,
             &num_str,
             remaining - inner.x,
-            Style::default().fg(scheme.text_muted),
+            gutter_style,
         );
+        // Color the fold indicator separately
+        if state.bracket_pairs.contains_key(&abs_idx)
+            || state.bracket_pairs_reverse.contains_key(&abs_idx)
+        {
+            let fold_style = if is_folded_start {
+                Style::default().fg(scheme.accent)
+            } else {
+                Style::default().fg(scheme.muted)
+            };
+            if let Some(cell) = frame.buffer_mut().cell_mut((inner.x, y)) {
+                cell.set_style(fold_style);
+            }
+        }
 
         let content_x = inner.x + num_str.len() as u16;
         if content_x < remaining {
             let max_w = remaining - content_x;
-            // Apply horizontal scroll offset (skip if word wrap is on)
-            let display_line = if state.word_wrap {
-                // Word wrap: truncate at max_w (no horizontal scroll)
-                line.to_string()
-            } else if state.h_scroll_offset > 0 {
-                skip_display_chars(line, state.h_scroll_offset)
-            } else {
-                line.to_string()
-            };
-            if has_json_tree {
-                render_json_line_highlighted(
-                    frame.buffer_mut(),
-                    content_x,
-                    y,
-                    &display_line,
-                    max_w,
-                    &scheme,
-                );
-            } else if has_xml_tree {
-                render_xml_line_highlighted(
-                    frame.buffer_mut(),
-                    content_x,
-                    y,
-                    &display_line,
-                    max_w,
-                    &scheme,
-                );
-            } else {
+
+            if is_folded_start {
+                // [Feature 4] Show fold summary instead of content
+                let fold_end = state.bracket_pairs.get(&abs_idx).copied().unwrap_or(abs_idx);
+                let hidden = fold_end - abs_idx;
+                let trimmed = line.trim();
+                let summary = format!("{trimmed} \u{2026} ({hidden} lines)");
                 render_str(
                     frame.buffer_mut(),
                     content_x,
                     y,
-                    &display_line,
+                    &summary,
                     max_w,
-                    Style::default().fg(scheme.text),
+                    Style::default().fg(scheme.accent),
                 );
+            } else {
+                // Apply horizontal scroll offset
+                let display_line = if state.word_wrap {
+                    line.to_string()
+                } else if state.h_scroll_offset > 0 {
+                    skip_display_chars(line, state.h_scroll_offset)
+                } else {
+                    line.to_string()
+                };
+
+                if has_json_tree {
+                    // [Feature 5] Structural lines get dimmed rendering
+                    if is_structural {
+                        render_str(
+                            frame.buffer_mut(),
+                            content_x,
+                            y,
+                            &display_line,
+                            max_w,
+                            Style::default().fg(scheme.muted),
+                        );
+                    } else {
+                        render_json_line_highlighted(
+                            frame.buffer_mut(),
+                            content_x,
+                            y,
+                            &display_line,
+                            max_w,
+                            &scheme,
+                        );
+                    }
+                } else if has_xml_tree {
+                    render_xml_line_highlighted(
+                        frame.buffer_mut(),
+                        content_x,
+                        y,
+                        &display_line,
+                        max_w,
+                        &scheme,
+                    );
+                } else {
+                    render_str(
+                        frame.buffer_mut(),
+                        content_x,
+                        y,
+                        &display_line,
+                        max_w,
+                        Style::default().fg(scheme.text),
+                    );
+                }
+
+                // [Feature 1] Indent guides
+                if state.show_indent_guides && has_json_tree && state.h_scroll_offset == 0 {
+                    let leading_spaces = line.len() - line.trim_start().len();
+                    let indent_size = 2; // serde_json pretty-print indent
+                    for level in 1..=(leading_spaces / indent_size) {
+                        let guide_offset = (level * indent_size - indent_size) as u16;
+                        let gx = content_x + guide_offset;
+                        if gx < remaining {
+                            if let Some(cell) = frame.buffer_mut().cell_mut((gx, y)) {
+                                cell.set_char('\u{2502}') // │
+                                    .set_style(Style::default().fg(scheme.muted));
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -702,6 +817,15 @@ fn render_source_raw(
                             cell.set_bg(bg);
                         }
                     }
+                }
+            }
+        }
+
+        // [Feature 2] Highlight matching bracket line background
+        if is_bracket_match && !is_selected {
+            for col in inner.x..remaining {
+                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                    cell.set_bg(scheme.selection);
                 }
             }
         }
@@ -745,6 +869,68 @@ fn render_source_raw(
         let mut sb_state = ScrollbarState::new(state.raw_lines.len()).position(state.selected);
         frame.render_stateful_widget(scrollbar, inner, &mut sb_state);
     }
+}
+
+/// Build the list of visible raw line indices, skipping folded interiors.
+/// Starts from the scroll region around `state.selected` and returns up to
+/// `visible_height` line indices.
+fn build_visible_lines(state: &mut SourcePanelState, visible_height: usize) -> Vec<usize> {
+    if state.folded_lines.is_empty() {
+        // Fast path: no folds, use simple range
+        if visible_height > 0 {
+            if state.selected >= state.scroll_offset + visible_height {
+                state.scroll_offset = state.selected.saturating_sub(visible_height - 1);
+            } else if state.selected < state.scroll_offset {
+                state.scroll_offset = state.selected;
+            }
+        }
+        return (state.scroll_offset..)
+            .take(visible_height)
+            .take_while(|&i| i < state.raw_lines.len())
+            .collect();
+    }
+
+    // With folds: build full visible line list, then window around selected
+    let total = state.raw_lines.len();
+    let mut all_visible = Vec::with_capacity(total / 2);
+    let mut i = 0;
+    while i < total {
+        all_visible.push(i);
+        if state.folded_lines.contains(&i) {
+            // Skip to after the fold end
+            if let Some(&end) = state.bracket_pairs.get(&i) {
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // Find selected line's position in visible list
+    let sel_pos = all_visible
+        .iter()
+        .position(|&l| l == state.selected)
+        .unwrap_or(0);
+
+    // Window around selected
+    let start = sel_pos.saturating_sub(visible_height / 3);
+    let end = (start + visible_height).min(all_visible.len());
+    let start = if end == all_visible.len() {
+        end.saturating_sub(visible_height)
+    } else {
+        start
+    };
+
+    all_visible[start..end].to_vec()
+}
+
+/// Check if a raw line is purely structural (just braces, brackets, commas).
+fn is_structural_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    matches!(
+        trimmed,
+        "{" | "}" | "}," | "[" | "]" | "]," | "{}" | "[]"
+    )
 }
 
 /// Render a raw JSON line with syntax highlighting.

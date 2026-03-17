@@ -214,7 +214,7 @@ pub enum ViolationSeverity {
 }
 
 /// Category of compliance violation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ViolationCategory {
     /// Document metadata issue
     DocumentMetadata,
@@ -247,6 +247,36 @@ impl ViolationCategory {
             Self::SecurityInfo => "Security Information",
             Self::FormatSpecific => "Format-Specific",
         }
+    }
+
+    /// Short name suitable for compact table display (max 10 chars).
+    #[must_use]
+    pub const fn short_name(&self) -> &'static str {
+        match self {
+            Self::DocumentMetadata => "Doc Meta",
+            Self::ComponentIdentification => "Comp IDs",
+            Self::DependencyInfo => "Deps",
+            Self::LicenseInfo => "License",
+            Self::SupplierInfo => "Supplier",
+            Self::IntegrityInfo => "Integrity",
+            Self::SecurityInfo => "Security",
+            Self::FormatSpecific => "Format",
+        }
+    }
+
+    /// All category variants in display order.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::SupplierInfo,
+            Self::ComponentIdentification,
+            Self::DocumentMetadata,
+            Self::IntegrityInfo,
+            Self::LicenseInfo,
+            Self::DependencyInfo,
+            Self::SecurityInfo,
+            Self::FormatSpecific,
+        ]
     }
 }
 

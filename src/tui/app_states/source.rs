@@ -151,6 +151,7 @@ pub fn flatten_xml_tree(
                 is_expandable: has_children,
                 is_expanded,
                 child_count_label,
+                preview: String::new(),
                 is_last_sibling,
                 ancestors_last: ancestors_last.to_vec(),
             });
@@ -187,6 +188,7 @@ pub fn flatten_xml_tree(
                 is_expandable: false,
                 is_expanded: false,
                 child_count_label: String::new(),
+                preview: String::new(),
                 is_last_sibling,
                 ancestors_last: ancestors_last.to_vec(),
             });
@@ -427,10 +429,200 @@ impl JsonTreeNode {
                 .map_or_else(|| key.clone(), |i| format!("[{i}]")),
         }
     }
+
+    /// The key name of this node (without index formatting).
+    pub fn key(&self) -> &str {
+        match self {
+            Self::Object { key, .. } | Self::Array { key, .. } | Self::Leaf { key, .. } => key,
+        }
+    }
+
+    /// Extract a smart preview label for an array element based on the parent array's key.
+    ///
+    /// Returns a human-readable summary for collapsed object nodes that are children
+    /// of known SBOM arrays (components, dependencies, vulnerabilities, etc.).
+    /// Falls back to the first string leaf value for unknown arrays.
+    pub fn preview_label(&self, parent_key: &str) -> String {
+        let Self::Object { children, .. } = self else {
+            return String::new();
+        };
+
+        match parent_key {
+            "components" => self.preview_component(children),
+            "dependencies" => self.preview_dependency(children),
+            "vulnerabilities" => self.preview_vulnerability(children),
+            "licenses" | "evidence" => self.preview_license(children),
+            "externalReferences" => self.preview_ext_ref(children),
+            "services" => self.preview_named(children),
+            "tools" => self.preview_named(children),
+            "compositions" => self.preview_composition(children),
+            "formulation" => self.preview_named(children),
+            // SPDX
+            "packages" => self.preview_spdx_package(children),
+            "relationships" => self.preview_spdx_relationship(children),
+            "hasExtractedLicensingInfos" => self.preview_spdx_license(children),
+            // Generic: first string leaf
+            _ => self.preview_first_string(children),
+        }
+    }
+
+    fn preview_component(&self, children: &[Self]) -> String {
+        let name = find_leaf_str(children, "name");
+        let version = find_leaf_str(children, "version");
+        let comp_type = find_leaf_str(children, "type");
+        match (name, version) {
+            (Some(n), Some(v)) => {
+                let suffix = comp_type.map_or(String::new(), |t| format!(" ({t})"));
+                format!("{n}@{v}{suffix}")
+            }
+            (Some(n), None) => {
+                let suffix = comp_type.map_or(String::new(), |t| format!(" ({t})"));
+                format!("{n}{suffix}")
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn preview_dependency(&self, children: &[Self]) -> String {
+        let ref_name = find_leaf_str(children, "ref");
+        let depends_on = children.iter().find(|c| c.key() == "dependsOn");
+        let dep_count = match depends_on {
+            Some(Self::Array { len, .. }) => Some(*len),
+            _ => None,
+        };
+        match (ref_name, dep_count) {
+            (Some(r), Some(n)) => {
+                let short = truncate_value(&r, 40);
+                format!("{short} \u{2192} {n} deps")
+            }
+            (Some(r), None) => {
+                let short = truncate_value(&r, 50);
+                format!("{short} \u{2192} 0 deps")
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn preview_vulnerability(&self, children: &[Self]) -> String {
+        let id = find_leaf_str(children, "id");
+        // CycloneDX: ratings[0].severity, SPDX: severity
+        let severity = find_leaf_str(children, "severity").or_else(|| {
+            children
+                .iter()
+                .find(|c| c.key() == "ratings")
+                .and_then(|arr| arr.children())
+                .and_then(|ratings| ratings.first())
+                .and_then(|r| r.children())
+                .and_then(|fields| find_leaf_str(fields, "severity"))
+        });
+        match (id, severity) {
+            (Some(i), Some(s)) => format!("{i} ({s})"),
+            (Some(i), None) => i,
+            _ => String::new(),
+        }
+    }
+
+    fn preview_license(&self, children: &[Self]) -> String {
+        // CycloneDX: license.id or expression
+        let expression = find_leaf_str(children, "expression");
+        if let Some(e) = expression {
+            return e;
+        }
+        // Nested: { license: { id: "MIT" } }
+        children
+            .iter()
+            .find(|c| c.key() == "license")
+            .and_then(|lic| lic.children())
+            .and_then(|fields| find_leaf_str(fields, "id").or_else(|| find_leaf_str(fields, "name")))
+            .unwrap_or_default()
+    }
+
+    fn preview_ext_ref(&self, children: &[Self]) -> String {
+        let ref_type = find_leaf_str(children, "type");
+        let url = find_leaf_str(children, "url");
+        match (ref_type, url) {
+            (Some(t), Some(u)) => format!("{t}: {}", truncate_value(&u, 40)),
+            (Some(t), None) => t,
+            (None, Some(u)) => truncate_value(&u, 50),
+            _ => String::new(),
+        }
+    }
+
+    fn preview_named(&self, children: &[Self]) -> String {
+        find_leaf_str(children, "name")
+            .or_else(|| find_leaf_str(children, "vendor"))
+            .unwrap_or_default()
+    }
+
+    fn preview_composition(&self, children: &[Self]) -> String {
+        find_leaf_str(children, "aggregate").unwrap_or_default()
+    }
+
+    fn preview_spdx_package(&self, children: &[Self]) -> String {
+        let name = find_leaf_str(children, "name");
+        let version = find_leaf_str(children, "versionInfo");
+        match (name, version) {
+            (Some(n), Some(v)) => format!("{n}@{v}"),
+            (Some(n), None) => n,
+            _ => String::new(),
+        }
+    }
+
+    fn preview_spdx_relationship(&self, children: &[Self]) -> String {
+        let rel_type = find_leaf_str(children, "relationshipType");
+        let element = find_leaf_str(children, "spdxElementId");
+        let related = find_leaf_str(children, "relatedSpdxElement");
+        match (element, rel_type, related) {
+            (Some(e), Some(t), Some(r)) => {
+                format!("{} {} {}", truncate_value(&e, 20), t, truncate_value(&r, 20))
+            }
+            (_, Some(t), _) => t,
+            _ => String::new(),
+        }
+    }
+
+    fn preview_spdx_license(&self, children: &[Self]) -> String {
+        find_leaf_str(children, "licenseId")
+            .or_else(|| find_leaf_str(children, "name"))
+            .unwrap_or_default()
+    }
+
+    fn preview_first_string(&self, children: &[Self]) -> String {
+        for child in children {
+            if let Self::Leaf {
+                value,
+                value_type: JsonValueType::String,
+                ..
+            } = child
+            {
+                // Strip surrounding quotes from the stored value
+                let s = value.trim_matches('"');
+                if !s.is_empty() {
+                    return truncate_value(s, 50);
+                }
+            }
+        }
+        String::new()
+    }
 }
 
 fn truncate_value(s: &str, max_len: usize) -> String {
     crate::tui::widgets::truncate_str(s, max_len)
+}
+
+/// Find a direct child leaf by key name and return its unquoted string value.
+fn find_leaf_str(children: &[JsonTreeNode], key: &str) -> Option<String> {
+    children.iter().find_map(|c| {
+        if let JsonTreeNode::Leaf {
+            key: k, value, value_type: JsonValueType::String, ..
+        } = c
+            && k == key
+        {
+            Some(value.trim_matches('"').to_string())
+        } else {
+            None
+        }
+    })
 }
 
 fn count_tree_nodes(node: &JsonTreeNode) -> usize {
@@ -515,6 +707,31 @@ fn build_raw_line_mapping(raw_lines: &[String]) -> Vec<String> {
     }
 
     result
+}
+
+/// Compute bracket pairs from pretty-printed JSON lines.
+/// Returns (opening→closing, closing→opening) mappings.
+fn compute_bracket_pairs(
+    raw_lines: &[String],
+) -> (HashMap<usize, usize>, HashMap<usize, usize>) {
+    let mut forward = HashMap::new();
+    let mut reverse = HashMap::new();
+    let mut stack: Vec<usize> = Vec::new();
+
+    for (i, line) in raw_lines.iter().enumerate() {
+        let trimmed = line.trim().trim_end_matches(',');
+        // Check for opening brackets at end of line or standalone
+        if trimmed.ends_with('{') || trimmed.ends_with('[') {
+            stack.push(i);
+        } else if trimmed == "}" || trimmed == "]" {
+            if let Some(open) = stack.pop() {
+                forward.insert(open, i);
+                reverse.insert(i, open);
+            }
+        }
+    }
+
+    (forward, reverse)
 }
 
 fn stack_to_node_id(stack: &[RawMapEntry]) -> String {
@@ -627,6 +844,14 @@ pub struct SourcePanelState {
     pub filter_type: Option<JsonValueType>,
     /// Sort mode for tree children (tree mode only).
     pub sort_mode: SourceSortMode,
+    /// Bracket pairs: opening line → closing line (raw JSON mode).
+    pub bracket_pairs: HashMap<usize, usize>,
+    /// Reverse bracket pairs: closing line → opening line (raw JSON mode).
+    pub bracket_pairs_reverse: HashMap<usize, usize>,
+    /// Set of opening bracket line indices that are currently folded (raw mode).
+    pub folded_lines: HashSet<usize>,
+    /// Show indent guides in raw mode.
+    pub show_indent_guides: bool,
 }
 
 impl SourcePanelState {
@@ -683,6 +908,12 @@ impl SourcePanelState {
             Vec::new()
         };
 
+        let (bracket_pairs, bracket_pairs_reverse) = if json_tree.is_some() {
+            compute_bracket_pairs(&raw_lines)
+        } else {
+            (HashMap::new(), HashMap::new())
+        };
+
         Self {
             view_mode: if has_tree {
                 SourceViewMode::Tree
@@ -722,6 +953,10 @@ impl SourcePanelState {
             compiled_regex: None,
             filter_type: None,
             sort_mode: SourceSortMode::None,
+            bracket_pairs,
+            bracket_pairs_reverse,
+            folded_lines: HashSet::new(),
+            show_indent_guides: true,
         }
     }
 
@@ -748,6 +983,7 @@ impl SourcePanelState {
                 true,
                 &[],
                 self.sort_mode,
+                "",
             );
         } else if let Some(ref xml) = self.xml_tree {
             flatten_xml_tree(
@@ -904,15 +1140,115 @@ impl SourcePanelState {
         self.invalidate_flat_cache();
     }
 
-    pub fn select_next(&mut self) {
-        let max = self.effective_count();
-        if max > 0 && self.selected < max.saturating_sub(1) {
-            self.selected += 1;
+    /// Toggle fold at the current line in raw mode.
+    /// If on an opening bracket line, fold/unfold the region.
+    /// If on a closing bracket line, fold/unfold the matching opening.
+    pub fn toggle_fold(&mut self) {
+        let line = self.selected;
+        let open_line = if self.bracket_pairs.contains_key(&line) {
+            line
+        } else if let Some(&open) = self.bracket_pairs_reverse.get(&line) {
+            open
+        } else {
+            return;
+        };
+        if self.folded_lines.contains(&open_line) {
+            self.folded_lines.remove(&open_line);
+        } else {
+            self.folded_lines.insert(open_line);
         }
     }
 
-    pub const fn select_prev(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+    /// Unfold all folded regions.
+    pub fn unfold_all(&mut self) {
+        self.folded_lines.clear();
+    }
+
+    /// Fold all top-level regions (depth 1).
+    pub fn fold_all_top_level(&mut self) {
+        for &open in self.bracket_pairs.keys() {
+            if let Some(line) = self.raw_lines.get(open) {
+                let indent = line.len() - line.trim_start().len();
+                if indent <= 2 {
+                    self.folded_lines.insert(open);
+                }
+            }
+        }
+    }
+
+    /// Get the matching bracket line for the given line index.
+    pub fn matching_bracket(&self, line: usize) -> Option<usize> {
+        self.bracket_pairs
+            .get(&line)
+            .or_else(|| self.bracket_pairs_reverse.get(&line))
+            .copied()
+    }
+
+    /// Jump to the matching bracket.
+    pub fn jump_to_matching_bracket(&mut self) {
+        if let Some(target) = self.matching_bracket(self.selected) {
+            self.selected = target;
+            // Ensure the target is visible (unfold if needed)
+            if let Some(&open) = self.bracket_pairs_reverse.get(&target) {
+                self.folded_lines.remove(&open);
+            }
+            if self.folded_lines.contains(&target) {
+                self.folded_lines.remove(&target);
+            }
+        }
+    }
+
+    /// Check if a raw line index is inside a folded region (hidden).
+    pub fn is_line_folded(&self, line: usize) -> bool {
+        for &open in &self.folded_lines {
+            if let Some(&close) = self.bracket_pairs.get(&open) {
+                if line > open && line <= close {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Get the next visible line after `line` (skipping folded regions).
+    pub fn next_visible_line(&self, line: usize) -> usize {
+        let max = self.raw_lines.len().saturating_sub(1);
+        let mut next = line + 1;
+        while next <= max && self.is_line_folded(next) {
+            next += 1;
+        }
+        next.min(max)
+    }
+
+    /// Get the previous visible line before `line` (skipping folded regions).
+    pub fn prev_visible_line(&self, line: usize) -> usize {
+        if line == 0 {
+            return 0;
+        }
+        let mut prev = line - 1;
+        while prev > 0 && self.is_line_folded(prev) {
+            prev -= 1;
+        }
+        prev
+    }
+
+    pub fn select_next(&mut self) {
+        let max = self.effective_count();
+        if max > 0 && self.selected < max.saturating_sub(1) {
+            if self.view_mode == SourceViewMode::Raw && !self.folded_lines.is_empty() {
+                self.selected = self.next_visible_line(self.selected);
+            } else {
+                self.selected += 1;
+            }
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        if self.view_mode == SourceViewMode::Raw && !self.folded_lines.is_empty() {
+            self.selected = self.prev_visible_line(self.selected);
+        } else {
+            self.selected = self.selected.saturating_sub(1);
+        }
     }
 
     pub const fn select_first(&mut self) {
@@ -929,11 +1265,28 @@ impl SourcePanelState {
 
     pub fn page_down(&mut self) {
         let max = self.effective_count();
-        self.selected = (self.selected + self.viewport_height).min(max.saturating_sub(1));
+        let target = (self.selected + self.viewport_height).min(max.saturating_sub(1));
+        if self.view_mode == SourceViewMode::Raw && !self.folded_lines.is_empty() {
+            // Skip to target, avoiding folded interiors
+            self.selected = target;
+            while self.selected > 0 && self.is_line_folded(self.selected) {
+                self.selected = self.next_visible_line(self.selected);
+            }
+        } else {
+            self.selected = target;
+        }
     }
 
     pub fn page_up(&mut self) {
-        self.selected = self.selected.saturating_sub(self.viewport_height);
+        let target = self.selected.saturating_sub(self.viewport_height);
+        if self.view_mode == SourceViewMode::Raw && !self.folded_lines.is_empty() {
+            self.selected = target;
+            while self.selected > 0 && self.is_line_folded(self.selected) {
+                self.selected = self.prev_visible_line(self.selected);
+            }
+        } else {
+            self.selected = target;
+        }
     }
 
     fn effective_count(&self) -> usize {

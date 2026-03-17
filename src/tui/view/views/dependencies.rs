@@ -569,6 +569,28 @@ fn available_detail_slots(area_height: u16, used_lines: usize, reserved: usize) 
         .max(3) // always show at least 3
 }
 
+/// Short badge for component type.
+fn component_type_badge(ct: &crate::model::ComponentType) -> (&'static str, Color) {
+    use crate::model::ComponentType;
+    let scheme = colors();
+    match ct {
+        ComponentType::Application => ("APP", scheme.accent),
+        ComponentType::Framework => ("FW", scheme.info),
+        ComponentType::Library => ("LIB", scheme.primary),
+        ComponentType::Container => ("CTR", scheme.secondary),
+        ComponentType::OperatingSystem => ("OS", scheme.warning),
+        ComponentType::Device => ("DEV", scheme.text_muted),
+        ComponentType::Firmware => ("FW", scheme.warning),
+        ComponentType::File => ("FILE", scheme.text_muted),
+        ComponentType::Data => ("DATA", scheme.text_muted),
+        ComponentType::MachineLearningModel => ("ML", scheme.info),
+        ComponentType::Platform => ("PLAT", scheme.secondary),
+        ComponentType::DeviceDriver => ("DRV", scheme.text_muted),
+        ComponentType::Cryptographic => ("CRYPT", scheme.accent),
+        ComponentType::Other(_) => ("OTHER", scheme.text_muted),
+    }
+}
+
 fn render_dependency_stats(
     frame: &mut Frame,
     area: Rect,
@@ -580,120 +602,36 @@ fn render_dependency_stats(
 
     let mut lines = vec![];
 
-    // P7: Compact stat summary (2 lines instead of 4)
+    // Compact single-line stats
     let total_components = deps.names.len();
     let total_edges: usize = deps.edges.values().map(Vec::len).sum();
     let root_count = deps.roots.len();
     let max_depth = deps.max_depth;
 
-    lines.push(Line::styled(
-        "Dependency Statistics",
-        Style::default().fg(scheme.primary).bold(),
-    ));
-    lines.push(Line::from(""));
-
-    // P9: Number formatting with thousands separators
     lines.push(Line::from(vec![
         Span::styled("Components: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format_thousands(total_components),
             Style::default().fg(scheme.text).bold(),
         ),
-        Span::styled("  │  ", Style::default().fg(scheme.border)),
-        Span::styled("Edges: ", Style::default().fg(scheme.muted)),
+        Span::styled("  Edges: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format_thousands(total_edges),
             Style::default().fg(scheme.text).bold(),
         ),
-    ]));
-
-    lines.push(Line::from(vec![
-        Span::styled("Roots: ", Style::default().fg(scheme.muted)),
+        Span::styled("  Roots: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format_thousands(root_count),
             Style::default().fg(scheme.text).bold(),
         ),
-        Span::styled("  │  ", Style::default().fg(scheme.border)),
-        Span::styled("Max Depth: ", Style::default().fg(scheme.muted)),
+        Span::styled("  D:", Style::default().fg(scheme.muted)),
         Span::styled(
             max_depth.to_string(),
             Style::default().fg(scheme.text).bold(),
         ),
     ]));
 
-    // P5: Section separator
-    lines.push(Line::from(""));
-    push_separator(&mut lines, sep_width, scheme.border);
-
-    // Vulnerability severity bar chart
-    let width = area.width.saturating_sub(4) as usize;
-    let bar_width = width.saturating_sub(20).min(30);
-
-    let mut vuln_severity_counts: HashMap<&str, usize> = HashMap::new();
-    vuln_severity_counts.insert("critical", 0);
-    vuln_severity_counts.insert("high", 0);
-    vuln_severity_counts.insert("medium", 0);
-    vuln_severity_counts.insert("low", 0);
-    vuln_severity_counts.insert("clean", 0);
-
-    for (node_id, &count) in &deps.vuln_counts {
-        if count > 0 {
-            let category = deps
-                .max_severities
-                .get(node_id)
-                .map_or("low", |s| s.as_str());
-            *vuln_severity_counts.entry(category).or_insert(0) += 1;
-        } else {
-            *vuln_severity_counts.entry("clean").or_insert(0) += 1;
-        }
-    }
-
-    let has_vulns = vuln_severity_counts
-        .iter()
-        .any(|(&k, &v)| k != "clean" && v > 0);
-    if has_vulns {
-        lines.push(Line::styled(
-            "Vulnerability Status:",
-            Style::default().fg(scheme.critical).bold(),
-        ));
-
-        let vuln_order = [
-            ("critical", "Critical", scheme.critical),
-            ("high", "High", scheme.high),
-            ("medium", "Medium", scheme.warning),
-            ("low", "Low", scheme.low),
-            ("clean", "Clean", scheme.success),
-        ];
-
-        let max_vuln_count = vuln_severity_counts.values().copied().max().unwrap_or(1);
-        for (key, label, color) in &vuln_order {
-            let count = vuln_severity_counts.get(key).copied().unwrap_or(0);
-            // P3: Hide zero-count vulnerability rows (except Clean which always shows)
-            if count == 0 && *key != "clean" {
-                continue;
-            }
-            let bar_len = if max_vuln_count > 0 {
-                (count * bar_width) / max_vuln_count
-            } else {
-                0
-            };
-            let bar = "█".repeat(bar_len);
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
-                Span::styled(
-                    format!("{:>5} ", format_thousands(count)),
-                    Style::default().fg(scheme.text),
-                ),
-                Span::styled(bar, Style::default().fg(*color)),
-            ]));
-        }
-
-        // P5: Section separator
-        lines.push(Line::from(""));
-        push_separator(&mut lines, sep_width, scheme.border);
-    }
-
-    // P10: Conditional relationship chart — only show bar chart when 2+ types
+    // Relationship counts
     let mut rel_counts: HashMap<&str, usize> = HashMap::new();
     for edge in &app.sbom.edges {
         let tag = dependency_tag(&edge.relationship).trim();
@@ -703,7 +641,6 @@ fn render_dependency_stats(
 
     if !rel_counts.is_empty() {
         if rel_counts.len() == 1 {
-            // Single relationship type — compact single line
             let (label, count) = rel_counts.iter().next().expect("checked non-empty");
             lines.push(Line::from(vec![
                 Span::styled("Relationships: ", Style::default().fg(scheme.info).bold()),
@@ -714,6 +651,7 @@ fn render_dependency_stats(
             ]));
         } else {
             // Multiple types — show bar chart
+            let bar_width = (area.width.saturating_sub(4) as usize).saturating_sub(20).min(30);
             lines.push(Line::styled(
                 "Relationship Types:",
                 Style::default().fg(scheme.info).bold(),
@@ -741,26 +679,103 @@ fn render_dependency_stats(
                 ]));
             }
         }
-
-        // P5: Section separator
-        lines.push(Line::from(""));
-        push_separator(&mut lines, sep_width, scheme.border);
     }
 
-    // P4: Rich Selected Node details (replaces static Navigation section)
-    if let Some(node_id) = app.get_selected_dependency_node_id() {
-        lines.push(Line::styled(
-            "Selected Node",
-            Style::default().fg(scheme.accent).bold(),
-        ));
+    // Vulnerability severity bar chart with percentage headline
+    let bar_width = (area.width.saturating_sub(4) as usize).saturating_sub(22).min(30);
+
+    let mut vuln_severity_counts: HashMap<&str, usize> = HashMap::new();
+    vuln_severity_counts.insert("critical", 0);
+    vuln_severity_counts.insert("high", 0);
+    vuln_severity_counts.insert("medium", 0);
+    vuln_severity_counts.insert("low", 0);
+    vuln_severity_counts.insert("clean", 0);
+
+    for (node_id, &count) in &deps.vuln_counts {
+        if count > 0 {
+            let category = deps
+                .max_severities
+                .get(node_id)
+                .map_or("low", |s| s.as_str());
+            *vuln_severity_counts.entry(category).or_insert(0) += 1;
+        } else {
+            *vuln_severity_counts.entry("clean").or_insert(0) += 1;
+        }
+    }
+
+    let affected: usize = vuln_severity_counts
+        .iter()
+        .filter(|(k, _)| **k != "clean")
+        .map(|(_, &v)| v)
+        .sum();
+    let has_vulns = affected > 0;
+
+    if has_vulns {
         lines.push(Line::from(""));
 
-        if let Some(name) = deps.names.get(&node_id) {
+        // Percentage affected headline
+        let pct = if total_components > 0 {
+            (affected as f64 / total_components as f64) * 100.0
+        } else {
+            0.0
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Vulnerabilities:  ", Style::default().fg(scheme.critical).bold()),
+            Span::styled(
+                format!("{pct:.1}% affected"),
+                Style::default().fg(scheme.warning).bold(),
+            ),
+        ]));
+
+        let vuln_order = [
+            ("critical", "Critical", scheme.critical, "C"),
+            ("high", "High", scheme.high, "H"),
+            ("medium", "Medium", scheme.warning, "M"),
+            ("low", "Low", scheme.low, "L"),
+            ("clean", "Clean", scheme.success, "\u{2713}"),
+        ];
+
+        let max_vuln_count = vuln_severity_counts.values().copied().max().unwrap_or(1);
+        for (key, label, color, badge) in &vuln_order {
+            let count = vuln_severity_counts.get(key).copied().unwrap_or(0);
+            if count == 0 && *key != "clean" {
+                continue;
+            }
+            let bar_len = if max_vuln_count > 0 {
+                (count * bar_width) / max_vuln_count
+            } else {
+                0
+            }
+            .max(if count > 0 { 1 } else { 0 }); // at least 1 char if non-zero
+            let bar = "█".repeat(bar_len);
+
+            let badge_style = Style::default()
+                .fg(scheme.badge_fg_dark)
+                .bg(*color)
+                .bold();
             lines.push(Line::from(vec![
-                Span::styled("Name: ", Style::default().fg(scheme.muted)),
-                Span::styled(name, Style::default().fg(scheme.text).bold()),
+                Span::styled(format!(" [{badge}]"), badge_style),
+                Span::styled(format!(" {label:8}"), Style::default().fg(*color)),
+                Span::styled(
+                    format!("{:>5} ", format_thousands(count)),
+                    Style::default().fg(scheme.text),
+                ),
+                Span::styled(bar, Style::default().fg(*color)),
             ]));
         }
+    }
+
+    // Separator before selected node
+    push_separator(&mut lines, sep_width, scheme.border);
+
+    // Selected Node details
+    if let Some(node_id) = app.get_selected_dependency_node_id() {
+        // Get depth from cached flat nodes
+        let node_depth = app
+            .dependency_state
+            .cached_flat_nodes
+            .get(app.dependency_state.selected)
+            .map(|n| n.depth);
 
         // Look up component in SBOM for rich details
         let component = app.sbom.components.iter().find_map(|(id, comp)| {
@@ -771,89 +786,131 @@ fn render_dependency_stats(
             }
         });
 
+        let dep_count = deps.edges.get(&node_id).map_or(0, Vec::len);
+        let depended_on_count = deps.reverse_edges.get(&node_id).map_or(0, Vec::len);
+        let is_root = depended_on_count == 0;
+
         if let Some(comp) = component {
-            if let Some(ref ver) = comp.version {
-                lines.push(Line::from(vec![
-                    Span::styled("Version: ", Style::default().fg(scheme.muted)),
-                    Span::styled(ver, Style::default().fg(scheme.text)),
-                ]));
-            }
+            // Line 1: Display name + [TYPE] badge + Root badge
+            let display_name = deps
+                .names
+                .get(&node_id)
+                .cloned()
+                .unwrap_or_else(|| node_id.clone());
+            // Strip version from display name for cleaner title
+            let clean_title = display_name
+                .rsplit_once('@')
+                .map_or(display_name.clone(), |(name, _)| name.to_string());
+            let (type_tag, type_color) = component_type_badge(&comp.component_type);
 
-            lines.push(Line::from(vec![
-                Span::styled("Type: ", Style::default().fg(scheme.muted)),
+            let mut title_spans = vec![
+                Span::styled(clean_title, Style::default().fg(scheme.text).bold()),
+                Span::raw("  "),
                 Span::styled(
-                    format!("{:?}", comp.component_type),
-                    Style::default().fg(scheme.text),
+                    format!("[{type_tag}]"),
+                    Style::default().fg(scheme.badge_fg_dark).bg(type_color).bold(),
                 ),
-            ]));
+            ];
+            if is_root {
+                title_spans.push(Span::raw("  "));
+                title_spans.push(Span::styled(
+                    "Root",
+                    Style::default().fg(scheme.accent).bold(),
+                ));
+            }
+            lines.push(Line::from(title_spans));
 
-            if let Some(ref eco) = comp.ecosystem {
-                lines.push(Line::from(vec![
-                    Span::styled("Ecosystem: ", Style::default().fg(scheme.muted)),
-                    Span::styled(format!("{eco:?}"), Style::default().fg(scheme.text)),
-                ]));
+            // Line 2: Version | Supplier | License (compact metadata line)
+            let mut meta_spans: Vec<Span<'_>> = Vec::new();
+            if let Some(ref ver) = comp.version {
+                meta_spans.push(Span::styled(ver.as_str(), Style::default().fg(scheme.text)));
+            }
+            if let Some(ref supplier) = comp.supplier {
+                if !supplier.name.is_empty() {
+                    if !meta_spans.is_empty() {
+                        meta_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
+                    }
+                    meta_spans.push(Span::styled(
+                        &supplier.name,
+                        Style::default().fg(scheme.info),
+                    ));
+                }
+            }
+            if !comp.licenses.declared.is_empty() {
+                if !meta_spans.is_empty() {
+                    meta_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
+                }
+                let license_text = comp
+                    .licenses
+                    .declared
+                    .iter()
+                    .take(2)
+                    .map(|l| l.expression.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                meta_spans.push(Span::styled(license_text, Style::default().fg(scheme.text)));
+                if comp.licenses.declared.len() > 2 {
+                    meta_spans.push(Span::styled(
+                        format!(" +{}", comp.licenses.declared.len() - 2),
+                        Style::default().fg(scheme.muted),
+                    ));
+                }
+            }
+            if !meta_spans.is_empty() {
+                lines.push(Line::from(meta_spans));
             }
 
-            if let Some(ref purl) = comp.identifiers.purl
-                && purl != &node_id
-            {
-                lines.push(Line::from(vec![
-                    Span::styled("PURL: ", Style::default().fg(scheme.muted)),
-                    Span::styled(purl, Style::default().fg(scheme.accent)),
-                ]));
-            }
-
-            // Dependency counts (inline)
-            let dep_count = deps.edges.get(&node_id).map_or(0, Vec::len);
-            let depended_on_count = deps.reverse_edges.get(&node_id).map_or(0, Vec::len);
-
-            lines.push(Line::from(vec![
-                Span::styled("Deps: ", Style::default().fg(scheme.muted)),
+            // Line 3: Dependencies count | Depth | Used by
+            let mut dep_spans = vec![
+                Span::styled("Dependencies: ", Style::default().fg(scheme.muted)),
                 Span::styled(
                     format_thousands(dep_count),
                     Style::default().fg(scheme.primary),
                 ),
-                Span::styled("  │  ", Style::default().fg(scheme.border)),
-                Span::styled("Used by: ", Style::default().fg(scheme.muted)),
-                Span::styled(
+            ];
+            if let Some(depth) = node_depth {
+                dep_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
+                dep_spans.push(Span::styled("Depth: ", Style::default().fg(scheme.muted)));
+                dep_spans.push(Span::styled(
+                    depth.to_string(),
+                    Style::default().fg(scheme.text),
+                ));
+            }
+            if !is_root {
+                dep_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
+                dep_spans.push(Span::styled("Used by: ", Style::default().fg(scheme.muted)));
+                dep_spans.push(Span::styled(
                     format_thousands(depended_on_count),
                     Style::default().fg(scheme.primary),
-                ),
-            ]));
+                ));
+            }
+            lines.push(Line::from(dep_spans));
 
-            // License info
-            if !comp.licenses.declared.is_empty() {
+            // Line 4: Hash (best available, truncated)
+            if let Some(hash) = comp.hashes.first() {
+                let hash_display = if hash.value.len() > 16 {
+                    format!("{}...{}", &hash.value[..8], &hash.value[hash.value.len() - 8..])
+                } else {
+                    hash.value.clone()
+                };
                 lines.push(Line::from(vec![
-                    Span::styled("License: ", Style::default().fg(scheme.muted)),
                     Span::styled(
-                        comp.licenses
-                            .declared
-                            .iter()
-                            .take(2)
-                            .map(|l| l.expression.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        Style::default().fg(scheme.text),
+                        format!("{}: ", hash.algorithm),
+                        Style::default().fg(scheme.muted),
                     ),
-                    if comp.licenses.declared.len() > 2 {
-                        Span::styled(
-                            format!(" +{}", comp.licenses.declared.len() - 2),
-                            Style::default().fg(scheme.muted),
-                        )
-                    } else {
-                        Span::raw("")
-                    },
+                    Span::styled(hash_display, Style::default().fg(scheme.text_muted)),
                 ]));
             }
 
-            // Vulnerability details
+            // Vulnerability list with CVE details
             if !comp.vulnerabilities.is_empty() {
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     format!("Vulnerabilities ({}):", comp.vulnerabilities.len()),
                     Style::default().fg(scheme.error).bold(),
                 ));
-                for vuln in comp.vulnerabilities.iter().take(5) {
+                let max_vulns = available_detail_slots(area.height, lines.len(), 8);
+                for vuln in comp.vulnerabilities.iter().take(max_vulns) {
                     let sev_str = vuln.severity.as_ref().map_or("unknown", |s| match s {
                         crate::model::Severity::Critical => "critical",
                         crate::model::Severity::High => "high",
@@ -864,7 +921,7 @@ fn render_dependency_stats(
                     let sev_color = SeverityBadge::fg_color(sev_str);
                     let indicator = SeverityBadge::indicator(sev_str);
                     let mut spans = vec![
-                        Span::styled("  • ", Style::default().fg(scheme.muted)),
+                        Span::styled("  ", Style::default()),
                         Span::styled(&vuln.id, Style::default().fg(scheme.text)),
                         Span::raw(" "),
                         Span::styled(
@@ -881,117 +938,210 @@ fn render_dependency_stats(
                             Style::default().fg(sev_color),
                         ));
                     }
+                    // Truncated description
+                    if let Some(ref desc) = vuln.description {
+                        if !desc.is_empty() {
+                            let max_desc = (area.width as usize).saturating_sub(30);
+                            let short = truncate_str(desc, max_desc);
+                            spans.push(Span::styled(
+                                format!("  {short}"),
+                                Style::default().fg(scheme.text_muted),
+                            ));
+                        }
+                    }
                     lines.push(Line::from(spans));
                 }
-                if comp.vulnerabilities.len() > 5 {
+                if comp.vulnerabilities.len() > max_vulns {
                     lines.push(Line::styled(
-                        format!("  ... and {} more", comp.vulnerabilities.len() - 5),
+                        format!("  ... and {} more", comp.vulnerabilities.len() - max_vulns),
                         Style::default().fg(scheme.muted),
                     ));
                 }
             }
-        } else {
-            // No component found — still show dependency counts
-            let dep_count = deps.edges.get(&node_id).map_or(0, Vec::len);
-            let depended_on_count = deps.reverse_edges.get(&node_id).map_or(0, Vec::len);
 
-            lines.push(Line::from(vec![
-                Span::styled("Deps: ", Style::default().fg(scheme.muted)),
+            // PURL (if different from node_id)
+            if let Some(ref purl) = comp.identifiers.purl
+                && purl != &node_id
+            {
+                lines.push(Line::from(vec![
+                    Span::styled("PURL: ", Style::default().fg(scheme.muted)),
+                    Span::styled(purl, Style::default().fg(scheme.accent)),
+                ]));
+            }
+        } else {
+            // No component found — show basic info
+            if let Some(name) = deps.names.get(&node_id) {
+                lines.push(Line::styled(name, Style::default().fg(scheme.text).bold()));
+            }
+
+            let mut dep_spans = vec![
+                Span::styled("Dependencies: ", Style::default().fg(scheme.muted)),
                 Span::styled(
                     format_thousands(dep_count),
                     Style::default().fg(scheme.primary),
                 ),
-                Span::styled("  │  ", Style::default().fg(scheme.border)),
-                Span::styled("Used by: ", Style::default().fg(scheme.muted)),
-                Span::styled(
+            ];
+            if is_root {
+                dep_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
+                dep_spans.push(Span::styled(
+                    "Root",
+                    Style::default().fg(scheme.accent).bold(),
+                ));
+            } else {
+                dep_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
+                dep_spans.push(Span::styled("Used by: ", Style::default().fg(scheme.muted)));
+                dep_spans.push(Span::styled(
                     format_thousands(depended_on_count),
                     Style::default().fg(scheme.primary),
-                ),
-            ]));
+                ));
+            }
+            lines.push(Line::from(dep_spans));
         }
 
-        // "Used by" (parent) listing
-        if let Some(parents) = deps.reverse_edges.get(&node_id) {
-            if !parents.is_empty() {
+        // Determine which list to show scrollable: the larger one gets scroll,
+        // the smaller one gets a compact count-only line
+        let parents = deps.reverse_edges.get(&node_id);
+        let children = deps.edges.get(&node_id);
+        let parent_count = parents.map_or(0, Vec::len);
+        let child_count = children.map_or(0, Vec::len);
+        let scroll_parents = parent_count > 0 && parent_count >= child_count;
+
+        if scroll_parents {
+            // Parents get scrollable list, deps get compact line
+            if child_count > 0 {
+                // Don't repeat if already shown in the stats line above
+            }
+
+            if let Some(parents) = parents {
                 lines.push(Line::from(""));
-                lines.push(Line::styled(
-                    format!("Used by ({}):", format_thousands(parents.len())),
-                    Style::default().fg(scheme.secondary).bold(),
-                ));
-                let max_parents = available_detail_slots(area.height, lines.len(), 2);
-                for parent_id in parents.iter().take(max_parents) {
+
+                let inner_height = area.height.saturating_sub(2) as usize;
+                let header_lines = lines.len() + 1;
+                let visible_slots = inner_height.saturating_sub(header_lines).max(3);
+
+                let dep_scroll = app.dependency_state.detail_scroll as usize;
+                let total = parents.len();
+                let effective_scroll = dep_scroll.min(total.saturating_sub(visible_slots));
+
+                let pos_end = (effective_scroll + visible_slots).min(total);
+                let pos_indicator = if total > visible_slots {
+                    format!("  {}-{}/{}", effective_scroll + 1, pos_end, format_thousands(total))
+                } else {
+                    String::new()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("Used by ({}):", format_thousands(total)),
+                        Style::default().fg(scheme.secondary).bold(),
+                    ),
+                    Span::styled(pos_indicator, Style::default().fg(scheme.text_muted)),
+                ]));
+
+                for parent_id in parents.iter().skip(effective_scroll).take(visible_slots) {
                     let parent_name = deps
                         .names
                         .get(parent_id)
                         .map_or(parent_id.as_str(), String::as_str);
                     lines.push(Line::from(vec![
-                        Span::styled("  ← ", Style::default().fg(scheme.muted)),
+                        Span::styled("  \u{2190} ", Style::default().fg(scheme.muted)),
                         Span::styled(parent_name, Style::default().fg(scheme.text)),
                     ]));
                 }
-                if parents.len() > max_parents {
-                    lines.push(Line::styled(
-                        format!("  ... and {} more", parents.len() - max_parents),
-                        Style::default().fg(scheme.muted),
-                    ));
+            }
+        } else {
+            // Deps get scrollable list, parents get compact line
+            if parent_count > 0 {
+                lines.push(Line::from(""));
+                // Compact parent summary — show first few inline
+                if let Some(parents) = parents {
+                    let preview: Vec<&str> = parents
+                        .iter()
+                        .take(3)
+                        .map(|id| {
+                            deps.names
+                                .get(id)
+                                .map_or(id.as_str(), String::as_str)
+                        })
+                        .collect();
+                    let mut spans = vec![
+                        Span::styled(
+                            format!("Used by ({}):", format_thousands(parent_count)),
+                            Style::default().fg(scheme.secondary).bold(),
+                        ),
+                        Span::styled(
+                            format!(" {}", preview.join(", ")),
+                            Style::default().fg(scheme.text_muted),
+                        ),
+                    ];
+                    if parent_count > 3 {
+                        spans.push(Span::styled(
+                            format!(" +{}", parent_count - 3),
+                            Style::default().fg(scheme.muted),
+                        ));
+                    }
+                    lines.push(Line::from(spans));
                 }
             }
-        }
 
-        // Direct dependencies with relationship tags
-        if let Some(children) = deps.edges.get(&node_id) {
-            lines.push(Line::from(""));
-            lines.push(Line::styled(
-                format!("Dependencies ({}):", format_thousands(children.len())),
-                Style::default().fg(scheme.primary).bold(),
-            ));
-            let max_deps = available_detail_slots(area.height, lines.len(), 2);
-            for child_id in children.iter().take(max_deps) {
-                let child_name = deps
-                    .names
-                    .get(child_id)
-                    .map_or(child_id.as_str(), String::as_str);
-                let tag = deps
-                    .relationships
-                    .get(&(node_id.clone(), child_id.clone()))
-                    .map(|r| dependency_tag(r))
-                    .unwrap_or("");
-                let mut spans = vec![
-                    Span::styled("  → ", Style::default().fg(scheme.muted)),
-                    Span::styled(child_name, Style::default().fg(scheme.text)),
-                ];
-                let tag = tag.trim();
-                if !tag.is_empty() {
-                    spans.push(Span::styled(
-                        format!(" {tag}"),
-                        Style::default().fg(scheme.info),
-                    ));
+            if let Some(children) = children {
+                if !children.is_empty() {
+                    lines.push(Line::from(""));
+
+                    let inner_height = area.height.saturating_sub(2) as usize;
+                    let header_lines = lines.len() + 1;
+                    let visible_slots = inner_height.saturating_sub(header_lines).max(3);
+
+                    let dep_scroll = app.dependency_state.detail_scroll as usize;
+                    let total_deps = children.len();
+                    let effective_scroll =
+                        dep_scroll.min(total_deps.saturating_sub(visible_slots));
+
+                    let pos_end = (effective_scroll + visible_slots).min(total_deps);
+                    let pos_indicator = if total_deps > visible_slots {
+                        format!(
+                            "  {}-{}/{}",
+                            effective_scroll + 1,
+                            pos_end,
+                            format_thousands(total_deps)
+                        )
+                    } else {
+                        String::new()
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("Dependencies ({}):", format_thousands(total_deps)),
+                            Style::default().fg(scheme.primary).bold(),
+                        ),
+                        Span::styled(pos_indicator, Style::default().fg(scheme.text_muted)),
+                    ]));
+
+                    for child_id in
+                        children.iter().skip(effective_scroll).take(visible_slots)
+                    {
+                        let child_name = deps
+                            .names
+                            .get(child_id)
+                            .map_or(child_id.as_str(), String::as_str);
+                        let tag = deps
+                            .relationships
+                            .get(&(node_id.clone(), child_id.clone()))
+                            .map(|r| dependency_tag(r))
+                            .unwrap_or("");
+                        let mut spans = vec![
+                            Span::styled("  ", Style::default()),
+                            Span::styled(child_name, Style::default().fg(scheme.text)),
+                        ];
+                        let tag = tag.trim();
+                        if !tag.is_empty() {
+                            spans.push(Span::styled(
+                                format!(" {tag}"),
+                                Style::default().fg(scheme.info),
+                            ));
+                        }
+                        lines.push(Line::from(spans));
+                    }
                 }
-                lines.push(Line::from(spans));
             }
-            if children.len() > max_deps {
-                lines.push(Line::styled(
-                    format!("  ... and {} more", children.len() - max_deps),
-                    Style::default().fg(scheme.muted),
-                ));
-            }
-        }
-
-        // Canonical ID (dimmed, for reference when it differs from name)
-        if deps
-            .names
-            .get(&node_id)
-            .is_some_and(|name| name != &node_id)
-        {
-            lines.push(Line::from(""));
-            lines.push(Line::styled(
-                "Canonical ID:",
-                Style::default().fg(scheme.muted),
-            ));
-            lines.push(Line::styled(
-                node_id.clone(),
-                Style::default().fg(scheme.muted).dim(),
-            ));
         }
     } else {
         lines.push(Line::styled(
@@ -1002,7 +1152,7 @@ fn render_dependency_stats(
 
     // Scrolling support
     let content_height = lines.len() as u16;
-    // P6: Focused panel border highlighting
+    // Focused panel border highlighting
     let detail_border_color = if app.focus_panel == FocusPanel::Right {
         scheme.border_focused
     } else {
@@ -1099,6 +1249,11 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
         }
     }
 
+    // Sort edge children for stable ordering across renders
+    for children in edges.values_mut() {
+        children.sort();
+    }
+
     // Build reverse edges for O(1) "used by" lookups
     let mut reverse_edges: HashMap<String, Vec<String>> = HashMap::new();
     for (parent, children) in &edges {
@@ -1108,6 +1263,10 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
                 .or_default()
                 .push(parent.clone());
         }
+    }
+    // Sort parent lists for stable display ordering
+    for parents in reverse_edges.values_mut() {
+        parents.sort();
     }
 
     // Find roots (components with no incoming edges), sorted for stable ordering
