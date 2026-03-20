@@ -37,7 +37,7 @@ crossterm = "0.29"
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }
-clap_complete = "4.5"
+clap_complete = "4.6"
 clap_mangen = "0.2"
 
 # HTTP Client for enrichment
