@@ -833,15 +833,16 @@ fn render_dependency_stats(
                 meta_spans.push(Span::styled(ver.as_str(), Style::default().fg(scheme.text)));
             }
             if let Some(ref supplier) = comp.supplier
-                && !supplier.name.is_empty() {
-                    if !meta_spans.is_empty() {
-                        meta_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
-                    }
-                    meta_spans.push(Span::styled(
-                        &supplier.name,
-                        Style::default().fg(scheme.info),
-                    ));
+                && !supplier.name.is_empty()
+            {
+                if !meta_spans.is_empty() {
+                    meta_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
                 }
+                meta_spans.push(Span::styled(
+                    &supplier.name,
+                    Style::default().fg(scheme.info),
+                ));
+            }
             if !comp.licenses.declared.is_empty() {
                 if !meta_spans.is_empty() {
                     meta_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
@@ -950,14 +951,15 @@ fn render_dependency_stats(
                     }
                     // Truncated description
                     if let Some(ref desc) = vuln.description
-                        && !desc.is_empty() {
-                            let max_desc = (area.width as usize).saturating_sub(30);
-                            let short = truncate_str(desc, max_desc);
-                            spans.push(Span::styled(
-                                format!("  {short}"),
-                                Style::default().fg(scheme.text_muted),
-                            ));
-                        }
+                        && !desc.is_empty()
+                    {
+                        let max_desc = (area.width as usize).saturating_sub(30);
+                        let short = truncate_str(desc, max_desc);
+                        spans.push(Span::styled(
+                            format!("  {short}"),
+                            Style::default().fg(scheme.text_muted),
+                        ));
+                    }
                     lines.push(Line::from(spans));
                 }
                 if comp.vulnerabilities.len() > max_vulns {
@@ -1094,60 +1096,61 @@ fn render_dependency_stats(
             }
 
             if let Some(children) = children
-                && !children.is_empty() {
-                    lines.push(Line::from(""));
+                && !children.is_empty()
+            {
+                lines.push(Line::from(""));
 
-                    let inner_height = area.height.saturating_sub(2) as usize;
-                    let header_lines = lines.len() + 1;
-                    let visible_slots = inner_height.saturating_sub(header_lines).max(3);
+                let inner_height = area.height.saturating_sub(2) as usize;
+                let header_lines = lines.len() + 1;
+                let visible_slots = inner_height.saturating_sub(header_lines).max(3);
 
-                    let dep_scroll = app.dependency_state.detail_scroll as usize;
-                    let total_deps = children.len();
-                    let effective_scroll = dep_scroll.min(total_deps.saturating_sub(visible_slots));
+                let dep_scroll = app.dependency_state.detail_scroll as usize;
+                let total_deps = children.len();
+                let effective_scroll = dep_scroll.min(total_deps.saturating_sub(visible_slots));
 
-                    let pos_end = (effective_scroll + visible_slots).min(total_deps);
-                    let pos_indicator = if total_deps > visible_slots {
-                        format!(
-                            "  {}-{}/{}",
-                            effective_scroll + 1,
-                            pos_end,
-                            format_thousands(total_deps)
-                        )
-                    } else {
-                        String::new()
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("Dependencies ({}):", format_thousands(total_deps)),
-                            Style::default().fg(scheme.primary).bold(),
-                        ),
-                        Span::styled(pos_indicator, Style::default().fg(scheme.text_muted)),
-                    ]));
+                let pos_end = (effective_scroll + visible_slots).min(total_deps);
+                let pos_indicator = if total_deps > visible_slots {
+                    format!(
+                        "  {}-{}/{}",
+                        effective_scroll + 1,
+                        pos_end,
+                        format_thousands(total_deps)
+                    )
+                } else {
+                    String::new()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("Dependencies ({}):", format_thousands(total_deps)),
+                        Style::default().fg(scheme.primary).bold(),
+                    ),
+                    Span::styled(pos_indicator, Style::default().fg(scheme.text_muted)),
+                ]));
 
-                    for child_id in children.iter().skip(effective_scroll).take(visible_slots) {
-                        let child_name = deps
-                            .names
-                            .get(child_id)
-                            .map_or(child_id.as_str(), String::as_str);
-                        let tag = deps
-                            .relationships
-                            .get(&(node_id.clone(), child_id.clone()))
-                            .map(|r| dependency_tag(r))
-                            .unwrap_or("");
-                        let mut spans = vec![
-                            Span::styled("  ", Style::default()),
-                            Span::styled(child_name, Style::default().fg(scheme.text)),
-                        ];
-                        let tag = tag.trim();
-                        if !tag.is_empty() {
-                            spans.push(Span::styled(
-                                format!(" {tag}"),
-                                Style::default().fg(scheme.info),
-                            ));
-                        }
-                        lines.push(Line::from(spans));
+                for child_id in children.iter().skip(effective_scroll).take(visible_slots) {
+                    let child_name = deps
+                        .names
+                        .get(child_id)
+                        .map_or(child_id.as_str(), String::as_str);
+                    let tag = deps
+                        .relationships
+                        .get(&(node_id.clone(), child_id.clone()))
+                        .map(|r| dependency_tag(r))
+                        .unwrap_or("");
+                    let mut spans = vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(child_name, Style::default().fg(scheme.text)),
+                    ];
+                    let tag = tag.trim();
+                    if !tag.is_empty() {
+                        spans.push(Span::styled(
+                            format!(" {tag}"),
+                            Style::default().fg(scheme.info),
+                        ));
                     }
+                    lines.push(Line::from(spans));
                 }
+            }
         }
     } else {
         lines.push(Line::styled(

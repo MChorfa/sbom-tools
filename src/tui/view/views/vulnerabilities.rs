@@ -1974,16 +1974,17 @@ fn render_group_detail_panel(
 
         // Phase 3: One-line description under CVE if available
         if let Some(ref desc) = v.description
-            && !desc.is_empty() {
-                let desc_max = area.width.saturating_sub(8) as usize;
-                lines.push(Line::from(vec![
-                    Span::styled("    ", Style::default()),
-                    Span::styled(
-                        truncate_str(desc, desc_max),
-                        Style::default().fg(scheme.text_muted).italic(),
-                    ),
-                ]));
-            }
+            && !desc.is_empty()
+        {
+            let desc_max = area.width.saturating_sub(8) as usize;
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled(
+                    truncate_str(desc, desc_max),
+                    Style::default().fg(scheme.text_muted).italic(),
+                ),
+            ]));
+        }
     }
 
     // Phase 2: Scrollable paragraph with scrollbar

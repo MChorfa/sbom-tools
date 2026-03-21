@@ -69,9 +69,10 @@ pub fn render_source(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                 if let Some(item) = app.source_state.cached_flat_items.get(idx)
                     // Skip expandable objects — their labels are already shown as smart previews
                     && !item.is_expandable
-                    && let Some(link) = resolve_source_reference(item, &app.sbom) {
-                        labels.insert(idx, link.display_label);
-                    }
+                    && let Some(link) = resolve_source_reference(item, &app.sbom)
+                {
+                    labels.insert(idx, link.display_label);
+                }
             }
         }
         SourceViewMode::Raw => {
@@ -89,33 +90,35 @@ pub fn render_source(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                         .cached_flat_items
                         .iter()
                         .find(|i| i.node_id == *node_id)
-                        && let Some(link) = resolve_source_reference(item, &app.sbom) {
-                            labels.insert(line_idx, link.display_label);
-                            resolved = true;
-                        }
+                    && let Some(link) = resolve_source_reference(item, &app.sbom)
+                {
+                    labels.insert(line_idx, link.display_label);
+                    resolved = true;
+                }
                 // Fallback: directly resolve bom-ref UUIDs from raw line content
-                if !resolved
-                    && let Some(line) = app.source_state.raw_lines.get(line_idx) {
-                        let trimmed = line.trim();
-                        // Match "ref": "uuid" or bare "uuid" in dependsOn arrays
-                        let val = if let Some(rest) = trimmed.strip_prefix("\"ref\": \"") {
-                            rest.strip_suffix(['"', ','])
-                        } else if trimmed.starts_with('"')
-                            && !trimmed.contains(':')
-                            && app.source_state.raw_line_node_ids
-                                .get(line_idx)
-                                .is_some_and(|nid| nid.contains("dependsOn"))
-                        {
-                            trimmed.trim_matches(['"', ','])
-                                .into()
-                        } else {
-                            None
-                        };
-                        if let Some(ref_val) = val
-                            && let Some(name) = bomref_names.get(ref_val) {
-                                labels.insert(line_idx, name.clone());
-                            }
+                if !resolved && let Some(line) = app.source_state.raw_lines.get(line_idx) {
+                    let trimmed = line.trim();
+                    // Match "ref": "uuid" or bare "uuid" in dependsOn arrays
+                    let val = if let Some(rest) = trimmed.strip_prefix("\"ref\": \"") {
+                        rest.strip_suffix(['"', ','])
+                    } else if trimmed.starts_with('"')
+                        && !trimmed.contains(':')
+                        && app
+                            .source_state
+                            .raw_line_node_ids
+                            .get(line_idx)
+                            .is_some_and(|nid| nid.contains("dependsOn"))
+                    {
+                        trimmed.trim_matches(['"', ',']).into()
+                    } else {
+                        None
+                    };
+                    if let Some(ref_val) = val
+                        && let Some(name) = bomref_names.get(ref_val)
+                    {
+                        labels.insert(line_idx, name.clone());
                     }
+                }
             }
         }
     }

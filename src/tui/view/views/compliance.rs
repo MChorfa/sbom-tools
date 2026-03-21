@@ -85,11 +85,12 @@ pub(crate) fn build_groups<'a>(
 fn extract_pattern(msg: &str) -> String {
     // Match "Component 'xxx' <rest>" → "Component <rest>"
     if let Some(start) = msg.find('\'')
-        && let Some(end) = msg[start + 1..].find('\'') {
-            let before = &msg[..start];
-            let after = &msg[start + 1 + end + 1..];
-            return format!("{before}{after}").trim().to_string();
-        }
+        && let Some(end) = msg[start + 1..].find('\'')
+    {
+        let before = &msg[..start];
+        let after = &msg[start + 1 + end + 1..];
+        return format!("{before}{after}").trim().to_string();
+    }
     msg.to_string()
 }
 

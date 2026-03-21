@@ -221,10 +221,10 @@ impl CycloneDxParser {
                         })
                     })
                     .collect::<Vec<_>>(),
-            ) {
-                sbom.extensions.cyclonedx =
-                    Some(serde_json::json!({ "citations": citations_json }));
-            }
+            )
+        {
+            sbom.extensions.cyclonedx = Some(serde_json::json!({ "citations": citations_json }));
+        }
 
         sbom.calculate_content_hash();
         sbom

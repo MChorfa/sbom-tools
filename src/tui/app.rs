@@ -624,28 +624,29 @@ impl App {
         let mut components = Vec::new();
 
         if self.mode == AppMode::Diff
-            && let Some(sbom) = &self.data.new_sbom {
-                for comp in sbom.components.values() {
-                    let licenses: Vec<String> = comp
-                        .licenses
-                        .declared
-                        .iter()
-                        .map(std::string::ToString::to_string)
-                        .collect();
-                    let vulns: Vec<(String, String)> = comp
-                        .vulnerabilities
-                        .iter()
-                        .map(|v| {
-                            let severity = v.severity.as_ref().map_or_else(
-                                || "Unknown".to_string(),
-                                std::string::ToString::to_string,
-                            );
-                            (v.id.clone(), severity)
-                        })
-                        .collect();
-                    components.push((comp.name.clone(), comp.version.clone(), licenses, vulns));
-                }
+            && let Some(sbom) = &self.data.new_sbom
+        {
+            for comp in sbom.components.values() {
+                let licenses: Vec<String> = comp
+                    .licenses
+                    .declared
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                let vulns: Vec<(String, String)> = comp
+                    .vulnerabilities
+                    .iter()
+                    .map(|v| {
+                        let severity = v.severity.as_ref().map_or_else(
+                            || "Unknown".to_string(),
+                            std::string::ToString::to_string,
+                        );
+                        (v.id.clone(), severity)
+                    })
+                    .collect();
+                components.push((comp.name.clone(), comp.version.clone(), licenses, vulns));
             }
+        }
 
         components
     }
@@ -925,11 +926,12 @@ impl App {
         // Totals are set by set_totals in the render function, which is now
         // hoisted here using cached aligned rows or diff data.
         if self.mode == AppMode::Diff
-            && let Some(ref result) = self.data.diff_result {
-                let left = result.components.removed.len() + result.components.modified.len();
-                let right = result.components.added.len() + result.components.modified.len();
-                self.side_by_side_state_mut().set_totals(left, right);
-            }
+            && let Some(ref result) = self.data.diff_result
+        {
+            let left = result.components.removed.len() + result.components.modified.len();
+            let right = result.components.added.len() + result.components.modified.len();
+            self.side_by_side_state_mut().set_totals(left, right);
+        }
     }
 
     /// Pre-compute license totals for rendering.
