@@ -16,13 +16,32 @@ pub const fn severity_enum_order(s: &Severity) -> u8 {
 }
 
 /// Get the maximum severity from a list of vulnerabilities.
+///
+/// Uses the explicit `severity` field when available, falling back to
+/// deriving severity from the highest CVSS base score via
+/// [`Severity::from_cvss`]. This ensures vulnerabilities that only have
+/// CVSS scores (no categorical severity) are still represented in the badge.
 #[must_use]
 pub fn max_severity_from_vulns(vulns: &[VulnerabilityRef]) -> Option<String> {
     vulns
         .iter()
-        .filter_map(|v| v.severity.as_ref())
+        .filter_map(effective_severity)
         .max_by(|a, b| severity_enum_order(a).cmp(&severity_enum_order(b)))
         .map(|s| s.to_string().to_lowercase())
+}
+
+/// Get the effective severity for a vulnerability: explicit severity field,
+/// or derived from the highest CVSS base score.
+fn effective_severity(v: &VulnerabilityRef) -> Option<Severity> {
+    if let Some(sev) = &v.severity {
+        return Some(sev.clone());
+    }
+    // Derive from highest CVSS score
+    v.cvss
+        .iter()
+        .map(|c| c.base_score)
+        .reduce(f32::max)
+        .map(Severity::from_cvss)
 }
 
 /// Check if a Severity enum matches a target string (case-insensitive).
@@ -42,7 +61,7 @@ pub fn severity_category(vulns: &[VulnerabilityRef]) -> &'static str {
 
     let max = vulns
         .iter()
-        .filter_map(|v| v.severity.as_ref().map(severity_enum_order))
+        .filter_map(|v| effective_severity(v).map(|s| severity_enum_order(&s)))
         .max()
         .unwrap_or(0);
 

@@ -87,6 +87,12 @@ impl ViewState for SourceView {
             }
             // Copy JSON path — data-dependent (clipboard), return Ignored for bridge
             KeyCode::Char('c') => EventResult::Ignored,
+            // Compact mode toggle
+            KeyCode::Char('C') => {
+                self.inner.old_panel.toggle_compact_mode();
+                self.inner.new_panel.toggle_compact_mode();
+                EventResult::Consumed
+            }
             // Line numbers toggle
             KeyCode::Char('I') => {
                 self.inner.active_panel_mut().toggle_line_numbers();

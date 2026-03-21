@@ -11,9 +11,11 @@ use crossterm::event::{KeyEvent, MouseEvent};
 /// The summary tab has no tab-specific interactions — it shows an
 /// overview of the SBOM or diff. All key events are ignored so the
 /// global handler (tab switching, search, overlays) processes them.
+#[allow(dead_code)]
 pub struct SummaryView;
 
 impl SummaryView {
+    #[allow(dead_code)]
     pub(crate) const fn new() -> Self {
         Self
     }

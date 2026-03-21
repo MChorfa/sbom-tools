@@ -93,8 +93,8 @@ fn inject_cyclonedx_eol(doc: &mut Value, sbom: &NormalizedSbom) {
                 .values()
                 .find(|c| c.name == name || c.identifiers.format_id == name);
 
-            if let Some(comp) = matching {
-                if let Some(eol) = &comp.eol {
+            if let Some(comp) = matching
+                && let Some(eol) = &comp.eol {
                     let properties = comp_val.as_object_mut().and_then(|o| {
                         o.entry("properties")
                             .or_insert_with(|| Value::Array(Vec::new()))
@@ -117,7 +117,6 @@ fn inject_cyclonedx_eol(doc: &mut Value, sbom: &NormalizedSbom) {
                         }
                     }
                 }
-            }
         }
     }
 }

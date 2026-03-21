@@ -878,8 +878,8 @@ impl ViewApp {
             }
             ViewTab::Vulnerabilities => {
                 // In grouped mode, check if we're on a group header
-                if self.vuln_state.group_by != VulnGroupBy::Flat {
-                    if let Some(item) = self
+                if self.vuln_state.group_by != VulnGroupBy::Flat
+                    && let Some(item) = self
                         .vuln_state
                         .cached_display_items
                         .get(self.vuln_state.selected)
@@ -904,10 +904,9 @@ impl ViewApp {
                             }
                         }
                     }
-                }
                 // Navigate to component in Tree tab with proper targeting
-                if let Some(cache) = &self.vuln_state.cached_data.clone() {
-                    if let Some((comp_id, vuln_id)) = self.vuln_state.get_nav_component_id(cache) {
+                if let Some(cache) = &self.vuln_state.cached_data.clone()
+                    && let Some((comp_id, vuln_id)) = self.vuln_state.get_nav_component_id(cache) {
                         // Push breadcrumb so Backspace returns here
                         self.navigation_ctx.push_breadcrumb(
                             ViewTab::Vulnerabilities,
@@ -921,7 +920,6 @@ impl ViewApp {
                         self.jump_to_component_in_tree(&comp_id);
                         self.set_status_message(format!("→ {vuln_id} (Backspace to return)"));
                     }
-                }
             }
             ViewTab::Licenses => {
                 // Navigate to the first component with this license in the Tree tab
@@ -930,8 +928,8 @@ impl ViewApp {
                     .license_state
                     .selected
                     .min(license_data.len().saturating_sub(1));
-                if let Some((license, _, _)) = license_data.get(selected_idx) {
-                    if let Some(comp_id) =
+                if let Some((license, _, _)) = license_data.get(selected_idx)
+                    && let Some(comp_id) =
                         super::views::get_first_component_id_for_license(self, license)
                     {
                         self.navigation_ctx.push_breadcrumb(
@@ -946,7 +944,6 @@ impl ViewApp {
                         self.jump_to_component_in_tree(&comp_id);
                         self.set_status_message(format!("→ {license} (Backspace to return)"));
                     }
-                }
             }
             ViewTab::Dependencies => {
                 if let Some(node_id) = self.get_selected_dependency_node_id() {

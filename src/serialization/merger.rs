@@ -219,11 +219,10 @@ fn component_key(comp: &Value, config: &MergeConfig) -> String {
             // Try externalReferences for PURL
             if let Some(refs) = comp.get("externalReferences").and_then(Value::as_array) {
                 for r in refs {
-                    if r.get("type").and_then(Value::as_str) == Some("purl") {
-                        if let Some(url) = r.get("url").and_then(Value::as_str) {
+                    if r.get("type").and_then(Value::as_str) == Some("purl")
+                        && let Some(url) = r.get("url").and_then(Value::as_str) {
                             return url.to_string();
                         }
-                    }
                 }
             }
             // Fall back to name-version

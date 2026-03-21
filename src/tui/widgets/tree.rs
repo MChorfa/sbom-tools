@@ -501,7 +501,7 @@ impl StatefulWidget for Tree<'_> {
             };
 
             let vuln_badge_width: u16 = if item.vuln_count > 0 {
-                2 + item.vuln_count.to_string().len() as u16 // space + sev_char + count digits
+                3 + item.vuln_count.to_string().len() as u16 // space + sev_char + space + count
             } else {
                 0
             };
@@ -558,6 +558,11 @@ impl StatefulWidget for Tree<'_> {
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         cell.set_char(sev_char).set_style(badge_style);
                     }
+                    x += 1;
+                }
+
+                // Space between badge and count
+                if x < area.x + area.width {
                     x += 1;
                 }
 

@@ -57,6 +57,9 @@ pub struct ColorScheme {
     pub search_highlight_bg: Color, // Background for search matches
     pub error_bg: Color,            // Background for removed/error highlights
     pub success_bg: Color,          // Background for added/success highlights
+
+    // Source view scope highlighting
+    pub scope_bg: Color, // Subtle background for enclosing bracket scope
 }
 
 impl Default for ColorScheme {
@@ -117,6 +120,9 @@ impl ColorScheme {
             search_highlight_bg: Color::Rgb(100, 80, 0),
             error_bg: Color::Rgb(80, 30, 30),
             success_bg: Color::Rgb(30, 80, 30),
+
+            // Source view scope highlighting
+            scope_bg: Color::Rgb(35, 35, 50),
         }
     }
 
@@ -172,6 +178,9 @@ impl ColorScheme {
             search_highlight_bg: Color::Rgb(100, 80, 0),
             error_bg: Color::Rgb(80, 30, 30),
             success_bg: Color::Rgb(30, 80, 30),
+
+            // Source view scope highlighting
+            scope_bg: Color::Rgb(35, 35, 50),
         }
     }
 
@@ -227,6 +236,9 @@ impl ColorScheme {
             search_highlight_bg: Color::Rgb(255, 230, 150),
             error_bg: Color::Rgb(255, 200, 200),
             success_bg: Color::Rgb(200, 255, 200),
+
+            // Source view scope highlighting
+            scope_bg: Color::Rgb(235, 240, 250),
         }
     }
 
@@ -282,6 +294,9 @@ impl ColorScheme {
             search_highlight_bg: Color::Rgb(120, 100, 0),
             error_bg: Color::Rgb(100, 30, 30),
             success_bg: Color::Rgb(30, 100, 30),
+
+            // Source view scope highlighting
+            scope_bg: Color::Rgb(25, 25, 40),
         }
     }
 

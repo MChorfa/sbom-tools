@@ -1973,8 +1973,8 @@ fn render_group_detail_panel(
         lines.push(Line::from(cve_spans));
 
         // Phase 3: One-line description under CVE if available
-        if let Some(ref desc) = v.description {
-            if !desc.is_empty() {
+        if let Some(ref desc) = v.description
+            && !desc.is_empty() {
                 let desc_max = area.width.saturating_sub(8) as usize;
                 lines.push(Line::from(vec![
                     Span::styled("    ", Style::default()),
@@ -1984,7 +1984,6 @@ fn render_group_detail_panel(
                     ),
                 ]));
             }
-        }
     }
 
     // Phase 2: Scrollable paragraph with scrollbar

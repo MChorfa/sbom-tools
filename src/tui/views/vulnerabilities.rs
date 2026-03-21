@@ -131,8 +131,8 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     ];
 
     // Add stats based on mode
-    if ctx.mode == AppMode::Diff {
-        if let Some(result) = ctx.diff_result {
+    if ctx.mode == AppMode::Diff
+        && let Some(result) = ctx.diff_result {
             let scheme = colors();
 
             // Compute per-severity deltas
@@ -235,7 +235,6 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 }
             }
         }
-    }
 
     // Add grouped mode indicator
     let grouped_label = if ctx.vulnerabilities.group_by_component {

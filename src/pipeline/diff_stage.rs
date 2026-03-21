@@ -82,8 +82,8 @@ pub fn compute_diff(
             }
         }
 
-        if !quiet {
-            if let Some(ref summary) = result.graph_summary {
+        if !quiet
+            && let Some(ref summary) = result.graph_summary {
                 tracing::info!(
                     "Graph changes: {} total ({} added, {} removed, {} reparented, {} depth changes)",
                     summary.total_changes,
@@ -93,7 +93,6 @@ pub fn compute_diff(
                     summary.depth_changed
                 );
             }
-        }
     }
 
     // Apply severity filtering if specified
