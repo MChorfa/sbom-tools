@@ -46,6 +46,14 @@ pub fn render_source(frame: &mut Frame, area: Rect, source: &mut SourceDiffState
     let old_title = format!("Old SBOM{sync_label}{old_badge}");
     let new_title = format!("New SBOM{sync_label}{new_badge}");
 
+    // Pre-compute render state to avoid mutations inside the render path
+    source
+        .old_panel
+        .prepare_source_render(main_area.0.height.saturating_sub(2) as usize);
+    source
+        .new_panel
+        .prepare_source_render(main_area.1.height.saturating_sub(2) as usize);
+
     render_source_panel(
         frame,
         main_area.0,

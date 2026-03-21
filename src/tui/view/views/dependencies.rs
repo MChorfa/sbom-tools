@@ -832,8 +832,8 @@ fn render_dependency_stats(
             if let Some(ref ver) = comp.version {
                 meta_spans.push(Span::styled(ver.as_str(), Style::default().fg(scheme.text)));
             }
-            if let Some(ref supplier) = comp.supplier {
-                if !supplier.name.is_empty() {
+            if let Some(ref supplier) = comp.supplier
+                && !supplier.name.is_empty() {
                     if !meta_spans.is_empty() {
                         meta_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
                     }
@@ -842,7 +842,6 @@ fn render_dependency_stats(
                         Style::default().fg(scheme.info),
                     ));
                 }
-            }
             if !comp.licenses.declared.is_empty() {
                 if !meta_spans.is_empty() {
                     meta_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
@@ -950,8 +949,8 @@ fn render_dependency_stats(
                         ));
                     }
                     // Truncated description
-                    if let Some(ref desc) = vuln.description {
-                        if !desc.is_empty() {
+                    if let Some(ref desc) = vuln.description
+                        && !desc.is_empty() {
                             let max_desc = (area.width as usize).saturating_sub(30);
                             let short = truncate_str(desc, max_desc);
                             spans.push(Span::styled(
@@ -959,7 +958,6 @@ fn render_dependency_stats(
                                 Style::default().fg(scheme.text_muted),
                             ));
                         }
-                    }
                     lines.push(Line::from(spans));
                 }
                 if comp.vulnerabilities.len() > max_vulns {
@@ -1095,8 +1093,8 @@ fn render_dependency_stats(
                 }
             }
 
-            if let Some(children) = children {
-                if !children.is_empty() {
+            if let Some(children) = children
+                && !children.is_empty() {
                     lines.push(Line::from(""));
 
                     let inner_height = area.height.saturating_sub(2) as usize;
@@ -1150,7 +1148,6 @@ fn render_dependency_stats(
                         lines.push(Line::from(spans));
                     }
                 }
-            }
         }
     } else {
         lines.push(Line::styled(

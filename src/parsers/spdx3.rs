@@ -93,12 +93,11 @@ impl Spdx3Parser {
                     Spdx3Element::SimpleLicensingText(l) => l.spdx_id.clone(),
                     _ => None,
                 };
-                if let Some(id) = &element_id {
-                    if !seen_ids.insert(id.clone()) {
+                if let Some(id) = &element_id
+                    && !seen_ids.insert(id.clone()) {
                         duplicate_count += 1;
                         tracing::warn!(id = %id, "duplicate SPDX 3.0 element ID");
                     }
-                }
 
                 match element {
                     Spdx3Element::Package(pkg) => packages.push(*pkg),
@@ -238,8 +237,8 @@ impl Spdx3Parser {
                 serde_json::Value::String(data_license.clone()),
             );
         }
-        if let Some(ns_map) = &doc.namespace_map {
-            if !ns_map.is_empty() {
+        if let Some(ns_map) = &doc.namespace_map
+            && !ns_map.is_empty() {
                 let ns_entries: Vec<_> = ns_map
                     .iter()
                     .filter_map(|ns| {
@@ -256,9 +255,8 @@ impl Spdx3Parser {
                     );
                 }
             }
-        }
-        if let Some(imports) = &doc.imports {
-            if !imports.is_empty() {
+        if let Some(imports) = &doc.imports
+            && !imports.is_empty() {
                 let import_entries: Vec<_> = imports
                     .iter()
                     .filter_map(|imp| {
@@ -275,7 +273,6 @@ impl Spdx3Parser {
                     );
                 }
             }
-        }
         if !spdx_ext.is_empty() {
             sbom.extensions.spdx = Some(serde_json::Value::Object(spdx_ext));
         }
@@ -803,12 +800,12 @@ impl Spdx3Parser {
 
             // License relationships -> populate Component.licenses
             "HAS_DECLARED_LICENSE" | "HAS_CONCLUDED_LICENSE" => {
-                if let Some(from_ref) = &rel.from {
-                    if let Some(canonical_id) = id_map.get(from_ref) {
-                        if let Some(to_refs) = &rel.to {
+                if let Some(from_ref) = &rel.from
+                    && let Some(canonical_id) = id_map.get(from_ref)
+                        && let Some(to_refs) = &rel.to {
                             for to_ref in to_refs {
-                                if let Some(expr) = license_elements.get(to_ref) {
-                                    if let Some(comp) = sbom.components.get_mut(canonical_id) {
+                                if let Some(expr) = license_elements.get(to_ref)
+                                    && let Some(comp) = sbom.components.get_mut(canonical_id) {
                                         let lic = LicenseExpression::new(expr.clone());
                                         if rel_type.to_uppercase().contains("CONCLUDED") {
                                             comp.licenses.concluded = Some(lic);
@@ -816,19 +813,16 @@ impl Spdx3Parser {
                                             comp.licenses.add_declared(lic);
                                         }
                                     }
-                                }
                             }
                         }
-                    }
-                }
             }
 
             // Vulnerability relationships
             "AFFECTS" => {
                 // Vulnerability affects Package
-                if let Some(from_ref) = &rel.from {
-                    if let Some(vuln) = vuln_map.get(from_ref) {
-                        if let Some(to_refs) = &rel.to {
+                if let Some(from_ref) = &rel.from
+                    && let Some(vuln) = vuln_map.get(from_ref)
+                        && let Some(to_refs) = &rel.to {
                             for to_ref in to_refs {
                                 if let Some(canonical_id) = id_map.get(to_ref) {
                                     let vuln_ref = self.convert_vulnerability(vuln);
@@ -838,15 +832,13 @@ impl Spdx3Parser {
                                 }
                             }
                         }
-                    }
-                }
             }
 
             "FIXED_IN" => {
                 // Vulnerability fixed in Package@version
-                if let Some(from_ref) = &rel.from {
-                    if let Some(vuln) = vuln_map.get(from_ref) {
-                        if let Some(to_refs) = &rel.to {
+                if let Some(from_ref) = &rel.from
+                    && let Some(vuln) = vuln_map.get(from_ref)
+                        && let Some(to_refs) = &rel.to {
                             for to_ref in to_refs {
                                 if let Some(canonical_id) = id_map.get(to_ref) {
                                     let mut vuln_ref = self.convert_vulnerability(vuln);
@@ -872,8 +864,6 @@ impl Spdx3Parser {
                                 }
                             }
                         }
-                    }
-                }
             }
 
             // VEX assessment relationships — handled via VulnAssessment elements
@@ -903,9 +893,9 @@ impl Spdx3Parser {
         sbom: &mut NormalizedSbom,
         dep_type: DependencyType,
     ) {
-        if let Some(from_ref) = &rel.from {
-            if let Some(from_id) = id_map.get(from_ref) {
-                if let Some(to_refs) = &rel.to {
+        if let Some(from_ref) = &rel.from
+            && let Some(from_id) = id_map.get(from_ref)
+                && let Some(to_refs) = &rel.to {
                     for to_ref in to_refs {
                         if let Some(to_id) = id_map.get(to_ref) {
                             sbom.add_edge(DependencyEdge::new(
@@ -916,8 +906,6 @@ impl Spdx3Parser {
                         }
                     }
                 }
-            }
-        }
     }
 
     /// Convert SPDX 3.0 Vulnerability element to VulnerabilityRef

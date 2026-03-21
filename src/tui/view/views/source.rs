@@ -25,43 +25,106 @@ pub fn render_source(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     let scroll = app.source_state.scroll_offset;
     let visible = app.source_state.viewport_height.max(50);
     let mut labels = HashMap::new();
+    // Build bom-ref → component name lookup for dependency resolution
+    let bomref_names: HashMap<String, String> = app
+        .sbom
+        .components
+        .values()
+        .filter_map(|c| {
+            let bomref = &c.identifiers.format_id;
+            if bomref.is_empty() {
+                None
+            } else {
+                let label = c
+                    .version
+                    .as_ref()
+                    .map_or_else(|| c.name.clone(), |v| format!("{}@{v}", c.name));
+                Some((bomref.clone(), label))
+            }
+        })
+        .collect();
+
+    // Resolve dependency previews: replace bom-ref UUIDs with component names
+    // Dependency items have node_ids like "root.dependencies.[N]"
+    for item in &mut app.source_state.cached_flat_items {
+        if item.is_expandable
+            && !item.preview.is_empty()
+            && item.node_id.starts_with("root.dependencies.[")
+        {
+            // Preview format: "uuid → N deps" — resolve the UUID part
+            if let Some(arrow_pos) = item.preview.find(" \u{2192} ") {
+                let ref_part = &item.preview[..arrow_pos];
+                if let Some(name) = bomref_names.get(ref_part) {
+                    let rest = &item.preview[arrow_pos..];
+                    item.preview = format!("{name}{rest}");
+                }
+            }
+        }
+    }
+
     match app.source_state.view_mode {
         SourceViewMode::Tree => {
             let range_end = (scroll + visible + 5).min(app.source_state.cached_flat_items.len());
             for idx in scroll.saturating_sub(2)..range_end {
-                if let Some(item) = app.source_state.cached_flat_items.get(idx) {
-                    if let Some(link) = resolve_source_reference(item, &app.sbom) {
+                if let Some(item) = app.source_state.cached_flat_items.get(idx)
+                    // Skip expandable objects — their labels are already shown as smart previews
+                    && !item.is_expandable
+                    && let Some(link) = resolve_source_reference(item, &app.sbom) {
                         labels.insert(idx, link.display_label);
                     }
-                }
             }
         }
         SourceViewMode::Raw => {
             let range_end = (scroll + visible + 5).min(app.source_state.raw_lines.len());
             for line_idx in scroll.saturating_sub(2)..range_end {
+                // First try the tree-based resolution
+                let mut resolved = false;
                 if let Some(node_id) = app
                     .source_state
                     .raw_line_node_ids
                     .get(line_idx)
                     .filter(|nid| !nid.is_empty())
-                {
-                    if let Some(item) = app
+                    && let Some(item) = app
                         .source_state
                         .cached_flat_items
                         .iter()
                         .find(|i| i.node_id == *node_id)
-                    {
-                        if let Some(link) = resolve_source_reference(item, &app.sbom) {
+                        && let Some(link) = resolve_source_reference(item, &app.sbom) {
                             labels.insert(line_idx, link.display_label);
+                            resolved = true;
                         }
+                // Fallback: directly resolve bom-ref UUIDs from raw line content
+                if !resolved
+                    && let Some(line) = app.source_state.raw_lines.get(line_idx) {
+                        let trimmed = line.trim();
+                        // Match "ref": "uuid" or bare "uuid" in dependsOn arrays
+                        let val = if let Some(rest) = trimmed.strip_prefix("\"ref\": \"") {
+                            rest.strip_suffix(['"', ','])
+                        } else if trimmed.starts_with('"')
+                            && !trimmed.contains(':')
+                            && app.source_state.raw_line_node_ids
+                                .get(line_idx)
+                                .is_some_and(|nid| nid.contains("dependsOn"))
+                        {
+                            trimmed.trim_matches(['"', ','])
+                                .into()
+                        } else {
+                            None
+                        };
+                        if let Some(ref_val) = val
+                            && let Some(name) = bomref_names.get(ref_val) {
+                                labels.insert(line_idx, name.clone());
+                            }
                     }
-                }
             }
         }
     }
     app.source_state.link_labels = labels;
 
     let is_source_focused = app.focus_panel == FocusPanel::Left;
+    // Pre-compute render state to avoid mutations inside the render path
+    app.source_state
+        .prepare_source_render(chunks[0].height.saturating_sub(2) as usize);
     render_source_panel(
         frame,
         chunks[0],
@@ -1281,6 +1344,128 @@ fn render_context(
                     &format!(" Vulnerability [{idx}]"),
                     width,
                     Style::default().fg(scheme.warning),
+                );
+            }
+            return;
+        }
+
+        // Dependency context: resolve the ref to a component and show its deps
+        if section == "dependencies" {
+            // Try to resolve the dependency's ref to a component
+            let dep_ref = app.sbom.components.values().nth(idx).or_else(|| {
+                // Find by bom-ref from the dependency object's ref field
+                // The JSON dependency array items have a "ref" field with a bom-ref
+                node_id_full.as_ref().and_then(|nid| {
+                    // Get the ref value from the raw lines or flat items
+                    app.source_state
+                        .cached_flat_items
+                        .iter()
+                        .find(|i| i.node_id.starts_with(nid) && i.display_key == "ref")
+                        .and_then(|ref_item| {
+                            let val = ref_item.value_preview.trim_matches('"');
+                            app.sbom
+                                .components
+                                .values()
+                                .find(|c| c.identifiers.format_id == val)
+                        })
+                })
+            });
+
+            if let Some(comp) = dep_ref {
+                // Show component name
+                let name_ver = comp.version.as_ref().map_or_else(
+                    || format!(" {}", comp.name),
+                    |v| format!(" {}@{v}", comp.name),
+                );
+                render_str(
+                    buf,
+                    x,
+                    y,
+                    &truncate_map_str(&name_ver, (width as usize).saturating_sub(1)),
+                    width,
+                    Style::default().fg(scheme.primary),
+                );
+                y += 1;
+                if y >= max_y {
+                    return;
+                }
+
+                // Show dependency count (from edges)
+                let dep_count = app
+                    .sbom
+                    .edges
+                    .iter()
+                    .filter(|e| e.from == comp.canonical_id)
+                    .count();
+                render_str(
+                    buf,
+                    x,
+                    y,
+                    &format!(" Dependencies: {dep_count}"),
+                    width,
+                    Style::default().fg(scheme.text),
+                );
+                y += 1;
+                if y >= max_y {
+                    return;
+                }
+
+                // Show vulnerability summary
+                let vuln_count = comp.vulnerabilities.len();
+                if vuln_count > 0 {
+                    render_str(
+                        buf,
+                        x,
+                        y,
+                        &format!(" {vuln_count} vulnerabilities"),
+                        width,
+                        Style::default().fg(scheme.error),
+                    );
+                } else {
+                    render_str(
+                        buf,
+                        x,
+                        y,
+                        " No vulnerabilities",
+                        width,
+                        Style::default().fg(scheme.muted),
+                    );
+                }
+                y += 1;
+                if y >= max_y {
+                    return;
+                }
+
+                // Show license
+                let license = if comp.licenses.declared.is_empty() {
+                    "Unknown".to_string()
+                } else {
+                    comp.licenses
+                        .declared
+                        .iter()
+                        .map(|l| l.expression.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                render_str(
+                    buf,
+                    x,
+                    y,
+                    &format!(
+                        " License: {}",
+                        truncate_map_str(&license, (width as usize).saturating_sub(11))
+                    ),
+                    width,
+                    Style::default().fg(scheme.success),
+                );
+            } else {
+                render_str(
+                    buf,
+                    x,
+                    y,
+                    &format!(" Dependency [{idx}]"),
+                    width,
+                    Style::default().fg(scheme.text_muted),
                 );
             }
             return;

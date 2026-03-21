@@ -207,8 +207,7 @@ impl CycloneDxParser {
         // Store citations in format extensions for lossless preservation (1.7+)
         if let Some(citations) = &cdx.citations
             && !citations.is_empty()
-        {
-            if let Ok(citations_json) = serde_json::to_value(
+            && let Ok(citations_json) = serde_json::to_value(
                 citations
                     .iter()
                     .map(|c| {
@@ -226,7 +225,6 @@ impl CycloneDxParser {
                 sbom.extensions.cyclonedx =
                     Some(serde_json::json!({ "citations": citations_json }));
             }
-        }
 
         sbom.calculate_content_hash();
         sbom

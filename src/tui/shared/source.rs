@@ -232,15 +232,8 @@ fn render_source_tree(
         return;
     }
 
-    // Use cached flat items (rebuilt only on expand/collapse changes)
-    state.ensure_flat_cache();
+    // State should be pre-computed via prepare_source_render() before frame render
     let item_count = state.cached_flat_items.len();
-    state.visible_count = item_count;
-
-    // Clamp selection
-    if state.selected >= item_count && item_count > 0 {
-        state.selected = item_count - 1;
-    }
 
     // Render JSON path breadcrumb
     let inner = if inner.height > 3 {
@@ -295,16 +288,8 @@ fn render_source_tree(
         inner
     };
 
-    // Scroll adjustment
+    // Scroll/viewport already adjusted by prepare_source_render()
     let visible_height = inner.height as usize;
-    state.viewport_height = visible_height;
-    if visible_height > 0 {
-        if state.selected >= state.scroll_offset + visible_height {
-            state.scroll_offset = state.selected.saturating_sub(visible_height - 1);
-        } else if state.selected < state.scroll_offset {
-            state.scroll_offset = state.selected;
-        }
-    }
 
     // Render visible rows
     for (i, item) in state
@@ -348,8 +333,15 @@ fn render_source_tree(
             );
         }
 
-        // Selection indicator
-        let sel_str = if is_selected { "> " } else { "  " };
+        // Selection indicator (compact: 1 char, normal: 2 chars)
+        let compact = state.compact_mode;
+        let (sel_str, sel_width): (&str, u16) = if compact {
+            if is_selected { (">", 1) } else { (" ", 1) }
+        } else if is_selected {
+            ("> ", 2)
+        } else {
+            ("  ", 2)
+        };
         render_str(
             frame.buffer_mut(),
             x,
@@ -358,15 +350,22 @@ fn render_source_tree(
             inner.width.saturating_sub(x - inner.x),
             Style::default().fg(scheme.accent).bold(),
         );
-        x += 2;
+        x += sel_width;
 
-        // Tree connector lines
+        // Tree connector lines (compact: 2-char, normal: 3-char)
         if item.depth > 0 {
             let connector_style = Style::default().fg(scheme.muted);
+            let connector_width: u16 = if compact { 2 } else { 3 };
             // Draw ancestor continuation lines
             for d in 0..item.depth - 1 {
                 let is_ancestor_last = item.ancestors_last.get(d + 1).copied().unwrap_or(false);
-                let connector = if is_ancestor_last { "   " } else { "│  " };
+                let connector = if compact {
+                    if is_ancestor_last { "  " } else { "│ " }
+                } else if is_ancestor_last {
+                    "   "
+                } else {
+                    "│  "
+                };
                 render_str(
                     frame.buffer_mut(),
                     x,
@@ -375,10 +374,12 @@ fn render_source_tree(
                     inner.width.saturating_sub(x - inner.x),
                     connector_style,
                 );
-                x += 3;
+                x += connector_width;
             }
             // Draw branch connector for this node
-            let branch = if item.is_last_sibling {
+            let branch = if compact {
+                if item.is_last_sibling { "└ " } else { "├ " }
+            } else if item.is_last_sibling {
                 "└─ "
             } else {
                 "├─ "
@@ -391,12 +392,18 @@ fn render_source_tree(
                 inner.width.saturating_sub(x - inner.x),
                 connector_style,
             );
-            x += 3;
+            x += connector_width;
         }
 
-        // Expand/collapse indicator
+        // Expand/collapse indicator (compact: 1 char no trailing space, normal: 2 chars)
         if item.is_expandable {
-            let indicator = if item.is_expanded { "▼ " } else { "▶ " };
+            let (indicator, ind_width): (&str, u16) = if compact {
+                if item.is_expanded { ("\u{25bc}", 1) } else { ("\u{25b6}", 1) }
+            } else if item.is_expanded {
+                ("\u{25bc} ", 2)
+            } else {
+                ("\u{25b6} ", 2)
+            };
             render_str(
                 frame.buffer_mut(),
                 x,
@@ -405,7 +412,7 @@ fn render_source_tree(
                 inner.width.saturating_sub(x - inner.x),
                 Style::default().fg(scheme.accent),
             );
-            x += 2;
+            x += ind_width;
         }
 
         let remaining = inner.x + inner.width;
@@ -483,9 +490,10 @@ fn render_source_tree(
             }
         }
 
-        // Link indicator for navigable references (e.g., " → lodash@4.17.21 ⏎")
+        // Link indicator for navigable references (e.g., " → lodash@4.17.21")
         if let Some(label) = state.link_labels.get(&abs_idx) {
-            let link_text = format!(" \u{2192} {label} \u{23ce}");
+            let short_label = shorten_path_label(label, 40);
+            let link_text = format!(" \u{2192} {short_label}");
             if x + 4 < remaining {
                 let avail = (remaining - x) as usize;
                 let truncated = crate::tui::widgets::truncate_str(&link_text, avail);
@@ -501,8 +509,8 @@ fn render_source_tree(
         }
 
         // Diff change annotation highlighting
-        if !state.change_annotations.is_empty() {
-            if let Some(status) = state.find_annotation(&item.node_id) {
+        if !state.change_annotations.is_empty()
+            && let Some(status) = state.find_annotation(&item.node_id) {
                 let bg = match status {
                     crate::tui::app_states::source::SourceChangeStatus::Added => scheme.success_bg,
                     crate::tui::app_states::source::SourceChangeStatus::Removed => scheme.error_bg,
@@ -516,7 +524,6 @@ fn render_source_tree(
                     }
                 }
             }
-        }
 
         // Highlight selected row background
         if is_selected {
@@ -635,15 +642,62 @@ fn render_source_raw(
         return;
     }
 
-    state.visible_count = state.raw_lines.len();
+    // State should be pre-computed via prepare_source_render() before frame render
 
-    // Clamp selection
-    if state.selected >= state.raw_lines.len() && !state.raw_lines.is_empty() {
-        state.selected = state.raw_lines.len() - 1;
-    }
+    // Breadcrumb bar for raw mode (like tree view has)
+    let inner = if inner.height > 3 && has_json_tree {
+        let breadcrumb = state
+            .raw_line_node_ids
+            .get(state.selected)
+            .filter(|nid| !nid.is_empty())
+            .map_or_else(String::new, |nid| breadcrumb_from_node_id(nid));
+        if !breadcrumb.is_empty() {
+            let bc_style = Style::default().fg(scheme.text_muted).italic();
+            let bc_width = inner.width as usize;
+            let bc_display = if UnicodeWidthStr::width(breadcrumb.as_str()) > bc_width {
+                let target = bc_width.saturating_sub(3);
+                let mut width = 0;
+                let trimmed: String = breadcrumb
+                    .chars()
+                    .rev()
+                    .take_while(|ch| {
+                        let w = UnicodeWidthChar::width(*ch).unwrap_or(1);
+                        if width + w > target {
+                            return false;
+                        }
+                        width += w;
+                        true
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                format!("...{trimmed}")
+            } else {
+                breadcrumb
+            };
+            render_str(
+                frame.buffer_mut(),
+                inner.x,
+                inner.y,
+                &bc_display,
+                inner.width,
+                bc_style,
+            );
+            Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: inner.height - 1,
+            }
+        } else {
+            inner
+        }
+    } else {
+        inner
+    };
 
     let visible_height = inner.height as usize;
-    state.viewport_height = visible_height;
 
     // Build visible line indices (skipping folded interiors)
     let visible_lines = build_visible_lines(state, visible_height);
@@ -661,6 +715,26 @@ fn render_source_raw(
 
     // [Feature 2] Pre-compute matching bracket for selected line
     let match_line = state.matching_bracket(state.selected);
+
+    // Pre-compute enclosing scope for selected line (for scope highlighting)
+    let enclosing_scope = find_enclosing_scope(state, state.selected);
+
+    // Compute scope indent level for active scope gutter indicator
+    let scope_indent_level: Option<usize> = enclosing_scope.and_then(|(scope_start, _)| {
+        state.raw_lines.get(scope_start).map(|line| {
+            let leading = line.len() - line.trim_start().len();
+            leading / 2 // serde_json indent size = 2
+        })
+    });
+
+    // Sticky scope header: if enclosing scope's opening line is scrolled off-screen
+    let sticky_header_line: Option<usize> = enclosing_scope.and_then(|(scope_start, _)| {
+        if !visible_lines.is_empty() && scope_start < visible_lines[0] {
+            Some(scope_start)
+        } else {
+            None
+        }
+    });
 
     for (i, &abs_idx) in visible_lines.iter().enumerate() {
         let y = inner.y + i as u16;
@@ -802,18 +876,26 @@ fn render_source_raw(
                     );
                 }
 
-                // [Feature 1] Indent guides
-                if state.show_indent_guides && has_json_tree && state.h_scroll_offset == 0 {
+                // Active scope indent guide: single guide at the enclosing
+                // scope level, skipping structural-only lines for cleanliness
+                if state.show_indent_guides
+                    && has_json_tree
+                    && state.h_scroll_offset == 0
+                    && !is_structural
+                    && let Some(scope_level) = scope_indent_level
+                {
                     let leading_spaces = line.len() - line.trim_start().len();
                     let indent_size = 2; // serde_json pretty-print indent
-                    for level in 1..=(leading_spaces / indent_size) {
-                        let guide_offset = (level * indent_size - indent_size) as u16;
+                    let line_depth = leading_spaces / indent_size;
+                    // Render on lines at or deeper than the scope content
+                    if line_depth >= scope_level {
+                        let guide_offset = (scope_level * indent_size) as u16;
                         let gx = content_x + guide_offset;
-                        if gx < remaining {
-                            if let Some(cell) = frame.buffer_mut().cell_mut((gx, y)) {
-                                cell.set_char('\u{2502}') // │
-                                    .set_style(Style::default().fg(scheme.muted));
-                            }
+                        if gx < remaining
+                            && let Some(cell) = frame.buffer_mut().cell_mut((gx, y))
+                        {
+                            cell.set_char('\u{2506}') // ┆ thin dashed guide
+                                .set_style(Style::default().fg(scheme.accent));
                         }
                     }
                 }
@@ -821,9 +903,11 @@ fn render_source_raw(
         }
 
         // Link indicator for navigable references in raw mode
-        if let Some(label) = state.link_labels.get(&abs_idx) {
-            if !is_folded_start && !is_structural {
-                let link_text = format!(" \u{2192} {label} \u{23ce}");
+        if let Some(label) = state.link_labels.get(&abs_idx)
+            && !is_folded_start && !is_structural {
+                // For path-like labels, show the basename (end of path)
+                let short_label = shorten_path_label(label, 40);
+                let link_text = format!(" \u{2192} {short_label}");
                 // Estimate current x position from content
                 let line_display_len = if state.word_wrap || state.h_scroll_offset == 0 {
                     UnicodeWidthStr::width(line.as_str())
@@ -844,12 +928,11 @@ fn render_source_raw(
                     );
                 }
             }
-        }
 
         // Diff change annotation highlighting (raw mode)
-        if !state.change_annotations.is_empty() {
-            if let Some(node_id) = state.raw_line_node_ids.get(abs_idx) {
-                if let Some(status) = state.find_annotation(node_id) {
+        if !state.change_annotations.is_empty()
+            && let Some(node_id) = state.raw_line_node_ids.get(abs_idx)
+                && let Some(status) = state.find_annotation(node_id) {
                     let bg = match status {
                         crate::tui::app_states::source::SourceChangeStatus::Added => {
                             scheme.success_bg
@@ -867,17 +950,6 @@ fn render_source_raw(
                         }
                     }
                 }
-            }
-        }
-
-        // [Feature 2] Highlight matching bracket line background
-        if is_bracket_match && !is_selected {
-            for col in inner.x..remaining {
-                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                    cell.set_bg(scheme.selection);
-                }
-            }
-        }
 
         // Highlight selected row
         if is_selected {
@@ -907,6 +979,48 @@ fn render_source_raw(
         }
     }
 
+    // Sticky scope header: render the opening bracket line at the top when scrolled off
+    if let Some(header_line_idx) = sticky_header_line
+        && let Some(header_line) = state.raw_lines.get(header_line_idx)
+    {
+        let header_y = inner.y;
+        // Clear the first row with background_alt
+        for col in inner.x..remaining {
+            if let Some(cell) = frame.buffer_mut().cell_mut((col, header_y)) {
+                cell.reset();
+                cell.set_bg(scheme.background_alt);
+            }
+        }
+        // Render the line number + content
+        let header_num = format!(" {:>gutter_width$} \u{2502} ", header_line_idx + 1,);
+        render_str(
+            frame.buffer_mut(),
+            inner.x,
+            header_y,
+            &header_num,
+            remaining - inner.x,
+            Style::default()
+                .fg(scheme.text_muted)
+                .bg(scheme.background_alt),
+        );
+        let header_content_x = inner.x + header_num.len() as u16;
+        if header_content_x < remaining {
+            let display_line = if state.h_scroll_offset > 0 {
+                skip_display_chars(header_line, state.h_scroll_offset)
+            } else {
+                header_line.to_string()
+            };
+            render_str(
+                frame.buffer_mut(),
+                header_content_x,
+                header_y,
+                &display_line,
+                remaining - header_content_x,
+                Style::default().fg(scheme.text).bg(scheme.background_alt),
+            );
+        }
+    }
+
     // Search bar
     render_search_bar(frame, inner, state, &scheme);
 
@@ -918,6 +1032,42 @@ fn render_source_raw(
         let mut sb_state = ScrollbarState::new(state.raw_lines.len()).position(state.selected);
         frame.render_stateful_widget(scrollbar, inner, &mut sb_state);
     }
+}
+
+/// Find the innermost bracket scope containing the given line.
+/// Returns (opening_line, closing_line) if found.
+fn find_enclosing_scope(state: &SourcePanelState, line: usize) -> Option<(usize, usize)> {
+    // Check if this line IS an opening bracket
+    if let Some(&end) = state.bracket_pairs.get(&line) {
+        return Some((line, end));
+    }
+    // Walk backwards to find the enclosing opening bracket
+    for start_line in (0..line).rev() {
+        if let Some(&end_line) = state.bracket_pairs.get(&start_line)
+            && end_line >= line
+        {
+            return Some((start_line, end_line));
+        }
+    }
+    None
+}
+
+/// Shorten a label for display: if it looks like a file path and exceeds
+/// `max_len`, show `…/basename` instead of truncating from the right.
+fn shorten_path_label(label: &str, max_len: usize) -> String {
+    if label.len() <= max_len {
+        return label.to_string();
+    }
+    // If it contains path separators, show the basename
+    if let Some(last_sep) = label.rfind('/') {
+        let basename = &label[last_sep + 1..];
+        if basename.len() + 2 <= max_len {
+            return format!("\u{2026}/{basename}"); // …/filename
+        }
+    }
+    // Fallback: truncate from the right
+    let truncated: String = label.chars().take(max_len.saturating_sub(1)).collect();
+    format!("{truncated}\u{2026}")
 }
 
 /// Build the list of visible raw line indices, skipping folded interiors.

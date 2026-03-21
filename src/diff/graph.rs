@@ -307,8 +307,8 @@ pub fn diff_dependency_graph(
                     .and_then(|old_child_id| old_graph.get_edge_attrs(old_id, old_child_id));
                 let new_attrs = new_graph.get_edge_attrs(new_id, child_id);
 
-                if let (Some(old_a), Some(new_a)) = (old_attrs, new_attrs) {
-                    if old_a != new_a {
+                if let (Some(old_a), Some(new_a)) = (old_attrs, new_attrs)
+                    && old_a != new_a {
                         let dep_name = new_graph.get_component_name(child_id);
                         changes.push(DependencyGraphChange {
                             component_id: new_id.clone(),
@@ -324,7 +324,6 @@ pub fn diff_dependency_graph(
                             impact: GraphChangeImpact::Medium,
                         });
                     }
-                }
             }
         }
     }

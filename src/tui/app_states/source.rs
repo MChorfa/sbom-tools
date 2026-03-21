@@ -83,11 +83,10 @@ pub fn xml_tree_from_str(xml: &str) -> Option<XmlTreeNode> {
             }
             Ok(Event::Text(ref e)) => {
                 let text = e.decode().unwrap_or_default().trim().to_string();
-                if !text.is_empty() {
-                    if let Some(XmlTreeNode::Element { children, .. }) = stack.last_mut() {
+                if !text.is_empty()
+                    && let Some(XmlTreeNode::Element { children, .. }) = stack.last_mut() {
                         children.push(XmlTreeNode::Text(text));
                     }
-                }
             }
             Ok(Event::Eof) => break,
             Err(_) => return None,
@@ -731,12 +730,11 @@ fn compute_bracket_pairs(raw_lines: &[String]) -> (HashMap<usize, usize>, HashMa
         // Check for opening brackets at end of line or standalone
         if trimmed.ends_with('{') || trimmed.ends_with('[') {
             stack.push(i);
-        } else if trimmed == "}" || trimmed == "]" {
-            if let Some(open) = stack.pop() {
+        } else if (trimmed == "}" || trimmed == "]")
+            && let Some(open) = stack.pop() {
                 forward.insert(open, i);
                 reverse.insert(i, open);
             }
-        }
     }
 
     (forward, reverse)
@@ -863,6 +861,8 @@ pub struct SourcePanelState {
     /// Pre-computed link labels for navigable references (item index → display label).
     /// Populated before render by the ViewApp's source renderer.
     pub link_labels: HashMap<usize, String>,
+    /// Compact tree mode: narrower connectors and indicators to save horizontal space.
+    pub compact_mode: bool,
 }
 
 impl SourcePanelState {
@@ -969,6 +969,7 @@ impl SourcePanelState {
             folded_lines: HashSet::new(),
             show_indent_guides: true,
             link_labels: HashMap::new(),
+            compact_mode: false,
         }
     }
 
@@ -1016,6 +1017,62 @@ impl SourcePanelState {
         }
 
         self.flat_cache_valid = true;
+    }
+
+    /// Toggle compact tree mode (narrower connectors/indicators).
+    pub fn toggle_compact_mode(&mut self) {
+        self.compact_mode = !self.compact_mode;
+    }
+
+    /// Pre-compute render state before frame render to avoid mutations during rendering.
+    /// Call this before `render_source_panel()` to fix flickering caused by
+    /// state mutations inside the render path.
+    pub fn prepare_source_render(&mut self, viewport_height: usize) {
+        self.ensure_flat_cache();
+
+        match self.view_mode {
+            SourceViewMode::Tree => {
+                let item_count = self.cached_flat_items.len();
+                self.visible_count = item_count;
+
+                // Clamp selection
+                if self.selected >= item_count && item_count > 0 {
+                    self.selected = item_count - 1;
+                }
+
+                // Scroll adjustment
+                if viewport_height > 0 {
+                    if self.selected >= self.scroll_offset + viewport_height {
+                        self.scroll_offset =
+                            self.selected.saturating_sub(viewport_height - 1);
+                    } else if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
+                }
+
+                self.viewport_height = viewport_height;
+            }
+            SourceViewMode::Raw => {
+                self.visible_count = self.raw_lines.len();
+
+                // Clamp selection
+                if self.selected >= self.raw_lines.len() && !self.raw_lines.is_empty() {
+                    self.selected = self.raw_lines.len() - 1;
+                }
+
+                // Scroll adjustment (for non-folded fast path)
+                if self.folded_lines.is_empty() && viewport_height > 0 {
+                    if self.selected >= self.scroll_offset + viewport_height {
+                        self.scroll_offset =
+                            self.selected.saturating_sub(viewport_height - 1);
+                    } else if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
+                }
+
+                self.viewport_height = viewport_height;
+            }
+        }
     }
 
     pub fn toggle_view_mode(&mut self) {
@@ -1213,11 +1270,10 @@ impl SourcePanelState {
     /// Check if a raw line index is inside a folded region (hidden).
     pub fn is_line_folded(&self, line: usize) -> bool {
         for &open in &self.folded_lines {
-            if let Some(&close) = self.bracket_pairs.get(&open) {
-                if line > open && line <= close {
+            if let Some(&close) = self.bracket_pairs.get(&open)
+                && line > open && line <= close {
                     return true;
                 }
-            }
         }
         false
     }
@@ -1978,15 +2034,14 @@ fn build_component_index(panel: &SourcePanelState) -> HashMap<String, usize> {
     };
     // Find the "components" child
     for child in children {
-        if let JsonTreeNode::Array { key, children, .. } = child {
-            if key == "components" {
+        if let JsonTreeNode::Array { key, children, .. } = child
+            && key == "components" {
                 for (idx, comp_node) in children.iter().enumerate() {
                     if let Some(name) = extract_component_name(comp_node) {
                         map.insert(name, idx);
                     }
                 }
             }
-        }
     }
     map
 }
@@ -1995,13 +2050,12 @@ fn build_component_index(panel: &SourcePanelState) -> HashMap<String, usize> {
 fn extract_component_name(node: &JsonTreeNode) -> Option<String> {
     if let JsonTreeNode::Object { children, .. } = node {
         for child in children {
-            if let JsonTreeNode::Leaf { key, value, .. } = child {
-                if key == "name" {
+            if let JsonTreeNode::Leaf { key, value, .. } = child
+                && key == "name" {
                     // Strip surrounding quotes from the value
                     let v = value.trim_matches('"');
                     return Some(v.to_string());
                 }
-            }
         }
     }
     None

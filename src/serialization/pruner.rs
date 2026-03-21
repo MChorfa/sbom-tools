@@ -58,8 +58,8 @@ pub fn tailor_sbom_json(
         }
 
         // Filter by ecosystem
-        if !config.exclude_ecosystems.is_empty() {
-            if let Some(eco) = &comp.ecosystem {
+        if !config.exclude_ecosystems.is_empty()
+            && let Some(eco) = &comp.ecosystem {
                 let eco_str = format!("{eco:?}").to_lowercase();
                 if config
                     .exclude_ecosystems
@@ -69,7 +69,6 @@ pub fn tailor_sbom_json(
                     keep = false;
                 }
             }
-        }
 
         // Filter by component type
         if !config.include_types.is_empty() {
@@ -146,13 +145,12 @@ fn prune_cyclonedx(doc: &mut Value, remove_ids: &[String], config: &TailorConfig
     }
 
     // Strip extensions/properties if requested
-    if config.strip_extensions {
-        if let Some(components) = doc.get_mut("components").and_then(Value::as_array_mut) {
+    if config.strip_extensions
+        && let Some(components) = doc.get_mut("components").and_then(Value::as_array_mut) {
             for comp in components {
                 comp.as_object_mut().map(|o| o.remove("properties"));
             }
         }
-    }
 }
 
 fn prune_spdx3(doc: &mut Value, remove_ids: &[String], config: &TailorConfig) {

@@ -623,8 +623,8 @@ impl App {
     fn collect_compliance_data(&self) -> Vec<crate::tui::security::ComplianceComponentData> {
         let mut components = Vec::new();
 
-        if self.mode == AppMode::Diff {
-            if let Some(sbom) = &self.data.new_sbom {
+        if self.mode == AppMode::Diff
+            && let Some(sbom) = &self.data.new_sbom {
                 for comp in sbom.components.values() {
                     let licenses: Vec<String> = comp
                         .licenses
@@ -646,7 +646,6 @@ impl App {
                     components.push((comp.name.clone(), comp.version.clone(), licenses, vulns));
                 }
             }
-        }
 
         components
     }
@@ -925,13 +924,12 @@ impl App {
         // 9. Side-by-side totals (was inline in render_sidebyside)
         // Totals are set by set_totals in the render function, which is now
         // hoisted here using cached aligned rows or diff data.
-        if self.mode == AppMode::Diff {
-            if let Some(ref result) = self.data.diff_result {
+        if self.mode == AppMode::Diff
+            && let Some(ref result) = self.data.diff_result {
                 let left = result.components.removed.len() + result.components.modified.len();
                 let right = result.components.added.len() + result.components.modified.len();
                 self.side_by_side_state_mut().set_totals(left, right);
             }
-        }
     }
 
     /// Pre-compute license totals for rendering.

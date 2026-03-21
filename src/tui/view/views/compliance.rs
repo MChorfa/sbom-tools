@@ -84,13 +84,12 @@ pub(crate) fn build_groups<'a>(
 /// Strips the component name quoted in single quotes to create a shared pattern.
 fn extract_pattern(msg: &str) -> String {
     // Match "Component 'xxx' <rest>" → "Component <rest>"
-    if let Some(start) = msg.find('\'') {
-        if let Some(end) = msg[start + 1..].find('\'') {
+    if let Some(start) = msg.find('\'')
+        && let Some(end) = msg[start + 1..].find('\'') {
             let before = &msg[..start];
             let after = &msg[start + 1 + end + 1..];
             return format!("{before}{after}").trim().to_string();
         }
-    }
     msg.to_string()
 }
 
