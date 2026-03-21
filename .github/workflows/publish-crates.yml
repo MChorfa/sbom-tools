@@ -155,6 +155,18 @@ jobs:
       - name: Checkout
         # v6.0.2
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Verify tagged commit is on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${{ github.sha }}" "origin/main"; then
+            echo "::error::Tagged commit ${{ github.sha }} is not on origin/main — refusing to build."
+            exit 1
+          fi
 
       - name: Install Rust stable
         # stable
@@ -252,6 +264,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write
     steps:
       - name: Checkout
         # v6.0.2
@@ -262,6 +275,10 @@ jobs:
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
         with:
           toolchain: stable
+
+      - name: Install cosign
+        # v4.1.0
+        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22
 
       - name: Install cargo-sbom
         run: cargo install cargo-sbom --locked
@@ -303,6 +320,40 @@ jobs:
           echo "=== Checksums ==="
           ls -la checksums.sha256
 
+      - name: Generate release asset manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Create a comprehensive manifest of ALL release assets for tamper detection.
+          # The tag-integrity workflow verifies this daily.
+          MANIFEST="release-manifest.sha256"
+          {
+            echo "# sbom-tools ${{ github.ref_name }} release manifest"
+            echo "# Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "# Commit: ${{ github.sha }}"
+            echo "# Workflow: ${{ github.run_id }}"
+            # Hash all assets that will be uploaded
+            if command -v sha256sum &>/dev/null; then
+              SHA_CMD="sha256sum"
+            else
+              SHA_CMD="shasum -a 256"
+            fi
+            ${SHA_CMD} sbom-tools.cdx.json sbom-tools.spdx.json checksums.sha256 provenance/sbom-tools.intoto.jsonl
+            for f in binaries/sbom-tools-*; do
+              case "${f}" in *.sha256) continue ;; esac
+              ${SHA_CMD} "${f}"
+            done
+          } > "${MANIFEST}"
+          echo "=== Release Manifest ==="
+          cat "${MANIFEST}"
+
+      - name: Sign release manifest with Sigstore
+        shell: bash
+        run: |
+          cosign sign-blob --yes \
+            --bundle "release-manifest.sha256.bundle" \
+            "release-manifest.sha256"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -314,6 +365,8 @@ jobs:
           ASSETS+=(sbom-tools.spdx.json)
           ASSETS+=(checksums.sha256)
           ASSETS+=(provenance/sbom-tools.intoto.jsonl)
+          ASSETS+=(release-manifest.sha256)
+          ASSETS+=(release-manifest.sha256.bundle)
           # Add archives and Sigstore bundles, skip per-file .sha256
           for f in binaries/sbom-tools-*; do
             case "${f}" in *.sha256) continue ;; esac
@@ -354,6 +407,20 @@ jobs:
           echo "::error::Source tarball not available after 50s"
           exit 1
 
+      - name: Verify tagged commit is on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          COMMIT="${{ github.sha }}"
+          # Double-check ancestry even though publish (which we depend on) already verified
+          ANCESTORS=$(gh api "repos/${{ github.repository }}/compare/main...${COMMIT}" --jq '.status')
+          if [[ "${ANCESTORS}" != "identical" && "${ANCESTORS}" != "behind" ]]; then
+            echo "::error::Tagged commit ${COMMIT} is not on main (status: ${ANCESTORS})"
+            exit 1
+          fi
+
       - name: Download source tarball and compute SHA256
         id: sha
         env:
@@ -362,8 +429,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.publish.outputs.version }}"
-          TAG="${{ github.ref_name }}"
-          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          COMMIT="${{ github.sha }}"
+          # Pin to immutable commit SHA, not the mutable tag ref
+          URL="https://github.com/${{ github.repository }}/archive/${COMMIT}.tar.gz"
 
           curl -sSL -o source.tar.gz "${URL}"
           SHA256="$(shasum -a 256 source.tar.gz | awk '{print $1}')"
@@ -371,7 +439,7 @@ jobs:
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Source tarball SHA256: ${SHA256}"
+          echo "Source tarball SHA256: ${SHA256} (pinned to commit ${COMMIT})"
 
       - name: Checkout Homebrew tap
         # v6.0.2
@@ -396,8 +464,10 @@ jobs:
           FORMULA_EOF
 
           cat >> tap/Formula/sbom-tools.rb << FORMULA_EOF
+            # URL pinned to immutable commit SHA (not mutable tag) for supply chain safety
             url "${URL}"
             sha256 "${SHA256}"
+            version "${VERSION}"
           FORMULA_EOF
 
           cat >> tap/Formula/sbom-tools.rb << 'FORMULA_EOF'
