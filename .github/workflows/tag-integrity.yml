@@ -1,0 +1,195 @@
+name: Tag Integrity Check
+
+# Detects tag poisoning and release tampering attacks.
+# See: https://www.aquasec.com/blog/tag-poisoning-attack (Trivy incident)
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at 06:00 UTC
+  workflow_dispatch: # Allow manual trigger
+
+permissions: read-all
+
+jobs:
+  check-tags:
+    name: Verify release tags
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify all release tags are on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          FAILED=0
+          CHECKED=0
+          SUSPECT_TAGS=""
+
+          for tag in $(git tag -l 'v*'); do
+            CHECKED=$((CHECKED + 1))
+            TAG_SHA=$(git rev-list -n1 "$tag")
+
+            # Check 1: Tag must point to a commit on main
+            if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+              echo "::error::Tag $tag ($TAG_SHA) is NOT an ancestor of origin/main!"
+              SUSPECT_TAGS="${SUSPECT_TAGS} $tag"
+              FAILED=1
+              continue
+            fi
+
+            # Check 2: If it's a signed tag, verify the signature
+            if git cat-file -t "$tag" 2>/dev/null | grep -q "tag"; then
+              if ! git tag -v "$tag" 2>/dev/null; then
+                echo "::warning::Tag $tag has a signature that could not be verified"
+              fi
+            fi
+          done
+
+          echo "Checked ${CHECKED} release tags"
+
+          if [[ $FAILED -ne 0 ]]; then
+            echo "::error::SUSPECT TAGS:${SUSPECT_TAGS}"
+            echo "::error::One or more release tags point to commits NOT on main."
+            echo "::error::This may indicate a tag poisoning attack."
+            echo "::error::See: https://www.aquasec.com/blog/tag-poisoning-attack"
+            exit 1
+          fi
+
+          echo "All ${CHECKED} release tags verified on main"
+
+      - name: Check for force-pushed tags (compare with releases)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          FAILED=0
+
+          # For each GitHub Release, verify the tag SHA matches what GitHub recorded
+          gh api repos/${{ github.repository }}/releases --paginate --jq '.[] | "\(.tag_name) \(.target_commitish)"' | \
+          while read -r TAG_NAME TARGET_SHA; do
+            # target_commitish may be a branch name or SHA; skip branch names
+            if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              continue
+            fi
+
+            LOCAL_SHA=$(git rev-list -n1 "$TAG_NAME" 2>/dev/null || echo "MISSING")
+            if [[ "$LOCAL_SHA" == "MISSING" ]]; then
+              echo "::error::Release tag $TAG_NAME exists in GitHub Releases but not in git!"
+              FAILED=1
+            elif [[ "$LOCAL_SHA" != "$TARGET_SHA" ]]; then
+              echo "::error::Tag $TAG_NAME SHA mismatch! Git: $LOCAL_SHA, Release: $TARGET_SHA"
+              echo "::error::This tag may have been force-pushed after the release was created."
+              FAILED=1
+            fi
+          done
+
+          if [[ $FAILED -ne 0 ]]; then
+            exit 1
+          fi
+
+          echo "All release tag SHAs match GitHub Release records"
+
+  check-release-assets:
+    name: Verify release asset integrity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Install cosign
+        # v4.1.0
+        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22
+
+      - name: Verify release asset checksums against signed manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          FAILED=0
+          CHECKED=0
+          SKIPPED=0
+
+          # Check each release that has a signed manifest
+          gh api repos/${{ github.repository }}/releases --paginate --jq '.[].tag_name' | \
+          while read -r TAG; do
+            RELEASE_DIR="release-${TAG}"
+            mkdir -p "${RELEASE_DIR}"
+
+            # Try to download the signed manifest and its Sigstore bundle
+            MANIFEST_URL=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" \
+              --jq '.assets[] | select(.name == "release-manifest.sha256") | .browser_download_url' 2>/dev/null || true)
+            BUNDLE_URL=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" \
+              --jq '.assets[] | select(.name == "release-manifest.sha256.bundle") | .browser_download_url' 2>/dev/null || true)
+
+            if [[ -z "${MANIFEST_URL}" ]]; then
+              echo "::notice::Release ${TAG} has no release-manifest.sha256 — skipping (pre-manifest release)"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            CHECKED=$((CHECKED + 1))
+
+            # Download manifest and bundle
+            curl -sSL -o "${RELEASE_DIR}/release-manifest.sha256" "${MANIFEST_URL}"
+            if [[ -n "${BUNDLE_URL}" ]]; then
+              curl -sSL -o "${RELEASE_DIR}/release-manifest.sha256.bundle" "${BUNDLE_URL}"
+
+              # Verify the manifest's Sigstore signature
+              if ! cosign verify-blob \
+                --bundle "${RELEASE_DIR}/release-manifest.sha256.bundle" \
+                --certificate-identity-regexp "https://github.com/sbom-tool/sbom-tools/" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                "${RELEASE_DIR}/release-manifest.sha256" 2>/dev/null; then
+                echo "::error::Release ${TAG}: manifest Sigstore signature INVALID!"
+                echo "::error::The release manifest may have been tampered with."
+                FAILED=1
+                continue
+              fi
+              echo "Release ${TAG}: manifest signature verified"
+            else
+              echo "::warning::Release ${TAG}: manifest exists but has no Sigstore bundle"
+            fi
+
+            # Download all assets listed in the manifest and verify checksums
+            # Parse manifest lines (skip comments), format: <hash>  <filename>
+            grep -v '^#' "${RELEASE_DIR}/release-manifest.sha256" | \
+            while read -r EXPECTED_HASH ASSET_PATH; do
+              ASSET_NAME=$(basename "${ASSET_PATH}")
+              ASSET_URL=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" \
+                --jq ".assets[] | select(.name == \"${ASSET_NAME}\") | .browser_download_url" 2>/dev/null || true)
+
+              if [[ -z "${ASSET_URL}" ]]; then
+                echo "::error::Release ${TAG}: asset ${ASSET_NAME} listed in manifest but MISSING from release!"
+                FAILED=1
+                continue
+              fi
+
+              curl -sSL -o "${RELEASE_DIR}/${ASSET_NAME}" "${ASSET_URL}"
+              ACTUAL_HASH=$(sha256sum "${RELEASE_DIR}/${ASSET_NAME}" | awk '{print $1}')
+
+              if [[ "${ACTUAL_HASH}" != "${EXPECTED_HASH}" ]]; then
+                echo "::error::Release ${TAG}: asset ${ASSET_NAME} checksum MISMATCH!"
+                echo "::error::  Expected: ${EXPECTED_HASH}"
+                echo "::error::  Actual:   ${ACTUAL_HASH}"
+                echo "::error::  This asset may have been replaced by an attacker."
+                FAILED=1
+              fi
+            done
+          done
+
+          echo "Checked ${CHECKED} releases with manifests (${SKIPPED} pre-manifest releases skipped)"
+
+          if [[ $FAILED -ne 0 ]]; then
+            echo "::error::One or more release assets have been tampered with!"
+            exit 1
+          fi
+
+          echo "All release asset checksums match signed manifests"
