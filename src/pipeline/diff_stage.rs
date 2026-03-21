@@ -82,17 +82,16 @@ pub fn compute_diff(
             }
         }
 
-        if !quiet
-            && let Some(ref summary) = result.graph_summary {
-                tracing::info!(
-                    "Graph changes: {} total ({} added, {} removed, {} reparented, {} depth changes)",
-                    summary.total_changes,
-                    summary.dependencies_added,
-                    summary.dependencies_removed,
-                    summary.reparented,
-                    summary.depth_changed
-                );
-            }
+        if !quiet && let Some(ref summary) = result.graph_summary {
+            tracing::info!(
+                "Graph changes: {} total ({} added, {} removed, {} reparented, {} depth changes)",
+                summary.total_changes,
+                summary.dependencies_added,
+                summary.dependencies_removed,
+                summary.reparented,
+                summary.depth_changed
+            );
+        }
     }
 
     // Apply severity filtering if specified

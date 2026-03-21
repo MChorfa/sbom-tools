@@ -94,29 +94,30 @@ fn inject_cyclonedx_eol(doc: &mut Value, sbom: &NormalizedSbom) {
                 .find(|c| c.name == name || c.identifiers.format_id == name);
 
             if let Some(comp) = matching
-                && let Some(eol) = &comp.eol {
-                    let properties = comp_val.as_object_mut().and_then(|o| {
-                        o.entry("properties")
-                            .or_insert_with(|| Value::Array(Vec::new()))
-                            .as_array_mut()
-                    });
-                    if let Some(props) = properties {
+                && let Some(eol) = &comp.eol
+            {
+                let properties = comp_val.as_object_mut().and_then(|o| {
+                    o.entry("properties")
+                        .or_insert_with(|| Value::Array(Vec::new()))
+                        .as_array_mut()
+                });
+                if let Some(props) = properties {
+                    props.push(serde_json::json!({
+                        "name": "sbom-tools:eol:status",
+                        "value": format!("{:?}", eol.status),
+                    }));
+                    props.push(serde_json::json!({
+                        "name": "sbom-tools:eol:product",
+                        "value": eol.product,
+                    }));
+                    if let Some(date) = eol.eol_date {
                         props.push(serde_json::json!({
-                            "name": "sbom-tools:eol:status",
-                            "value": format!("{:?}", eol.status),
+                            "name": "sbom-tools:eol:date",
+                            "value": date.to_string(),
                         }));
-                        props.push(serde_json::json!({
-                            "name": "sbom-tools:eol:product",
-                            "value": eol.product,
-                        }));
-                        if let Some(date) = eol.eol_date {
-                            props.push(serde_json::json!({
-                                "name": "sbom-tools:eol:date",
-                                "value": date.to_string(),
-                            }));
-                        }
                     }
                 }
+            }
         }
     }
 }

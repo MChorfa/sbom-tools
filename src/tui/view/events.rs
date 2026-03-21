@@ -627,48 +627,50 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
         KeyCode::Char('i') if app.active_tab == ViewTab::Vulnerabilities => {
             // Inspect: jump to component in Tree tab (same as Enter on a Vuln item)
             if let Some(cache) = &app.vuln_state.cached_data.clone()
-                && let Some((comp_id, vuln_id)) = app.vuln_state.get_nav_component_id(cache) {
-                    app.navigation_ctx.push_breadcrumb(
-                        ViewTab::Vulnerabilities,
-                        vuln_id.clone(),
-                        app.vuln_state.selected,
-                    );
-                    app.selected_component = Some(comp_id.clone());
-                    app.component_tab = ComponentDetailTab::Overview;
-                    app.active_tab = ViewTab::Tree;
-                    app.focus_panel = FocusPanel::Right;
-                    app.jump_to_component_in_tree(&comp_id);
-                    let vuln = app.vuln_state.get_selected_vuln_row(cache);
-                    let total = vuln.map_or(1, |v| v.affected_component_ids.len());
-                    let idx = app.vuln_state.inspect_component_idx + 1;
-                    if total > 1 {
-                        app.set_status_message(format!(
-                            "→ {vuln_id} [{idx}/{total}] (Backspace to return, [n]/[p] to cycle)"
-                        ));
-                    } else {
-                        app.set_status_message(format!("→ {vuln_id} (Backspace to return)"));
-                    }
+                && let Some((comp_id, vuln_id)) = app.vuln_state.get_nav_component_id(cache)
+            {
+                app.navigation_ctx.push_breadcrumb(
+                    ViewTab::Vulnerabilities,
+                    vuln_id.clone(),
+                    app.vuln_state.selected,
+                );
+                app.selected_component = Some(comp_id.clone());
+                app.component_tab = ComponentDetailTab::Overview;
+                app.active_tab = ViewTab::Tree;
+                app.focus_panel = FocusPanel::Right;
+                app.jump_to_component_in_tree(&comp_id);
+                let vuln = app.vuln_state.get_selected_vuln_row(cache);
+                let total = vuln.map_or(1, |v| v.affected_component_ids.len());
+                let idx = app.vuln_state.inspect_component_idx + 1;
+                if total > 1 {
+                    app.set_status_message(format!(
+                        "→ {vuln_id} [{idx}/{total}] (Backspace to return, [n]/[p] to cycle)"
+                    ));
+                } else {
+                    app.set_status_message(format!("→ {vuln_id} (Backspace to return)"));
                 }
+            }
         }
         KeyCode::Char('n') if app.active_tab == ViewTab::Vulnerabilities => {
             // Next affected component for multi-component vulns
             if let Some(cache) = &app.vuln_state.cached_data.clone()
-                && let Some(vuln) = app.vuln_state.get_selected_vuln_row(cache) {
-                    let total = vuln.affected_component_ids.len();
-                    if total > 1 {
-                        let new_idx = (app.vuln_state.inspect_component_idx + 1) % total;
-                        app.vuln_state.inspect_component_idx = new_idx;
-                        let comp_name = vuln
-                            .affected_components
-                            .get(new_idx)
-                            .map(|s| s.as_str())
-                            .unwrap_or("?");
-                        app.set_status_message(format!(
-                            "Component {}/{total}: {comp_name}",
-                            new_idx + 1
-                        ));
-                    }
+                && let Some(vuln) = app.vuln_state.get_selected_vuln_row(cache)
+            {
+                let total = vuln.affected_component_ids.len();
+                if total > 1 {
+                    let new_idx = (app.vuln_state.inspect_component_idx + 1) % total;
+                    app.vuln_state.inspect_component_idx = new_idx;
+                    let comp_name = vuln
+                        .affected_components
+                        .get(new_idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("?");
+                    app.set_status_message(format!(
+                        "Component {}/{total}: {comp_name}",
+                        new_idx + 1
+                    ));
                 }
+            }
         }
         KeyCode::Char('c') if app.active_tab == ViewTab::Dependencies => {
             // Jump to selected dependency's component in the Tree tab

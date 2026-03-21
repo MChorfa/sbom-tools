@@ -132,109 +132,110 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     // Add stats based on mode
     if ctx.mode == AppMode::Diff
-        && let Some(result) = ctx.diff_result {
-            let scheme = colors();
+        && let Some(result) = ctx.diff_result
+    {
+        let scheme = colors();
 
-            // Compute per-severity deltas
-            let count_by_sev = |vulns: &[crate::diff::VulnerabilityDetail]| -> [usize; 4] {
-                let mut counts = [0usize; 4]; // [C, H, M, L]
-                for v in vulns {
-                    match v.severity.to_lowercase().as_str() {
-                        "critical" => counts[0] += 1,
-                        "high" => counts[1] += 1,
-                        "medium" | "moderate" => counts[2] += 1,
-                        "low" => counts[3] += 1,
-                        _ => {}
-                    }
+        // Compute per-severity deltas
+        let count_by_sev = |vulns: &[crate::diff::VulnerabilityDetail]| -> [usize; 4] {
+            let mut counts = [0usize; 4]; // [C, H, M, L]
+            for v in vulns {
+                match v.severity.to_lowercase().as_str() {
+                    "critical" => counts[0] += 1,
+                    "high" => counts[1] += 1,
+                    "medium" | "moderate" => counts[2] += 1,
+                    "low" => counts[3] += 1,
+                    _ => {}
                 }
-                counts
-            };
-            let intro = count_by_sev(&result.vulnerabilities.introduced);
-            let resolved = count_by_sev(&result.vulnerabilities.resolved);
-
-            spans.push(Span::styled("│ ", Style::default().fg(scheme.border)));
-
-            let sev_labels = [
-                ("C", scheme.critical, "critical"),
-                ("H", scheme.high, "high"),
-                ("M", scheme.medium, "medium"),
-                ("L", scheme.low, "low"),
-            ];
-            for (i, (label, bg, sev_name)) in sev_labels.iter().enumerate() {
-                spans.push(Span::styled(
-                    format!(" {label} "),
-                    Style::default()
-                        .fg(scheme.severity_badge_fg(sev_name))
-                        .bg(*bg)
-                        .bold(),
-                ));
-                let net: i32 = intro[i] as i32 - resolved[i] as i32;
-                let delta_str = if net > 0 {
-                    format!("+{net}")
-                } else if net < 0 {
-                    format!("{net}")
-                } else {
-                    "0".to_string()
-                };
-                let delta_color = if net > 0 {
-                    scheme.removed // worse
-                } else if net < 0 {
-                    scheme.added // better
-                } else {
-                    scheme.text_muted
-                };
-                spans.push(Span::styled(
-                    format!(" {delta_str} "),
-                    Style::default().fg(delta_color),
-                ));
             }
+            counts
+        };
+        let intro = count_by_sev(&result.vulnerabilities.introduced);
+        let resolved = count_by_sev(&result.vulnerabilities.resolved);
 
-            // Total summary
-            spans.extend(vec![
-                Span::styled("│ ", Style::default().fg(scheme.border)),
-                Span::styled("+ ", Style::default().fg(scheme.removed).bold()),
-                Span::styled(
-                    format!("{}  ", result.summary.vulnerabilities_introduced),
-                    Style::default().fg(scheme.text),
-                ),
-                Span::styled("- ", Style::default().fg(scheme.added).bold()),
-                Span::styled(
-                    format!("{}  ", result.summary.vulnerabilities_resolved),
-                    Style::default().fg(scheme.text),
-                ),
-                Span::styled("= ", Style::default().fg(scheme.modified).bold()),
-                Span::styled(
-                    format!("{}", result.summary.vulnerabilities_persistent),
-                    Style::default().fg(scheme.text),
-                ),
-            ]);
+        spans.push(Span::styled("│ ", Style::default().fg(scheme.border)));
 
-            // Add enrichment stats if available
-            #[cfg(feature = "enrichment")]
-            {
-                let combined = match (ctx.enrichment_stats_old, ctx.enrichment_stats_new) {
-                    (Some(old), Some(new)) => {
-                        let mut c = old.clone();
-                        c.merge(new);
-                        Some(c)
-                    }
-                    (Some(s), None) | (None, Some(s)) => Some(s.clone()),
-                    (None, None) => None,
-                };
-                if let Some(stats) = combined
-                    && stats.total_vulns_found > 0
-                {
-                    spans.extend(vec![
-                        Span::styled("  │ ", Style::default().fg(scheme.border)),
-                        Span::styled("OSV ", Style::default().fg(scheme.accent).bold()),
-                        Span::styled(
-                            format!("+{}", stats.total_vulns_found),
-                            Style::default().fg(scheme.accent),
-                        ),
-                    ]);
+        let sev_labels = [
+            ("C", scheme.critical, "critical"),
+            ("H", scheme.high, "high"),
+            ("M", scheme.medium, "medium"),
+            ("L", scheme.low, "low"),
+        ];
+        for (i, (label, bg, sev_name)) in sev_labels.iter().enumerate() {
+            spans.push(Span::styled(
+                format!(" {label} "),
+                Style::default()
+                    .fg(scheme.severity_badge_fg(sev_name))
+                    .bg(*bg)
+                    .bold(),
+            ));
+            let net: i32 = intro[i] as i32 - resolved[i] as i32;
+            let delta_str = if net > 0 {
+                format!("+{net}")
+            } else if net < 0 {
+                format!("{net}")
+            } else {
+                "0".to_string()
+            };
+            let delta_color = if net > 0 {
+                scheme.removed // worse
+            } else if net < 0 {
+                scheme.added // better
+            } else {
+                scheme.text_muted
+            };
+            spans.push(Span::styled(
+                format!(" {delta_str} "),
+                Style::default().fg(delta_color),
+            ));
+        }
+
+        // Total summary
+        spans.extend(vec![
+            Span::styled("│ ", Style::default().fg(scheme.border)),
+            Span::styled("+ ", Style::default().fg(scheme.removed).bold()),
+            Span::styled(
+                format!("{}  ", result.summary.vulnerabilities_introduced),
+                Style::default().fg(scheme.text),
+            ),
+            Span::styled("- ", Style::default().fg(scheme.added).bold()),
+            Span::styled(
+                format!("{}  ", result.summary.vulnerabilities_resolved),
+                Style::default().fg(scheme.text),
+            ),
+            Span::styled("= ", Style::default().fg(scheme.modified).bold()),
+            Span::styled(
+                format!("{}", result.summary.vulnerabilities_persistent),
+                Style::default().fg(scheme.text),
+            ),
+        ]);
+
+        // Add enrichment stats if available
+        #[cfg(feature = "enrichment")]
+        {
+            let combined = match (ctx.enrichment_stats_old, ctx.enrichment_stats_new) {
+                (Some(old), Some(new)) => {
+                    let mut c = old.clone();
+                    c.merge(new);
+                    Some(c)
                 }
+                (Some(s), None) | (None, Some(s)) => Some(s.clone()),
+                (None, None) => None,
+            };
+            if let Some(stats) = combined
+                && stats.total_vulns_found > 0
+            {
+                spans.extend(vec![
+                    Span::styled("  │ ", Style::default().fg(scheme.border)),
+                    Span::styled("OSV ", Style::default().fg(scheme.accent).bold()),
+                    Span::styled(
+                        format!("+{}", stats.total_vulns_found),
+                        Style::default().fg(scheme.accent),
+                    ),
+                ]);
             }
         }
+    }
 
     // Add grouped mode indicator
     let grouped_label = if ctx.vulnerabilities.group_by_component {

@@ -308,22 +308,23 @@ pub fn diff_dependency_graph(
                 let new_attrs = new_graph.get_edge_attrs(new_id, child_id);
 
                 if let (Some(old_a), Some(new_a)) = (old_attrs, new_attrs)
-                    && old_a != new_a {
-                        let dep_name = new_graph.get_component_name(child_id);
-                        changes.push(DependencyGraphChange {
-                            component_id: new_id.clone(),
-                            component_name: component_name.clone(),
-                            change: DependencyChangeType::RelationshipChanged {
-                                dependency_id: child_id.clone(),
-                                dependency_name: dep_name,
-                                old_relationship: old_a.relationship.to_string(),
-                                new_relationship: new_a.relationship.to_string(),
-                                old_scope: old_a.scope.as_ref().map(ToString::to_string),
-                                new_scope: new_a.scope.as_ref().map(ToString::to_string),
-                            },
-                            impact: GraphChangeImpact::Medium,
-                        });
-                    }
+                    && old_a != new_a
+                {
+                    let dep_name = new_graph.get_component_name(child_id);
+                    changes.push(DependencyGraphChange {
+                        component_id: new_id.clone(),
+                        component_name: component_name.clone(),
+                        change: DependencyChangeType::RelationshipChanged {
+                            dependency_id: child_id.clone(),
+                            dependency_name: dep_name,
+                            old_relationship: old_a.relationship.to_string(),
+                            new_relationship: new_a.relationship.to_string(),
+                            old_scope: old_a.scope.as_ref().map(ToString::to_string),
+                            new_scope: new_a.scope.as_ref().map(ToString::to_string),
+                        },
+                        impact: GraphChangeImpact::Medium,
+                    });
+                }
             }
         }
     }

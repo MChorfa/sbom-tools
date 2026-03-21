@@ -84,9 +84,10 @@ pub fn xml_tree_from_str(xml: &str) -> Option<XmlTreeNode> {
             Ok(Event::Text(ref e)) => {
                 let text = e.decode().unwrap_or_default().trim().to_string();
                 if !text.is_empty()
-                    && let Some(XmlTreeNode::Element { children, .. }) = stack.last_mut() {
-                        children.push(XmlTreeNode::Text(text));
-                    }
+                    && let Some(XmlTreeNode::Element { children, .. }) = stack.last_mut()
+                {
+                    children.push(XmlTreeNode::Text(text));
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => return None,
@@ -731,10 +732,11 @@ fn compute_bracket_pairs(raw_lines: &[String]) -> (HashMap<usize, usize>, HashMa
         if trimmed.ends_with('{') || trimmed.ends_with('[') {
             stack.push(i);
         } else if (trimmed == "}" || trimmed == "]")
-            && let Some(open) = stack.pop() {
-                forward.insert(open, i);
-                reverse.insert(i, open);
-            }
+            && let Some(open) = stack.pop()
+        {
+            forward.insert(open, i);
+            reverse.insert(i, open);
+        }
     }
 
     (forward, reverse)
@@ -1043,8 +1045,7 @@ impl SourcePanelState {
                 // Scroll adjustment
                 if viewport_height > 0 {
                     if self.selected >= self.scroll_offset + viewport_height {
-                        self.scroll_offset =
-                            self.selected.saturating_sub(viewport_height - 1);
+                        self.scroll_offset = self.selected.saturating_sub(viewport_height - 1);
                     } else if self.selected < self.scroll_offset {
                         self.scroll_offset = self.selected;
                     }
@@ -1063,8 +1064,7 @@ impl SourcePanelState {
                 // Scroll adjustment (for non-folded fast path)
                 if self.folded_lines.is_empty() && viewport_height > 0 {
                     if self.selected >= self.scroll_offset + viewport_height {
-                        self.scroll_offset =
-                            self.selected.saturating_sub(viewport_height - 1);
+                        self.scroll_offset = self.selected.saturating_sub(viewport_height - 1);
                     } else if self.selected < self.scroll_offset {
                         self.scroll_offset = self.selected;
                     }
@@ -1271,9 +1271,11 @@ impl SourcePanelState {
     pub fn is_line_folded(&self, line: usize) -> bool {
         for &open in &self.folded_lines {
             if let Some(&close) = self.bracket_pairs.get(&open)
-                && line > open && line <= close {
-                    return true;
-                }
+                && line > open
+                && line <= close
+            {
+                return true;
+            }
         }
         false
     }
@@ -2035,13 +2037,14 @@ fn build_component_index(panel: &SourcePanelState) -> HashMap<String, usize> {
     // Find the "components" child
     for child in children {
         if let JsonTreeNode::Array { key, children, .. } = child
-            && key == "components" {
-                for (idx, comp_node) in children.iter().enumerate() {
-                    if let Some(name) = extract_component_name(comp_node) {
-                        map.insert(name, idx);
-                    }
+            && key == "components"
+        {
+            for (idx, comp_node) in children.iter().enumerate() {
+                if let Some(name) = extract_component_name(comp_node) {
+                    map.insert(name, idx);
                 }
             }
+        }
     }
     map
 }
@@ -2051,11 +2054,12 @@ fn extract_component_name(node: &JsonTreeNode) -> Option<String> {
     if let JsonTreeNode::Object { children, .. } = node {
         for child in children {
             if let JsonTreeNode::Leaf { key, value, .. } = child
-                && key == "name" {
-                    // Strip surrounding quotes from the value
-                    let v = value.trim_matches('"');
-                    return Some(v.to_string());
-                }
+                && key == "name"
+            {
+                // Strip surrounding quotes from the value
+                let v = value.trim_matches('"');
+                return Some(v.to_string());
+            }
         }
     }
     None

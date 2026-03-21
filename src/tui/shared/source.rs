@@ -398,7 +398,11 @@ fn render_source_tree(
         // Expand/collapse indicator (compact: 1 char no trailing space, normal: 2 chars)
         if item.is_expandable {
             let (indicator, ind_width): (&str, u16) = if compact {
-                if item.is_expanded { ("\u{25bc}", 1) } else { ("\u{25b6}", 1) }
+                if item.is_expanded {
+                    ("\u{25bc}", 1)
+                } else {
+                    ("\u{25b6}", 1)
+                }
             } else if item.is_expanded {
                 ("\u{25bc} ", 2)
             } else {
@@ -510,20 +514,21 @@ fn render_source_tree(
 
         // Diff change annotation highlighting
         if !state.change_annotations.is_empty()
-            && let Some(status) = state.find_annotation(&item.node_id) {
-                let bg = match status {
-                    crate::tui::app_states::source::SourceChangeStatus::Added => scheme.success_bg,
-                    crate::tui::app_states::source::SourceChangeStatus::Removed => scheme.error_bg,
-                    crate::tui::app_states::source::SourceChangeStatus::Modified => {
-                        scheme.search_highlight_bg
-                    }
-                };
-                for col in inner.x..remaining {
-                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                        cell.set_bg(bg);
-                    }
+            && let Some(status) = state.find_annotation(&item.node_id)
+        {
+            let bg = match status {
+                crate::tui::app_states::source::SourceChangeStatus::Added => scheme.success_bg,
+                crate::tui::app_states::source::SourceChangeStatus::Removed => scheme.error_bg,
+                crate::tui::app_states::source::SourceChangeStatus::Modified => {
+                    scheme.search_highlight_bg
+                }
+            };
+            for col in inner.x..remaining {
+                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                    cell.set_bg(bg);
                 }
             }
+        }
 
         // Highlight selected row background
         if is_selected {
@@ -904,52 +909,51 @@ fn render_source_raw(
 
         // Link indicator for navigable references in raw mode
         if let Some(label) = state.link_labels.get(&abs_idx)
-            && !is_folded_start && !is_structural {
-                // For path-like labels, show the basename (end of path)
-                let short_label = shorten_path_label(label, 40);
-                let link_text = format!(" \u{2192} {short_label}");
-                // Estimate current x position from content
-                let line_display_len = if state.word_wrap || state.h_scroll_offset == 0 {
-                    UnicodeWidthStr::width(line.as_str())
-                } else {
-                    UnicodeWidthStr::width(skip_display_chars(line, state.h_scroll_offset).as_str())
-                };
-                let link_x = content_x + (line_display_len as u16).min(remaining - content_x);
-                if link_x + 4 < remaining {
-                    let avail = (remaining - link_x) as usize;
-                    let truncated = crate::tui::widgets::truncate_str(&link_text, avail);
-                    render_str(
-                        frame.buffer_mut(),
-                        link_x,
-                        y,
-                        &truncated,
-                        remaining - link_x,
-                        Style::default().fg(scheme.primary).italic(),
-                    );
-                }
+            && !is_folded_start
+            && !is_structural
+        {
+            // For path-like labels, show the basename (end of path)
+            let short_label = shorten_path_label(label, 40);
+            let link_text = format!(" \u{2192} {short_label}");
+            // Estimate current x position from content
+            let line_display_len = if state.word_wrap || state.h_scroll_offset == 0 {
+                UnicodeWidthStr::width(line.as_str())
+            } else {
+                UnicodeWidthStr::width(skip_display_chars(line, state.h_scroll_offset).as_str())
+            };
+            let link_x = content_x + (line_display_len as u16).min(remaining - content_x);
+            if link_x + 4 < remaining {
+                let avail = (remaining - link_x) as usize;
+                let truncated = crate::tui::widgets::truncate_str(&link_text, avail);
+                render_str(
+                    frame.buffer_mut(),
+                    link_x,
+                    y,
+                    &truncated,
+                    remaining - link_x,
+                    Style::default().fg(scheme.primary).italic(),
+                );
             }
+        }
 
         // Diff change annotation highlighting (raw mode)
         if !state.change_annotations.is_empty()
             && let Some(node_id) = state.raw_line_node_ids.get(abs_idx)
-                && let Some(status) = state.find_annotation(node_id) {
-                    let bg = match status {
-                        crate::tui::app_states::source::SourceChangeStatus::Added => {
-                            scheme.success_bg
-                        }
-                        crate::tui::app_states::source::SourceChangeStatus::Removed => {
-                            scheme.error_bg
-                        }
-                        crate::tui::app_states::source::SourceChangeStatus::Modified => {
-                            scheme.search_highlight_bg
-                        }
-                    };
-                    for col in inner.x..remaining {
-                        if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                            cell.set_bg(bg);
-                        }
-                    }
+            && let Some(status) = state.find_annotation(node_id)
+        {
+            let bg = match status {
+                crate::tui::app_states::source::SourceChangeStatus::Added => scheme.success_bg,
+                crate::tui::app_states::source::SourceChangeStatus::Removed => scheme.error_bg,
+                crate::tui::app_states::source::SourceChangeStatus::Modified => {
+                    scheme.search_highlight_bg
                 }
+            };
+            for col in inner.x..remaining {
+                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                    cell.set_bg(bg);
+                }
+            }
+        }
 
         // Highlight selected row
         if is_selected {

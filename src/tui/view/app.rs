@@ -883,43 +883,44 @@ impl ViewApp {
                         .vuln_state
                         .cached_display_items
                         .get(self.vuln_state.selected)
-                    {
-                        match item {
-                            super::views::VulnDisplayItem::GroupHeader { label, .. } => {
-                                let label = label.clone();
-                                self.vuln_state.toggle_vuln_group(&label);
-                                return;
-                            }
-                            super::views::VulnDisplayItem::SubGroupHeader {
-                                parent_label,
-                                label,
-                                ..
-                            } => {
-                                let key = format!("{parent_label}::{label}");
-                                self.vuln_state.toggle_vuln_group(&key);
-                                return;
-                            }
-                            super::views::VulnDisplayItem::Vuln { .. } => {
-                                // Fall through to normal navigation
-                            }
+                {
+                    match item {
+                        super::views::VulnDisplayItem::GroupHeader { label, .. } => {
+                            let label = label.clone();
+                            self.vuln_state.toggle_vuln_group(&label);
+                            return;
+                        }
+                        super::views::VulnDisplayItem::SubGroupHeader {
+                            parent_label,
+                            label,
+                            ..
+                        } => {
+                            let key = format!("{parent_label}::{label}");
+                            self.vuln_state.toggle_vuln_group(&key);
+                            return;
+                        }
+                        super::views::VulnDisplayItem::Vuln { .. } => {
+                            // Fall through to normal navigation
                         }
                     }
+                }
                 // Navigate to component in Tree tab with proper targeting
                 if let Some(cache) = &self.vuln_state.cached_data.clone()
-                    && let Some((comp_id, vuln_id)) = self.vuln_state.get_nav_component_id(cache) {
-                        // Push breadcrumb so Backspace returns here
-                        self.navigation_ctx.push_breadcrumb(
-                            ViewTab::Vulnerabilities,
-                            vuln_id.clone(),
-                            self.vuln_state.selected,
-                        );
-                        self.selected_component = Some(comp_id.clone());
-                        self.component_tab = ComponentDetailTab::Overview;
-                        self.active_tab = ViewTab::Tree;
-                        self.focus_panel = FocusPanel::Right;
-                        self.jump_to_component_in_tree(&comp_id);
-                        self.set_status_message(format!("→ {vuln_id} (Backspace to return)"));
-                    }
+                    && let Some((comp_id, vuln_id)) = self.vuln_state.get_nav_component_id(cache)
+                {
+                    // Push breadcrumb so Backspace returns here
+                    self.navigation_ctx.push_breadcrumb(
+                        ViewTab::Vulnerabilities,
+                        vuln_id.clone(),
+                        self.vuln_state.selected,
+                    );
+                    self.selected_component = Some(comp_id.clone());
+                    self.component_tab = ComponentDetailTab::Overview;
+                    self.active_tab = ViewTab::Tree;
+                    self.focus_panel = FocusPanel::Right;
+                    self.jump_to_component_in_tree(&comp_id);
+                    self.set_status_message(format!("→ {vuln_id} (Backspace to return)"));
+                }
             }
             ViewTab::Licenses => {
                 // Navigate to the first component with this license in the Tree tab
@@ -931,19 +932,19 @@ impl ViewApp {
                 if let Some((license, _, _)) = license_data.get(selected_idx)
                     && let Some(comp_id) =
                         super::views::get_first_component_id_for_license(self, license)
-                    {
-                        self.navigation_ctx.push_breadcrumb(
-                            ViewTab::Licenses,
-                            license.clone(),
-                            self.license_state.selected,
-                        );
-                        self.selected_component = Some(comp_id.clone());
-                        self.component_tab = ComponentDetailTab::Overview;
-                        self.active_tab = ViewTab::Tree;
-                        self.focus_panel = FocusPanel::Right;
-                        self.jump_to_component_in_tree(&comp_id);
-                        self.set_status_message(format!("→ {license} (Backspace to return)"));
-                    }
+                {
+                    self.navigation_ctx.push_breadcrumb(
+                        ViewTab::Licenses,
+                        license.clone(),
+                        self.license_state.selected,
+                    );
+                    self.selected_component = Some(comp_id.clone());
+                    self.component_tab = ComponentDetailTab::Overview;
+                    self.active_tab = ViewTab::Tree;
+                    self.focus_panel = FocusPanel::Right;
+                    self.jump_to_component_in_tree(&comp_id);
+                    self.set_status_message(format!("→ {license} (Backspace to return)"));
+                }
             }
             ViewTab::Dependencies => {
                 if let Some(node_id) = self.get_selected_dependency_node_id() {
