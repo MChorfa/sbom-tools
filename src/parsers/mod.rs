@@ -41,10 +41,11 @@ pub use streaming::{ParseEvent, ParseProgress, StreamingConfig, StreamingParser}
 pub use traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
 
 use crate::model::NormalizedSbom;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Result of format detection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedFormat {
     /// Name of the detected format
     pub format_name: String,

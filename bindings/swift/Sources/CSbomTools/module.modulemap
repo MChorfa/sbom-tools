@@ -1,0 +1,4 @@
+module CSbomTools [system] {
+    header "include/sbom_tools.h"
+    export *
+}

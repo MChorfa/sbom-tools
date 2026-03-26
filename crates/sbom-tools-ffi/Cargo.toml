@@ -1,0 +1,14 @@
+[package]
+name = "sbom-tools-ffi"
+version = "0.1.17"
+edition = "2024"
+rust-version = "1.88"
+description = "C ABI bindings for sbom-tools (Go, Swift, Python consumers)"
+license = "MIT"
+
+[lib]
+name = "sbom_tools"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+sbom-tools = { path = "../..", features = ["ffi"] }

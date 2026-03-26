@@ -83,6 +83,18 @@ SBOMs larger than 512MB are parsed with a streaming strategy to avoid memory exh
 - `enrichment` (default) — enables OSV/KEV vulnerability enrichment and EOL detection
 - `vex` — enables OpenVEX integration
 
+## Go and Swift Bindings MVP
+
+The repository now includes a C-compatible ABI layer in [src/ffi.rs](src/ffi.rs) for the Go and Swift MVP bindings.
+
+- The ABI surface is intentionally narrow: format detection, parse from path/string, diffing, quality scoring, and ABI version reporting.
+- All complex values cross the ABI as JSON strings rather than field-by-field structs. This keeps the ABI stable for both `cgo` and Swift while allowing the Rust data model to evolve internally.
+- The stable header lives at [bindings/swift/Sources/CSbomTools/include/sbom_tools.h](bindings/swift/Sources/CSbomTools/include/sbom_tools.h). Both wrappers consume that same header.
+- The Go wrapper lives in [bindings/go](bindings/go) and the Swift package lives in [bindings/swift](bindings/swift).
+- Errors are mapped into stable numeric codes plus UTF-8 messages, and every ABI result must be released with `sbom_tools_string_result_free`.
+- Both wrappers expose opt-in deduplication helpers for normalized payloads. Components deduplicate by canonical identifier, edges deduplicate by full edge shape, and last occurrence wins in both cases.
+- Dedup regression checks are centralized in [scripts/test-bindings-dedup.sh](scripts/test-bindings-dedup.sh) and are invoked by bindings CI to keep Go and Swift helper behavior aligned.
+
 ## Testing
 
 - 762+ tests (unit + integration)

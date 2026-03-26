@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/sbom-tools-ffi"]
+
 [package]
 name = "sbom-tools"
 version = "0.1.17"
@@ -9,6 +12,10 @@ readme = "README.md"
 repository = "https://github.com/sbom-tool/sbom-tools"
 keywords = ["sbom", "cyclonedx", "spdx", "diff", "security"]
 categories = ["command-line-utilities", "development-tools", "security"]
+
+[lib]
+name = "sbom_tools"
+crate-type = ["rlib"]
 
 [dependencies]
 # Signal Handling
@@ -60,6 +67,7 @@ schemars = "1.2"
 [features]
 default = ["enrichment"]
 enrichment = ["reqwest"]
+ffi = []
 
 [dev-dependencies]
 criterion = "0.8"

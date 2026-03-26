@@ -2492,6 +2492,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbom-tools-ffi"
+version = "0.1.17"
+dependencies = [
+ "sbom-tools",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"

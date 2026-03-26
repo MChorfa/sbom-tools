@@ -1,0 +1,91 @@
+name: Bindings
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  dagger-rust-sdk:
+    name: Dagger Rust SDK (staticlib + ABI)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
+        with:
+          toolchain: stable
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+      - name: Run Dagger Rust SDK pipeline
+        run: cargo run --manifest-path dagger/rust-sdk/Cargo.toml -- ci-all
+
+  rust-ffi:
+    name: Rust FFI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
+        with:
+          toolchain: stable
+      - name: Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+      - name: Build FFI library
+        run: bash ./scripts/build-bindings-mvp.sh
+      - name: Test FFI ABI
+        run: cargo test --locked --test ffi_bindings
+
+      - name: Test ABI snapshot contracts
+        run: cargo test --locked --test ffi_schema_snapshots
+
+  go-bindings:
+    name: Go Bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
+        with:
+          toolchain: stable
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version: '1.22'
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+      - name: Build Rust library
+        run: bash ./scripts/build-bindings-mvp.sh
+      - name: Test Go wrapper
+        working-directory: bindings/go
+        run: go test ./...
+      - name: Test Go dedup helpers
+        run: ./scripts/test-bindings-dedup.sh go
+
+  swift-bindings:
+    name: Swift Bindings
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
+        with:
+          toolchain: stable
+      - name: Build Rust library
+        run: bash ./scripts/build-bindings-mvp.sh
+      - name: Build and test Swift wrapper
+        working-directory: bindings/swift
+        run: swift test
+      - name: Test Swift dedup helpers
+        run: ./scripts/test-bindings-dedup.sh swift
