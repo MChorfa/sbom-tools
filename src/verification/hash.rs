@@ -78,12 +78,20 @@ pub fn verify_file_hash(path: &Path, expected: &str) -> anyhow::Result<HashVerif
         "SHA-256" => {
             let mut hasher = Sha256::new();
             hasher.update(&content);
-            format!("{:x}", hasher.finalize())
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
         }
         "SHA-512" => {
             let mut hasher = Sha512::new();
             hasher.update(&content);
-            format!("{:x}", hasher.finalize())
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
         }
         _ => unreachable!(),
     };
