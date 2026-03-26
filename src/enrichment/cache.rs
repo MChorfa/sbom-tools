@@ -46,7 +46,8 @@ impl CacheKey {
             self.purl, self.name, self.ecosystem, self.version
         ));
         let hash = hasher.finalize();
-        format!("{hash:x}.json")
+        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        format!("{hex}.json")
     }
 
     /// Check if this key can be used for an OSV query.
