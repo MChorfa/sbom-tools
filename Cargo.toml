@@ -63,7 +63,7 @@ enrichment = ["reqwest"]
 
 [dev-dependencies]
 criterion = "0.8"
-proptest = "1.5"
+proptest = "1.11"
 tempfile = "3.25"
 
 [[bench]]
