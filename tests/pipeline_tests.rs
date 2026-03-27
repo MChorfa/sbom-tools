@@ -3,7 +3,11 @@
 //! These tests exercise the full parse → diff → report pipeline,
 //! error handling paths, and CLI command handlers with real fixture files.
 
-use sbom_tools::config::DiffConfigBuilder;
+use sbom_tools::config::{
+    BehaviorConfig, DiffConfigBuilder, EnrichmentConfig, FilterConfig, GraphAwareDiffConfig,
+    MatchingConfig, MatchingRulesPathConfig, MatrixConfig, MultiDiffConfig, OutputConfig,
+    TimelineConfig,
+};
 use sbom_tools::pipeline::{
     OutputTarget, PipelineError, auto_detect_format, compute_diff, output_report,
     parse_sbom_with_context, write_output,
@@ -527,18 +531,28 @@ mod multi_diff_pipeline {
         let dir = tempfile::tempdir().expect("create temp dir");
         let out_path = dir.path().join("multi-diff.json");
 
-        let result = sbom_tools::cli::run_diff_multi(
-            fixture_path("demo-old.cdx.json"),
-            vec![
+        let result = sbom_tools::cli::run_diff_multi(MultiDiffConfig {
+            baseline: fixture_path("demo-old.cdx.json"),
+            targets: vec![
                 fixture_path("demo-new.cdx.json"),
                 fixture_path("cyclonedx/minimal.cdx.json"),
             ],
-            ReportFormat::Json,
-            Some(out_path.clone()),
-            "balanced".to_string(),
-            false,
-            false,
-        );
+            output: OutputConfig {
+                format: ReportFormat::Json,
+                file: Some(out_path.clone()),
+                ..Default::default()
+            },
+            matching: MatchingConfig {
+                fuzzy_preset: "balanced".to_string(),
+                ..Default::default()
+            },
+            behavior: BehaviorConfig::default(),
+            filtering: FilterConfig::default(),
+            graph_diff: GraphAwareDiffConfig::default(),
+            rules: MatchingRulesPathConfig::default(),
+            ecosystem_rules: Default::default(),
+            enrichment: EnrichmentConfig::default(),
+        });
 
         result.expect("multi-diff should succeed");
 
@@ -555,16 +569,27 @@ mod multi_diff_pipeline {
         let dir = tempfile::tempdir().expect("create temp dir");
         let out_path = dir.path().join("timeline.json");
 
-        let result = sbom_tools::cli::run_timeline(
-            vec![
+        let result = sbom_tools::cli::run_timeline(TimelineConfig {
+            sbom_paths: vec![
                 fixture_path("demo-old.cdx.json"),
                 fixture_path("demo-new.cdx.json"),
             ],
-            ReportFormat::Json,
-            Some(out_path.clone()),
-            "balanced".to_string(),
-            false,
-        );
+            output: OutputConfig {
+                format: ReportFormat::Json,
+                file: Some(out_path.clone()),
+                ..Default::default()
+            },
+            matching: MatchingConfig {
+                fuzzy_preset: "balanced".to_string(),
+                ..Default::default()
+            },
+            behavior: BehaviorConfig::default(),
+            filtering: FilterConfig::default(),
+            graph_diff: GraphAwareDiffConfig::default(),
+            rules: MatchingRulesPathConfig::default(),
+            ecosystem_rules: Default::default(),
+            enrichment: EnrichmentConfig::default(),
+        });
 
         result.expect("timeline should succeed");
 
@@ -578,13 +603,23 @@ mod multi_diff_pipeline {
 
     #[test]
     fn run_timeline_requires_two_sboms() {
-        let result = sbom_tools::cli::run_timeline(
-            vec![fixture_path("demo-old.cdx.json")],
-            ReportFormat::Json,
-            None,
-            "balanced".to_string(),
-            false,
-        );
+        let result = sbom_tools::cli::run_timeline(TimelineConfig {
+            sbom_paths: vec![fixture_path("demo-old.cdx.json")],
+            output: OutputConfig {
+                format: ReportFormat::Json,
+                ..Default::default()
+            },
+            matching: MatchingConfig {
+                fuzzy_preset: "balanced".to_string(),
+                ..Default::default()
+            },
+            behavior: BehaviorConfig::default(),
+            filtering: FilterConfig::default(),
+            graph_diff: GraphAwareDiffConfig::default(),
+            rules: MatchingRulesPathConfig::default(),
+            ecosystem_rules: Default::default(),
+            enrichment: EnrichmentConfig::default(),
+        });
 
         assert!(result.is_err(), "Timeline with 1 SBOM should fail");
         let msg = result.unwrap_err().to_string();
@@ -599,18 +634,29 @@ mod multi_diff_pipeline {
         let dir = tempfile::tempdir().expect("create temp dir");
         let out_path = dir.path().join("matrix.json");
 
-        let result = sbom_tools::cli::run_matrix(
-            vec![
+        let result = sbom_tools::cli::run_matrix(MatrixConfig {
+            sbom_paths: vec![
                 fixture_path("demo-old.cdx.json"),
                 fixture_path("demo-new.cdx.json"),
                 fixture_path("cyclonedx/minimal.cdx.json"),
             ],
-            ReportFormat::Json,
-            Some(out_path.clone()),
-            "balanced".to_string(),
-            0.7,
-            false,
-        );
+            output: OutputConfig {
+                format: ReportFormat::Json,
+                file: Some(out_path.clone()),
+                ..Default::default()
+            },
+            matching: MatchingConfig {
+                fuzzy_preset: "balanced".to_string(),
+                ..Default::default()
+            },
+            cluster_threshold: 0.7,
+            behavior: BehaviorConfig::default(),
+            filtering: FilterConfig::default(),
+            graph_diff: GraphAwareDiffConfig::default(),
+            rules: MatchingRulesPathConfig::default(),
+            ecosystem_rules: Default::default(),
+            enrichment: EnrichmentConfig::default(),
+        });
 
         result.expect("matrix should succeed");
 
@@ -628,14 +674,24 @@ mod multi_diff_pipeline {
 
     #[test]
     fn run_matrix_requires_two_sboms() {
-        let result = sbom_tools::cli::run_matrix(
-            vec![fixture_path("demo-old.cdx.json")],
-            ReportFormat::Json,
-            None,
-            "balanced".to_string(),
-            0.7,
-            false,
-        );
+        let result = sbom_tools::cli::run_matrix(MatrixConfig {
+            sbom_paths: vec![fixture_path("demo-old.cdx.json")],
+            output: OutputConfig {
+                format: ReportFormat::Json,
+                ..Default::default()
+            },
+            matching: MatchingConfig {
+                fuzzy_preset: "balanced".to_string(),
+                ..Default::default()
+            },
+            cluster_threshold: 0.7,
+            behavior: BehaviorConfig::default(),
+            filtering: FilterConfig::default(),
+            graph_diff: GraphAwareDiffConfig::default(),
+            rules: MatchingRulesPathConfig::default(),
+            ecosystem_rules: Default::default(),
+            enrichment: EnrichmentConfig::default(),
+        });
 
         assert!(result.is_err(), "Matrix with 1 SBOM should fail");
     }

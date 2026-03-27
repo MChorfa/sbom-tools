@@ -1,5 +1,23 @@
 //! Search state types.
 
+/// Search mode: substring (default) or regex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchMode {
+    #[default]
+    Substring,
+    Regex,
+}
+
+impl SearchMode {
+    /// Human-readable label for display in status bar.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Substring => "substring",
+            Self::Regex => "regex",
+        }
+    }
+}
+
 /// Search state for diff mode.
 #[derive(Debug, Clone)]
 pub struct DiffSearchState {
@@ -7,6 +25,8 @@ pub struct DiffSearchState {
     pub query: String,
     pub results: Vec<DiffSearchResult>,
     pub selected: usize,
+    /// Current search mode (substring or regex).
+    pub mode: SearchMode,
 }
 
 impl DiffSearchState {
@@ -16,6 +36,7 @@ impl DiffSearchState {
             query: String::new(),
             results: Vec::new(),
             selected: 0,
+            mode: SearchMode::Substring,
         }
     }
 

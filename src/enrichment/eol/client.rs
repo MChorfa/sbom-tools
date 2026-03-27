@@ -155,7 +155,7 @@ fn dirs_cache_dir() -> Option<PathBuf> {
 // ============================================================================
 
 /// Statistics from EOL enrichment.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct EolEnrichmentStats {
     /// Number of components checked
     pub components_checked: usize,

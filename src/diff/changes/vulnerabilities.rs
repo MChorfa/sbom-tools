@@ -1,6 +1,7 @@
 //! Vulnerability change computer implementation.
 
 use crate::diff::VulnerabilityDetail;
+use crate::diff::result::VexStatusChange;
 use crate::diff::traits::{ChangeComputer, ComponentMatches, VulnerabilityChangeSet};
 use crate::model::{CanonicalId, NormalizedSbom};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -151,13 +152,27 @@ impl ChangeComputer for VulnerabilityChangeComputer {
         }
 
         // Find persistent vulnerabilities (in both)
-        for detail in new_vulns.values() {
+        let mut vex_changes = Vec::new();
+        for (key, detail) in &new_vulns {
             let vuln_id = &detail.id;
             let exists_in_old = old_vulns.values().any(|v| &v.id == vuln_id);
             if exists_in_old {
                 result.persistent.push(detail.clone());
+
+                // Compare VEX states between old and new for this vuln+component pair
+                if let Some(old_detail) = old_vulns.get(key)
+                    && old_detail.vex_state != detail.vex_state
+                {
+                    vex_changes.push(VexStatusChange {
+                        vuln_id: detail.id.clone(),
+                        component_name: detail.component_name.clone(),
+                        old_state: old_detail.vex_state.clone(),
+                        new_state: detail.vex_state.clone(),
+                    });
+                }
             }
         }
+        result.vex_changes = vex_changes;
 
         // Sort by severity
         result.sort_by_severity();
@@ -189,5 +204,119 @@ mod tests {
 
         let result = computer.compute(&old, &new, &matches);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_vex_state_change_detection() {
+        use crate::model::{Component, VexState, VexStatus, VulnerabilityRef, VulnerabilitySource};
+
+        let computer = VulnerabilityChangeComputer;
+
+        // Build old SBOM with a vuln that has VexState::NotAffected
+        let mut old_comp = Component::new("libfoo".to_string(), "pkg:npm/libfoo@1.0".to_string());
+        let old_vuln = VulnerabilityRef::new("CVE-2023-1234".to_string(), VulnerabilitySource::Osv)
+            .with_vex_status(VexStatus::new(VexState::NotAffected));
+        old_comp.vulnerabilities.push(old_vuln);
+
+        let mut old_sbom = NormalizedSbom::default();
+        let old_id = old_comp.canonical_id.clone();
+        old_sbom.components.insert(old_id, old_comp);
+
+        // Build new SBOM with the same vuln but VexState::Affected
+        let mut new_comp = Component::new("libfoo".to_string(), "pkg:npm/libfoo@1.0".to_string());
+        let new_vuln = VulnerabilityRef::new("CVE-2023-1234".to_string(), VulnerabilitySource::Osv)
+            .with_vex_status(VexStatus::new(VexState::Affected));
+        new_comp.vulnerabilities.push(new_vuln);
+
+        let mut new_sbom = NormalizedSbom::default();
+        let new_id = new_comp.canonical_id.clone();
+        new_sbom.components.insert(new_id, new_comp);
+
+        let matches = ComponentMatches::new();
+        let result = computer.compute(&old_sbom, &new_sbom, &matches);
+
+        // The vuln should appear as persistent (present in both SBOMs)
+        assert_eq!(result.persistent.len(), 1);
+        assert!(result.introduced.is_empty());
+        assert!(result.resolved.is_empty());
+
+        // A VEX state change should be detected
+        assert_eq!(result.vex_changes.len(), 1);
+        let change = &result.vex_changes[0];
+        assert_eq!(change.vuln_id, "CVE-2023-1234");
+        assert_eq!(change.component_name, "libfoo");
+        assert_eq!(change.old_state, Some(VexState::NotAffected));
+        assert_eq!(change.new_state, Some(VexState::Affected));
+    }
+
+    #[test]
+    fn test_no_vex_change_when_states_equal() {
+        use crate::model::{Component, VexState, VexStatus, VulnerabilityRef, VulnerabilitySource};
+
+        let computer = VulnerabilityChangeComputer;
+
+        // Both SBOMs have the same VEX state
+        let mut old_comp = Component::new("libbar".to_string(), "pkg:npm/libbar@2.0".to_string());
+        let old_vuln = VulnerabilityRef::new("CVE-2023-5678".to_string(), VulnerabilitySource::Nvd)
+            .with_vex_status(VexStatus::new(VexState::Fixed));
+        old_comp.vulnerabilities.push(old_vuln);
+
+        let mut old_sbom = NormalizedSbom::default();
+        let old_id = old_comp.canonical_id.clone();
+        old_sbom.components.insert(old_id, old_comp);
+
+        let mut new_comp = Component::new("libbar".to_string(), "pkg:npm/libbar@2.0".to_string());
+        let new_vuln = VulnerabilityRef::new("CVE-2023-5678".to_string(), VulnerabilitySource::Nvd)
+            .with_vex_status(VexStatus::new(VexState::Fixed));
+        new_comp.vulnerabilities.push(new_vuln);
+
+        let mut new_sbom = NormalizedSbom::default();
+        let new_id = new_comp.canonical_id.clone();
+        new_sbom.components.insert(new_id, new_comp);
+
+        let matches = ComponentMatches::new();
+        let result = computer.compute(&old_sbom, &new_sbom, &matches);
+
+        assert_eq!(result.persistent.len(), 1);
+        // No VEX changes since both have the same state
+        assert!(result.vex_changes.is_empty());
+    }
+
+    #[test]
+    fn test_vex_state_change_from_none_to_some() {
+        use crate::model::{Component, VexState, VexStatus, VulnerabilityRef, VulnerabilitySource};
+
+        let computer = VulnerabilityChangeComputer;
+
+        // Old SBOM: vuln without any VEX status
+        let mut old_comp = Component::new("libqux".to_string(), "pkg:npm/libqux@1.0".to_string());
+        let old_vuln =
+            VulnerabilityRef::new("CVE-2024-0001".to_string(), VulnerabilitySource::Ghsa);
+        old_comp.vulnerabilities.push(old_vuln);
+
+        let mut old_sbom = NormalizedSbom::default();
+        let old_id = old_comp.canonical_id.clone();
+        old_sbom.components.insert(old_id, old_comp);
+
+        // New SBOM: same vuln now has VEX status UnderInvestigation
+        let mut new_comp = Component::new("libqux".to_string(), "pkg:npm/libqux@1.0".to_string());
+        let new_vuln =
+            VulnerabilityRef::new("CVE-2024-0001".to_string(), VulnerabilitySource::Ghsa)
+                .with_vex_status(VexStatus::new(VexState::UnderInvestigation));
+        new_comp.vulnerabilities.push(new_vuln);
+
+        let mut new_sbom = NormalizedSbom::default();
+        let new_id = new_comp.canonical_id.clone();
+        new_sbom.components.insert(new_id, new_comp);
+
+        let matches = ComponentMatches::new();
+        let result = computer.compute(&old_sbom, &new_sbom, &matches);
+
+        assert_eq!(result.persistent.len(), 1);
+        assert_eq!(result.vex_changes.len(), 1);
+        let change = &result.vex_changes[0];
+        assert_eq!(change.vuln_id, "CVE-2024-0001");
+        assert_eq!(change.old_state, None);
+        assert_eq!(change.new_state, Some(VexState::UnderInvestigation));
     }
 }

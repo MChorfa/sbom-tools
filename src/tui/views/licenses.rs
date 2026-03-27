@@ -28,7 +28,7 @@ pub fn render_licenses(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     // License content
     match ctx.mode {
-        AppMode::Diff => render_diff_licenses(frame, chunks[1], ctx),
+        AppMode::Diff | AppMode::View => render_diff_licenses(frame, chunks[1], ctx),
         // Multi-comparison modes have their own views
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => {}
     }

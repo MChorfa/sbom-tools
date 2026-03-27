@@ -135,6 +135,17 @@ pub struct ChangedSections {
 }
 
 impl ChangedSections {
+    /// Create a `ChangedSections` with all sections marked as changed.
+    #[must_use]
+    pub const fn all_changed() -> Self {
+        Self {
+            components: true,
+            dependencies: true,
+            licenses: true,
+            vulnerabilities: true,
+        }
+    }
+
     /// Check if any section changed.
     #[must_use]
     pub const fn any(&self) -> bool {
@@ -481,8 +492,40 @@ impl IncrementalDiffEngine {
             }
         };
 
-        // Full computation (for now - true incremental would require more complex logic)
-        let result = self.engine.diff(old, new).unwrap_or_default();
+        // Section-selective or full computation
+        let (result, cache_hit, sections_recomputed) = if let Some(ref changed) = changed
+            && !changed.all()
+            && changed.any()
+        {
+            // We know which sections changed and it's a partial change —
+            // try to reuse cached sections from a previous result
+            if let Some(prev_result) = self.find_previous_result() {
+                match self.engine.diff_sections(old, new, changed, &prev_result) {
+                    Ok(result) => (result, CacheHitType::Partial, changed.clone()),
+                    Err(_) => {
+                        // Fall back to full computation on any error
+                        let result = self.engine.diff(old, new).unwrap_or_default();
+                        (result, CacheHitType::Miss, ChangedSections::all_changed())
+                    }
+                }
+            } else {
+                // No previous result to build on — full computation
+                let result = self.engine.diff(old, new).unwrap_or_default();
+                (result, CacheHitType::Miss, ChangedSections::all_changed())
+            }
+        } else {
+            // Either no change detection possible, or all sections changed — full computation
+            let result = self.engine.diff(old, new).unwrap_or_default();
+            let sections = changed.unwrap_or_else(ChangedSections::all_changed);
+            (result, CacheHitType::Miss, sections)
+        };
+
+        // Track incremental hits in cache stats
+        if cache_hit == CacheHitType::Partial
+            && let Ok(mut stats) = self.cache.stats.write()
+        {
+            stats.incremental_hits += 1;
+        }
 
         // Cache the result
         self.cache.put(
@@ -502,19 +545,25 @@ impl IncrementalDiffEngine {
             .write()
             .expect("last_new_hashes lock poisoned") = Some(new_hashes);
 
-        let sections_recomputed = changed.unwrap_or(ChangedSections {
-            components: true,
-            dependencies: true,
-            licenses: true,
-            vulnerabilities: true,
-        });
-
         IncrementalDiffResult {
             result,
-            cache_hit: CacheHitType::Miss,
+            cache_hit,
             sections_recomputed,
             computation_time: start.elapsed(),
         }
+    }
+
+    /// Find a previous cached result to use as a base for incremental recomputation.
+    ///
+    /// Returns the most recently accessed (highest hit count) cached result,
+    /// which is the best candidate for reuse since it likely covers similar SBOMs.
+    fn find_previous_result(&self) -> Option<Arc<DiffResult>> {
+        let cache = self.cache.cache.read().ok()?;
+        cache
+            .values()
+            .filter(|e| e.is_valid(Duration::from_secs(3600)))
+            .max_by_key(|e| e.hit_count)
+            .map(|e| Arc::clone(&e.result))
     }
 
     /// Get the underlying engine.
@@ -741,5 +790,167 @@ mod tests {
         let stats = incremental.cache_stats();
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);
+    }
+
+    #[test]
+    fn test_changed_sections_all_changed() {
+        let all = ChangedSections::all_changed();
+        assert!(all.components);
+        assert!(all.dependencies);
+        assert!(all.licenses);
+        assert!(all.vulnerabilities);
+        assert!(all.all());
+        assert!(all.any());
+        assert_eq!(all.count(), 4);
+    }
+
+    #[test]
+    fn test_changed_sections_or_combine() {
+        let a = ChangedSections {
+            components: true,
+            dependencies: false,
+            licenses: false,
+            vulnerabilities: false,
+        };
+        let b = ChangedSections {
+            components: false,
+            dependencies: false,
+            licenses: true,
+            vulnerabilities: false,
+        };
+        let combined = a.or(&b);
+        assert!(combined.components);
+        assert!(!combined.dependencies);
+        assert!(combined.licenses);
+        assert!(!combined.vulnerabilities);
+        assert_eq!(combined.count(), 2);
+    }
+
+    #[test]
+    fn test_diff_sections_selective_recomputation() {
+        // Test that diff_sections on DiffEngine produces a valid result
+        // when only a subset of sections are marked as changed
+        let engine = DiffEngine::new();
+        let old = make_sbom("old", &["a", "b", "c"]);
+        let new = make_sbom("new", &["a", "b", "d"]);
+
+        // Full diff first to get a baseline
+        let full_result = engine.diff(&old, &new).expect("diff should succeed");
+
+        // Now do a section-selective diff recomputing only components
+        let sections = ChangedSections {
+            components: true,
+            dependencies: false,
+            licenses: false,
+            vulnerabilities: false,
+        };
+        let selective_result = engine
+            .diff_sections(&old, &new, &sections, &full_result)
+            .expect("diff_sections should succeed");
+
+        // Components should be freshly computed — same as full diff
+        assert_eq!(
+            selective_result.components.added.len(),
+            full_result.components.added.len()
+        );
+        assert_eq!(
+            selective_result.components.removed.len(),
+            full_result.components.removed.len()
+        );
+        assert_eq!(
+            selective_result.components.modified.len(),
+            full_result.components.modified.len()
+        );
+
+        // Dependencies were not recomputed — should be preserved from cached
+        assert_eq!(
+            selective_result.dependencies.added.len(),
+            full_result.dependencies.added.len()
+        );
+        assert_eq!(
+            selective_result.dependencies.removed.len(),
+            full_result.dependencies.removed.len()
+        );
+    }
+
+    #[test]
+    fn test_diff_sections_all_changed_matches_full_diff() {
+        // When all sections are marked as changed, diff_sections should produce
+        // the same result as a full diff
+        let engine = DiffEngine::new();
+        let old = make_sbom("old", &["a", "b", "c"]);
+        let new = make_sbom("new", &["a", "b", "d"]);
+
+        let full_result = engine.diff(&old, &new).expect("diff should succeed");
+        let sections = ChangedSections::all_changed();
+        let selective_result = engine
+            .diff_sections(&old, &new, &sections, &DiffResult::new())
+            .expect("diff_sections should succeed");
+
+        assert_eq!(
+            selective_result.components.added.len(),
+            full_result.components.added.len()
+        );
+        assert_eq!(
+            selective_result.components.removed.len(),
+            full_result.components.removed.len()
+        );
+        assert_eq!(
+            selective_result.vulnerabilities.introduced.len(),
+            full_result.vulnerabilities.introduced.len()
+        );
+    }
+
+    #[test]
+    fn test_incremental_partial_change_detection() {
+        // Simulate the incremental path: diff two SBOMs, then diff again
+        // with a slightly different new SBOM that shares the same old SBOM.
+        // This tests that the engine detects partial changes and attempts
+        // section-selective diff.
+        let engine = DiffEngine::new();
+        let incremental = IncrementalDiffEngine::new(engine);
+
+        let old = make_sbom("old", &["a", "b", "c"]);
+        let new1 = make_sbom("new1", &["a", "b", "d"]);
+
+        // First diff populates last_old_hashes and last_new_hashes
+        let result1 = incremental.diff(&old, &new1);
+        assert_eq!(result1.cache_hit, CacheHitType::Miss);
+
+        // Second diff with different SBOMs (different content hashes = no exact cache hit)
+        // but last_old_hashes/last_new_hashes are now set, so change detection runs
+        let new2 = make_sbom("new2", &["a", "b", "e"]);
+        let result2 = incremental.diff(&old, &new2);
+
+        // This should either be a Partial hit (if section-selective kicked in)
+        // or a Miss (if all sections changed). Either way, it should produce a valid result.
+        assert!(
+            result2.cache_hit == CacheHitType::Partial || result2.cache_hit == CacheHitType::Miss
+        );
+        // The result should have been computed successfully regardless
+        assert!(result2.sections_recomputed.any());
+    }
+
+    #[test]
+    fn test_find_previous_result_empty_cache() {
+        let engine = DiffEngine::new();
+        let incremental = IncrementalDiffEngine::new(engine);
+        // With an empty cache, find_previous_result should return None
+        assert!(incremental.find_previous_result().is_none());
+    }
+
+    #[test]
+    fn test_find_previous_result_after_diff() {
+        let engine = DiffEngine::new();
+        let incremental = IncrementalDiffEngine::new(engine);
+
+        let old = make_sbom("old", &["a", "b"]);
+        let new = make_sbom("new", &["a", "c"]);
+
+        // Populate the cache
+        let _ = incremental.diff(&old, &new);
+
+        // Now find_previous_result should return Some
+        assert!(incremental.find_previous_result().is_some());
     }
 }

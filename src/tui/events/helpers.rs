@@ -41,7 +41,7 @@ pub(super) fn get_selected_component_name(app: &App) -> Option<String> {
             }
             None
         }
-        AppMode::Diff => {
+        AppMode::Diff | AppMode::View => {
             // Get selected component from components tab
             if let Some(ref result) = app.data.diff_result {
                 let idx = app.components_state().selected;

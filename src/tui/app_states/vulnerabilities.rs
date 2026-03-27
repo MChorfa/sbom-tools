@@ -17,6 +17,11 @@ pub struct VulnerabilitiesState {
     pub cached_indices: Vec<(DiffVulnStatus, usize)>,
     /// Cached attack paths for the currently selected vulnerability: (component_name, paths)
     pub(crate) cached_attack_paths: Option<(String, Vec<crate::tui::security::AttackPath>)>,
+    /// Hash of (filter, sort, group_by_component, expanded_groups) for grouped render cache invalidation.
+    /// Updated in `invalidate_grouped_cache()` when any grouping-relevant state changes.
+    pub(crate) grouped_cache_generation: u64,
+    /// Advanced composable filter applied on top of the primary `VulnFilter`.
+    pub advanced_filter: VulnFilterSpec,
 }
 
 impl VulnerabilitiesState {
@@ -31,6 +36,8 @@ impl VulnerabilitiesState {
             cached_key: None,
             cached_indices: Vec::new(),
             cached_attack_paths: None,
+            grouped_cache_generation: 0,
+            advanced_filter: VulnFilterSpec::default(),
         }
     }
 
@@ -38,12 +45,37 @@ impl VulnerabilitiesState {
     pub fn invalidate_cache(&mut self) {
         self.cached_key = None;
         self.cached_indices.clear();
+        self.invalidate_grouped_cache();
+    }
+
+    /// Compute a hash of the current grouped-render-relevant state.
+    fn compute_grouped_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.filter.hash(&mut hasher);
+        self.sort_by.hash(&mut hasher);
+        self.group_by_component.hash(&mut hasher);
+        self.expanded_groups.len().hash(&mut hasher);
+        // Hash expanded groups in sorted order for determinism
+        let mut sorted: Vec<&String> = self.expanded_groups.iter().collect();
+        sorted.sort();
+        for g in sorted {
+            g.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Bump the grouped cache generation if the grouping state has changed.
+    /// Call this after any mutation to filter, sort, group_by_component, or expanded_groups.
+    pub(crate) fn invalidate_grouped_cache(&mut self) {
+        self.grouped_cache_generation = self.compute_grouped_hash();
     }
 
     /// Toggle grouped display mode
-    pub const fn toggle_grouped_mode(&mut self) {
+    pub fn toggle_grouped_mode(&mut self) {
         self.group_by_component = !self.group_by_component;
         self.selected = 0;
+        self.invalidate_grouped_cache();
     }
 
     /// Toggle expansion of a group
@@ -53,6 +85,7 @@ impl VulnerabilitiesState {
         } else {
             self.expanded_groups.insert(component_id.to_string());
         }
+        self.invalidate_grouped_cache();
     }
 
     /// Expand all groups
@@ -60,11 +93,13 @@ impl VulnerabilitiesState {
         for id in group_ids {
             self.expanded_groups.insert(id.clone());
         }
+        self.invalidate_grouped_cache();
     }
 
     /// Collapse all groups
     pub fn collapse_all_groups(&mut self) {
         self.expanded_groups.clear();
+        self.invalidate_grouped_cache();
     }
 
     /// Check if a group is expanded
@@ -103,7 +138,7 @@ impl ListNavigation for VulnerabilitiesState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VulnFilter {
     All,
     Introduced,
@@ -151,7 +186,7 @@ impl VulnFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum VulnSort {
     #[default]
     Severity,
@@ -209,4 +244,60 @@ impl DiffVulnStatus {
 pub struct DiffVulnItem<'a> {
     pub status: DiffVulnStatus,
     pub vuln: &'a crate::diff::VulnerabilityDetail,
+}
+
+/// Composable vulnerability filter with multiple criteria.
+///
+/// Applied as a secondary filter on top of the primary `VulnFilter` cycle.
+/// When all fields are at their defaults the spec has no effect.
+#[derive(Debug, Clone, Default)]
+pub struct VulnFilterSpec {
+    /// Filter by severity level (None = any severity).
+    pub severity: Option<String>,
+    /// Filter by change status (None = any status).
+    pub status: Option<DiffVulnStatus>,
+    /// Only show KEV (Known Exploited Vulnerabilities).
+    pub kev_only: bool,
+    /// Only show actionable vulns (exclude VEX `NotAffected`/`Fixed`).
+    pub actionable_only: bool,
+}
+
+impl VulnFilterSpec {
+    /// Returns `true` when no criteria are set (pass-through).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.severity.is_none() && self.status.is_none() && !self.kev_only && !self.actionable_only
+    }
+
+    /// Check whether a vulnerability item passes all active criteria.
+    #[must_use]
+    pub fn matches(&self, item: &DiffVulnItem<'_>) -> bool {
+        // Severity filter
+        if let Some(ref sev) = self.severity
+            && !item.vuln.severity.eq_ignore_ascii_case(sev)
+        {
+            return false;
+        }
+        // Status filter
+        if let Some(status) = self.status
+            && item.status != status
+        {
+            return false;
+        }
+        // KEV filter
+        if self.kev_only && !item.vuln.is_kev {
+            return false;
+        }
+        // Actionable filter (exclude VEX NotAffected/Fixed)
+        if self.actionable_only
+            && let Some(ref vex) = item.vuln.vex_state
+            && matches!(
+                vex,
+                crate::model::VexState::NotAffected | crate::model::VexState::Fixed
+            )
+        {
+            return false;
+        }
+        true
+    }
 }

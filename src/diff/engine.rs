@@ -7,6 +7,8 @@ use super::changes::{
 pub use super::engine_config::LargeSbomConfig;
 use super::engine_matching::{ComponentMatchResult, match_components};
 use super::engine_rules::{apply_rules, remap_match_result};
+use super::incremental::ChangedSections;
+use super::result::MatchMetrics;
 use super::traits::ChangeComputer;
 use super::{CostModel, DiffResult, GraphDiffConfig, MatchInfo, diff_dependency_graph};
 use crate::error::SbomDiffError;
@@ -121,6 +123,13 @@ impl DiffEngine {
         old: &NormalizedSbom,
         new: &NormalizedSbom,
     ) -> Result<DiffResult, SbomDiffError> {
+        let _span = tracing::info_span!(
+            "diff_engine::diff",
+            old_components = old.component_count(),
+            new_components = new.component_count(),
+        )
+        .entered();
+
         let mut result = DiffResult::new();
 
         // Quick check: if content hashes match, SBOMs are identical
@@ -163,6 +172,32 @@ impl DiffEngine {
                 remap_match_result(&component_matches, old_canonical, new_canonical);
         }
 
+        // Compute match metrics for observability
+        {
+            let scores: Vec<f64> = component_matches.pairs.values().copied().collect();
+            let exact = scores.iter().filter(|&&s| s >= 0.99).count();
+            let fuzzy = scores.len() - exact;
+            let matched_count = scores.len();
+            let unmatched_old = old_filtered.component_count().saturating_sub(matched_count);
+            let unmatched_new = new_filtered.component_count().saturating_sub(matched_count);
+            let avg = if scores.is_empty() {
+                0.0
+            } else {
+                scores.iter().sum::<f64>() / scores.len() as f64
+            };
+            let min = scores.iter().copied().fold(f64::INFINITY, f64::min);
+
+            result.match_metrics = Some(MatchMetrics {
+                exact_matches: exact,
+                fuzzy_matches: fuzzy,
+                rule_matches: result.rules_applied,
+                unmatched_old,
+                unmatched_new,
+                avg_match_score: avg,
+                min_match_score: if min.is_infinite() { 0.0 } else { min },
+            });
+        }
+
         // Compute changes using the modular change computers
         self.compute_all_changes(
             &old_filtered,
@@ -185,16 +220,7 @@ impl DiffEngine {
         }
 
         // Calculate semantic score
-        result.semantic_score = self.cost_model.calculate_semantic_score(
-            result.components.added.len(),
-            result.components.removed.len(),
-            result.components.modified.len(),
-            result.licenses.component_changes.len(),
-            result.vulnerabilities.introduced.len(),
-            result.vulnerabilities.resolved.len(),
-            result.dependencies.added.len(),
-            result.dependencies.removed.len(),
-        );
+        result.semantic_score = self.compute_semantic_score(&result);
 
         result.calculate_summary();
         Ok(result)
@@ -258,6 +284,137 @@ impl DiffEngine {
         result.vulnerabilities.introduced = vuln_changes.introduced;
         result.vulnerabilities.resolved = vuln_changes.resolved;
         result.vulnerabilities.persistent = vuln_changes.persistent;
+        result.vulnerabilities.vex_changes = vuln_changes.vex_changes;
+    }
+
+    /// Diff only the specified sections, reusing cached results for unchanged sections.
+    ///
+    /// This enables true incremental diffing: when only some SBOM sections changed,
+    /// we skip recomputing the unchanged sections and reuse them from the cached result.
+    /// Component matching is always recomputed since it's needed by all section computers.
+    ///
+    /// Falls back to a full diff if no cached result is provided.
+    pub(crate) fn diff_sections(
+        &self,
+        old: &NormalizedSbom,
+        new: &NormalizedSbom,
+        sections: &ChangedSections,
+        cached: &DiffResult,
+    ) -> Result<DiffResult, SbomDiffError> {
+        // Start with the cached result so unchanged sections are preserved
+        let mut result = cached.clone();
+
+        // Apply custom matching rules if configured
+        let (old_filtered, new_filtered, canonical_maps) =
+            if let Some(rule_result) = apply_rules(self.rule_engine.as_ref(), old, new) {
+                result.rules_applied = rule_result.rules_count;
+                (
+                    Cow::Owned(rule_result.old_filtered),
+                    Cow::Owned(rule_result.new_filtered),
+                    Some((rule_result.old_canonical, rule_result.new_canonical)),
+                )
+            } else {
+                (Cow::Borrowed(old), Cow::Borrowed(new), None)
+            };
+
+        // Always recompute matching — it's needed for any section computer
+        let default_matcher = FuzzyMatcher::new(self.fuzzy_config.clone());
+        let matcher: &dyn ComponentMatcher = self
+            .custom_matcher
+            .as_ref()
+            .map_or(&default_matcher as &dyn ComponentMatcher, |m| m.as_ref());
+
+        let mut component_matches = match_components(
+            &old_filtered,
+            &new_filtered,
+            matcher,
+            &self.fuzzy_config,
+            &self.large_sbom_config,
+        );
+
+        // Apply canonical mappings from rule engine
+        if let Some((old_canonical, new_canonical)) = &canonical_maps {
+            component_matches =
+                remap_match_result(&component_matches, old_canonical, new_canonical);
+        }
+
+        // Selectively recompute only the changed sections
+        if sections.components {
+            let comp_computer = ComponentChangeComputer::new(self.cost_model.clone());
+            let comp_changes =
+                comp_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
+            result.components.added = comp_changes.added;
+            result.components.removed = comp_changes.removed;
+            result.components.modified = comp_changes
+                .modified
+                .into_iter()
+                .map(|mut change| {
+                    if let (Some(old_id), Some(new_id)) =
+                        (&change.old_canonical_id, &change.canonical_id)
+                        && let (Some(old_comp), Some(new_comp)) = (
+                            old_filtered.components.get(old_id),
+                            new_filtered.components.get(new_id),
+                        )
+                    {
+                        let explanation = matcher.explain_match(old_comp, new_comp);
+                        let mut match_info = MatchInfo::from_explanation(&explanation);
+                        if let Some(&score) = component_matches
+                            .pairs
+                            .get(&(old_id.clone(), new_id.clone()))
+                        {
+                            match_info.score = score;
+                        }
+                        change = change.with_match_info(match_info);
+                    }
+                    change
+                })
+                .collect();
+        }
+
+        if sections.dependencies {
+            let dep_computer = DependencyChangeComputer::new();
+            let dep_changes =
+                dep_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
+            result.dependencies.added = dep_changes.added;
+            result.dependencies.removed = dep_changes.removed;
+        }
+
+        if sections.licenses {
+            let lic_computer = LicenseChangeComputer::new();
+            let lic_changes =
+                lic_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
+            result.licenses.new_licenses = lic_changes.new_licenses;
+            result.licenses.removed_licenses = lic_changes.removed_licenses;
+        }
+
+        if sections.vulnerabilities {
+            let vuln_computer = VulnerabilityChangeComputer::new();
+            let vuln_changes =
+                vuln_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
+            result.vulnerabilities.introduced = vuln_changes.introduced;
+            result.vulnerabilities.resolved = vuln_changes.resolved;
+            result.vulnerabilities.persistent = vuln_changes.persistent;
+            result.vulnerabilities.vex_changes = vuln_changes.vex_changes;
+        }
+
+        // Always recompute summary and semantic score since they depend on all sections
+        result.semantic_score = self.compute_semantic_score(&result);
+        result.calculate_summary();
+        Ok(result)
+    }
+
+    /// Compute the semantic score from a `DiffResult`.
+    fn compute_semantic_score(&self, result: &DiffResult) -> f64 {
+        self.cost_model.calculate_semantic_score(
+            result.components.added.len(),
+            result.components.removed.len(),
+            result.components.modified.len(),
+            result.licenses.component_changes.len(),
+            result.vulnerabilities.introduced.len(),
+            result.vulnerabilities.resolved.len(),
+            result.dependencies.added.len(),
+            result.dependencies.removed.len(),
+        )
     }
 }
 

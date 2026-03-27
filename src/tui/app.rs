@@ -378,14 +378,15 @@ impl App {
     /// The export is scoped to the active tab: e.g. if the user is on the
     /// Vulnerabilities tab only vulnerability data is included.
     pub fn export(&mut self, format: super::export::ExportFormat) {
-        use super::export::{export_diff, tab_to_report_type};
+        use super::export::{
+            export_diff, export_view, tab_to_report_type, view_tab_to_report_type,
+        };
         use crate::reports::ReportConfig;
-
-        let report_type = tab_to_report_type(self.active_tab);
-        let config = ReportConfig::with_types(vec![report_type]);
 
         let result = match self.mode {
             AppMode::Diff => {
+                let report_type = tab_to_report_type(self.active_tab);
+                let config = ReportConfig::with_types(vec![report_type]);
                 if let (Some(diff_result), Some(old_sbom), Some(new_sbom)) = (
                     &self.data.diff_result,
                     &self.data.old_sbom,
@@ -402,6 +403,29 @@ impl App {
                     )
                 } else {
                     self.set_status_message("No diff data to export");
+                    return;
+                }
+            }
+            AppMode::View => {
+                // Map diff TabKind to ViewTab for report type mapping
+                let report_type = match self.active_tab {
+                    super::TabKind::Tree => view_tab_to_report_type(crate::tui::ViewTab::Tree),
+                    super::TabKind::Vulnerabilities => {
+                        view_tab_to_report_type(crate::tui::ViewTab::Vulnerabilities)
+                    }
+                    super::TabKind::Licenses => {
+                        view_tab_to_report_type(crate::tui::ViewTab::Licenses)
+                    }
+                    super::TabKind::Dependencies => {
+                        view_tab_to_report_type(crate::tui::ViewTab::Dependencies)
+                    }
+                    _ => view_tab_to_report_type(crate::tui::ViewTab::Overview),
+                };
+                let config = ReportConfig::with_types(vec![report_type]);
+                if let Some(ref sbom) = self.data.sbom {
+                    export_view(format, sbom, None, &config, self.export_template.as_deref())
+                } else {
+                    self.set_status_message("No SBOM data available for export");
                     return;
                 }
             }
@@ -892,14 +916,14 @@ impl App {
         self.ensure_compliance_results();
 
         // 3. Vulnerability cache (was inline in render_vulnerabilities)
-        if self.mode == AppMode::Diff {
+        if matches!(self.mode, AppMode::Diff | AppMode::View) {
             self.ensure_vulnerability_cache();
         }
 
         // 4. Component totals (was inline in render_components)
         let comp_filter = self.components_state().filter;
         let comp_total = match self.mode {
-            AppMode::Diff => self.diff_component_count(comp_filter),
+            AppMode::Diff | AppMode::View => self.diff_component_count(comp_filter),
             AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
         };
         self.components_state_mut().total = comp_total;
@@ -925,7 +949,7 @@ impl App {
         // 9. Side-by-side totals (was inline in render_sidebyside)
         // Totals are set by set_totals in the render function, which is now
         // hoisted here using cached aligned rows or diff data.
-        if self.mode == AppMode::Diff
+        if matches!(self.mode, AppMode::Diff | AppMode::View)
             && let Some(ref result) = self.data.diff_result
         {
             let left = result.components.removed.len() + result.components.modified.len();
@@ -937,7 +961,7 @@ impl App {
     /// Pre-compute license totals for rendering.
     fn prepare_license_totals(&mut self) {
         match self.mode {
-            AppMode::Diff => {
+            AppMode::Diff | AppMode::View => {
                 if let Some(ref result) = self.data.diff_result {
                     let focus_left = self.licenses_state().focus_left;
                     let risk_filter = self.licenses_state().risk_filter;
@@ -981,7 +1005,7 @@ impl App {
     /// Pre-compute vulnerability totals for rendering.
     fn prepare_vulnerability_totals(&mut self) {
         let vuln_total = match self.mode {
-            AppMode::Diff => self.diff_vulnerability_count(),
+            AppMode::Diff | AppMode::View => self.diff_vulnerability_count(),
             AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
         };
         self.vulnerabilities_state_mut().total = vuln_total;
@@ -1001,6 +1025,8 @@ impl App {
 pub enum AppMode {
     /// Comparing two SBOMs
     Diff,
+    /// Exploring a single SBOM
+    View,
     /// 1:N multi-diff comparison
     MultiDiff,
     /// Timeline analysis
@@ -1013,6 +1039,10 @@ pub enum AppMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabKind {
     Summary,
+    /// Single SBOM overview (View mode)
+    Overview,
+    /// Hierarchical component browser (View mode)
+    Tree,
     Components,
     Dependencies,
     Licenses,
@@ -1029,6 +1059,8 @@ impl TabKind {
     pub const fn title(&self) -> &'static str {
         match self {
             Self::Summary => "Summary",
+            Self::Overview => "Overview",
+            Self::Tree => "Tree",
             Self::Components => "Components",
             Self::Dependencies => "Dependencies",
             Self::Licenses => "Licenses",
@@ -1046,6 +1078,8 @@ impl TabKind {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Summary => "summary",
+            Self::Overview => "overview",
+            Self::Tree => "tree",
             Self::Components => "components",
             Self::Dependencies => "dependencies",
             Self::Licenses => "licenses",
@@ -1063,6 +1097,8 @@ impl TabKind {
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s {
             "summary" => Some(Self::Summary),
+            "overview" => Some(Self::Overview),
+            "tree" => Some(Self::Tree),
             "components" => Some(Self::Components),
             "dependencies" => Some(Self::Dependencies),
             "licenses" => Some(Self::Licenses),
@@ -1073,6 +1109,37 @@ impl TabKind {
             "graph" => Some(Self::GraphChanges),
             "source" => Some(Self::Source),
             _ => None,
+        }
+    }
+
+    /// Returns the tabs visible in a given mode.
+    #[must_use]
+    pub const fn tabs_for_mode(mode: AppMode) -> &'static [TabKind] {
+        match mode {
+            AppMode::View => &[
+                TabKind::Overview,
+                TabKind::Tree,
+                TabKind::Vulnerabilities,
+                TabKind::Licenses,
+                TabKind::Dependencies,
+                TabKind::Quality,
+                TabKind::Compliance,
+                TabKind::Source,
+            ],
+            AppMode::Diff => &[
+                TabKind::Summary,
+                TabKind::Components,
+                TabKind::Dependencies,
+                TabKind::Licenses,
+                TabKind::Vulnerabilities,
+                TabKind::Quality,
+                TabKind::Compliance,
+                TabKind::SideBySide,
+                TabKind::GraphChanges,
+                TabKind::Source,
+            ],
+            // MultiDiff/Timeline/Matrix use full-screen renders, not tabs
+            AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => &[],
         }
     }
 }

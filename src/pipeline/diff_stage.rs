@@ -128,6 +128,17 @@ pub fn compute_diff(
         print_threshold_recommendation(old_sbom, new_sbom, fuzzy_config);
     }
 
+    // Compute quality delta
+    {
+        let scorer = crate::quality::QualityScorer::new(crate::quality::ScoringProfile::Standard);
+        let old_report = scorer.score(old_sbom);
+        let new_report = scorer.score(new_sbom);
+        result.quality_delta = Some(crate::diff::QualityDelta::from_reports(
+            &old_report,
+            &new_report,
+        ));
+    }
+
     Ok(result)
 }
 

@@ -32,13 +32,13 @@ pub fn render_components(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // Totals and clamp_selection are done in prepare_render().
     // Compute total_unfiltered for empty-state display only.
     let total_unfiltered = match ctx.mode {
-        AppMode::Diff => ctx.diff_result.map_or(0, |r| r.components.total()),
+        AppMode::Diff | AppMode::View => ctx.diff_result.map_or(0, |r| r.components.total()),
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
     };
 
     // Build the list data once for rendering
     let component_data = match ctx.mode {
-        AppMode::Diff => ComponentListData::Diff(ctx.diff_component_items()),
+        AppMode::Diff | AppMode::View => ComponentListData::Diff(ctx.diff_component_items()),
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => ComponentListData::Empty,
     };
 
@@ -611,6 +611,31 @@ fn get_diff_rows(ctx: &RenderContext, components: &[&ComponentChange]) -> Vec<Ro
                 row_style
             };
 
+            // Detect version downgrades for the "New Version" cell
+            let new_version_cell = if let (Some(old_ver), Some(new_ver)) =
+                (&comp.old_version, &comp.new_version)
+            {
+                use crate::tui::security::{VersionChange, detect_version_downgrade};
+                if detect_version_downgrade(old_ver, new_ver) == VersionChange::Downgrade {
+                    Cell::from(Line::from(vec![
+                        Span::raw(new_ver.clone()),
+                        Span::styled(" \u{2193}DG", Style::default().fg(colors().critical).bold()),
+                    ]))
+                } else {
+                    Cell::from(
+                        comp.new_version
+                            .clone()
+                            .unwrap_or_else(|| "\u{2014}".to_string()),
+                    )
+                }
+            } else {
+                Cell::from(
+                    comp.new_version
+                        .clone()
+                        .unwrap_or_else(|| "\u{2014}".to_string()),
+                )
+            };
+
             Row::new(vec![
                 Cell::from(Span::styled(
                     format!("{checkbox}{label}"),
@@ -622,11 +647,7 @@ fn get_diff_rows(ctx: &RenderContext, components: &[&ComponentChange]) -> Vec<Ro
                         .clone()
                         .unwrap_or_else(|| "\u{2014}".to_string()),
                 ),
-                Cell::from(
-                    comp.new_version
-                        .clone()
-                        .unwrap_or_else(|| "\u{2014}".to_string()),
-                ),
+                new_version_cell,
                 Cell::from(comp.ecosystem.clone().unwrap_or_else(|| "-".to_string())),
                 Cell::from(if comp.field_changes.is_empty() {
                     "-".to_string()

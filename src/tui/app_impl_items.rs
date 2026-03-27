@@ -186,6 +186,12 @@ impl App {
             }
         }
 
+        // Apply the composable advanced filter on top of the primary filter.
+        let advanced = &self.vulnerabilities_state().advanced_filter;
+        if !advanced.is_empty() {
+            all_vulns.retain(|item| advanced.matches(item));
+        }
+
         // Get blast radius data for FixUrgency sorting
         let reverse_graph = &self.dependencies_state().cached_reverse_graph;
 
@@ -312,8 +318,17 @@ impl App {
 
     /// Count diff-mode vulnerabilities matching the current filter (without building full list).
     /// More efficient than `diff_vulnerability_items().len()` for just getting a count.
+    ///
+    /// Falls back to the full list when the advanced composable filter is active,
+    /// since it needs `DiffVulnItem` references to check multi-criteria.
     #[must_use]
     pub fn diff_vulnerability_count(&self) -> usize {
+        // When the advanced filter is active, delegate to the full list builder
+        // since VulnFilterSpec::matches needs DiffVulnItem references.
+        if !self.vulnerabilities_state().advanced_filter.is_empty() {
+            return self.diff_vulnerability_items().len();
+        }
+
         let Some(diff) = self.data.diff_result.as_ref() else {
             return 0;
         };

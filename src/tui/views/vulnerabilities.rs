@@ -9,6 +9,22 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
+use std::cell::RefCell;
+
+// Thread-local cache for grouped vulnerability render items.
+// Avoids rebuilding the grouped item list every frame when
+// the filter/sort/expand state hasn't changed.
+thread_local! {
+    static GROUPED_ITEMS_CACHE: RefCell<GroupedItemsCache> = const { RefCell::new(GroupedItemsCache {
+        generation: u64::MAX, // Will never match initial state (0)
+        items: Vec::new(),
+    }) };
+}
+
+struct GroupedItemsCache {
+    generation: u64,
+    items: Vec<VulnRenderItem>,
+}
 
 /// Structured vulnerability detail for the detail panel.
 struct VulnDetailInfo {
@@ -66,7 +82,7 @@ pub fn render_vulnerabilities(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
     // Compute total unfiltered count (totals/clamping already done in prepare_render)
     let total_unfiltered = match ctx.mode {
-        AppMode::Diff => ctx.diff_result.map_or(0, |r| {
+        AppMode::Diff | AppMode::View => ctx.diff_result.map_or(0, |r| {
             r.vulnerabilities.introduced.len()
                 + r.vulnerabilities.resolved.len()
                 + r.vulnerabilities.persistent.len()
@@ -76,16 +92,23 @@ pub fn render_vulnerabilities(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
     // Build the list data once for rendering (cache already warmed in prepare_render)
     let vuln_data = match ctx.mode {
-        AppMode::Diff => VulnListData::Diff(ctx.diff_vulnerability_items_from_cache()),
+        AppMode::Diff | AppMode::View => {
+            VulnListData::Diff(ctx.diff_vulnerability_items_from_cache())
+        }
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => VulnListData::Empty,
     };
 
-    // Pre-compute grouped render items once per frame (used by both table and detail panel)
-    let grouped_items = if ctx.vulnerabilities.group_by_component {
-        Some(build_grouped_render_items(ctx, &vuln_data))
-    } else {
-        None
-    };
+    // Pre-compute grouped render items (cached across frames, only rebuilt when state changes)
+    if ctx.vulnerabilities.group_by_component {
+        let generation = ctx.vulnerabilities.grouped_cache_generation;
+        GROUPED_ITEMS_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.generation != generation {
+                cache.items = build_grouped_render_items(ctx, &vuln_data);
+                cache.generation = generation;
+            }
+        });
+    }
 
     // Master-detail layout
     let content_chunks = Layout::default()
@@ -93,24 +116,28 @@ pub fn render_vulnerabilities(frame: &mut Frame, area: Rect, ctx: &RenderContext
         .constraints(widgets::MASTER_DETAIL_SPLIT)
         .split(chunks[1]);
 
-    // Vulnerability table (master)
-    render_vuln_table(
-        frame,
-        content_chunks[0],
-        ctx,
-        &vuln_data,
-        total_unfiltered,
-        grouped_items.as_deref(),
-    );
+    // Borrow the cached grouped items for the duration of rendering
+    GROUPED_ITEMS_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let grouped_items = if ctx.vulnerabilities.group_by_component {
+            Some(cache.items.as_slice())
+        } else {
+            None
+        };
 
-    // Detail panel
-    render_detail_panel(
-        frame,
-        content_chunks[1],
-        ctx,
-        &vuln_data,
-        grouped_items.as_deref(),
-    );
+        // Vulnerability table (master)
+        render_vuln_table(
+            frame,
+            content_chunks[0],
+            ctx,
+            &vuln_data,
+            total_unfiltered,
+            grouped_items,
+        );
+
+        // Detail panel
+        render_detail_panel(frame, content_chunks[1], ctx, &vuln_data, grouped_items);
+    });
 }
 
 /// Resolve the component name of the currently selected vulnerability (for cache keying).

@@ -9,14 +9,14 @@
 )]
 
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use sbom_tools::{
     cli,
     config::{
         BehaviorConfig, DiffConfig, DiffPaths, EcosystemRulesConfig, EnrichmentConfig,
-        FilterConfig, GraphAwareDiffConfig, MatchingConfig, MatchingRulesPathConfig, OutputConfig,
-        QueryConfig, ViewConfig, WatchConfig,
+        FilterConfig, GraphAwareDiffConfig, MatchingConfig, MatchingRulesPathConfig, MatrixConfig,
+        MultiDiffConfig, OutputConfig, QueryConfig, TimelineConfig, ViewConfig, WatchConfig,
     },
     pipeline::dirs,
     reports::{ReportFormat, ReportType},
@@ -98,6 +98,65 @@ struct Cli {
 // ============================================================================
 // Command argument structs (extracted for readability)
 // ============================================================================
+
+/// Shared enrichment and behavior arguments for multi-SBOM commands.
+#[derive(Args, Debug)]
+struct SharedEnrichmentArgs {
+    /// Enable OSV vulnerability enrichment
+    #[arg(long)]
+    enrich_vulns: bool,
+
+    /// Enable end-of-life detection
+    #[arg(long)]
+    enrich_eol: bool,
+
+    /// Apply external VEX document(s)
+    #[arg(long = "vex", value_name = "PATH")]
+    vex: Vec<PathBuf>,
+
+    /// Cache directory for vulnerability data
+    #[arg(long)]
+    vuln_cache_dir: Option<PathBuf>,
+
+    /// Cache TTL in hours
+    #[arg(long, default_value = "24")]
+    vuln_cache_ttl: u64,
+
+    /// Bypass cache and fetch fresh data
+    #[arg(long)]
+    refresh_vulns: bool,
+
+    /// API timeout in seconds
+    #[arg(long, default_value = "30")]
+    api_timeout: u64,
+
+    /// Filter by minimum severity
+    #[arg(long)]
+    severity: Option<String>,
+
+    /// Exit with code 2 if vulnerabilities introduced
+    #[arg(long)]
+    fail_on_vuln: bool,
+
+    /// Custom matching rules file
+    #[arg(long)]
+    matching_rules: Option<PathBuf>,
+}
+
+impl SharedEnrichmentArgs {
+    fn to_enrichment_config(&self) -> EnrichmentConfig {
+        EnrichmentConfig {
+            enabled: self.enrich_vulns,
+            cache_dir: self.vuln_cache_dir.clone(),
+            cache_ttl_hours: self.vuln_cache_ttl,
+            bypass_cache: self.refresh_vulns,
+            timeout_secs: self.api_timeout,
+            enable_eol: self.enrich_eol,
+            vex_paths: self.vex.clone(),
+            ..Default::default()
+        }
+    }
+}
 
 /// Arguments for the `diff` subcommand
 #[derive(Parser)]
@@ -353,6 +412,13 @@ struct DiffMultiArgs {
     /// Enable graph-aware diffing for multi-comparisons
     #[arg(long)]
     graph_diff: bool,
+
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
+
+    /// Exit with code 1 if any changes detected
+    #[arg(long)]
+    fail_on_change: bool,
 }
 
 /// Arguments for the `timeline` subcommand
@@ -377,6 +443,9 @@ struct TimelineArgs {
     /// Enable graph-aware diffing for timeline analysis
     #[arg(long)]
     graph_diff: bool,
+
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 }
 
 /// Arguments for the `matrix` subcommand
@@ -405,6 +474,9 @@ struct MatrixArgs {
     /// Enable graph-aware diffing for matrix comparison
     #[arg(long)]
     graph_diff: bool,
+
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 }
 
 /// Arguments for the `quality` subcommand
@@ -1043,32 +1115,129 @@ fn main() -> Result<()> {
             args.summary,
         ),
 
-        Commands::DiffMulti(args) => cli::run_diff_multi(
-            args.baseline,
-            args.targets,
-            args.output,
-            args.output_file,
-            args.fuzzy_preset,
-            args.include_unchanged,
-            args.graph_diff,
-        ),
+        Commands::DiffMulti(args) => {
+            let enrichment = args.enrichment.to_enrichment_config();
+            let config = MultiDiffConfig {
+                baseline: args.baseline,
+                targets: args.targets,
+                output: OutputConfig {
+                    format: args.output,
+                    file: args.output_file,
+                    ..Default::default()
+                },
+                matching: MatchingConfig {
+                    fuzzy_preset: args.fuzzy_preset,
+                    include_unchanged: args.include_unchanged,
+                    ..Default::default()
+                },
+                filtering: FilterConfig {
+                    min_severity: args.enrichment.severity.clone(),
+                    ..Default::default()
+                },
+                behavior: BehaviorConfig {
+                    fail_on_vuln: args.enrichment.fail_on_vuln,
+                    fail_on_change: args.fail_on_change,
+                    quiet: cli.quiet,
+                    ..Default::default()
+                },
+                graph_diff: GraphAwareDiffConfig {
+                    enabled: args.graph_diff,
+                    ..Default::default()
+                },
+                rules: MatchingRulesPathConfig {
+                    rules_file: args.enrichment.matching_rules.clone(),
+                    ..Default::default()
+                },
+                ecosystem_rules: Default::default(),
+                enrichment,
+            };
+            let exit_code = cli::run_diff_multi(config)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
 
-        Commands::Timeline(args) => cli::run_timeline(
-            args.sboms,
-            args.output,
-            args.output_file,
-            args.fuzzy_preset,
-            args.graph_diff,
-        ),
+        Commands::Timeline(args) => {
+            let enrichment = args.enrichment.to_enrichment_config();
+            let config = TimelineConfig {
+                sbom_paths: args.sboms,
+                output: OutputConfig {
+                    format: args.output,
+                    file: args.output_file,
+                    ..Default::default()
+                },
+                matching: MatchingConfig {
+                    fuzzy_preset: args.fuzzy_preset,
+                    ..Default::default()
+                },
+                filtering: FilterConfig {
+                    min_severity: args.enrichment.severity.clone(),
+                    ..Default::default()
+                },
+                behavior: BehaviorConfig {
+                    fail_on_vuln: args.enrichment.fail_on_vuln,
+                    quiet: cli.quiet,
+                    ..Default::default()
+                },
+                graph_diff: GraphAwareDiffConfig {
+                    enabled: args.graph_diff,
+                    ..Default::default()
+                },
+                rules: MatchingRulesPathConfig {
+                    rules_file: args.enrichment.matching_rules.clone(),
+                    ..Default::default()
+                },
+                ecosystem_rules: Default::default(),
+                enrichment,
+            };
+            let exit_code = cli::run_timeline(config)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
 
-        Commands::Matrix(args) => cli::run_matrix(
-            args.sboms,
-            args.output,
-            args.output_file,
-            args.fuzzy_preset,
-            args.cluster_threshold,
-            args.graph_diff,
-        ),
+        Commands::Matrix(args) => {
+            let enrichment = args.enrichment.to_enrichment_config();
+            let config = MatrixConfig {
+                sbom_paths: args.sboms,
+                output: OutputConfig {
+                    format: args.output,
+                    file: args.output_file,
+                    ..Default::default()
+                },
+                matching: MatchingConfig {
+                    fuzzy_preset: args.fuzzy_preset,
+                    ..Default::default()
+                },
+                cluster_threshold: args.cluster_threshold,
+                filtering: FilterConfig {
+                    min_severity: args.enrichment.severity.clone(),
+                    ..Default::default()
+                },
+                behavior: BehaviorConfig {
+                    fail_on_vuln: args.enrichment.fail_on_vuln,
+                    quiet: cli.quiet,
+                    ..Default::default()
+                },
+                graph_diff: GraphAwareDiffConfig {
+                    enabled: args.graph_diff,
+                    ..Default::default()
+                },
+                rules: MatchingRulesPathConfig {
+                    rules_file: args.enrichment.matching_rules.clone(),
+                    ..Default::default()
+                },
+                ecosystem_rules: Default::default(),
+                enrichment,
+            };
+            let exit_code = cli::run_matrix(config)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
 
         Commands::Quality(args) => {
             let exit_code = cli::run_quality(
