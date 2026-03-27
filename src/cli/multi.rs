@@ -149,6 +149,9 @@ pub fn run_timeline(config: TimelineConfig) -> Result<i32> {
     // Output result
     let (output_target, effective_output) = resolve_output(&config.output);
 
+    // Determine exit code
+    let exit_code = determine_timeline_exit_code(&config.behavior, &result);
+
     if effective_output == ReportFormat::Tui {
         let mut app = App::new_timeline(result);
         run_tui(&mut app)?;
@@ -157,7 +160,7 @@ pub fn run_timeline(config: TimelineConfig) -> Result<i32> {
         write_output(&json, &output_target, quiet)?;
     }
 
-    Ok(exit_codes::SUCCESS)
+    Ok(exit_code)
 }
 
 /// Run the matrix command (N×N comparison), returning the desired exit code.
@@ -210,6 +213,9 @@ pub fn run_matrix(config: MatrixConfig) -> Result<i32> {
     // Output result
     let (output_target, effective_output) = resolve_output(&config.output);
 
+    // Determine exit code
+    let exit_code = determine_matrix_exit_code(&config.behavior, &result);
+
     if effective_output == ReportFormat::Tui {
         let mut app = App::new_matrix(result);
         run_tui(&mut app)?;
@@ -218,7 +224,7 @@ pub fn run_matrix(config: MatrixConfig) -> Result<i32> {
         write_output(&json, &output_target, quiet)?;
     }
 
-    Ok(exit_codes::SUCCESS)
+    Ok(exit_code)
 }
 
 /// Parse and optionally enrich multiple SBOMs.
@@ -272,6 +278,64 @@ fn determine_multi_exit_code(
     }
     if behavior.fail_on_change && total_changes > 0 {
         return exit_codes::CHANGES_DETECTED;
+    }
+    exit_codes::SUCCESS
+}
+
+/// Determine exit code for timeline commands based on behavior config.
+fn determine_timeline_exit_code(
+    behavior: &crate::config::BehaviorConfig,
+    result: &crate::diff::TimelineResult,
+) -> i32 {
+    if behavior.fail_on_vuln {
+        let total_introduced: usize = result
+            .incremental_diffs
+            .iter()
+            .map(|d| d.summary.vulnerabilities_introduced)
+            .sum();
+        if total_introduced > 0 {
+            return exit_codes::VULNS_INTRODUCED;
+        }
+    }
+    if behavior.fail_on_change {
+        let total_changes: usize = result
+            .incremental_diffs
+            .iter()
+            .map(|d| d.summary.total_changes)
+            .sum();
+        if total_changes > 0 {
+            return exit_codes::CHANGES_DETECTED;
+        }
+    }
+    exit_codes::SUCCESS
+}
+
+/// Determine exit code for matrix commands based on behavior config.
+fn determine_matrix_exit_code(
+    behavior: &crate::config::BehaviorConfig,
+    result: &crate::diff::MatrixResult,
+) -> i32 {
+    if behavior.fail_on_vuln {
+        let total_introduced: usize = result
+            .diffs
+            .iter()
+            .flatten()
+            .map(|d| d.summary.vulnerabilities_introduced)
+            .sum();
+        if total_introduced > 0 {
+            return exit_codes::VULNS_INTRODUCED;
+        }
+    }
+    if behavior.fail_on_change {
+        let total_changes: usize = result
+            .diffs
+            .iter()
+            .flatten()
+            .map(|d| d.summary.total_changes)
+            .sum();
+        if total_changes > 0 {
+            return exit_codes::CHANGES_DETECTED;
+        }
     }
     exit_codes::SUCCESS
 }
