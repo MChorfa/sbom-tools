@@ -1,10 +1,11 @@
+mod common;
+
+use common::ffi_helpers::{consume_result, into_c_string};
 use sbom_tools::ffi::{
-    SbomToolsErrorCode, SbomToolsScoringProfile, SbomToolsStringResult,
-    sbom_tools_abi_version_json, sbom_tools_detect_format_json, sbom_tools_diff_sboms_json,
-    sbom_tools_parse_sbom_path_json, sbom_tools_score_sbom_json, sbom_tools_string_result_free,
+    SbomToolsScoringProfile, sbom_tools_abi_version_json, sbom_tools_detect_format_json,
+    sbom_tools_diff_sboms_json, sbom_tools_parse_sbom_path_json, sbom_tools_score_sbom_json,
 };
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -13,46 +14,11 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(FIXTURES_DIR).join(name)
 }
 
-fn into_c_string(value: &str) -> CString {
-    CString::new(value).expect("input should be free of NUL bytes")
-}
-
-fn consume_result(result: SbomToolsStringResult) -> Result<String, (SbomToolsErrorCode, String)> {
-    let code = result.error_code;
-    let payload = if result.data.is_null() {
-        None
-    } else {
-        // SAFETY: pointer ownership belongs to the ABI result and stays valid
-        // until sbom_tools_string_result_free is invoked.
-        Some(unsafe { CStr::from_ptr(result.data) }.to_string_lossy().into_owned())
-    };
-    let error_message = if result.error_message.is_null() {
-        None
-    } else {
-        // SAFETY: pointer ownership belongs to the ABI result and stays valid
-        // until sbom_tools_string_result_free is invoked.
-        Some(
-            unsafe { CStr::from_ptr(result.error_message) }
-                .to_string_lossy()
-                .into_owned(),
-        )
-    };
-
-    sbom_tools_string_result_free(result);
-
-    if code == SbomToolsErrorCode::Ok {
-        Ok(payload.expect("successful result should include payload"))
-    } else {
-        Err((
-            code,
-            error_message.expect("failing result should include error message"),
-        ))
-    }
-}
-
 fn assert_required_keys(payload: &str, required: &[String]) {
     let value: serde_json::Value = serde_json::from_str(payload).expect("ABI JSON should be valid");
-    let object = value.as_object().expect("ABI response should be a JSON object");
+    let object = value
+        .as_object()
+        .expect("ABI response should be a JSON object");
     for key in required {
         assert!(
             object.contains_key(key),
@@ -64,15 +30,13 @@ fn assert_required_keys(payload: &str, required: &[String]) {
 #[test]
 fn abi_contract_snapshots_are_enforced() {
     let contract_path = fixture_path("abi/contract_required_keys.json");
-    let contract_raw = std::fs::read_to_string(contract_path).expect("snapshot fixture should exist");
+    let contract_raw =
+        std::fs::read_to_string(contract_path).expect("snapshot fixture should exist");
     let contract: HashMap<String, HashMap<String, Vec<String>>> =
         serde_json::from_str(&contract_raw).expect("snapshot fixture should parse");
 
     let abi_version = consume_result(sbom_tools_abi_version_json()).expect("ABI version payload");
-    assert_required_keys(
-        &abi_version,
-        &contract["abi_version_json"]["required_keys"],
-    );
+    assert_required_keys(&abi_version, &contract["abi_version_json"]["required_keys"]);
 
     let detect_input = into_c_string(r#"{"bomFormat":"CycloneDX","specVersion":"1.6"}"#);
     let detection = consume_result(sbom_tools_detect_format_json(detect_input.as_ptr()))
@@ -119,12 +83,10 @@ fn abi_contract_snapshots_are_enforced() {
 
 #[test]
 fn c_header_signatures_snapshot_is_enforced() {
-    let header = std::fs::read_to_string(
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/bindings/swift/Sources/CSbomTools/include/sbom_tools.h"
-        ),
-    )
+    let header = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/bindings/swift/Sources/CSbomTools/include/sbom_tools.h"
+    ))
     .expect("header should exist");
 
     let expected = std::fs::read_to_string(fixture_path("abi/header_signatures.txt"))

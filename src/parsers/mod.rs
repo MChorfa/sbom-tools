@@ -41,11 +41,14 @@ pub use streaming::{ParseEvent, ParseProgress, StreamingConfig, StreamingParser}
 pub use traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
 
 use crate::model::NormalizedSbom;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Result of format detection
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Note: Serialize/Deserialize support was added in v0.1.18 to support FFI and
+/// external tooling integration. This is a backwards-compatible expansion of the API.
+#[cfg_attr(feature = "ffi", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
 pub struct DetectedFormat {
     /// Name of the detected format
     pub format_name: String,

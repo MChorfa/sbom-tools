@@ -32,7 +32,7 @@ private func linkerSettings() -> [LinkerSetting] {
     if !searchPathFlags.isEmpty {
         settings.append(.unsafeFlags(searchPathFlags))
     }
-    settings.append(.linkedLibrary("sbom_tools"))
+    settings.append(.linkedLibrary("sbom_tools_ffi"))
     return settings
 }
 

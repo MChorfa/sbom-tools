@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "crates/sbom-tools-ffi"]
+exclude = ["dagger/rust-sdk"]
 
 [package]
 name = "sbom-tools"
@@ -81,6 +82,22 @@ harness = false
 [[bench]]
 name = "large_sbom"
 harness = false
+
+[[test]]
+name = "ffi_bindings"
+required-features = ["ffi"]
+
+[[test]]
+name = "ffi_schema_snapshots"
+required-features = ["ffi"]
+
+[[test]]
+name = "conformance_ffi"
+required-features = ["ffi"]
+
+[[test]]
+name = "ffi_regression"
+required-features = ["ffi"]
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"

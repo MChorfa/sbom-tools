@@ -10,7 +10,7 @@ permissions: read-all
 
 jobs:
   dagger-rust-sdk:
-    name: Dagger Rust SDK (staticlib + ABI)
+    name: Dagger CI (workspace check + staticlib + FFI tests + Go bindings)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -39,10 +39,16 @@ jobs:
       - name: Build FFI library
         run: bash ./scripts/build-bindings-mvp.sh
       - name: Test FFI ABI
-        run: cargo test --locked --test ffi_bindings
+        run: cargo test --locked --features ffi --test ffi_bindings
 
       - name: Test ABI snapshot contracts
-        run: cargo test --locked --test ffi_schema_snapshots
+        run: cargo test --locked --features ffi --test ffi_schema_snapshots
+
+      - name: Test FFI conformance (bidirectional ABI)
+        run: cargo test --locked --features ffi --test conformance_ffi
+
+      - name: Test FFI regression (PR #113 + multi-format)
+        run: cargo test --locked --features ffi --test ffi_regression
 
   go-bindings:
     name: Go Bindings (${{ matrix.os }})

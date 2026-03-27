@@ -2,11 +2,11 @@ package sbomtools
 
 /*
 #cgo CFLAGS: -I../swift/Sources/CSbomTools/include
-#cgo darwin,arm64 LDFLAGS: -L../../target/aarch64-apple-darwin/release -L../../target/aarch64-apple-darwin/debug -L../../target/release -L../../target/debug -lsbom_tools
-#cgo darwin,amd64 LDFLAGS: -L../../target/x86_64-apple-darwin/release -L../../target/x86_64-apple-darwin/debug -L../../target/release -L../../target/debug -lsbom_tools
-#cgo linux,amd64 LDFLAGS: -L../../target/x86_64-unknown-linux-gnu/release -L../../target/x86_64-unknown-linux-gnu/debug -L../../target/release -L../../target/debug -Wl,-Bstatic -lsbom_tools -Wl,-Bdynamic -lm -ldl -lpthread
-#cgo linux,arm64 LDFLAGS: -L../../target/aarch64-unknown-linux-gnu/release -L../../target/aarch64-unknown-linux-gnu/debug -L../../target/release -L../../target/debug -Wl,-Bstatic -lsbom_tools -Wl,-Bdynamic -lm -ldl -lpthread
-#cgo !darwin,!linux LDFLAGS: -L../../target/release -L../../target/debug -lsbom_tools
+#cgo darwin,arm64 LDFLAGS: -L../../target/aarch64-apple-darwin/release -L../../target/aarch64-apple-darwin/debug -L../../target/release -L../../target/debug -lsbom_tools_ffi
+#cgo darwin,amd64 LDFLAGS: -L../../target/x86_64-apple-darwin/release -L../../target/x86_64-apple-darwin/debug -L../../target/release -L../../target/debug -lsbom_tools_ffi
+#cgo linux,amd64 LDFLAGS: -L../../target/x86_64-unknown-linux-gnu/release -L../../target/x86_64-unknown-linux-gnu/debug -L../../target/release -L../../target/debug -Wl,-Bstatic -lsbom_tools_ffi -Wl,-Bdynamic -lm -ldl -lpthread
+#cgo linux,arm64 LDFLAGS: -L../../target/aarch64-unknown-linux-gnu/release -L../../target/aarch64-unknown-linux-gnu/debug -L../../target/release -L../../target/debug -Wl,-Bstatic -lsbom_tools_ffi -Wl,-Bdynamic -lm -ldl -lpthread
+#cgo !darwin,!linux LDFLAGS: -L../../target/release -L../../target/debug -lsbom_tools_ffi
 #include <stdlib.h>
 #include "sbom_tools.h"
 */
@@ -387,11 +387,25 @@ func Decode[T any](payload []byte) (*T, error) {
 }
 
 func consumeResult(result C.SbomToolsStringResult) ([]byte, error) {
+	// SAFETY: Free the result after we extract data. Passed by value per C ABI.
+	// Pointer zeroing in free() defends against accidental double-free on copies.
 	defer C.sbom_tools_string_result_free(result)
 
 	if result.error_code != C.SBOM_TOOLS_ERROR_OK {
-		message := C.GoString(result.error_message)
+		var message string
+		if result.error_message != nil {
+			message = C.GoString(result.error_message)
+		}
+		// Provide context if error_message is NULL (Rust into_c_string() may have failed on line 164)
+		if message == "" {
+			message = fmt.Sprintf("unknown ABI error (code %d) - error message allocation failed in Rust", result.error_code)
+		}
 		return nil, &Error{Code: ErrorCode(result.error_code), Message: message}
+	}
+
+	// OK response: data should be valid pointer. If NULL, return empty bytes as safeguard.
+	if result.data == nil {
+		return []byte{}, nil
 	}
 
 	return []byte(C.GoString(result.data)), nil

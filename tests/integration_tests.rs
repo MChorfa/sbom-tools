@@ -2308,7 +2308,6 @@ mod streaming_tests {
 
     #[test]
     fn test_streaming_spdx3_via_reader() {
-        use sbom_tools::parsers::parse_sbom;
         use std::path::Path;
 
         // SPDX 3.0 should work through the reader path (used by streaming parser)

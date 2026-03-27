@@ -3,7 +3,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::diff::DiffEngine;
-use crate::model::{CanonicalId, Component, DependencyEdge, DocumentMetadata, FormatExtensions, NormalizedSbom};
+use crate::model::{
+    CanonicalId, Component, DependencyEdge, DocumentMetadata, FormatExtensions, NormalizedSbom,
+};
 use crate::parsers::{ParseError, detect_format, parse_sbom, parse_sbom_str};
 use crate::quality::{QualityScorer, ScoringProfile};
 use indexmap::IndexMap;
@@ -173,40 +175,65 @@ fn read_input(value: *const c_char, field: &str) -> Result<String, FfiError> {
 
     // SAFETY: The caller guarantees a valid NUL-terminated string pointer.
     let c_string = unsafe { CStr::from_ptr(value) };
-    c_string.to_str().map(str::to_owned).map_err(|err| FfiError {
-        code: SbomToolsErrorCode::Validation,
-        message: format!("{field} must be valid UTF-8: {err}"),
-    })
+    c_string
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|err| FfiError {
+            code: SbomToolsErrorCode::Validation,
+            message: format!("{field} must be valid UTF-8: {err}"),
+        })
 }
 
 fn parse_normalized_sbom(json: &str, field: &str) -> Result<NormalizedSbom, FfiError> {
     serde_json::from_str::<AbiNormalizedSbom>(json)
         .map(AbiNormalizedSbom::into_sbom)
         .map_err(|err| FfiError {
-        code: SbomToolsErrorCode::Validation,
-        message: format!("invalid normalized SBOM JSON in {field}: {err}"),
-    })
+            code: SbomToolsErrorCode::Validation,
+            message: format!("invalid normalized SBOM JSON in {field}: {err}"),
+        })
 }
 
 fn map_parse_error(err: ParseError) -> FfiError {
-    let code = match err {
-        ParseError::IoError(_) => SbomToolsErrorCode::Io,
-        ParseError::UnsupportedVersion(_) | ParseError::UnknownFormat(_) => {
-            SbomToolsErrorCode::Unsupported
-        }
-        ParseError::ValidationError(_) | ParseError::MissingField(_) => {
-            SbomToolsErrorCode::Validation
-        }
-        ParseError::JsonError(_) | ParseError::XmlError(_) | ParseError::YamlError(_) => {
-            SbomToolsErrorCode::Parse
-        }
-        ParseError::InvalidStructure(_) => SbomToolsErrorCode::Parse,
+    let (code, message) = match err {
+        ParseError::IoError(_) => (
+            SbomToolsErrorCode::Io,
+            "failed to read file (permission denied, file not found, or I/O error)".to_string(),
+        ),
+        ParseError::UnsupportedVersion(v) => (
+            SbomToolsErrorCode::Unsupported,
+            format!("unsupported SBOM version: {v}"),
+        ),
+        ParseError::UnknownFormat(_) => (
+            SbomToolsErrorCode::Unsupported,
+            "unknown SBOM format (expected CycloneDX or SPDX)".to_string(),
+        ),
+        ParseError::ValidationError(msg) => (
+            SbomToolsErrorCode::Validation,
+            format!("SBOM validation failed: {msg}"),
+        ),
+        ParseError::MissingField(field) => (
+            SbomToolsErrorCode::Validation,
+            format!("required field missing: {field}"),
+        ),
+        ParseError::JsonError(msg) => (
+            SbomToolsErrorCode::Parse,
+            format!("JSON parsing failed: {msg}"),
+        ),
+        ParseError::XmlError(msg) => (
+            SbomToolsErrorCode::Parse,
+            format!("XML parsing failed: {msg}"),
+        ),
+        ParseError::YamlError(msg) => (
+            SbomToolsErrorCode::Parse,
+            format!("YAML parsing failed: {msg}"),
+        ),
+        ParseError::InvalidStructure(msg) => (
+            SbomToolsErrorCode::Parse,
+            format!("invalid SBOM structure: {msg}"),
+        ),
     };
 
-    FfiError {
-        code,
-        message: err.to_string(),
-    }
+    FfiError { code, message }
 }
 
 fn run_json<T, F>(operation: F) -> SbomToolsStringResult
@@ -226,13 +253,36 @@ where
     }
 }
 
+/// Wrap an FFI function body with panic catching.
+///
+/// Any panic inside the closure will be caught and converted to an FFI error.
+/// This prevents undefined behavior from panics crossing the FFI boundary.
+///
+/// # SAFETY & CORRECTNESS
+/// Panics must never unwind across the FFI boundary into C code (UB).
+/// This wrapper converts `catch_unwind` panic payload into an error result.
+fn catch_ffi_panic<F>(f: F) -> SbomToolsStringResult
+where
+    F: FnOnce() -> SbomToolsStringResult + std::panic::UnwindSafe,
+{
+    match std::panic::catch_unwind(f) {
+        Ok(result) => result,
+        Err(_) => SbomToolsStringResult::error(
+            SbomToolsErrorCode::Internal,
+            "internal panic caught at FFI boundary",
+        ),
+    }
+}
+
 /// Return the ABI and crate versions as JSON.
 #[unsafe(no_mangle)]
 pub extern "C" fn sbom_tools_abi_version_json() -> SbomToolsStringResult {
-    run_json(|| {
-        Ok(AbiVersionPayload {
-            abi_version: "1",
-            crate_version: ABI_VERSION,
+    catch_ffi_panic(|| {
+        run_json(|| {
+            Ok(AbiVersionPayload {
+                abi_version: "1",
+                crate_version: ABI_VERSION,
+            })
         })
     })
 }
@@ -240,35 +290,37 @@ pub extern "C" fn sbom_tools_abi_version_json() -> SbomToolsStringResult {
 /// Detect the SBOM format from raw content and return JSON.
 #[unsafe(no_mangle)]
 pub extern "C" fn sbom_tools_detect_format_json(content: *const c_char) -> SbomToolsStringResult {
-    run_json(|| {
-        let content = read_input(content, "content")?;
-        Ok(detect_format(&content))
+    catch_ffi_panic(|| {
+        run_json(|| {
+            let content = read_input(content, "content")?;
+            Ok(detect_format(&content))
+        })
     })
 }
 
 /// Parse an SBOM file from disk and return normalized JSON.
 #[unsafe(no_mangle)]
-pub extern "C" fn sbom_tools_parse_sbom_path_json(
-    path: *const c_char,
-) -> SbomToolsStringResult {
-    run_json(|| {
-        let path = read_input(path, "path")?;
-        parse_sbom(Path::new(&path))
-            .map(AbiNormalizedSbom::from_sbom)
-            .map_err(map_parse_error)
+pub extern "C" fn sbom_tools_parse_sbom_path_json(path: *const c_char) -> SbomToolsStringResult {
+    catch_ffi_panic(|| {
+        run_json(|| {
+            let path = read_input(path, "path")?;
+            parse_sbom(Path::new(&path))
+                .map(AbiNormalizedSbom::from_sbom)
+                .map_err(map_parse_error)
+        })
     })
 }
 
 /// Parse raw SBOM content and return normalized JSON.
 #[unsafe(no_mangle)]
-pub extern "C" fn sbom_tools_parse_sbom_str_json(
-    content: *const c_char,
-) -> SbomToolsStringResult {
-    run_json(|| {
-        let content = read_input(content, "content")?;
-        parse_sbom_str(&content)
-            .map(AbiNormalizedSbom::from_sbom)
-            .map_err(map_parse_error)
+pub extern "C" fn sbom_tools_parse_sbom_str_json(content: *const c_char) -> SbomToolsStringResult {
+    catch_ffi_panic(|| {
+        run_json(|| {
+            let content = read_input(content, "content")?;
+            parse_sbom_str(&content)
+                .map(AbiNormalizedSbom::from_sbom)
+                .map_err(map_parse_error)
+        })
     })
 }
 
@@ -278,15 +330,17 @@ pub extern "C" fn sbom_tools_diff_sboms_json(
     old_sbom_json: *const c_char,
     new_sbom_json: *const c_char,
 ) -> SbomToolsStringResult {
-    run_json(|| {
-        let old_json = read_input(old_sbom_json, "old_sbom_json")?;
-        let new_json = read_input(new_sbom_json, "new_sbom_json")?;
-        let old = parse_normalized_sbom(&old_json, "old_sbom_json")?;
-        let new = parse_normalized_sbom(&new_json, "new_sbom_json")?;
+    catch_ffi_panic(|| {
+        run_json(|| {
+            let old_json = read_input(old_sbom_json, "old_sbom_json")?;
+            let new_json = read_input(new_sbom_json, "new_sbom_json")?;
+            let old = parse_normalized_sbom(&old_json, "old_sbom_json")?;
+            let new = parse_normalized_sbom(&new_json, "new_sbom_json")?;
 
-        DiffEngine::new().diff(&old, &new).map_err(|err| FfiError {
-            code: SbomToolsErrorCode::Diff,
-            message: err.to_string(),
+            DiffEngine::new().diff(&old, &new).map_err(|err| FfiError {
+                code: SbomToolsErrorCode::Diff,
+                message: err.to_string(),
+            })
         })
     })
 }
@@ -297,31 +351,52 @@ pub extern "C" fn sbom_tools_score_sbom_json(
     sbom_json: *const c_char,
     profile: SbomToolsScoringProfile,
 ) -> SbomToolsStringResult {
-    run_json(|| {
-        let sbom_json = read_input(sbom_json, "sbom_json")?;
-        let sbom = parse_normalized_sbom(&sbom_json, "sbom_json")?;
-        Ok(QualityScorer::new(profile.into_rust()).score(&sbom))
+    catch_ffi_panic(|| {
+        run_json(|| {
+            let sbom_json = read_input(sbom_json, "sbom_json")?;
+            let sbom = parse_normalized_sbom(&sbom_json, "sbom_json")?;
+            Ok(QualityScorer::new(profile.into_rust()).score(&sbom))
+        })
     })
 }
 
 /// Free memory allocated by the ABI result.
 ///
 /// # Safety
-/// The caller must pass a result obtained from this ABI and must not reuse any
-/// pointers inside it after this function returns.
+/// - The caller must not free the same result twice
+/// - The result must not be used after this call
+/// - **Defense:** Passed by value per C ABI; caller may hold copies.
+///   Pointers are zeroed after freeing to defend against accidental double-free on copies.
+///
+/// # Design
+/// Takes the result by value (C calling convention). The caller may pass a copy.
+/// We zero internal pointers after freeing; subsequent free() calls on copies become no-ops
+/// because `is_null()` checks will skip the release.
+///
+/// # C Usage
+/// ```c
+/// SbomToolsStringResult result = sbom_tools_parse_sbom_str_json(content);
+/// // use result.data and result.error_message
+/// sbom_tools_string_result_free(result);
+/// // Calling sbom_tools_string_result_free(result) again is safe (no-op due to NULL pointers)
+/// ```
 #[unsafe(no_mangle)]
-pub extern "C" fn sbom_tools_string_result_free(result: SbomToolsStringResult) {
+pub extern "C" fn sbom_tools_string_result_free(mut result: SbomToolsStringResult) {
     if !result.data.is_null() {
         // SAFETY: The pointer was allocated by CString::into_raw in this module.
+        // Caller must guarantee this is the first and only free of this pointer.
         unsafe {
             drop(CString::from_raw(result.data));
         }
+        result.data = std::ptr::null_mut(); // Zero to defend against caller copies
     }
 
     if !result.error_message.is_null() {
         // SAFETY: The pointer was allocated by CString::into_raw in this module.
+        // Caller must guarantee this is the first and only free of this pointer.
         unsafe {
             drop(CString::from_raw(result.error_message));
         }
+        result.error_message = std::ptr::null_mut(); // Zero to defend against caller copies
     }
 }

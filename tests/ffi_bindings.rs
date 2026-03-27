@@ -1,52 +1,17 @@
+mod common;
+
+use common::ffi_helpers::{consume_result, into_c_string};
 use sbom_tools::ffi::{
-    SbomToolsErrorCode, SbomToolsScoringProfile, SbomToolsStringResult,
-    sbom_tools_abi_version_json, sbom_tools_detect_format_json, sbom_tools_diff_sboms_json,
-    sbom_tools_parse_sbom_path_json, sbom_tools_parse_sbom_str_json,
-    sbom_tools_score_sbom_json, sbom_tools_string_result_free,
+    SbomToolsErrorCode, SbomToolsScoringProfile, sbom_tools_abi_version_json,
+    sbom_tools_detect_format_json, sbom_tools_diff_sboms_json, sbom_tools_parse_sbom_path_json,
+    sbom_tools_parse_sbom_str_json, sbom_tools_score_sbom_json,
 };
-use std::ffi::{CStr, CString};
 use std::path::Path;
 
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     Path::new(FIXTURES_DIR).join(name)
-}
-
-fn into_c_string(value: &str) -> CString {
-    CString::new(value).expect("fixture input should be free of NUL bytes")
-}
-
-fn consume_result(result: SbomToolsStringResult) -> Result<String, (SbomToolsErrorCode, String)> {
-    let code = result.error_code;
-    let payload = if result.data.is_null() {
-        None
-    } else {
-        // SAFETY: The FFI result is allocated by the Rust ABI and remains valid
-        // until sbom_tools_string_result_free is called below.
-        Some(unsafe { CStr::from_ptr(result.data) }.to_string_lossy().into_owned())
-    };
-    let error_message = if result.error_message.is_null() {
-        None
-    } else {
-        // SAFETY: The FFI result is allocated by the Rust ABI and remains valid
-        // until sbom_tools_string_result_free is called below.
-        Some(
-            unsafe { CStr::from_ptr(result.error_message) }
-                .to_string_lossy()
-                .into_owned(),
-        )
-    };
-    sbom_tools_string_result_free(result);
-
-    if code == SbomToolsErrorCode::Ok {
-        Ok(payload.expect("successful results should contain a payload"))
-    } else {
-        Err((
-            code,
-            error_message.expect("failing results should contain an error message"),
-        ))
-    }
 }
 
 #[test]

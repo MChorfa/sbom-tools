@@ -7,7 +7,7 @@ description = "C ABI bindings for sbom-tools (Go, Swift, Python consumers)"
 license = "MIT"
 
 [lib]
-name = "sbom_tools"
+name = "sbom_tools_ffi"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
