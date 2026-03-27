@@ -43,6 +43,12 @@ pub struct DiffResult {
     /// Number of custom matching rules applied
     #[serde(default)]
     pub rules_applied: usize,
+    /// Quality impact of this diff (computed post-diff)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_delta: Option<QualityDelta>,
+    /// Matching quality metrics (populated during diff)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_metrics: Option<MatchMetrics>,
 }
 
 impl DiffResult {
@@ -58,6 +64,8 @@ impl DiffResult {
             graph_changes: Vec::new(),
             graph_summary: None,
             rules_applied: 0,
+            quality_delta: None,
+            match_metrics: None,
         }
     }
 
@@ -202,6 +210,140 @@ impl Default for DiffResult {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Quality and compliance impact of the diff.
+///
+/// Computed by comparing quality scores of old vs new SBOMs.
+/// Enables tracking whether a change improves or degrades SBOM quality.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QualityDelta {
+    /// Overall score change (positive = improvement)
+    pub overall_score_delta: f32,
+    /// Old grade
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_grade: Option<crate::quality::QualityGrade>,
+    /// New grade
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_grade: Option<crate::quality::QualityGrade>,
+    /// Per-category score deltas
+    pub category_deltas: Vec<CategoryDelta>,
+    /// Categories that regressed (score decreased by >1 point)
+    pub regressions: Vec<String>,
+    /// Categories that improved (score increased by >1 point)
+    pub improvements: Vec<String>,
+    /// Compliance violation count change (positive = more violations)
+    pub violation_count_delta: i32,
+}
+
+/// Score delta for a specific quality category.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CategoryDelta {
+    /// Category name (e.g., "Completeness", "Identifiers")
+    pub category: String,
+    /// Score in old SBOM
+    pub old_score: f32,
+    /// Score in new SBOM
+    pub new_score: f32,
+    /// Change (new - old)
+    pub delta: f32,
+}
+
+impl QualityDelta {
+    /// Compute quality delta by comparing two quality reports.
+    #[must_use]
+    pub fn from_reports(
+        old: &crate::quality::QualityReport,
+        new: &crate::quality::QualityReport,
+    ) -> Self {
+        let categories = [
+            (
+                "Completeness",
+                old.completeness_score,
+                new.completeness_score,
+            ),
+            ("Identifiers", old.identifier_score, new.identifier_score),
+            ("Licenses", old.license_score, new.license_score),
+            ("Dependencies", old.dependency_score, new.dependency_score),
+            ("Integrity", old.integrity_score, new.integrity_score),
+            ("Provenance", old.provenance_score, new.provenance_score),
+        ];
+
+        let mut category_deltas: Vec<CategoryDelta> = categories
+            .iter()
+            .map(|(name, old_s, new_s)| CategoryDelta {
+                category: (*name).to_string(),
+                old_score: *old_s,
+                new_score: *new_s,
+                delta: new_s - old_s,
+            })
+            .collect();
+
+        // Handle optional categories (VulnDocs and Lifecycle)
+        if let (Some(old_v), Some(new_v)) = (old.vulnerability_score, new.vulnerability_score) {
+            category_deltas.push(CategoryDelta {
+                category: "VulnDocs".to_string(),
+                old_score: old_v,
+                new_score: new_v,
+                delta: new_v - old_v,
+            });
+        }
+        if let (Some(old_l), Some(new_l)) = (old.lifecycle_score, new.lifecycle_score) {
+            category_deltas.push(CategoryDelta {
+                category: "Lifecycle".to_string(),
+                old_score: old_l,
+                new_score: new_l,
+                delta: new_l - old_l,
+            });
+        }
+
+        let regressions: Vec<String> = category_deltas
+            .iter()
+            .filter(|d| d.delta < -1.0)
+            .map(|d| d.category.clone())
+            .collect();
+
+        let improvements: Vec<String> = category_deltas
+            .iter()
+            .filter(|d| d.delta > 1.0)
+            .map(|d| d.category.clone())
+            .collect();
+
+        // Compute compliance violation delta
+        let old_violations = old.compliance.error_count + old.compliance.warning_count;
+        let new_violations = new.compliance.error_count + new.compliance.warning_count;
+
+        Self {
+            overall_score_delta: new.overall_score - old.overall_score,
+            old_grade: Some(old.grade),
+            new_grade: Some(new.grade),
+            category_deltas,
+            regressions,
+            improvements,
+            violation_count_delta: new_violations as i32 - old_violations as i32,
+        }
+    }
+}
+
+/// Metrics about the component matching process.
+///
+/// Provides visibility into matching quality for debugging and tuning.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MatchMetrics {
+    /// Number of exact matches (PURL, CPE, or canonical ID)
+    pub exact_matches: usize,
+    /// Number of fuzzy matches (below exact threshold)
+    pub fuzzy_matches: usize,
+    /// Number of custom rule matches
+    pub rule_matches: usize,
+    /// Components in old SBOM with no match
+    pub unmatched_old: usize,
+    /// Components in new SBOM with no match
+    pub unmatched_new: usize,
+    /// Average match confidence score
+    pub avg_match_score: f64,
+    /// Minimum match confidence score
+    pub min_match_score: f64,
 }
 
 /// Summary statistics for the diff
@@ -653,6 +795,21 @@ pub struct ComponentLicenseChange {
     pub new_licenses: Vec<String>,
 }
 
+/// A VEX state change for a vulnerability between old and new SBOMs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VexStatusChange {
+    /// Vulnerability ID (e.g., "CVE-2023-1234")
+    pub vuln_id: String,
+    /// Affected component name
+    pub component_name: String,
+    /// Old VEX state (None = no VEX in old SBOM)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_state: Option<crate::model::VexState>,
+    /// New VEX state (None = no VEX in new SBOM)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_state: Option<crate::model::VexState>,
+}
+
 /// Vulnerability change information
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VulnerabilityChanges {
@@ -662,6 +819,9 @@ pub struct VulnerabilityChanges {
     pub resolved: Vec<VulnerabilityDetail>,
     /// Persistent vulnerabilities (present in both)
     pub persistent: Vec<VulnerabilityDetail>,
+    /// VEX state transitions detected across persistent vulnerabilities
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vex_changes: Vec<VexStatusChange>,
 }
 
 impl VulnerabilityChanges {

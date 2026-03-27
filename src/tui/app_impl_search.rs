@@ -2,7 +2,7 @@
 
 use super::app::{App, TabKind};
 use super::app_states::{
-    ChangeType, ComponentFilter, DiffSearchResult, VulnChangeType, VulnFilter, VulnSort,
+    ChangeType, ComponentFilter, DiffSearchResult, SearchMode, VulnChangeType, VulnFilter, VulnSort,
 };
 
 impl App {
@@ -37,14 +37,37 @@ impl App {
             return;
         }
 
-        let query_lower = self.overlays.search.query.to_lowercase();
+        let query = &self.overlays.search.query;
+        let query_lower = query.to_lowercase();
+        let search_mode = self.overlays.search.mode;
+
+        // Build a regex matcher when in regex mode; fall back to substring on
+        // invalid patterns so the user sees an empty result set rather than a
+        // panic.
+        let regex_matcher = if search_mode == SearchMode::Regex {
+            regex::RegexBuilder::new(query)
+                .case_insensitive(true)
+                .build()
+                .ok()
+        } else {
+            None
+        };
+
+        // Closure that performs the appropriate match depending on mode.
+        let matches_query = |text: &str| -> bool {
+            match search_mode {
+                SearchMode::Substring => text.to_lowercase().contains(&query_lower),
+                SearchMode::Regex => regex_matcher.as_ref().is_some_and(|re| re.is_match(text)),
+            }
+        };
+
         let mut results = Vec::new();
 
         // Search through diff results if available (Diff mode)
         if let Some(ref diff) = self.data.diff_result {
             // Search added components
             for comp in &diff.components.added {
-                if comp.name.to_lowercase().contains(&query_lower) {
+                if matches_query(&comp.name) {
                     results.push(DiffSearchResult::Component {
                         name: comp.name.clone(),
                         version: comp.new_version.clone(),
@@ -55,7 +78,7 @@ impl App {
 
             // Search removed components
             for comp in &diff.components.removed {
-                if comp.name.to_lowercase().contains(&query_lower) {
+                if matches_query(&comp.name) {
                     results.push(DiffSearchResult::Component {
                         name: comp.name.clone(),
                         version: comp.old_version.clone(),
@@ -66,7 +89,7 @@ impl App {
 
             // Search modified components
             for change in &diff.components.modified {
-                if change.name.to_lowercase().contains(&query_lower) {
+                if matches_query(&change.name) {
                     results.push(DiffSearchResult::Component {
                         name: change.name.clone(),
                         version: change.new_version.clone(),
@@ -77,7 +100,7 @@ impl App {
 
             // Search introduced vulnerabilities
             for vuln in &diff.vulnerabilities.introduced {
-                if vuln.id.to_lowercase().contains(&query_lower) {
+                if matches_query(&vuln.id) {
                     results.push(DiffSearchResult::Vulnerability {
                         id: vuln.id.clone(),
                         component_name: vuln.component_name.clone(),
@@ -89,7 +112,7 @@ impl App {
 
             // Search resolved vulnerabilities
             for vuln in &diff.vulnerabilities.resolved {
-                if vuln.id.to_lowercase().contains(&query_lower) {
+                if matches_query(&vuln.id) {
                     results.push(DiffSearchResult::Vulnerability {
                         id: vuln.id.clone(),
                         component_name: vuln.component_name.clone(),
@@ -101,7 +124,7 @@ impl App {
 
             // Search license changes (new licenses)
             for lic_change in &diff.licenses.new_licenses {
-                if lic_change.license.to_lowercase().contains(&query_lower) {
+                if matches_query(&lic_change.license) {
                     let component_name = lic_change
                         .components
                         .first()
@@ -117,7 +140,7 @@ impl App {
 
             // Search license changes (removed licenses)
             for lic_change in &diff.licenses.removed_licenses {
-                if lic_change.license.to_lowercase().contains(&query_lower) {
+                if matches_query(&lic_change.license) {
                     let component_name = lic_change
                         .components
                         .first()
@@ -138,7 +161,7 @@ impl App {
         {
             // Search components by name
             for comp in sbom.components.values() {
-                if comp.name.to_lowercase().contains(&query_lower) {
+                if matches_query(&comp.name) {
                     results.push(DiffSearchResult::Component {
                         name: comp.name.clone(),
                         version: comp.version.clone(),
@@ -150,7 +173,7 @@ impl App {
             // Search vulnerabilities
             for comp in sbom.components.values() {
                 for vuln in &comp.vulnerabilities {
-                    if vuln.id.to_lowercase().contains(&query_lower) {
+                    if matches_query(&vuln.id) {
                         results.push(DiffSearchResult::Vulnerability {
                             id: vuln.id.clone(),
                             component_name: comp.name.clone(),
@@ -164,7 +187,7 @@ impl App {
             // Search licenses
             for comp in sbom.components.values() {
                 for lic in &comp.licenses.declared {
-                    if lic.expression.to_lowercase().contains(&query_lower) {
+                    if matches_query(&lic.expression) {
                         results.push(DiffSearchResult::License {
                             license: lic.expression.clone(),
                             component_name: comp.name.clone(),
@@ -173,6 +196,23 @@ impl App {
                     }
                 }
             }
+        }
+
+        // F2: Filter component results to match the current component filter.
+        // Vulnerability and license results are kept regardless.
+        let comp_filter = self.components_state().filter;
+        if comp_filter != ComponentFilter::All {
+            results.retain(|r| match r {
+                DiffSearchResult::Component { change_type, .. } => match comp_filter {
+                    ComponentFilter::Added => *change_type == ChangeType::Added,
+                    ComponentFilter::Removed => *change_type == ChangeType::Removed,
+                    ComponentFilter::Modified => *change_type == ChangeType::Modified,
+                    // EolOnly/EolRisk don't map to search change types — keep all
+                    _ => true,
+                },
+                // Keep vulnerability and license results regardless of filter
+                DiffSearchResult::Vulnerability { .. } | DiffSearchResult::License { .. } => true,
+            });
         }
 
         // Limit results

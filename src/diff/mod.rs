@@ -63,11 +63,12 @@ pub use multi::{
 };
 pub use multi_engine::MultiDiffEngine;
 pub use result::{
-    ChangeSet, ChangeType, ComponentChange, ComponentLicenseChange, ConfidenceInterval,
-    DependencyChange, DependencyChangeType, DependencyGraphChange, DiffResult, DiffSummary,
-    FieldChange, GraphChangeImpact, GraphChangeSummary, GraphChangesByImpact, LicenseChange,
-    LicenseChanges, LicenseConflict, MatchInfo, MatchScoreComponent, SlaStatus, VexCoverageSummary,
-    VulnerabilityChanges, VulnerabilityDetail,
+    CategoryDelta, ChangeSet, ChangeType, ComponentChange, ComponentLicenseChange,
+    ConfidenceInterval, DependencyChange, DependencyChangeType, DependencyGraphChange, DiffResult,
+    DiffSummary, FieldChange, GraphChangeImpact, GraphChangeSummary, GraphChangesByImpact,
+    LicenseChange, LicenseChanges, LicenseConflict, MatchInfo, MatchMetrics, MatchScoreComponent,
+    QualityDelta, SlaStatus, VexCoverageSummary, VexStatusChange, VulnerabilityChanges,
+    VulnerabilityDetail,
 };
 pub use traits::{
     ChangeComputer, ComponentChangeSet, ComponentMatches, DependencyChangeSet, LicenseChangeSet,

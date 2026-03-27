@@ -3,28 +3,39 @@
 //! Implements the `diff-multi`, `timeline`, and `matrix` subcommands.
 //! Uses the pipeline module for parsing and enrichment (shared with `diff`).
 
+use crate::config::{MatrixConfig, MultiDiffConfig, TimelineConfig};
 use crate::diff::MultiDiffEngine;
 use crate::matching::FuzzyMatchConfig;
 use crate::model::NormalizedSbom;
-use crate::pipeline::{OutputTarget, parse_sbom_with_context, write_output};
+use crate::pipeline::{
+    OutputTarget, auto_detect_format, enrich_sbom_full, enrich_sboms, exit_codes,
+    parse_sbom_with_context, write_output,
+};
 use crate::reports::ReportFormat;
 use crate::tui::{App, run_tui};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
-/// Run the diff-multi command (1:N comparison)
+/// Resolve output target and effective format from config.
+fn resolve_output(output: &crate::config::OutputConfig) -> (OutputTarget, ReportFormat) {
+    let target = OutputTarget::from_option(output.file.clone());
+    let format = auto_detect_format(output.format, &target);
+    (target, format)
+}
+
+/// Run the diff-multi command (1:N comparison), returning the desired exit code.
 #[allow(clippy::needless_pass_by_value)]
-pub fn run_diff_multi(
-    baseline_path: PathBuf,
-    target_paths: Vec<PathBuf>,
-    output: ReportFormat,
-    output_file: Option<PathBuf>,
-    fuzzy_preset: String,
-    include_unchanged: bool,
-    graph_diff: bool,
-) -> Result<()> {
-    let baseline_parsed = parse_sbom_with_context(&baseline_path, false)?;
-    let target_sboms = parse_multiple_sboms(&target_paths)?;
+pub fn run_diff_multi(config: MultiDiffConfig) -> Result<i32> {
+    let quiet = config.behavior.quiet;
+
+    // Parse baseline
+    let mut baseline_parsed = parse_sbom_with_context(&config.baseline, quiet)?;
+    // Parse and optionally enrich targets
+    let (target_sboms, target_stats) =
+        parse_and_enrich_sboms(&config.targets, &config.enrichment, quiet)?;
+
+    // Enrich baseline
+    let baseline_stats = enrich_sbom_full(baseline_parsed.sbom_mut(), &config.enrichment, quiet);
 
     tracing::info!(
         "Comparing baseline ({} components) against {} targets",
@@ -32,10 +43,10 @@ pub fn run_diff_multi(
         target_sboms.len()
     );
 
-    let fuzzy_config = get_fuzzy_config(&fuzzy_preset);
+    let fuzzy_config = get_fuzzy_config(&config.matching.fuzzy_preset);
 
     // Prepare target references with names
-    let targets = prepare_sbom_refs(&target_sboms, &target_paths);
+    let targets = prepare_sbom_refs(&target_sboms, &config.targets);
     let target_refs: Vec<_> = targets
         .iter()
         .map(|(sbom, name, path)| (*sbom, name.as_str(), path.as_str()))
@@ -44,17 +55,17 @@ pub fn run_diff_multi(
     // Run multi-diff
     let mut engine = MultiDiffEngine::new()
         .with_fuzzy_config(fuzzy_config)
-        .include_unchanged(include_unchanged);
-    if graph_diff {
+        .include_unchanged(config.matching.include_unchanged);
+    if config.graph_diff.enabled {
         engine = engine.with_graph_diff(crate::diff::GraphDiffConfig::default());
     }
 
-    let baseline_name = get_sbom_name(&baseline_path);
+    let baseline_name = get_sbom_name(&config.baseline);
 
     let result = engine.diff_multi(
         baseline_parsed.sbom(),
         &baseline_name,
-        &baseline_path.to_string_lossy(),
+        &config.baseline.to_string_lossy(),
         &target_refs,
     );
 
@@ -64,39 +75,60 @@ pub fn run_diff_multi(
         result.summary.max_deviation * 100.0
     );
 
+    // Determine exit code
+    let exit_code = determine_multi_exit_code(&config.behavior, &result);
+
     // Output result
-    output_multi_result(
-        output,
-        output_file,
-        || {
-            let mut app = App::new_multi_diff(result.clone());
-            run_tui(&mut app).map_err(Into::into)
-        },
-        || serde_json::to_string_pretty(&result).map_err(Into::into),
-    )
+    let (output_target, effective_output) = resolve_output(&config.output);
+
+    if effective_output == ReportFormat::Tui {
+        let mut app = App::new_multi_diff(result);
+        app.export_template = config.output.export_template.clone();
+
+        // Show enrichment warnings if any
+        let all_warnings: Vec<_> = std::iter::once(&baseline_stats)
+            .chain(target_stats.iter())
+            .flat_map(|s| s.warnings.iter())
+            .collect();
+        if !all_warnings.is_empty() {
+            app.set_status_message(format!(
+                "Warning: {}",
+                all_warnings
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            app.status_sticky = true;
+        }
+
+        run_tui(&mut app)?;
+    } else {
+        let json = serde_json::to_string_pretty(&result)?;
+        write_output(&json, &output_target, quiet)?;
+    }
+
+    Ok(exit_code)
 }
 
-/// Run the timeline command
+/// Run the timeline command, returning the desired exit code.
 #[allow(clippy::needless_pass_by_value)]
-pub fn run_timeline(
-    sbom_paths: Vec<PathBuf>,
-    output: ReportFormat,
-    output_file: Option<PathBuf>,
-    fuzzy_preset: String,
-    graph_diff: bool,
-) -> Result<()> {
-    if sbom_paths.len() < 2 {
+pub fn run_timeline(config: TimelineConfig) -> Result<i32> {
+    let quiet = config.behavior.quiet;
+
+    if config.sbom_paths.len() < 2 {
         bail!("Timeline analysis requires at least 2 SBOMs");
     }
 
-    let sboms = parse_multiple_sboms(&sbom_paths)?;
+    let (sboms, _enrich_stats) =
+        parse_and_enrich_sboms(&config.sbom_paths, &config.enrichment, quiet)?;
 
     tracing::info!("Analyzing timeline of {} SBOMs", sboms.len());
 
-    let fuzzy_config = get_fuzzy_config(&fuzzy_preset);
+    let fuzzy_config = get_fuzzy_config(&config.matching.fuzzy_preset);
 
     // Prepare SBOM references with names
-    let sbom_data = prepare_sbom_refs(&sboms, &sbom_paths);
+    let sbom_data = prepare_sbom_refs(&sboms, &config.sbom_paths);
     let sbom_refs: Vec<_> = sbom_data
         .iter()
         .map(|(sbom, name, path)| (*sbom, name.as_str(), path.as_str()))
@@ -104,7 +136,7 @@ pub fn run_timeline(
 
     // Run timeline analysis
     let mut engine = MultiDiffEngine::new().with_fuzzy_config(fuzzy_config);
-    if graph_diff {
+    if config.graph_diff.enabled {
         engine = engine.with_graph_diff(crate::diff::GraphDiffConfig::default());
     }
     let result = engine.timeline(&sbom_refs);
@@ -115,32 +147,30 @@ pub fn run_timeline(
     );
 
     // Output result
-    output_multi_result(
-        output,
-        output_file,
-        || {
-            let mut app = App::new_timeline(result.clone());
-            run_tui(&mut app).map_err(Into::into)
-        },
-        || serde_json::to_string_pretty(&result).map_err(Into::into),
-    )
+    let (output_target, effective_output) = resolve_output(&config.output);
+
+    if effective_output == ReportFormat::Tui {
+        let mut app = App::new_timeline(result);
+        run_tui(&mut app)?;
+    } else {
+        let json = serde_json::to_string_pretty(&result)?;
+        write_output(&json, &output_target, quiet)?;
+    }
+
+    Ok(exit_codes::SUCCESS)
 }
 
-/// Run the matrix command (N×N comparison)
+/// Run the matrix command (N×N comparison), returning the desired exit code.
 #[allow(clippy::needless_pass_by_value)]
-pub fn run_matrix(
-    sbom_paths: Vec<PathBuf>,
-    output: ReportFormat,
-    output_file: Option<PathBuf>,
-    fuzzy_preset: String,
-    cluster_threshold: f64,
-    graph_diff: bool,
-) -> Result<()> {
-    if sbom_paths.len() < 2 {
+pub fn run_matrix(config: MatrixConfig) -> Result<i32> {
+    let quiet = config.behavior.quiet;
+
+    if config.sbom_paths.len() < 2 {
         bail!("Matrix comparison requires at least 2 SBOMs");
     }
 
-    let sboms = parse_multiple_sboms(&sbom_paths)?;
+    let (sboms, _enrich_stats) =
+        parse_and_enrich_sboms(&config.sbom_paths, &config.enrichment, quiet)?;
 
     tracing::info!(
         "Computing {}x{} comparison matrix",
@@ -148,10 +178,10 @@ pub fn run_matrix(
         sboms.len()
     );
 
-    let fuzzy_config = get_fuzzy_config(&fuzzy_preset);
+    let fuzzy_config = get_fuzzy_config(&config.matching.fuzzy_preset);
 
     // Prepare SBOM references with names
-    let sbom_data = prepare_sbom_refs(&sboms, &sbom_paths);
+    let sbom_data = prepare_sbom_refs(&sboms, &config.sbom_paths);
     let sbom_refs: Vec<_> = sbom_data
         .iter()
         .map(|(sbom, name, path)| (*sbom, name.as_str(), path.as_str()))
@@ -159,10 +189,10 @@ pub fn run_matrix(
 
     // Run matrix comparison
     let mut engine = MultiDiffEngine::new().with_fuzzy_config(fuzzy_config);
-    if graph_diff {
+    if config.graph_diff.enabled {
         engine = engine.with_graph_diff(crate::diff::GraphDiffConfig::default());
     }
-    let result = engine.matrix(&sbom_refs, Some(cluster_threshold));
+    let result = engine.matrix(&sbom_refs, Some(config.cluster_threshold));
 
     tracing::info!(
         "Matrix comparison complete: {} pairs computed",
@@ -178,18 +208,40 @@ pub fn run_matrix(
     }
 
     // Output result
-    output_multi_result(
-        output,
-        output_file,
-        || {
-            let mut app = App::new_matrix(result.clone());
-            run_tui(&mut app).map_err(Into::into)
-        },
-        || serde_json::to_string_pretty(&result).map_err(Into::into),
-    )
+    let (output_target, effective_output) = resolve_output(&config.output);
+
+    if effective_output == ReportFormat::Tui {
+        let mut app = App::new_matrix(result);
+        run_tui(&mut app)?;
+    } else {
+        let json = serde_json::to_string_pretty(&result)?;
+        write_output(&json, &output_target, quiet)?;
+    }
+
+    Ok(exit_codes::SUCCESS)
 }
 
-/// Parse multiple SBOMs using the pipeline (with structured error context).
+/// Parse and optionally enrich multiple SBOMs.
+fn parse_and_enrich_sboms(
+    paths: &[PathBuf],
+    enrichment: &crate::config::EnrichmentConfig,
+    quiet: bool,
+) -> Result<(
+    Vec<NormalizedSbom>,
+    Vec<crate::pipeline::AggregatedEnrichmentStats>,
+)> {
+    let mut sboms = Vec::with_capacity(paths.len());
+    for path in paths {
+        let parsed = parse_sbom_with_context(path, quiet)?;
+        sboms.push(parsed.into_sbom());
+    }
+    let stats = enrich_sboms(&mut sboms, enrichment, quiet);
+    Ok((sboms, stats))
+}
+
+/// Parse multiple SBOMs without enrichment.
+///
+/// Used by the query command where enrichment is handled separately.
 pub(crate) fn parse_multiple_sboms(paths: &[PathBuf]) -> Result<Vec<NormalizedSbom>> {
     let mut sboms = Vec::with_capacity(paths.len());
     for path in paths {
@@ -197,6 +249,31 @@ pub(crate) fn parse_multiple_sboms(paths: &[PathBuf]) -> Result<Vec<NormalizedSb
         sboms.push(parsed.into_sbom());
     }
     Ok(sboms)
+}
+
+/// Determine exit code for multi-SBOM commands based on behavior config.
+fn determine_multi_exit_code(
+    behavior: &crate::config::BehaviorConfig,
+    result: &crate::diff::MultiDiffResult,
+) -> i32 {
+    let (total_introduced, total_changes) =
+        result
+            .comparisons
+            .iter()
+            .fold((0usize, 0usize), |(vi, tc), c| {
+                (
+                    vi + c.diff.summary.vulnerabilities_introduced,
+                    tc + c.diff.summary.total_changes,
+                )
+            });
+
+    if behavior.fail_on_vuln && total_introduced > 0 {
+        return exit_codes::VULNS_INTRODUCED;
+    }
+    if behavior.fail_on_change && total_changes > 0 {
+        return exit_codes::CHANGES_DETECTED;
+    }
+    exit_codes::SUCCESS
 }
 
 /// Get fuzzy matching config from preset name
@@ -232,26 +309,6 @@ fn prepare_sbom_refs<'a>(
             (sbom, name, path_str)
         })
         .collect()
-}
-
-/// Output multi-SBOM result with TUI or JSON fallback
-fn output_multi_result<F, G>(
-    output: ReportFormat,
-    output_file: Option<PathBuf>,
-    run_tui_fn: F,
-    generate_json: G,
-) -> Result<()>
-where
-    F: FnOnce() -> Result<()>,
-    G: FnOnce() -> Result<String>,
-{
-    if output == ReportFormat::Tui {
-        run_tui_fn()
-    } else {
-        let json = generate_json()?;
-        let target = OutputTarget::from_option(output_file);
-        write_output(&json, &target, false)
-    }
 }
 
 #[cfg(test)]

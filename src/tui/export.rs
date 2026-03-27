@@ -65,6 +65,8 @@ pub const fn tab_to_report_type(tab: TabKind) -> ReportType {
         TabKind::Licenses => ReportType::Licenses,
         TabKind::Vulnerabilities => ReportType::Vulnerabilities,
         TabKind::Summary
+        | TabKind::Overview
+        | TabKind::Tree
         | TabKind::Quality
         | TabKind::Compliance
         | TabKind::SideBySide

@@ -87,6 +87,8 @@ impl EventResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabTarget {
     Summary,
+    Overview,
+    Tree,
     Components,
     Dependencies,
     Licenses,
@@ -108,6 +110,8 @@ impl TabTarget {
     pub const fn to_tab_kind(&self) -> Option<super::app::TabKind> {
         match self {
             Self::Summary => Some(super::app::TabKind::Summary),
+            Self::Overview => Some(super::app::TabKind::Overview),
+            Self::Tree => Some(super::app::TabKind::Tree),
             Self::Components | Self::ComponentByName(_) => Some(super::app::TabKind::Components),
             Self::Dependencies => Some(super::app::TabKind::Dependencies),
             Self::Licenses => Some(super::app::TabKind::Licenses),
@@ -127,6 +131,8 @@ impl TabTarget {
     pub const fn from_tab_kind(kind: super::app::TabKind) -> Self {
         match kind {
             super::app::TabKind::Summary => Self::Summary,
+            super::app::TabKind::Overview => Self::Overview,
+            super::app::TabKind::Tree => Self::Tree,
             super::app::TabKind::Components => Self::Components,
             super::app::TabKind::Dependencies => Self::Dependencies,
             super::app::TabKind::Licenses => Self::Licenses,
@@ -214,6 +220,8 @@ impl ViewContext<'_> {
 pub enum ViewMode {
     /// Comparing two SBOMs
     Diff,
+    /// Exploring a single SBOM
+    View,
     /// Multi-diff comparison
     MultiDiff,
     /// Timeline analysis
@@ -228,6 +236,7 @@ impl ViewMode {
     pub const fn from_app_mode(mode: super::app::AppMode) -> Self {
         match mode {
             super::app::AppMode::Diff => Self::Diff,
+            super::app::AppMode::View => Self::View,
             super::app::AppMode::MultiDiff => Self::MultiDiff,
             super::app::AppMode::Timeline => Self::Timeline,
             super::app::AppMode::Matrix => Self::Matrix,

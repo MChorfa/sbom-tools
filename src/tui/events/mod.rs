@@ -103,6 +103,18 @@ pub fn handle_key_event(app: &mut super::App, key: KeyEvent) {
             }
             KeyCode::Up => app.overlays.search.select_prev(),
             KeyCode::Down => app.overlays.search.select_next(),
+            // Ctrl+R toggles between substring and regex search mode
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                use crate::tui::app_states::SearchMode;
+                app.overlays.search.mode = match app.overlays.search.mode {
+                    SearchMode::Substring => SearchMode::Regex,
+                    SearchMode::Regex => SearchMode::Substring,
+                };
+                // Re-execute search with new mode
+                app.execute_search();
+                let mode_name = app.overlays.search.mode.label();
+                app.set_status_message(format!("Search mode: {mode_name}"));
+            }
             KeyCode::Char(c) => {
                 app.search_push(c);
                 // Live search as user types
@@ -268,6 +280,7 @@ pub fn handle_key_event(app: &mut super::App, key: KeyEvent) {
                 super::AppMode::Timeline => super::app::ShortcutsContext::Timeline,
                 super::AppMode::Matrix => super::app::ShortcutsContext::Matrix,
                 super::AppMode::Diff => super::app::ShortcutsContext::Diff,
+                super::AppMode::View => super::app::ShortcutsContext::View,
             };
             app.overlays.shortcuts.show(context);
         }
@@ -373,7 +386,7 @@ pub fn handle_key_event(app: &mut super::App, key: KeyEvent) {
         super::TabKind::GraphChanges => graph_changes::handle_graph_changes_keys(app, key),
         super::TabKind::SideBySide => sidebyside::handle_sidebyside_keys(app, key),
         super::TabKind::Source => source::handle_source_keys(app, key),
-        super::TabKind::Summary => {}
+        super::TabKind::Summary | super::TabKind::Overview | super::TabKind::Tree => {}
     }
 
     // Mode-specific key bindings for multi-diff, timeline, and matrix

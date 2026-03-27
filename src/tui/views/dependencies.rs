@@ -27,12 +27,19 @@ fn compute_graph_hash(edges: &[(String, String)]) -> u64 {
 /// Takes `&mut DependenciesState` and `&DataContext` separately to avoid
 /// borrow conflicts when accessing both data and state on `App`.
 pub fn update_graph_cache(deps: &mut DependenciesState, data: &DataContext, mode: AppMode) {
-    if mode == AppMode::Diff {
+    if matches!(mode, AppMode::Diff | AppMode::View) {
         update_diff_mode_cache(deps, data);
     }
 }
 
 fn update_diff_mode_cache(deps: &mut DependenciesState, data: &DataContext) {
+    // Fast path: once the cache is valid, skip entirely.
+    // The diff_result is immutable during TUI operation, so the graph
+    // structure never changes after the initial cache build.
+    if deps.cache_valid {
+        return;
+    }
+
     if let Some(result) = &data.diff_result {
         let mut edges: Vec<(String, String)> = Vec::new();
         for dep in &result.dependencies.added {
@@ -416,7 +423,7 @@ fn render_dependency_tree(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let vuln_components = &ctx.dependencies.cached_vuln_components;
 
     match ctx.mode {
-        AppMode::Diff => {
+        AppMode::Diff | AppMode::View => {
             render_diff_tree_cached(
                 &mut lines,
                 &mut visible_nodes,

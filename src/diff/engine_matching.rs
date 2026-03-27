@@ -58,6 +58,13 @@ pub fn match_components(
     fuzzy_config: &FuzzyMatchConfig,
     large_sbom_config: &LargeSbomConfig,
 ) -> ComponentMatchResult {
+    let _span = tracing::info_span!(
+        "diff_engine::match_components",
+        old_count = old.component_count(),
+        new_count = new.component_count(),
+    )
+    .entered();
+
     let mut result = ComponentMatchResult::new();
     let mut used_new_ids: HashSet<CanonicalId> = HashSet::new();
 

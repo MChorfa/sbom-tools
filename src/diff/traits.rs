@@ -3,7 +3,9 @@
 //! This module provides abstractions for computing different types of changes,
 //! enabling modular and testable diff operations.
 
-use super::{ComponentChange, DependencyChange, LicenseChange, VulnerabilityDetail};
+use super::{
+    ComponentChange, DependencyChange, LicenseChange, VexStatusChange, VulnerabilityDetail,
+};
 use crate::model::{CanonicalId, NormalizedSbom};
 use std::collections::HashMap;
 
@@ -107,6 +109,8 @@ pub struct VulnerabilityChangeSet {
     pub introduced: Vec<VulnerabilityDetail>,
     pub resolved: Vec<VulnerabilityDetail>,
     pub persistent: Vec<VulnerabilityDetail>,
+    /// VEX state transitions detected across persistent vulnerabilities
+    pub vex_changes: Vec<VexStatusChange>,
 }
 
 impl VulnerabilityChangeSet {

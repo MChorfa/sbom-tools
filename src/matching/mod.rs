@@ -65,7 +65,7 @@ pub use lsh::{LshConfig, LshIndex, LshIndexStats, MinHashSignature};
 pub use purl::PurlNormalizer;
 pub use rule_engine::{AppliedRule, AppliedRuleType, RuleApplicationResult, RuleEngine};
 pub use rules::EcosystemRules;
-pub use scoring::MultiFieldScoreResult;
+pub use scoring::{MultiFieldScoreResult, SemverParts};
 pub use traits::{
     CacheConfig, CacheStats, CachedMatcher, ComponentMatcher, CompositeMatcher,
     CompositeMatcherBuilder, MatchExplanation, MatchMetadata, MatchResult, MatchTier,

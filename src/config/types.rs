@@ -310,6 +310,18 @@ pub struct MultiDiffConfig {
     pub output: OutputConfig,
     /// Matching configuration
     pub matching: MatchingConfig,
+    /// Filtering options
+    pub filtering: FilterConfig,
+    /// Behavior flags
+    pub behavior: BehaviorConfig,
+    /// Graph-aware diffing configuration
+    pub graph_diff: GraphAwareDiffConfig,
+    /// Custom matching rules configuration
+    pub rules: MatchingRulesPathConfig,
+    /// Ecosystem-specific rules configuration
+    pub ecosystem_rules: EcosystemRulesConfig,
+    /// Enrichment configuration
+    pub enrichment: EnrichmentConfig,
 }
 
 /// Configuration for timeline analysis
@@ -321,6 +333,18 @@ pub struct TimelineConfig {
     pub output: OutputConfig,
     /// Matching configuration
     pub matching: MatchingConfig,
+    /// Filtering options
+    pub filtering: FilterConfig,
+    /// Behavior flags
+    pub behavior: BehaviorConfig,
+    /// Graph-aware diffing configuration
+    pub graph_diff: GraphAwareDiffConfig,
+    /// Custom matching rules configuration
+    pub rules: MatchingRulesPathConfig,
+    /// Ecosystem-specific rules configuration
+    pub ecosystem_rules: EcosystemRulesConfig,
+    /// Enrichment configuration
+    pub enrichment: EnrichmentConfig,
 }
 
 /// Configuration for query operations (searching components across multiple SBOMs)
@@ -349,6 +373,18 @@ pub struct MatrixConfig {
     pub matching: MatchingConfig,
     /// Similarity threshold for clustering (0.0-1.0)
     pub cluster_threshold: f64,
+    /// Filtering options
+    pub filtering: FilterConfig,
+    /// Behavior flags
+    pub behavior: BehaviorConfig,
+    /// Graph-aware diffing configuration
+    pub graph_diff: GraphAwareDiffConfig,
+    /// Custom matching rules configuration
+    pub rules: MatchingRulesPathConfig,
+    /// Ecosystem-specific rules configuration
+    pub ecosystem_rules: EcosystemRulesConfig,
+    /// Enrichment configuration
+    pub enrichment: EnrichmentConfig,
 }
 
 /// Configuration for the `vex` subcommand.
