@@ -429,6 +429,53 @@ fn render_diff_detail(
             ]));
         }
 
+        // Match confidence (item 1.5) — show how old/new components were correlated
+        if let Some(match_info) = &comp.match_info {
+            let scheme = colors();
+            let score_color = if match_info.score >= 0.9 {
+                scheme.success
+            } else if match_info.score >= 0.7 {
+                scheme.warning
+            } else {
+                scheme.error
+            };
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("━━━ ", Style::default().fg(scheme.border)),
+                Span::styled("Match", Style::default().fg(scheme.accent).bold()),
+                Span::styled(" ━━━", Style::default().fg(scheme.border)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Score: ", Style::default().fg(scheme.text_muted)),
+                Span::styled(
+                    format!("{:.2}", match_info.score),
+                    Style::default().fg(score_color).bold(),
+                ),
+                Span::styled(" via ", Style::default().fg(scheme.text_muted)),
+                Span::styled(&match_info.method, Style::default().fg(scheme.secondary)),
+            ]));
+            if !match_info.reason.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("Reason: ", Style::default().fg(scheme.text_muted)),
+                    Span::styled(
+                        widgets::truncate_str(&match_info.reason, area.width as usize - 10),
+                        Style::default().fg(scheme.text),
+                    ),
+                ]));
+            }
+            // Show top score breakdown components (up to 3)
+            for sc in match_info.score_breakdown.iter().take(3) {
+                lines.push(Line::from(vec![
+                    Span::styled("  \u{2022} ", Style::default().fg(scheme.text_muted)),
+                    Span::styled(&sc.name, Style::default().fg(scheme.accent)),
+                    Span::styled(
+                        format!(" {:.2} (w={:.1})", sc.raw_score, sc.weight),
+                        Style::default().fg(scheme.text_muted),
+                    ),
+                ]));
+            }
+        }
+
         // Field changes for modified components (skip version-only changes since
         // the version diff is already shown above)
         let non_version_changes: Vec<_> = comp

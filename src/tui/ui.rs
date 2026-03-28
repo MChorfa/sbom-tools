@@ -1,7 +1,8 @@
 //! Main UI rendering with enhanced features.
 
 use super::app::{
-    App, AppMode, ChangeType, DiffSearchResult, DiffSearchState, TabKind, VulnChangeType,
+    App, AppMode, ChangeType, DiffSearchResult, DiffSearchState, SearchMode, TabKind,
+    VulnChangeType,
 };
 use super::events::{Event, EventHandler, handle_key_event, handle_mouse_event};
 use super::theme::{FooterHints, Theme, colors, render_footer_hints, set_theme};
@@ -226,14 +227,45 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
         AppMode::Matrix => ("matrix", "Matrix Comparison".to_string()),
     };
 
-    let header_line = Line::from(vec![
+    let mut spans = vec![
         Span::styled("sbom-tools", Style::default().fg(colors().primary).bold()),
         Span::styled(" ", Style::default()),
         render_mode_indicator(mode_name),
         Span::styled(" │ ", Style::default().fg(colors().muted)),
         Span::styled(subtitle, Style::default().fg(colors().text)),
-    ]);
+    ];
 
+    // Enrichment status indicator (item 1.6)
+    #[cfg(feature = "enrichment")]
+    {
+        let has_osv = app
+            .data
+            .enrichment_stats_old
+            .as_ref()
+            .is_some_and(|s| s.total_vulns_found > 0)
+            || app
+                .data
+                .enrichment_stats_new
+                .as_ref()
+                .is_some_and(|s| s.total_vulns_found > 0);
+        let has_enrichment =
+            app.data.enrichment_stats_old.is_some() || app.data.enrichment_stats_new.is_some();
+        if has_enrichment {
+            spans.push(Span::styled("  ", Style::default()));
+            let label = if has_osv { "OSV: on" } else { "OSV: --" };
+            let label_color = if has_osv {
+                colors().success
+            } else {
+                colors().text_muted
+            };
+            spans.push(Span::styled(
+                format!("[{label}]"),
+                Style::default().fg(label_color),
+            ));
+        }
+    }
+
+    let header_line = Line::from(spans);
     let header = Paragraph::new(header_line);
     frame.render_widget(header, area);
 }
@@ -653,9 +685,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
 }
 
 fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearchState) {
-    // Calculate popup size based on results
+    // Calculate popup size based on results (add 1 for error line if present)
     let result_count = search_state.results.len().min(10);
-    let popup_height = (result_count as u16 + 5).max(5);
+    let error_lines = u16::from(search_state.search_error.is_some());
+    let popup_height = (result_count as u16 + 5 + error_lines).max(5 + error_lines);
 
     let popup_area = Rect {
         x: area.x + 2,
@@ -668,13 +701,23 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearc
 
     let mut lines = Vec::new();
 
-    // Search input line
+    // Search input line with mode indicator
+    let mode_label = match search_state.mode {
+        SearchMode::Substring => "[substring]",
+        SearchMode::Regex => "[regex]",
+    };
     let cursor_char = "│";
     lines.push(Line::from(vec![
-        Span::styled("/", Style::default().fg(colors().primary)),
+        Span::styled("/ ", Style::default().fg(colors().primary)),
+        Span::styled(
+            format!("{mode_label} "),
+            Style::default().fg(colors().text_muted),
+        ),
         Span::styled(&search_state.query, Style::default().fg(colors().text)),
         Span::styled(cursor_char, Style::default().fg(colors().accent)),
-        if !search_state.results.is_empty() {
+        if search_state.search_error.is_some() {
+            Span::styled("  (invalid pattern)", Style::default().fg(colors().error))
+        } else if !search_state.results.is_empty() {
             Span::styled(
                 format!("  ({} results)", search_state.results.len()),
                 Style::default().fg(colors().text_muted),
@@ -688,6 +731,14 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearc
             )
         },
     ]));
+
+    // Show regex error if present
+    if let Some(ref err) = search_state.search_error {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {err}"),
+            Style::default().fg(colors().error).italic(),
+        )]));
+    }
 
     // Results
     if !search_state.results.is_empty() {

@@ -263,6 +263,18 @@ impl App {
     pub(super) fn navigate_to_target(&mut self, target: super::traits::TabTarget) {
         use super::traits::TabTarget;
 
+        // For cross-tab navigation variants, save a breadcrumb so the user can go back
+        if matches!(
+            target,
+            TabTarget::ComponentByName(_)
+                | TabTarget::ComponentByLicense(_)
+                | TabTarget::VulnerabilityById(_)
+        ) {
+            let selection_index = self.current_tab_selection_index();
+            self.navigation_ctx
+                .push_breadcrumb(self.active_tab, String::new(), selection_index);
+        }
+
         match target {
             TabTarget::Summary => self.active_tab = TabKind::Summary,
             TabTarget::Overview => self.active_tab = TabKind::Overview,
@@ -286,6 +298,32 @@ impl App {
                     self.vulnerabilities_state_mut().selected = idx;
                 }
             }
+            TabTarget::ComponentByLicense(license) => {
+                self.active_tab = TabKind::Components;
+                self.set_status_message(format!("Showing components with license: {license}"));
+            }
+        }
+    }
+
+    /// Get the selection index for the currently active tab (for breadcrumb saving).
+    fn current_tab_selection_index(&self) -> usize {
+        match self.active_tab {
+            TabKind::Components => self.components_state().selected,
+            TabKind::Vulnerabilities => self.vulnerabilities_state().selected,
+            TabKind::Licenses => self.licenses_state().selected,
+            TabKind::Dependencies => self.dependencies_state().selected,
+            TabKind::Compliance => self
+                .compliance_view
+                .as_ref()
+                .map_or(0, |v| v.inner().selected_violation),
+            TabKind::Source => {
+                let state = self.source_state();
+                match state.active_side {
+                    crate::tui::app_states::source::SourceSide::Old => state.old_panel.selected,
+                    crate::tui::app_states::source::SourceSide::New => state.new_panel.selected,
+                }
+            }
+            _ => 0,
         }
     }
 }

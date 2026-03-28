@@ -58,6 +58,7 @@ pub use super::app_states::{
     QualityState,
     QualityViewMode,
     ScrollSyncMode,
+    SearchMode,
     // Shortcuts overlay states
     ShortcutsContext,
     ShortcutsOverlayState,

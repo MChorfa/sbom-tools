@@ -20,7 +20,7 @@ pub fn render_timeline(f: &mut Frame, area: Rect, result: &TimelineResult, state
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // Header
-                Constraint::Length(6), // Statistics panel
+                Constraint::Length(7), // Statistics panel (3 lines + borders)
                 Constraint::Length(8), // Timeline bar
                 Constraint::Min(12),   // Main content
                 Constraint::Length(3), // Status bar
@@ -183,6 +183,60 @@ fn render_statistics_panel(f: &mut Frame, area: Rect, result: &TimelineResult) {
             scheme.error
         };
 
+    // Build vulnerability trend line from evolution_summary
+    let vuln_trend = &result.evolution_summary.vulnerability_trend;
+    let vuln_trend_line = if vuln_trend.is_empty() {
+        Line::from(vec![
+            Span::styled("Vuln trend: ", Style::default().fg(scheme.text_muted)),
+            Span::styled("N/A", Style::default().fg(scheme.text_muted)),
+        ])
+    } else {
+        let mut spans = vec![Span::styled(
+            "Vuln trend: ",
+            Style::default().fg(scheme.text_muted),
+        )];
+        let first_total = vuln_trend.first().map_or(0, |s| s.counts.total());
+        let last_total = vuln_trend.last().map_or(0, |s| s.counts.total());
+
+        for (idx, snap) in vuln_trend.iter().enumerate() {
+            let total = snap.counts.total();
+            let color = if snap.counts.critical > 0 {
+                scheme.critical
+            } else if snap.counts.high > 0 {
+                scheme.high
+            } else if total > 0 {
+                scheme.warning
+            } else {
+                scheme.success
+            };
+            spans.push(Span::styled(total.to_string(), Style::default().fg(color)));
+            if idx < vuln_trend.len() - 1 {
+                spans.push(Span::styled(
+                    " \u{2192} ",
+                    Style::default().fg(scheme.text_muted),
+                ));
+            }
+        }
+
+        // Net change indicator
+        if vuln_trend.len() > 1 {
+            let net = last_total as isize - first_total as isize;
+            let (arrow, color) = if net < 0 {
+                ("\u{25bc}", scheme.success) // down arrow = good
+            } else if net > 0 {
+                ("\u{25b2}", scheme.error) // up arrow = bad
+            } else {
+                ("\u{25cf}", scheme.text_muted) // dot = unchanged
+            };
+            spans.push(Span::styled(
+                format!("  ({arrow} net {net:+})"),
+                Style::default().fg(color),
+            ));
+        }
+
+        Line::from(spans)
+    };
+
     let text = vec![
         Line::from(vec![
             Span::styled("Total Added: ", Style::default().fg(scheme.added)),
@@ -210,6 +264,7 @@ fn render_statistics_panel(f: &mut Frame, area: Rect, result: &TimelineResult) {
             Span::styled("Compliance: ", Style::default().fg(scheme.text_muted)),
             Span::styled(compliance_trend_str, Style::default().fg(compliance_color)),
         ]),
+        vuln_trend_line,
     ];
 
     let block = Block::default()

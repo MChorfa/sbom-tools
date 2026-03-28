@@ -570,6 +570,25 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
             Span::raw(diff.summary.components_modified.to_string()),
         ]));
 
+        // Vulnerability impact
+        if diff.summary.vulnerabilities_introduced > 0 || diff.summary.vulnerabilities_resolved > 0
+        {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Vulnerabilities: ", Style::default().fg(scheme.text_muted)),
+                Span::styled(
+                    format!("+{}", diff.summary.vulnerabilities_introduced),
+                    Style::default().fg(scheme.removed),
+                ),
+                Span::raw(" introduced, "),
+                Span::styled(
+                    format!("-{}", diff.summary.vulnerabilities_resolved),
+                    Style::default().fg(scheme.added),
+                ),
+                Span::raw(" resolved"),
+            ]));
+        }
+
         // Show sample components
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
@@ -586,6 +605,12 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
                     Style::default().fg(scheme.text_muted),
                 ),
             ]));
+        }
+        if diff.components.added.len() > 5 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  ... and {} more", diff.components.added.len() - 5),
+                Style::default().fg(scheme.text_muted),
+            )]));
         }
 
         lines.push(Line::from(""));
@@ -604,6 +629,41 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
                 ),
             ]));
         }
+        if diff.components.removed.len() > 5 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  ... and {} more", diff.components.removed.len() - 5),
+                Style::default().fg(scheme.text_muted),
+            )]));
+        }
+
+        // Show modified components (version changes)
+        if !diff.components.modified.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![Span::styled(
+                "Modified Components:",
+                Style::default().fg(scheme.modified),
+            )]));
+            for comp in diff.components.modified.iter().take(5) {
+                let version_change = match (&comp.old_version, &comp.new_version) {
+                    (Some(old), Some(new)) => format!("{old} \u{2192} {new}"),
+                    (None, Some(new)) => format!("? \u{2192} {new}"),
+                    (Some(old), None) => format!("{old} \u{2192} ?"),
+                    (None, None) => "(changed)".to_string(),
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("  ~ "),
+                    Span::styled(&comp.name, Style::default().fg(scheme.text)),
+                    Span::raw(" "),
+                    Span::styled(version_change, Style::default().fg(scheme.accent)),
+                ]));
+            }
+            if diff.components.modified.len() > 5 {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  ... and {} more", diff.components.modified.len() - 5),
+                    Style::default().fg(scheme.text_muted),
+                )]));
+            }
+        }
     }
 
     lines.push(Line::from(""));
@@ -613,7 +673,7 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
     ]));
 
     let block = Block::default()
-        .title(format!(" Diff: {} ↔ {} ", sbom_a.name, sbom_b.name))
+        .title(format!(" Diff: {} \u{2194} {} ", sbom_a.name, sbom_b.name))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.accent))
         .style(Style::default().bg(scheme.muted));

@@ -2,7 +2,7 @@
 
 use crate::tui::app_states::licenses::LicensesState;
 use crate::tui::state::ListNavigation;
-use crate::tui::traits::{EventResult, Shortcut, ViewContext, ViewMode, ViewState};
+use crate::tui::traits::{EventResult, Shortcut, TabTarget, ViewContext, ViewMode, ViewState};
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 
 /// Licenses tab view implementing the `ViewState` trait.
@@ -69,6 +69,16 @@ impl ViewState for LicensesView {
                 self.inner.select_next();
                 EventResult::Consumed
             }
+            KeyCode::Enter => {
+                // Navigate to Components tab to show components with the selected license.
+                // The actual license name is resolved by the event bridge since the
+                // ViewState only tracks the selection index.
+                if self.inner.total > 0 {
+                    EventResult::NavigateTo(TabTarget::Components)
+                } else {
+                    EventResult::Ignored
+                }
+            }
             _ => EventResult::Ignored,
         }
     }
@@ -84,6 +94,7 @@ impl ViewState for LicensesView {
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
             Shortcut::primary("j/k", "Navigate"),
+            Shortcut::new("Enter", "Go to components"),
             Shortcut::new("g", "Group by"),
             Shortcut::new("s", "Sort"),
             Shortcut::new("r", "Risk filter"),
@@ -150,5 +161,25 @@ mod tests {
 
         view.handle_key(make_key(KeyCode::Char('k')), &mut ctx);
         assert_eq!(view.inner().selected, 0);
+    }
+
+    #[test]
+    fn test_enter_navigates_to_components() {
+        let mut view = LicensesView::new();
+        view.inner_mut().set_total(3);
+        let mut ctx = make_ctx(ViewMode::Diff);
+
+        let result = view.handle_key(make_key(KeyCode::Enter), &mut ctx);
+        assert_eq!(result, EventResult::NavigateTo(TabTarget::Components));
+    }
+
+    #[test]
+    fn test_enter_ignored_when_empty() {
+        let mut view = LicensesView::new();
+        // total is 0
+        let mut ctx = make_ctx(ViewMode::Diff);
+
+        let result = view.handle_key(make_key(KeyCode::Enter), &mut ctx);
+        assert_eq!(result, EventResult::Ignored);
     }
 }

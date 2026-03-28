@@ -102,6 +102,8 @@ pub enum TabTarget {
     ComponentByName(String),
     /// Navigate to a specific vulnerability by ID
     VulnerabilityById(String),
+    /// Navigate to Components tab, filtered to show components with a given license
+    ComponentByLicense(String),
 }
 
 impl TabTarget {
@@ -112,7 +114,9 @@ impl TabTarget {
             Self::Summary => Some(super::app::TabKind::Summary),
             Self::Overview => Some(super::app::TabKind::Overview),
             Self::Tree => Some(super::app::TabKind::Tree),
-            Self::Components | Self::ComponentByName(_) => Some(super::app::TabKind::Components),
+            Self::Components | Self::ComponentByName(_) | Self::ComponentByLicense(_) => {
+                Some(super::app::TabKind::Components)
+            }
             Self::Dependencies => Some(super::app::TabKind::Dependencies),
             Self::Licenses => Some(super::app::TabKind::Licenses),
             Self::Vulnerabilities | Self::VulnerabilityById(_) => {

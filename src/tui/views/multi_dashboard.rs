@@ -492,17 +492,24 @@ fn render_variable_components(
                 Style::default()
             };
 
-            let impact_style = match vc.security_impact {
-                SecurityImpact::Critical => {
-                    base_style.fg(scheme.critical).add_modifier(Modifier::BOLD)
-                }
-                SecurityImpact::High => base_style.fg(scheme.high),
-                SecurityImpact::Medium => base_style.fg(scheme.medium),
-                SecurityImpact::Low => base_style.fg(scheme.low),
+            let (badge, impact_style) = match vc.security_impact {
+                SecurityImpact::Critical => (
+                    "[C] ",
+                    base_style.fg(scheme.critical).add_modifier(Modifier::BOLD),
+                ),
+                SecurityImpact::High => ("[H] ", base_style.fg(scheme.high)),
+                SecurityImpact::Medium => ("[M] ", base_style.fg(scheme.medium)),
+                SecurityImpact::Low => ("[L] ", base_style.fg(scheme.low)),
             };
 
+            // Build name cell with color-coded security badge prefix
+            let name_line = Line::from(vec![
+                Span::styled(badge, impact_style),
+                Span::styled(vc.name.clone(), base_style),
+            ]);
+
             Row::new(vec![
-                Cell::from(vc.name.clone()).style(base_style),
+                Cell::from(name_line),
                 Cell::from(vc.version_spread.baseline.clone().unwrap_or_default())
                     .style(base_style),
                 Cell::from(format!(
@@ -618,7 +625,7 @@ fn render_cross_target_analysis(
         ),
     ]));
 
-    // Show top variable components across targets
+    // Show top variable components across targets with security badges
     for (i, vc) in result
         .summary
         .variable_components
@@ -635,11 +642,19 @@ fn render_cross_target_analysis(
             .collect::<Vec<_>>()
             .join(", ");
 
+        let (badge, badge_color) = match vc.security_impact {
+            SecurityImpact::Critical => ("[C]", scheme.critical),
+            SecurityImpact::High => ("[H]", scheme.high),
+            SecurityImpact::Medium => ("[M]", scheme.medium),
+            SecurityImpact::Low => ("[L]", scheme.low),
+        };
+
         cross_target_info.push(Line::from(vec![
             Span::styled(
                 format!("{}. ", i + 1),
                 Style::default().fg(scheme.text_muted),
             ),
+            Span::styled(format!("{badge} "), Style::default().fg(badge_color)),
             Span::styled(&vc.name, Style::default().fg(scheme.text)),
             Span::raw(": "),
             Span::styled(versions_str, Style::default().fg(scheme.accent)),
