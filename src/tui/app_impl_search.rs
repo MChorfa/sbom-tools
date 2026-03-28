@@ -41,15 +41,24 @@ impl App {
         let query_lower = query.to_lowercase();
         let search_mode = self.overlays.search.mode;
 
-        // Build a regex matcher when in regex mode; fall back to substring on
-        // invalid patterns so the user sees an empty result set rather than a
-        // panic.
+        // Build a regex matcher when in regex mode; show error on invalid patterns.
         let regex_matcher = if search_mode == SearchMode::Regex {
-            regex::RegexBuilder::new(query)
+            match regex::RegexBuilder::new(query)
                 .case_insensitive(true)
                 .build()
-                .ok()
+            {
+                Ok(re) => {
+                    self.overlays.search.search_error = None;
+                    Some(re)
+                }
+                Err(e) => {
+                    self.overlays.search.search_error = Some(format!("Invalid regex: {e}"));
+                    self.overlays.search.results.clear();
+                    return;
+                }
+            }
         } else {
+            self.overlays.search.search_error = None;
             None
         };
 

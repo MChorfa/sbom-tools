@@ -802,10 +802,11 @@ impl FooterHints {
                 hints.insert(1, ("s", "sort"));
             }
             "dependencies" => {
-                hints.insert(0, ("t", "transitive"));
-                hints.insert(1, ("h", "highlight"));
-                hints.insert(2, ("Enter", "expand"));
-                hints.insert(3, ("c", "component"));
+                hints.insert(0, ("f", "filter"));
+                hints.insert(1, ("t", "transitive"));
+                hints.insert(2, ("h", "highlight"));
+                hints.insert(3, ("Enter", "expand"));
+                hints.insert(4, ("c", "component"));
             }
             "licenses" => {
                 hints.insert(0, ("g", "group"));
@@ -816,6 +817,8 @@ impl FooterHints {
             }
             "vulnerabilities" | "vulns" => {
                 hints.insert(0, ("f", "filter"));
+                hints.insert(1, ("s", "sort"));
+                hints.insert(2, ("g", "group"));
             }
             "sidebyside" | "side-by-side" | "diff" => {
                 hints.insert(0, ("←→/p", "panel"));
@@ -823,6 +826,16 @@ impl FooterHints {
             }
             "quality" => {
                 hints.insert(0, ("v", "view"));
+            }
+            "compliance" => {
+                hints.insert(0, ("←→", "standard"));
+                hints.insert(1, ("Tab", "view"));
+                hints.insert(2, ("↑↓", "select"));
+            }
+            "source" => {
+                hints.insert(0, ("w", "panel"));
+                hints.insert(1, ("v", "tree/raw"));
+                hints.insert(2, ("↑↓", "scroll"));
             }
             "graphchanges" | "graph" => {
                 hints.insert(0, ("↑↓", "select"));
@@ -848,9 +861,10 @@ impl FooterHints {
             }
             "vulnerabilities" | "vulns" => {
                 hints.insert(0, ("f", "filter"));
-                hints.insert(1, ("g", "group"));
-                hints.insert(2, ("d", "dedup"));
-                hints.insert(3, ("Enter", "component"));
+                hints.insert(1, ("s", "sort"));
+                hints.insert(2, ("g", "group"));
+                hints.insert(3, ("d", "dedup"));
+                hints.insert(4, ("Enter", "component"));
             }
             "licenses" => {
                 hints.insert(0, ("g", "group"));
@@ -865,6 +879,11 @@ impl FooterHints {
             }
             "quality" => {
                 hints.insert(0, ("v", "view"));
+            }
+            "compliance" => {
+                hints.insert(0, ("f", "filter"));
+                hints.insert(1, ("←→", "standard"));
+                hints.insert(2, ("↑↓", "select"));
             }
             "source" => {
                 hints.insert(0, ("v", "tree/raw"));

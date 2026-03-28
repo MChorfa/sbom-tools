@@ -23,10 +23,11 @@ pub mod vulnerabilities;
 // All existing `use super::app_states::{...}` imports continue to work.
 
 pub use compliance::{
-    DiffComplianceState, DiffComplianceViewMode, PolicyComplianceState, PolicyPreset,
+    ComplianceSeverityFilter, DiffComplianceState, DiffComplianceViewMode, PolicyComplianceState,
+    PolicyPreset,
 };
 pub use components::{ComponentFilter, ComponentSort, ComponentsState, sort_component_changes};
-pub use dependencies::DependenciesState;
+pub use dependencies::{DependenciesState, DependencyChangeFilter};
 pub use graph_changes::GraphChangesState;
 pub use licenses::{LicenseGroupBy, LicenseRiskFilter, LicenseSort, LicensesState};
 pub use matrix::{MatrixSortBy, MatrixState, SimilarityThreshold};

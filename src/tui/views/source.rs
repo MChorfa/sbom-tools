@@ -46,6 +46,11 @@ pub fn render_source(frame: &mut Frame, area: Rect, source: &mut SourceDiffState
     let old_title = format!("Old SBOM{sync_label}{old_badge}");
     let new_title = format!("New SBOM{sync_label}{new_badge}");
 
+    // Reset alignment if either panel's flat cache was invalidated (will be rebuilt below)
+    if !source.old_panel.flat_cache_valid || !source.new_panel.flat_cache_valid {
+        source.alignment_applied = false;
+    }
+
     // Pre-compute render state to avoid mutations inside the render path
     source
         .old_panel
@@ -53,6 +58,9 @@ pub fn render_source(frame: &mut Frame, area: Rect, source: &mut SourceDiffState
     source
         .new_panel
         .prepare_source_render(main_area.1.height.saturating_sub(2) as usize);
+
+    // Align component panels by inserting gap placeholders (after flat caches are built)
+    source.align_component_panels();
 
     render_source_panel(
         frame,

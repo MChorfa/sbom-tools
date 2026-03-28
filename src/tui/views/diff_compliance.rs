@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use crate::quality::{ComplianceLevel, ComplianceResult, ViolationSeverity};
-use crate::tui::app_states::DiffComplianceViewMode;
+use crate::tui::app_states::{ComplianceSeverityFilter, DiffComplianceViewMode};
 use crate::tui::render_context::RenderContext;
 use crate::tui::shared::compliance as shared_compliance;
 use crate::tui::theme::colors;
@@ -32,12 +32,26 @@ pub fn diff_compliance_violation_count(ctx: &RenderContext) -> usize {
     let old = &old_results[idx];
     let new = &new_results[idx];
 
+    let sev_filter = ctx.compliance.severity_filter;
+
     match ctx.compliance.view_mode {
         DiffComplianceViewMode::Overview => 0,
-        DiffComplianceViewMode::NewViolations => compute_new_violations(old, new).len(),
-        DiffComplianceViewMode::ResolvedViolations => compute_resolved_violations(old, new).len(),
-        DiffComplianceViewMode::OldViolations => old.violations.len(),
-        DiffComplianceViewMode::NewSbomViolations => new.violations.len(),
+        DiffComplianceViewMode::NewViolations => {
+            filter_violations(compute_new_violations(old, new), sev_filter).len()
+        }
+        DiffComplianceViewMode::ResolvedViolations => {
+            filter_violations(compute_resolved_violations(old, new), sev_filter).len()
+        }
+        DiffComplianceViewMode::OldViolations => old
+            .violations
+            .iter()
+            .filter(|v| sev_filter.matches(v.severity))
+            .count(),
+        DiffComplianceViewMode::NewSbomViolations => new
+            .violations
+            .iter()
+            .filter(|v| sev_filter.matches(v.severity))
+            .count(),
     }
 }
 
@@ -245,12 +259,14 @@ fn render_violations_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         }
     }
 
+    let sev_filter = ctx.compliance.severity_filter;
+
     match mode {
         DiffComplianceViewMode::Overview => {
             render_overview(frame, area, old, new);
         }
         DiffComplianceViewMode::NewViolations => {
-            let violations = compute_new_violations(old, new);
+            let violations = filter_violations(compute_new_violations(old, new), sev_filter);
             render_violation_table(
                 frame,
                 area,
@@ -262,7 +278,7 @@ fn render_violations_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             );
         }
         DiffComplianceViewMode::ResolvedViolations => {
-            let violations = compute_resolved_violations(old, new);
+            let violations = filter_violations(compute_resolved_violations(old, new), sev_filter);
             render_violation_table(
                 frame,
                 area,
@@ -277,6 +293,7 @@ fn render_violations_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             let violations: Vec<_> = old
                 .violations
                 .iter()
+                .filter(|v| sev_filter.matches(v.severity))
                 .map(ViolationEntry::from_violation)
                 .collect();
             render_violation_table(
@@ -293,6 +310,7 @@ fn render_violations_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             let violations: Vec<_> = new
                 .violations
                 .iter()
+                .filter(|v| sev_filter.matches(v.severity))
                 .map(ViolationEntry::from_violation)
                 .collect();
             render_violation_table(
@@ -306,6 +324,26 @@ fn render_violations_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             );
         }
     }
+}
+
+/// Filter a list of `ViolationEntry` by the active severity filter.
+fn filter_violations(
+    violations: Vec<ViolationEntry>,
+    filter: ComplianceSeverityFilter,
+) -> Vec<ViolationEntry> {
+    if matches!(filter, ComplianceSeverityFilter::All) {
+        return violations;
+    }
+    violations
+        .into_iter()
+        .filter(|v| match filter {
+            ComplianceSeverityFilter::All => true,
+            ComplianceSeverityFilter::ErrorsOnly => v.severity == "ERROR",
+            ComplianceSeverityFilter::WarningsAndAbove => {
+                v.severity == "ERROR" || v.severity == "WARN"
+            }
+        })
+        .collect()
 }
 
 fn render_overview(frame: &mut Frame, area: Rect, old: &ComplianceResult, new: &ComplianceResult) {
@@ -581,7 +619,15 @@ fn render_help_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         DiffComplianceViewMode::NewSbomViolations => "New SBOM",
     };
 
+    let filter_label = ctx.compliance.severity_filter.label();
+    let violation_count = diff_compliance_violation_count(ctx);
+
     let help = Line::from(vec![
+        Span::styled("f", Style::default().fg(colors().accent)),
+        Span::styled(
+            format!(" filter [{filter_label}]  "),
+            Style::default().fg(colors().text_muted),
+        ),
         Span::styled("←/→", Style::default().fg(colors().accent)),
         Span::styled(
             " switch standard  ",
@@ -593,7 +639,10 @@ fn render_help_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             Style::default().fg(colors().text_muted),
         ),
         Span::styled("j/k", Style::default().fg(colors().accent)),
-        Span::styled(" navigate  ", Style::default().fg(colors().text_muted)),
+        Span::styled(
+            format!(" navigate ({violation_count})  "),
+            Style::default().fg(colors().text_muted),
+        ),
         Span::styled("E", Style::default().fg(colors().accent)),
         Span::styled(" export  ", Style::default().fg(colors().text_muted)),
         Span::styled("?", Style::default().fg(colors().accent)),

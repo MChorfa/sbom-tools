@@ -102,6 +102,55 @@ impl PolicyComplianceState {
     }
 }
 
+/// Severity filter for compliance violation display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ComplianceSeverityFilter {
+    /// Show all violations
+    #[default]
+    All,
+    /// Show only errors
+    ErrorsOnly,
+    /// Show warnings and above
+    WarningsAndAbove,
+}
+
+impl ComplianceSeverityFilter {
+    /// Cycle to the next filter option.
+    pub const fn next(self) -> Self {
+        match self {
+            Self::All => Self::ErrorsOnly,
+            Self::ErrorsOnly => Self::WarningsAndAbove,
+            Self::WarningsAndAbove => Self::All,
+        }
+    }
+
+    /// Human-readable label for display in the filter bar.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::ErrorsOnly => "Errors",
+            Self::WarningsAndAbove => "Warn+",
+        }
+    }
+
+    /// Whether a violation severity passes this filter.
+    pub fn matches(self, severity: crate::quality::ViolationSeverity) -> bool {
+        match self {
+            Self::All => true,
+            Self::ErrorsOnly => {
+                matches!(severity, crate::quality::ViolationSeverity::Error)
+            }
+            Self::WarningsAndAbove => {
+                matches!(
+                    severity,
+                    crate::quality::ViolationSeverity::Error
+                        | crate::quality::ViolationSeverity::Warning
+                )
+            }
+        }
+    }
+}
+
 /// State for compliance tab in diff mode (side-by-side multi-standard comparison)
 #[derive(Debug, Clone)]
 pub struct DiffComplianceState {
@@ -115,6 +164,8 @@ pub struct DiffComplianceState {
     pub view_mode: DiffComplianceViewMode,
     /// Whether the detail overlay is shown for the selected violation
     pub show_detail: bool,
+    /// Severity filter for violation display
+    pub severity_filter: ComplianceSeverityFilter,
 }
 
 /// What to show in the diff compliance tab
@@ -140,6 +191,7 @@ impl Default for DiffComplianceState {
             scroll_offset: 0,
             show_detail: false,
             view_mode: DiffComplianceViewMode::Overview,
+            severity_filter: ComplianceSeverityFilter::default(),
         }
     }
 }
@@ -189,5 +241,12 @@ impl DiffComplianceState {
         if self.selected_violation > 0 {
             self.selected_violation -= 1;
         }
+    }
+
+    /// Cycle the severity filter and reset selection.
+    pub const fn toggle_severity_filter(&mut self) {
+        self.severity_filter = self.severity_filter.next();
+        self.selected_violation = 0;
+        self.scroll_offset = 0;
     }
 }

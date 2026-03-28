@@ -865,6 +865,12 @@ pub struct SourcePanelState {
     pub link_labels: HashMap<usize, String>,
     /// Compact tree mode: narrower connectors and indicators to save horizontal space.
     pub compact_mode: bool,
+    /// Version transitions for modified components: node_id prefix -> (old_version, new_version).
+    pub version_diffs: HashMap<String, (String, String)>,
+    /// Whether to auto-collapse unchanged regions in diff mode.
+    pub collapse_unchanged: bool,
+    /// Minimum consecutive unchanged items before collapsing.
+    pub collapse_threshold: usize,
 }
 
 impl SourcePanelState {
@@ -972,6 +978,9 @@ impl SourcePanelState {
             show_indent_guides: true,
             link_labels: HashMap::new(),
             compact_mode: false,
+            version_diffs: HashMap::new(),
+            collapse_unchanged: false,
+            collapse_threshold: 3,
         }
     }
 
@@ -1018,7 +1027,108 @@ impl SourcePanelState {
                 .retain(|item| item.is_expandable || item.value_type == Some(filter_type));
         }
 
+        // Collapse long runs of unchanged items into placeholders
+        self.collapse_unchanged_regions();
+
         self.flat_cache_valid = true;
+    }
+
+    /// Replace long runs of unchanged items with a single placeholder.
+    ///
+    /// Only active in diff mode when `collapse_unchanged` is enabled.
+    /// Items at depth 0-1 (root/top-level structure) are always kept visible.
+    /// One context item is preserved before and after each collapsed region.
+    fn collapse_unchanged_regions(&mut self) {
+        if !self.collapse_unchanged || self.change_annotations.is_empty() {
+            return;
+        }
+
+        let items = &self.cached_flat_items;
+        let mut result: Vec<crate::tui::shared::source::FlatJsonItem> =
+            Vec::with_capacity(items.len());
+        let mut run_start: Option<usize> = None;
+        let mut run_count: usize = 0;
+
+        for i in 0..items.len() {
+            let item = &items[i];
+            let has_annotation = self.find_annotation(&item.node_id).is_some();
+            let is_structural = item.depth <= 1;
+
+            if has_annotation || is_structural {
+                // Flush any accumulated unchanged run
+                if run_count > self.collapse_threshold {
+                    if let Some(start) = run_start {
+                        // Context: first unchanged item
+                        result.push(items[start].clone());
+                        // Placeholder
+                        let collapsed_count = run_count.saturating_sub(2);
+                        result.push(crate::tui::shared::source::FlatJsonItem {
+                            node_id: format!("__collapsed_{start}"),
+                            depth: 3,
+                            display_key: format!(
+                                "\u{00b7}\u{00b7}\u{00b7} {collapsed_count} unchanged items \u{00b7}\u{00b7}\u{00b7}"
+                            ),
+                            value_preview: String::new(),
+                            value_type: None,
+                            is_expandable: false,
+                            is_expanded: false,
+                            child_count_label: String::new(),
+                            preview: String::new(),
+                            is_last_sibling: false,
+                            ancestors_last: vec![],
+                        });
+                        // Context: last unchanged item
+                        if run_count > 1 {
+                            result.push(items[i - 1].clone());
+                        }
+                    }
+                } else if let Some(start) = run_start {
+                    // Run too short to collapse, keep all items
+                    for item in items.iter().take(i).skip(start) {
+                        result.push(item.clone());
+                    }
+                }
+                // Add the current (annotated/structural) item
+                result.push(item.clone());
+                run_start = None;
+                run_count = 0;
+            } else {
+                if run_start.is_none() {
+                    run_start = Some(i);
+                }
+                run_count += 1;
+            }
+        }
+
+        // Handle trailing unchanged run
+        if run_count > self.collapse_threshold {
+            if let Some(start) = run_start {
+                // Context: first unchanged item
+                result.push(items[start].clone());
+                let collapsed_count = run_count.saturating_sub(1);
+                result.push(crate::tui::shared::source::FlatJsonItem {
+                    node_id: format!("__collapsed_{start}"),
+                    depth: 3,
+                    display_key: format!(
+                        "\u{00b7}\u{00b7}\u{00b7} {collapsed_count} unchanged items \u{00b7}\u{00b7}\u{00b7}"
+                    ),
+                    value_preview: String::new(),
+                    value_type: None,
+                    is_expandable: false,
+                    is_expanded: false,
+                    child_count_label: String::new(),
+                    preview: String::new(),
+                    is_last_sibling: false,
+                    ancestors_last: vec![],
+                });
+            }
+        } else if let Some(start) = run_start {
+            for item in items.iter().skip(start) {
+                result.push(item.clone());
+            }
+        }
+
+        self.cached_flat_items = result;
     }
 
     /// Toggle compact tree mode (narrower connectors/indicators).
@@ -1693,6 +1803,23 @@ impl SourcePanelState {
     pub fn get_full_content(&self) -> String {
         self.raw_lines.join("\n")
     }
+
+    /// Get the change status for an item at a specific index (tree or raw mode).
+    pub fn change_status_at_index(&self, idx: usize) -> Option<SourceChangeStatus> {
+        if self.change_annotations.is_empty() {
+            return None;
+        }
+        match self.view_mode {
+            SourceViewMode::Tree => self
+                .cached_flat_items
+                .get(idx)
+                .and_then(|item| self.find_annotation(&item.node_id)),
+            SourceViewMode::Raw => self
+                .raw_line_node_ids
+                .get(idx)
+                .and_then(|node_id| self.find_annotation(node_id)),
+        }
+    }
 }
 
 fn expand_all_recursive(node: &JsonTreeNode, path: &str, expanded: &mut HashSet<String>) {
@@ -1781,6 +1908,11 @@ pub struct SourceDiffState {
     pub show_detail: bool,
     /// Scroll offset within the detail panel.
     pub detail_scroll: usize,
+    /// Whether to align items across panels in diff mode by inserting gap placeholders.
+    pub align_enabled: bool,
+    /// Whether alignment gaps have been inserted into the current flat caches.
+    /// Reset when either panel's flat cache is invalidated.
+    pub(crate) alignment_applied: bool,
 }
 
 impl SourceDiffState {
@@ -1792,6 +1924,15 @@ impl SourceDiffState {
             sync_mode: super::ScrollSyncMode::Locked,
             show_detail: false,
             detail_scroll: 0,
+            align_enabled: true,
+            alignment_applied: false,
+        }
+    }
+
+    pub const fn active_panel(&self) -> &SourcePanelState {
+        match self.active_side {
+            SourceSide::Old => &self.old_panel,
+            SourceSide::New => &self.new_panel,
         }
     }
 
@@ -1931,6 +2072,23 @@ impl SourceDiffState {
                     .change_annotations
                     .insert(path, SourceChangeStatus::Modified);
             }
+            // Store version transition for inline display
+            if let (Some(old_v), Some(new_v)) = (&comp.old_version, &comp.new_version)
+                && old_v != new_v
+            {
+                if let Some(&idx) = old_comp_indices.get(&comp.name) {
+                    let path = format!("root.components.[{idx}]");
+                    self.old_panel
+                        .version_diffs
+                        .insert(path, (old_v.clone(), new_v.clone()));
+                }
+                if let Some(&idx) = new_comp_indices.get(&comp.name) {
+                    let path = format!("root.components.[{idx}]");
+                    self.new_panel
+                        .version_diffs
+                        .insert(path, (old_v.clone(), new_v.clone()));
+                }
+            }
         }
     }
 
@@ -2022,6 +2180,203 @@ impl SourceDiffState {
             lines.push(format!("Change: {status:?}"));
         }
         Some(lines.join("\n"))
+    }
+
+    /// Toggle panel alignment mode.
+    pub fn toggle_align(&mut self) {
+        self.align_enabled = !self.align_enabled;
+        self.alignment_applied = false;
+        self.old_panel.invalidate_flat_cache();
+        self.new_panel.invalidate_flat_cache();
+    }
+
+    /// Align items between old and new panels by inserting gap placeholders.
+    ///
+    /// Only aligns at the components array level (depth 2 items under `root.components`).
+    /// For each removed component (in old, not in new), inserts a gap in the new panel.
+    /// For each added component (in new, not in old), inserts a gap in the old panel.
+    /// Gaps are single-line placeholders showing `·····` in dimmed style.
+    pub fn align_component_panels(&mut self) {
+        if !self.align_enabled || self.old_panel.change_annotations.is_empty() {
+            return;
+        }
+        if self.alignment_applied {
+            return;
+        }
+
+        // Ensure flat caches are built
+        self.old_panel.ensure_flat_cache();
+        self.new_panel.ensure_flat_cache();
+
+        // Collect component-level entries from each panel (depth 2, under root.components)
+        // Each entry is (flat_index, node_id, component_status)
+        let old_comp_entries: Vec<(usize, String, Option<SourceChangeStatus>)> = self
+            .old_panel
+            .cached_flat_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.depth == 2 && item.node_id.starts_with("root.components.["))
+            .map(|(i, item)| {
+                let status = self
+                    .old_panel
+                    .change_annotations
+                    .get(&item.node_id)
+                    .copied();
+                (i, item.node_id.clone(), status)
+            })
+            .collect();
+
+        let new_comp_entries: Vec<(usize, String, Option<SourceChangeStatus>)> = self
+            .new_panel
+            .cached_flat_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.depth == 2 && item.node_id.starts_with("root.components.["))
+            .map(|(i, item)| {
+                let status = self
+                    .new_panel
+                    .change_annotations
+                    .get(&item.node_id)
+                    .copied();
+                (i, item.node_id.clone(), status)
+            })
+            .collect();
+
+        if old_comp_entries.is_empty() && new_comp_entries.is_empty() {
+            return;
+        }
+
+        // Count how many visible rows each component occupies (component item + expanded children)
+        let old_comp_spans =
+            compute_component_spans(&self.old_panel.cached_flat_items, &old_comp_entries);
+        let new_comp_spans =
+            compute_component_spans(&self.new_panel.cached_flat_items, &new_comp_entries);
+
+        // Walk both component lists, building gap insertions
+        // Removed components (in old panel) need a gap in new panel
+        // Added components (in new panel) need a gap in old panel
+        let mut old_insertions: Vec<(usize, usize)> = Vec::new(); // (position, gap_count)
+        let mut new_insertions: Vec<(usize, usize)> = Vec::new();
+
+        let mut old_idx = 0;
+        let mut new_idx = 0;
+
+        // Walk through components, matching unchanged/modified between panels
+        while old_idx < old_comp_entries.len() || new_idx < new_comp_entries.len() {
+            if old_idx < old_comp_entries.len()
+                && matches!(
+                    old_comp_entries[old_idx].2,
+                    Some(SourceChangeStatus::Removed)
+                )
+            {
+                // Removed: exists in old, not in new. Insert gap in new panel.
+                let span = old_comp_spans[old_idx];
+                let insert_pos = if new_idx < new_comp_entries.len() {
+                    new_comp_entries[new_idx].0
+                } else {
+                    // Past end of new components - insert at end of new panel
+                    self.new_panel.cached_flat_items.len()
+                };
+                new_insertions.push((insert_pos, span));
+                old_idx += 1;
+                continue;
+            }
+
+            if new_idx < new_comp_entries.len()
+                && matches!(new_comp_entries[new_idx].2, Some(SourceChangeStatus::Added))
+            {
+                // Added: exists in new, not in old. Insert gap in old panel.
+                let span = new_comp_spans[new_idx];
+                let insert_pos = if old_idx < old_comp_entries.len() {
+                    old_comp_entries[old_idx].0
+                } else {
+                    self.old_panel.cached_flat_items.len()
+                };
+                old_insertions.push((insert_pos, span));
+                new_idx += 1;
+                continue;
+            }
+
+            // Both are unchanged or modified — advance both
+            if old_idx < old_comp_entries.len() {
+                old_idx += 1;
+            }
+            if new_idx < new_comp_entries.len() {
+                new_idx += 1;
+            }
+        }
+
+        // Insert gap items into panels (process from end to avoid shifting)
+        insert_gap_items(&mut self.old_panel.cached_flat_items, &old_insertions);
+        insert_gap_items(&mut self.new_panel.cached_flat_items, &new_insertions);
+
+        // Update visible counts to reflect inserted gaps
+        self.old_panel.visible_count = self.old_panel.cached_flat_items.len();
+        self.new_panel.visible_count = self.new_panel.cached_flat_items.len();
+
+        self.alignment_applied = true;
+    }
+}
+
+/// Compute how many flat items each component occupies (1 if collapsed, more if expanded).
+fn compute_component_spans(
+    items: &[crate::tui::shared::source::FlatJsonItem],
+    comp_entries: &[(usize, String, Option<SourceChangeStatus>)],
+) -> Vec<usize> {
+    comp_entries
+        .iter()
+        .enumerate()
+        .map(|(ci, (start_idx, _, _))| {
+            // Count items from this component until the next component or end of components
+            let next_start = if ci + 1 < comp_entries.len() {
+                comp_entries[ci + 1].0
+            } else {
+                // Find end of components region: next item at depth <= 1, or end
+                items
+                    .iter()
+                    .enumerate()
+                    .skip(start_idx + 1)
+                    .find(|(_, item)| {
+                        item.depth <= 1
+                            || (item.depth == 2 && !item.node_id.starts_with("root.components.["))
+                    })
+                    .map_or(items.len(), |(i, _)| i)
+            };
+            next_start - start_idx
+        })
+        .collect()
+}
+
+/// Insert gap placeholder items into a flat item list.
+/// `insertions` is a list of (position, gap_count) pairs.
+/// Processes from end to start to avoid index shifting.
+fn insert_gap_items(
+    items: &mut Vec<crate::tui::shared::source::FlatJsonItem>,
+    insertions: &[(usize, usize)],
+) {
+    // Process insertions from the highest position to lowest
+    let mut sorted: Vec<(usize, usize)> = insertions.to_vec();
+    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (pos, count) in sorted {
+        let insert_pos = pos.min(items.len());
+        let gap_items: Vec<crate::tui::shared::source::FlatJsonItem> = (0..count)
+            .map(|i| crate::tui::shared::source::FlatJsonItem {
+                node_id: format!("__gap_{insert_pos}_{i}"),
+                depth: 2,
+                display_key: "\u{00b7}\u{00b7}\u{00b7}\u{00b7}\u{00b7}".to_string(),
+                value_preview: String::new(),
+                value_type: None,
+                is_expandable: false,
+                is_expanded: false,
+                child_count_label: String::new(),
+                preview: String::new(),
+                is_last_sibling: false,
+                ancestors_last: vec![],
+            })
+            .collect();
+        // Splice gap items at the insertion point
+        items.splice(insert_pos..insert_pos, gap_items);
     }
 }
 

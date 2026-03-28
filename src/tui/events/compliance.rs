@@ -2,7 +2,7 @@
 
 use crate::tui::App;
 use crate::tui::render_context::RenderContext;
-use crate::tui::traits::{EventResult, ViewContext, ViewMode, ViewState};
+use crate::tui::traits::{EventResult, TabTarget, ViewContext, ViewMode, ViewState};
 use crossterm::event::KeyEvent;
 
 pub(super) fn handle_diff_compliance_keys(app: &mut App, key: KeyEvent) {
@@ -12,29 +12,79 @@ pub(super) fn handle_diff_compliance_keys(app: &mut App, key: KeyEvent) {
         crate::tui::views::diff_compliance_violation_count(&ctx)
     };
 
-    let Some(view) = app.compliance_view.as_mut() else {
-        return;
+    // Process the key in a scoped borrow, extracting all side-effect flags
+    let (result, wants_export, wants_go_to_component) = {
+        let Some(view) = app.compliance_view.as_mut() else {
+            return;
+        };
+
+        view.set_max_violations(max_violations);
+
+        let mut ctx = ViewContext {
+            mode: ViewMode::from_app_mode(app.mode),
+            focused: true,
+            width: 0,
+            height: 0,
+            tick: app.tick,
+            status_message: &mut app.status_message,
+        };
+
+        let result = view.handle_key(key, &mut ctx);
+        let wants_export = view.take_export_request();
+        let wants_go_to_component = view.take_go_to_component_request();
+
+        (result, wants_export, wants_go_to_component)
     };
+    // `view` borrow is now dropped — safe to use `app` freely
 
-    view.set_max_violations(max_violations);
-
-    let mut ctx = ViewContext {
-        mode: ViewMode::from_app_mode(app.mode),
-        focused: true,
-        width: 0,
-        height: 0,
-        tick: app.tick,
-        status_message: &mut app.status_message,
-    };
-
-    let result = view.handle_key(key, &mut ctx);
-
-    // Handle export request
-    if view.take_export_request() {
+    if wants_export {
         app.export_compliance(crate::tui::export::ExportFormat::Json);
     }
 
-    if let EventResult::StatusMessage(msg) = result {
-        app.status_message = Some(msg);
+    if wants_go_to_component {
+        if let Some(component_name) = get_selected_violation_component(app) {
+            app.handle_event_result(EventResult::NavigateTo(TabTarget::ComponentByName(
+                component_name,
+            )));
+        } else {
+            app.set_status_message("No component associated with this violation");
+        }
+        return;
     }
+
+    app.handle_event_result(result);
+}
+
+/// Get the component name from the currently selected compliance violation.
+fn get_selected_violation_component(app: &App) -> Option<String> {
+    let ctx = RenderContext::from_app(app);
+    let idx = ctx.compliance.selected_standard;
+    let old = ctx.old_compliance_results?.get(idx)?;
+    let new = ctx.new_compliance_results?.get(idx)?;
+    let selected = ctx.compliance.selected_violation;
+
+    use crate::tui::app_states::DiffComplianceViewMode;
+    let violation = match ctx.compliance.view_mode {
+        DiffComplianceViewMode::Overview => None,
+        DiffComplianceViewMode::NewViolations => {
+            let old_messages: std::collections::HashSet<&str> =
+                old.violations.iter().map(|v| v.message.as_str()).collect();
+            new.violations
+                .iter()
+                .filter(|v| !old_messages.contains(v.message.as_str()))
+                .nth(selected)
+        }
+        DiffComplianceViewMode::ResolvedViolations => {
+            let new_messages: std::collections::HashSet<&str> =
+                new.violations.iter().map(|v| v.message.as_str()).collect();
+            old.violations
+                .iter()
+                .filter(|v| !new_messages.contains(v.message.as_str()))
+                .nth(selected)
+        }
+        DiffComplianceViewMode::OldViolations => old.violations.get(selected),
+        DiffComplianceViewMode::NewSbomViolations => new.violations.get(selected),
+    };
+
+    violation.and_then(|v| v.element.clone())
 }

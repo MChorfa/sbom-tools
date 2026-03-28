@@ -5,7 +5,7 @@
 //! sync bridge since they need access to `App` data and security cache.
 
 use crate::tui::app_states::components::ComponentsState;
-use crate::tui::traits::{EventResult, Shortcut, ViewContext, ViewState};
+use crate::tui::traits::{EventResult, Shortcut, TabTarget, ViewContext, ViewState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
 /// Components tab view implementing the `ViewState` trait.
@@ -82,6 +82,10 @@ impl ViewState for ComponentsView {
                 self.inner.security_filter.clear_all();
                 EventResult::status("All filters cleared")
             }
+            KeyCode::Char('d') => {
+                // Navigate to Dependencies tab for the selected component
+                EventResult::NavigateTo(TabTarget::Dependencies)
+            }
             // Data-dependent actions return Ignored so the bridge handles them
             KeyCode::Char('y' | 'F' | 'o' | 'n') => EventResult::Ignored,
             _ => EventResult::Ignored,
@@ -99,6 +103,7 @@ impl ViewState for ComponentsView {
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
             Shortcut::primary("j/k", "Navigate"),
+            Shortcut::new("d", "Dependencies"),
             Shortcut::new("f", "Filter"),
             Shortcut::new("s", "Sort"),
             Shortcut::new("v", "Multi-select"),
@@ -168,5 +173,14 @@ mod tests {
             view.handle_key(make_key(KeyCode::Char('F')), &mut ctx),
             EventResult::Ignored
         );
+    }
+
+    #[test]
+    fn test_d_navigates_to_dependencies() {
+        let mut view = ComponentsView::new();
+        let mut ctx = make_ctx(ViewMode::Diff);
+
+        let result = view.handle_key(make_key(KeyCode::Char('d')), &mut ctx);
+        assert_eq!(result, EventResult::NavigateTo(TabTarget::Dependencies));
     }
 }

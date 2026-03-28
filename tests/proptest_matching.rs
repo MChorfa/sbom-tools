@@ -13,7 +13,7 @@ use sbom_tools::model::Component;
 /// where alias lookup tables can cause asymmetric scores (known limitation).
 fn arb_component() -> impl Strategy<Value = Component> {
     (
-        "[a-z][a-z0-9]{2}[a-z0-9-]{0,17}", // name (min 3 chars)
+        "[a-z][a-z0-9]{2}[a-z0-9]{0,17}", // name (min 3 chars, no hyphens to avoid alias asymmetry)
         prop::option::of("[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}"), // version
         prop::option::of(prop::sample::select(vec![
             "npm", "pypi", "maven", "cargo", "golang",

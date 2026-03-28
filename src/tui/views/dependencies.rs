@@ -1,7 +1,7 @@
 //! Dependencies view with tree widget.
 
 use crate::tui::app::{AppMode, DataContext};
-use crate::tui::app_states::DependenciesState;
+use crate::tui::app_states::{DependenciesState, DependencyChangeFilter};
 use crate::tui::render_context::RenderContext;
 use crate::tui::theme::colors;
 use ratatui::{
@@ -203,7 +203,27 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         ),
     ]);
 
+    if is_diff_mode {
+        let filter_label = ctx.dependencies.change_filter.label();
+        let filter_style = if matches!(ctx.dependencies.change_filter, DependencyChangeFilter::All)
+        {
+            Style::default().fg(scheme.text_muted)
+        } else {
+            Style::default().fg(scheme.accent).bold()
+        };
+        line1_spans.push(Span::styled("  [f]", Style::default().fg(scheme.accent)));
+        line1_spans.push(Span::styled(
+            format!(" Filter:{filter_label}"),
+            filter_style,
+        ));
+    }
+
     let line1 = Line::from(line1_spans);
+
+    // Compute total node and edge counts for display
+    let node_count = ctx.dependencies.cached_graph.len();
+    let edge_count: usize = ctx.dependencies.cached_graph.values().map(Vec::len).sum();
+    let direct_count = ctx.dependencies.cached_direct_deps.len();
 
     // Line 2: Selection info + stats (merged from old line3 + hints)
     let mut line2_spans = vec![
@@ -212,6 +232,15 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             Style::default().fg(scheme.primary).bold(),
         ),
         Span::styled(" selected", Style::default().fg(scheme.text_muted)),
+        Span::styled("  │  ", Style::default().fg(scheme.border)),
+        Span::styled(
+            format!("{node_count} nodes  {edge_count} edges"),
+            Style::default().fg(scheme.text_muted),
+        ),
+        Span::styled(
+            format!("  ({direct_count} direct)"),
+            Style::default().fg(scheme.text_muted),
+        ),
         Span::styled("  │  ", Style::default().fg(scheme.border)),
         Span::styled(
             format!("Expanded: {expanded_count}"),
@@ -738,18 +767,23 @@ fn render_diff_tree_cached(
         let expanded = &ctx.dependencies.expanded_nodes;
         let display_names = &ctx.dependencies.cached_display_names;
 
-        // Build added/removed lookup from result
+        // Build added/removed lookup from result, respecting change filter
         let mut added_by_source: HashMap<&str, Vec<&str>> = HashMap::new();
         let mut removed_by_source: HashMap<&str, Vec<&str>> = HashMap::new();
+        let change_filter = ctx.dependencies.change_filter;
 
-        for dep in &result.dependencies.added {
-            added_by_source.entry(&dep.from).or_default().push(&dep.to);
+        if !matches!(change_filter, DependencyChangeFilter::Removed) {
+            for dep in &result.dependencies.added {
+                added_by_source.entry(&dep.from).or_default().push(&dep.to);
+            }
         }
-        for dep in &result.dependencies.removed {
-            removed_by_source
-                .entry(&dep.from)
-                .or_default()
-                .push(&dep.to);
+        if !matches!(change_filter, DependencyChangeFilter::Added) {
+            for dep in &result.dependencies.removed {
+                removed_by_source
+                    .entry(&dep.from)
+                    .or_default()
+                    .push(&dep.to);
+            }
         }
 
         // Apply search filter if active

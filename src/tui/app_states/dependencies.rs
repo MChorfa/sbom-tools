@@ -3,6 +3,38 @@
 use crate::tui::state::{ListNavigation, TreeNavigation};
 use std::collections::{HashMap, HashSet};
 
+/// Filter for dependency change status in diff mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DependencyChangeFilter {
+    /// Show all dependencies (added + removed)
+    #[default]
+    All,
+    /// Show only added dependencies
+    Added,
+    /// Show only removed dependencies
+    Removed,
+}
+
+impl DependencyChangeFilter {
+    /// Cycle to next filter option.
+    pub const fn next(self) -> Self {
+        match self {
+            Self::All => Self::Added,
+            Self::Added => Self::Removed,
+            Self::Removed => Self::All,
+        }
+    }
+
+    /// Human-readable label.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Added => "Added",
+            Self::Removed => "Removed",
+        }
+    }
+}
+
 /// State for dependencies view
 /// Sort order for dependencies
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -92,6 +124,8 @@ pub struct DependenciesState {
     pub cached_forward_graph: HashMap<String, Vec<String>>,
     /// Current sort order
     pub sort_order: DependencySort,
+    /// Change filter for diff mode (All/Added/Removed)
+    pub change_filter: DependencyChangeFilter,
     /// Cached depth for each node
     pub cached_depths: HashMap<String, usize>,
     /// Cached display names: canonical ID → "name@version"
@@ -132,6 +166,7 @@ impl DependenciesState {
             cached_reverse_graph: HashMap::new(),
             cached_forward_graph: HashMap::new(),
             sort_order: DependencySort::default(),
+            change_filter: DependencyChangeFilter::default(),
             cached_depths: HashMap::new(),
             cached_display_names: HashMap::new(),
         }
@@ -227,6 +262,11 @@ impl DependenciesState {
     /// Cycle to next sort order
     pub const fn toggle_sort(&mut self) {
         self.sort_order = self.sort_order.next();
+    }
+
+    /// Cycle to next change filter
+    pub const fn toggle_change_filter(&mut self) {
+        self.change_filter = self.change_filter.next();
     }
 
     /// Update transitive caches: direct deps, reverse graph, forward graph, and depths

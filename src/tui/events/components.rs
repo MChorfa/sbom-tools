@@ -21,14 +21,23 @@ pub(super) fn handle_components_keys(app: &mut App, key: KeyEvent) {
     let result = view.handle_key(key, &mut ctx);
 
     match result {
-        EventResult::StatusMessage(msg) => {
-            app.status_message = Some(msg);
-        }
         EventResult::Ignored => {
             // Handle data-dependent keys that the ViewState can't process
             handle_data_dependent_keys(app, key);
         }
-        _ => {}
+        EventResult::NavigateTo(ref target) => {
+            // For Dependencies navigation, set a status message
+            if matches!(target, crate::tui::traits::TabTarget::Dependencies) {
+                let comp_name = get_components_tab_selected_name(app);
+                if let Some(name) = comp_name {
+                    app.set_status_message(format!("Dependencies for: {name}"));
+                }
+            }
+            app.handle_event_result(result);
+        }
+        _ => {
+            app.handle_event_result(result);
+        }
     }
 }
 
