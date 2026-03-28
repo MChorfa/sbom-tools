@@ -1,0 +1,78 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-27T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "sbom-tools",
+        "name": "sbom-tools",
+        "version": "0.1.17"
+      }
+    ],
+    "component": {
+      "bom-ref": "root",
+      "type": "application",
+      "name": "test-dataset-app",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "dataset-training-1",
+      "type": "data",
+      "name": "training-dataset-v1",
+      "version": "1.0.0",
+      "description": "Primary training dataset for model development",
+      "data": {
+        "type": "training",
+        "contents": {
+          "properties": [
+            "size: 500GB",
+            "records: 10M",
+            "format: parquet"
+          ]
+        },
+        "sensitivityData": [
+          "pii",
+          "phi"
+        ],
+        "governance": {
+          "owners": [
+            "data-team@example.com",
+            "ml-ops@example.com"
+          ]
+        }
+      }
+    },
+    {
+      "bom-ref": "dataset-validation-1",
+      "type": "data",
+      "name": "validation-dataset-v1",
+      "version": "1.0.0",
+      "description": "Validation dataset for model evaluation",
+      "data": {
+        "type": "validation",
+        "sensitivityData": [
+          "pii"
+        ]
+      }
+    },
+    {
+      "bom-ref": "dataset-test-1",
+      "type": "data",
+      "name": "test-dataset-v1",
+      "version": "1.0.0",
+      "description": "Test dataset for final model evaluation",
+      "data": {
+        "type": "testing",
+        "governance": {
+          "owners": [
+            "qa-team@example.com"
+          ]
+        }
+      }
+    }
+  ]
+}
