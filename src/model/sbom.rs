@@ -621,6 +621,10 @@ pub struct Component {
     pub staleness: Option<StalenessInfo>,
     /// End-of-life information (populated by enrichment)
     pub eol: Option<EolInfo>,
+    /// ML model metadata (populated for MachineLearningModel components)
+    pub ml_model: Option<super::MlModelInfo>,
+    /// Dataset metadata (populated for Data components)
+    pub dataset: Option<super::DatasetInfo>,
 }
 
 impl Component {
@@ -654,6 +658,8 @@ impl Component {
             version_range: None,
             staleness: None,
             eol: None,
+            ml_model: None,
+            dataset: None,
         }
     }
 

@@ -459,6 +459,79 @@ impl CycloneDxParser {
         comp.is_external = cdx.is_external;
         comp.version_range.clone_from(&cdx.version_range);
 
+        // Set ML model metadata (CycloneDX 1.5+)
+        if let Some(ml_model) = &cdx.ml_model {
+            let mut ml_info = crate::model::MlModelInfo::default();
+
+            if let Some(approach) = &ml_model.approach {
+                ml_info.approach = approach.approach_type.clone();
+            }
+
+            if let Some(arch_family) = &ml_model.architecture_family {
+                ml_info.architecture_family = Some(arch_family.clone());
+            }
+
+            if let Some(model_params) = &ml_model.model_parameters {
+                ml_info.task = model_params.task.clone();
+
+                if let Some(arch) = &model_params.architecture {
+                    ml_info.architecture_name = arch.name.clone();
+                }
+
+                // Collect training datasets
+                for dataset_ref in &model_params.datasets {
+                    ml_info.training_datasets.push(crate::model::DatasetRef {
+                        name: dataset_ref.name.clone(),
+                        purl: dataset_ref.purl.clone(),
+                    });
+                }
+            }
+
+            if let Some(quantization) = &ml_model.quantization {
+                ml_info.quantization = quantization.mode.clone();
+            }
+
+            if let Some(limitations) = &ml_model.limitations {
+                ml_info.limitations = Some(limitations.clone());
+            }
+
+            // Extract energy consumption from considerations
+            if let Some(considerations) = &ml_model.considerations {
+                if let Some(env_considerations) = &considerations.environmental_considerations {
+                    for energy in &env_considerations.energy_consumptions {
+                        if energy.activity.as_deref() == Some("training") {
+                            ml_info.energy_kwh_training = energy.energy_kwh;
+                        }
+                    }
+                }
+            }
+
+            // Extract model card URL from external references
+            for ext_ref in &comp.external_refs {
+                if ext_ref.ref_type == ExternalRefType::ModelCard {
+                    ml_info.model_card_url = Some(ext_ref.url.clone());
+                    break;
+                }
+            }
+
+            comp.ml_model = Some(ml_info);
+        }
+
+        // Set dataset metadata (CycloneDX 1.5+)
+        if let Some(data_component) = &cdx.data_component {
+            let mut dataset_info = crate::model::DatasetInfo::default();
+
+            dataset_info.dataset_type = data_component.data_type.clone();
+            dataset_info.sensitivity_classifications = data_component.sensitivity_data.clone();
+
+            if let Some(governance) = &data_component.governance {
+                // governance.owners is Vec<String>, clone directly
+                dataset_info.governance_owners = governance.owners.clone();
+            }
+
+            comp.dataset = Some(dataset_info);
+        }
+
         comp.calculate_content_hash();
         comp
     }
@@ -1012,6 +1085,12 @@ struct CdxComponent {
     is_external: bool,
     /// Package URL Version Range syntax (1.7+, mutually exclusive with version)
     version_range: Option<String>,
+    /// ML Model metadata (CycloneDX 1.5+)
+    #[serde(rename = "modelCard", alias = "mlModel")]
+    ml_model: Option<CdxMlModel>,
+    /// Dataset metadata (CycloneDX 1.5+, used when component type is "data")
+    #[serde(rename = "data")]
+    data_component: Option<CdxDataComponent>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1060,6 +1139,124 @@ struct CdxExternalReference {
 struct CdxProperty {
     name: String,
     value: String,
+}
+
+// ML Model and Dataset structures (CycloneDX 1.5+ AI/ML BOM support)
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxMlModel {
+    approach: Option<CdxMlApproach>,
+    architecture_family: Option<String>,
+    model_card: Option<serde_json::Value>,  // Preserve as raw JSON for now
+    model_parameters: Option<CdxModelParameters>,
+    quantization: Option<CdxQuantization>,
+    limitations: Option<String>,
+    considerations: Option<CdxConsiderations>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxMlApproach {
+    #[serde(rename = "type")]
+    approach_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxModelParameters {
+    task: Option<String>,
+    architecture: Option<CdxModelArchitecture>,
+    #[serde(default)]
+    datasets: Vec<CdxDatasetRef>,
+    objective_function: Option<Vec<serde_json::Value>>,
+    evaluation_metrics: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxModelArchitecture {
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxDatasetRef {
+    #[serde(rename = "ref")]
+    ref_field: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    purl: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxQuantization {
+    mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxConsiderations {
+    environmental_considerations: Option<CdxEnvironmentalConsiderations>,
+    #[serde(default)]
+    #[serde(rename = "fairnessConsiderations")]
+    fairness_considerations: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxEnvironmentalConsiderations {
+    #[serde(default)]
+    energy_consumptions: Vec<CdxEnergyConsumption>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxEnergyConsumption {
+    activity: Option<String>,
+    energy_provider: Option<String>,
+    energy_source: Option<String>,
+    #[serde(rename = "energyKwh")]
+    energy_kwh: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxDataComponent {
+    #[serde(rename = "type")]
+    data_type: Option<String>,
+    name: Option<String>,
+    contents: Option<CdxDataContents>,
+    classification: Option<String>,
+    #[serde(default)]
+    sensitivity_data: Vec<String>,
+    governance: Option<CdxDataGovernance>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxDataContents {
+    #[serde(default)]
+    properties: Vec<CdxProperty>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxDataGovernance {
+    #[serde(default)]
+    owners: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
