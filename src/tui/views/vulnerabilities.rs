@@ -886,6 +886,38 @@ fn render_detail_panel(
             }
         }
 
+        // === VEX State Transition (item 1.4) ===
+        if let Some(vex_change) = ctx.diff_result.and_then(|r| {
+            r.vulnerabilities
+                .vex_changes
+                .iter()
+                .find(|c| c.vuln_id == info.id)
+        }) {
+            lines.push(Line::from(""));
+            let old_label = vex_change
+                .old_state
+                .as_ref()
+                .map_or_else(|| "None".to_string(), ToString::to_string);
+            let new_label = vex_change
+                .new_state
+                .as_ref()
+                .map_or_else(|| "None".to_string(), ToString::to_string);
+            let transition_color = match vex_change.new_state.as_ref() {
+                Some(crate::model::VexState::NotAffected | crate::model::VexState::Fixed) => {
+                    scheme.success
+                }
+                Some(crate::model::VexState::Affected) => scheme.critical,
+                Some(crate::model::VexState::UnderInvestigation) => scheme.warning,
+                None => scheme.text_muted,
+            };
+            lines.push(Line::from(vec![
+                Span::styled("VEX Transition: ", Style::default().fg(scheme.text_muted)),
+                Span::styled(old_label, Style::default().fg(scheme.text)),
+                Span::styled(" \u{2192} ", Style::default().fg(scheme.text_muted)),
+                Span::styled(new_label, Style::default().fg(transition_color).bold()),
+            ]));
+        }
+
         // === Section 3: Impact (CWEs + CVSS vector) ===
         if !info.cwes.is_empty() || info.cvss_vector.is_some() {
             lines.push(Line::from(""));

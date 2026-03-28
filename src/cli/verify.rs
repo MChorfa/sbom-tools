@@ -29,7 +29,12 @@ pub enum VerifyAction {
         /// SBOM file to audit
         file: PathBuf,
         /// Output format (table or json)
-        #[arg(short, long, default_value = "table")]
+        #[arg(
+            short = 'f',
+            long = "output",
+            alias = "format",
+            default_value = "table"
+        )]
         format: String,
     },
 }

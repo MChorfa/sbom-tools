@@ -100,6 +100,11 @@ impl ViewState for DependenciesView {
                 self.inner.toggle_cycles();
                 EventResult::Consumed
             }
+            KeyCode::Char('f') => {
+                self.inner.toggle_change_filter();
+                let label = self.inner.change_filter.label();
+                EventResult::status(format!("Dependency filter: {label}"))
+            }
             KeyCode::Char('s') => {
                 self.inner.toggle_sort();
                 EventResult::Consumed

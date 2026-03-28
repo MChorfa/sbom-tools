@@ -1,23 +1,26 @@
 # Architecture
 
-High-level overview of the sbom-tools codebase (~85K LOC, ~200 Rust files).
+High-level overview of the sbom-tools codebase (~87K LOC, ~200 Rust files).
 
 ## Module Structure
 
 ```
 src/
-  cli/          Command handlers (clap-based)
-  config/       YAML/JSON configuration, presets, validation
-  model/        Canonical SBOM representation
-  parsers/      Format detection + parsing
-  matching/     Multi-tier fuzzy component matching
-  diff/         Semantic diffing engine
-  enrichment/   OSV/KEV vulnerability data, EOL detection, VEX
-  quality/      Quality scoring engine + compliance standards
-  pipeline/     Orchestration: parse -> enrich -> diff -> report
-  reports/      Output format generators
-  tui/          Interactive terminal UI (ratatui)
-  watch/        Continuous SBOM monitoring
+  cli/            Command handlers (clap-based, 18 subcommands)
+  config/         YAML/JSON configuration, presets, validation, schema generation
+  model/          Canonical SBOM representation (NormalizedSbom, Component, CanonicalId)
+  parsers/        Format detection + parsing (streaming for >512MB)
+  matching/       Multi-tier fuzzy matching (PURL, alias, ecosystem, adaptive, LSH)
+  diff/           Semantic diffing engine + graph diff + incremental section-selective diff
+  enrichment/     OSV/KEV vulnerability data, EOL detection, VEX (feature-gated)
+  quality/        8-category scoring engine v2.0 + 9 compliance standards
+  pipeline/       Orchestration: parse -> enrich -> diff -> report + shared enrichment pipeline
+  reports/        9 output format generators + streaming reporter
+  tui/            Interactive terminal UI (ratatui) — diff, view, multi-diff, timeline, matrix
+  verification/   File hash verification + component hash auditing
+  license/        License policy engine (allow/deny/review) + propagation analysis
+  serialization/  Raw JSON enrichment, tailoring (filter), merging with dedup
+  watch/          Continuous SBOM monitoring (file watcher, vulnerability alerts)
 ```
 
 ## Data Flow
@@ -61,15 +64,26 @@ Components are matched across SBOMs using a tiered strategy:
 9 standards: NTIA, CRA Phase 1/2, FDA, NIST SSDF, EO 14028, plus Minimum and Comprehensive. Each standard defines required fields and produces SARIF-compatible findings.
 
 ### TUI (`tui/`)
-Built on ratatui with crossterm backend. Two parallel systems exist:
-- Legacy `App` struct for diff mode (tabs: Summary, Components, Vulnerabilities, Dependencies, Compliance, Source)
-- `ViewState` trait for view mode (only Quality tab migrated so far)
+Built on ratatui with crossterm backend. Unified `App` struct with `ViewState` trait pattern:
+- **Diff mode** — 10 tabs: Summary, Components, Dependencies, Licenses, Vulnerabilities, Quality, Compliance, Side-by-Side, Graph Changes, Source
+- **View mode** — 8 tabs: Overview, Tree, Vulnerabilities, Licenses, Dependencies, Quality, Compliance, Source
+- **Multi-modes** — Full-screen views for diff-multi (1:N), timeline, and matrix (NxN) comparisons
+- All tabs implement `ViewState` trait for modular event handling
+- `RenderContext` provides read-only rendering decoupled from state mutation
+- Features: regex search (Ctrl+R), composable vulnerability filters, version downgrade detection, cached grouped rendering
 
 ### Streaming Parser (`parsers/`)
 SBOMs larger than 512MB are parsed with a streaming strategy to avoid memory exhaustion.
 
+### Diff Engine (`diff/`)
+- Section-selective incremental diffing: only recomputes changed sections (components, dependencies, licenses, vulnerabilities) when cache detects partial changes
+- `QualityDelta` tracks per-category quality score changes across SBOM versions
+- `VexStatusChange` detects VEX state transitions for persistent vulnerabilities
+- `MatchMetrics` records matching quality statistics (exact/fuzzy/rule match counts)
+- Cost model with presets (default, security-focused, compliance-focused)
+
 ### Pipeline (`pipeline/`)
-`PipelineError` provides structured errors across stages. `build_enrichment_config()` centralizes feature-gated enrichment setup.
+`PipelineError` provides structured errors across stages. Shared enrichment pipeline (`pipeline/enrich.rs`) composes OSV + EOL + VEX enrichment into a single `enrich_sbom_full()` call used by all commands.
 
 ## Error Handling
 
@@ -80,8 +94,7 @@ SBOMs larger than 512MB are parsed with a streaming strategy to avoid memory exh
 
 ## Feature Flags
 
-- `enrichment` (default) — enables OSV/KEV vulnerability enrichment and EOL detection
-- `vex` — enables OpenVEX integration
+- `enrichment` (default) — enables OSV/KEV vulnerability enrichment, EOL detection, and VEX support
 
 ## Go and Swift Bindings MVP
 
@@ -97,8 +110,8 @@ The repository now includes a C-compatible ABI layer in [src/ffi.rs](src/ffi.rs)
 
 ## Testing
 
-- 762+ tests (unit + integration)
-- Property-based testing via `proptest`
+- 912+ tests (unit + integration)
+- Property-based testing via `proptest` (matching symmetry, score range, self-match)
 - Fuzz targets for all parser formats (`cargo-fuzz`)
 - Golden fixture tests for format compatibility
 - Integration tests in `tests/` covering pipeline, CLI, CRA, query, VEX, watch, and graph

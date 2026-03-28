@@ -54,20 +54,49 @@ const fn build_long_version() -> &'static str {
     5  License policy violations found
 
 EXAMPLES:
-    # Quick diff with auto-detected output
-    sbom-tools diff old.cdx.json new.cdx.json
+  Comparing SBOMs:
+    sbom-tools diff old.cdx.json new.cdx.json                     # Interactive TUI
+    sbom-tools diff old.cdx.json new.cdx.json -o summary           # Terminal summary
+    sbom-tools diff old.cdx.json new.cdx.json -o json > diff.json  # JSON export
+    sbom-tools diff old.cdx.json new.cdx.json -o sarif             # CI/CD SARIF
 
-    # CI/CD pipeline check
-    sbom-tools diff old.cdx.json new.cdx.json -o summary --fail-on-vuln
+  Enrichment (add vulnerability + EOL data before diffing):
+    sbom-tools diff old.json new.json --enrich-vulns --enrich-eol
+    sbom-tools view app.cdx.json --enrich-vulns --fail-on-vuln
 
-    # Export JSON for processing
-    sbom-tools diff old.cdx.json new.cdx.json -o json > diff.json
+  CI/CD pipeline gates:
+    sbom-tools diff old.json new.json --fail-on-vuln --fail-on-change
+    sbom-tools diff old.json new.json --fail-on-vex-gap --vex vex.json
+    sbom-tools quality app.cdx.json --min-score 70
 
-    # Compare baseline against fleet
-    sbom-tools diff-multi baseline.cdx.json device-*.cdx.json -o table
+  Fleet / multi-SBOM analysis:
+    sbom-tools diff-multi baseline.json device-*.json -o table
+    sbom-tools timeline v1.json v2.json v3.json --enrich-vulns
+    sbom-tools matrix *.cdx.json --cluster-threshold 0.9
 
-    # Search for vulnerable components across SBOMs
-    sbom-tools query \"log4j\" --version \"<2.17.0\" fleet/*.json")]
+  Search and query:
+    sbom-tools query \"log4j\" --version \"<2.17.0\" fleet/*.json
+    sbom-tools query --affected-by CVE-2021-44228 *.json
+
+  Quality and compliance:
+    sbom-tools quality app.cdx.json --profile security --metrics
+    sbom-tools validate app.cdx.json --standard ntia,cra,eo14028
+    sbom-tools license-check app.cdx.json --strict
+
+  VEX operations:
+    sbom-tools vex status --sbom app.json --vex vex.json
+    sbom-tools vex apply --sbom app.json --vex vex.json -O enriched.json
+
+  SBOM operations (enrich, filter, merge):
+    sbom-tools enrich app.cdx.json --enrich-vulns --enrich-eol -O enriched.json
+    sbom-tools tailor app.cdx.json --exclude-ecosystems npm,pypi
+    sbom-tools merge primary.json secondary.json -O combined.json
+
+  Monitoring:
+    sbom-tools watch --dir ./sboms --enrich-vulns --exit-on-change
+    sbom-tools verify hash app.cdx.json --algorithm sha256
+
+For more details on any command: sbom-tools <command> --help")]
 struct Cli {
     /// Enable verbose output
     #[arg(short, long, global = true)]
@@ -99,46 +128,38 @@ struct Cli {
 // Command argument structs (extracted for readability)
 // ============================================================================
 
-/// Shared enrichment and behavior arguments for multi-SBOM commands.
+/// Shared enrichment arguments for commands that support vulnerability/EOL data enrichment.
 #[derive(Args, Debug)]
 struct SharedEnrichmentArgs {
     /// Enable OSV vulnerability enrichment
     #[arg(long)]
     enrich_vulns: bool,
 
-    /// Enable end-of-life detection
+    /// Enable end-of-life detection via endoflife.date
     #[arg(long)]
     enrich_eol: bool,
 
-    /// Apply external VEX document(s)
+    /// Apply external VEX document(s) (OpenVEX format). Can be specified multiple times
     #[arg(long = "vex", value_name = "PATH")]
     vex: Vec<PathBuf>,
 
-    /// Cache directory for vulnerability data
-    #[arg(long)]
+    /// Cache directory for enrichment data
+    #[arg(long, alias = "cache-dir")]
     vuln_cache_dir: Option<PathBuf>,
 
     /// Cache TTL in hours
-    #[arg(long, default_value = "24")]
+    #[arg(long, alias = "cache-ttl", default_value = "24")]
     vuln_cache_ttl: u64,
 
     /// Bypass cache and fetch fresh data
-    #[arg(long)]
+    #[arg(long, alias = "refresh")]
     refresh_vulns: bool,
 
     /// API timeout in seconds
     #[arg(long, default_value = "30")]
     api_timeout: u64,
 
-    /// Filter by minimum severity
-    #[arg(long)]
-    severity: Option<String>,
-
-    /// Exit with code 2 if vulnerabilities introduced
-    #[arg(long)]
-    fail_on_vuln: bool,
-
-    /// Custom matching rules file
+    /// Custom matching rules YAML file
     #[arg(long)]
     matching_rules: Option<PathBuf>,
 }
@@ -147,7 +168,10 @@ impl SharedEnrichmentArgs {
     fn to_enrichment_config(&self) -> EnrichmentConfig {
         EnrichmentConfig {
             enabled: self.enrich_vulns,
-            cache_dir: self.vuln_cache_dir.clone(),
+            cache_dir: self
+                .vuln_cache_dir
+                .clone()
+                .or_else(|| Some(dirs::osv_cache_dir())),
             cache_ttl_hours: self.vuln_cache_ttl,
             bypass_cache: self.refresh_vulns,
             timeout_secs: self.api_timeout,
@@ -160,6 +184,12 @@ impl SharedEnrichmentArgs {
 
 /// Arguments for the `diff` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools diff old.cdx.json new.cdx.json                    # Interactive TUI
+    sbom-tools diff old.json new.json -o summary --fail-on-vuln   # CI gate
+    sbom-tools diff old.json new.json --enrich-vulns -o sarif     # Enriched SARIF
+    sbom-tools diff old.json new.json --graph-diff --graph-max-depth 3
+    sbom-tools diff old.json new.json --vex vex.json --fail-on-vex-gap")]
 struct DiffArgs {
     /// Path to the old/baseline SBOM
     old: PathBuf,
@@ -203,33 +233,8 @@ struct DiffArgs {
     #[arg(long)]
     severity: Option<String>,
 
-    /// Enable OSV vulnerability enrichment
-    #[arg(long)]
-    enrich_vulns: bool,
-
-    /// Enable end-of-life detection via endoflife.date
-    #[arg(long)]
-    enrich_eol: bool,
-
-    /// Apply external VEX document(s) (OpenVEX format). Can be specified multiple times.
-    #[arg(long = "vex", value_name = "PATH")]
-    vex: Vec<PathBuf>,
-
-    /// Cache directory for vulnerability data
-    #[arg(long)]
-    vuln_cache_dir: Option<PathBuf>,
-
-    /// Cache TTL in hours (default: 24)
-    #[arg(long, default_value = "24")]
-    vuln_cache_ttl: u64,
-
-    /// Bypass cache and fetch fresh vulnerability data
-    #[arg(long)]
-    refresh_vulns: bool,
-
-    /// API timeout in seconds (default: 30)
-    #[arg(long, default_value = "30")]
-    api_timeout: u64,
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 
     /// Enable graph-aware diffing (detect reparenting, depth changes)
     #[arg(long)]
@@ -247,10 +252,6 @@ struct DiffArgs {
     /// (e.g., "DependsOn,DevDependsOn"). Empty = all types.
     #[arg(long)]
     graph_relations: Option<String>,
-
-    /// Custom matching rules YAML file
-    #[arg(long)]
-    matching_rules: Option<PathBuf>,
 
     /// Dry-run matching rules (show what would match without applying)
     #[arg(long)]
@@ -288,13 +289,18 @@ struct DiffArgs {
     #[arg(long)]
     streaming: bool,
 
-    /// Streaming threshold in MB (default: 10). Files larger than this use streaming mode.
+    /// Streaming threshold in MB. Files larger than this use streaming mode.
     #[arg(long, default_value = "10")]
     streaming_threshold: u64,
 }
 
 /// Arguments for the `view` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools view app.cdx.json                                  # Interactive TUI
+    sbom-tools view app.cdx.json --enrich-vulns --fail-on-vuln    # CI vuln check
+    sbom-tools view app.cdx.json -o json > components.json        # Export
+    sbom-tools view app.cdx.json --vulnerable-only --severity high")]
 struct ViewArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
@@ -323,41 +329,21 @@ struct ViewArgs {
     #[arg(long)]
     ecosystem: Option<String>,
 
-    /// Exit with code 2 if vulnerabilities are present (for CI pipelines)
+    /// Exit with code 2 if any vulnerabilities are present in the SBOM
     #[arg(long)]
     fail_on_vuln: bool,
 
-    /// Enable OSV vulnerability enrichment
-    #[arg(long)]
-    enrich_vulns: bool,
-
-    /// Enable end-of-life detection via endoflife.date
-    #[arg(long)]
-    enrich_eol: bool,
-
-    /// Apply external VEX document(s) (OpenVEX format). Can be specified multiple times.
-    #[arg(long = "vex", value_name = "PATH")]
-    vex: Vec<PathBuf>,
-
-    /// Cache directory for enrichment data
-    #[arg(long)]
-    vuln_cache_dir: Option<PathBuf>,
-
-    /// Cache TTL in hours (default: 24)
-    #[arg(long, default_value = "24")]
-    vuln_cache_ttl: u64,
-
-    /// Bypass cache and fetch fresh data
-    #[arg(long)]
-    refresh_vulns: bool,
-
-    /// API timeout in seconds (default: 30)
-    #[arg(long, default_value = "30")]
-    api_timeout: u64,
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 }
 
 /// Arguments for the `validate` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools validate app.cdx.json                              # NTIA minimum
+    sbom-tools validate app.cdx.json --standard cra,eo14028       # Multi-standard
+    sbom-tools validate app.cdx.json --standard ntia -o sarif     # SARIF for CI
+    sbom-tools validate app.cdx.json --fail-on-warning            # Strict CI gate")]
 struct ValidateArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
@@ -385,6 +371,10 @@ struct ValidateArgs {
 
 /// Arguments for the `diff-multi` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools diff-multi baseline.json target1.json target2.json
+    sbom-tools diff-multi baseline.json devices/*.json -o table
+    sbom-tools diff-multi base.json t1.json t2.json --enrich-vulns --fail-on-vuln")]
 struct DiffMultiArgs {
     /// Path to the baseline SBOM
     baseline: PathBuf,
@@ -413,16 +403,48 @@ struct DiffMultiArgs {
     #[arg(long)]
     graph_diff: bool,
 
-    #[command(flatten)]
-    enrichment: SharedEnrichmentArgs,
+    /// Maximum depth for graph analysis (0 = unlimited, requires --graph-diff)
+    #[arg(long, default_value = "0")]
+    graph_max_depth: u32,
+
+    /// Minimum impact level for graph diff output (low, medium, high, critical)
+    #[arg(long, default_value = "low")]
+    graph_impact_threshold: String,
+
+    /// Relationship types to include in graph diff (comma-separated, e.g., "DependsOn,DevDependsOn")
+    #[arg(long)]
+    graph_relations: Option<String>,
+
+    /// Filter by minimum severity (critical, high, medium, low)
+    #[arg(long)]
+    severity: Option<String>,
+
+    /// Exit with code 2 if new vulnerabilities are introduced
+    #[arg(long)]
+    fail_on_vuln: bool,
 
     /// Exit with code 1 if any changes detected
     #[arg(long)]
     fail_on_change: bool,
+
+    /// Exclude vulnerabilities with VEX status `not_affected` or fixed
+    #[arg(long)]
+    exclude_vex_resolved: bool,
+
+    /// Exit with error if introduced vulnerabilities lack VEX statements
+    #[arg(long)]
+    fail_on_vex_gap: bool,
+
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 }
 
 /// Arguments for the `timeline` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools timeline v1.0.json v1.1.json v1.2.json             # Version evolution
+    sbom-tools timeline releases/*.json --enrich-vulns -o markdown # Vuln trend report
+    sbom-tools timeline *.json --fail-on-vuln --fail-on-change     # CI gate")]
 struct TimelineArgs {
     /// Paths to SBOMs in chronological order (oldest first)
     #[arg(required = true)]
@@ -444,12 +466,48 @@ struct TimelineArgs {
     #[arg(long)]
     graph_diff: bool,
 
+    /// Maximum depth for graph analysis (0 = unlimited, requires --graph-diff)
+    #[arg(long, default_value = "0")]
+    graph_max_depth: u32,
+
+    /// Minimum impact level for graph diff output (low, medium, high, critical)
+    #[arg(long, default_value = "low")]
+    graph_impact_threshold: String,
+
+    /// Relationship types to include in graph diff (comma-separated, e.g., "DependsOn,DevDependsOn")
+    #[arg(long)]
+    graph_relations: Option<String>,
+
+    /// Filter by minimum severity (critical, high, medium, low)
+    #[arg(long)]
+    severity: Option<String>,
+
+    /// Exit with code 2 if new vulnerabilities are introduced
+    #[arg(long)]
+    fail_on_vuln: bool,
+
+    /// Exit with code 1 if any changes detected
+    #[arg(long)]
+    fail_on_change: bool,
+
+    /// Exclude vulnerabilities with VEX status `not_affected` or fixed
+    #[arg(long)]
+    exclude_vex_resolved: bool,
+
+    /// Exit with error if introduced vulnerabilities lack VEX statements
+    #[arg(long)]
+    fail_on_vex_gap: bool,
+
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
 }
 
 /// Arguments for the `matrix` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools matrix v1.json v2.json v3.json                     # NxN comparison
+    sbom-tools matrix *.cdx.json --cluster-threshold 0.9 -o table # Clustering
+    sbom-tools matrix *.json --enrich-vulns --fail-on-vuln         # CI with enrichment")]
 struct MatrixArgs {
     /// Paths to SBOMs to compare
     #[arg(required = true)]
@@ -475,12 +533,49 @@ struct MatrixArgs {
     #[arg(long)]
     graph_diff: bool,
 
+    /// Maximum depth for graph analysis (0 = unlimited, requires --graph-diff)
+    #[arg(long, default_value = "0")]
+    graph_max_depth: u32,
+
+    /// Minimum impact level for graph diff output (low, medium, high, critical)
+    #[arg(long, default_value = "low")]
+    graph_impact_threshold: String,
+
+    /// Relationship types to include in graph diff (comma-separated, e.g., "DependsOn,DevDependsOn")
+    #[arg(long)]
+    graph_relations: Option<String>,
+
+    /// Filter by minimum severity (critical, high, medium, low)
+    #[arg(long)]
+    severity: Option<String>,
+
+    /// Exit with code 2 if new vulnerabilities are introduced
+    #[arg(long)]
+    fail_on_vuln: bool,
+
+    /// Exit with code 1 if any changes detected
+    #[arg(long)]
+    fail_on_change: bool,
+
+    /// Exclude vulnerabilities with VEX status `not_affected` or fixed
+    #[arg(long)]
+    exclude_vex_resolved: bool,
+
+    /// Exit with error if introduced vulnerabilities lack VEX statements
+    #[arg(long)]
+    fail_on_vex_gap: bool,
+
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
 }
 
 /// Arguments for the `quality` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools quality app.cdx.json                                # Score overview
+    sbom-tools quality app.cdx.json --profile security --metrics   # Detailed metrics
+    sbom-tools quality app.cdx.json --min-score 70 -o json         # CI gate with export
+    sbom-tools quality app.cdx.json --recommendations              # Improvement suggestions")]
 struct QualityArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
@@ -512,6 +607,11 @@ struct QualityArgs {
 
 /// Arguments for the `query` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools query log4j fleet/*.json                            # Search by name
+    sbom-tools query --affected-by CVE-2021-44228 *.json           # Search by CVE
+    sbom-tools query --ecosystem npm --license GPL fleet/*.json     # Multi-filter
+    sbom-tools query --version \"<2.0.0\" --enrich-vulns *.json      # With enrichment")]
 struct QueryArgs {
     /// Positional arguments: [PATTERN] SBOM_FILES...
     /// First argument is treated as search pattern if it doesn't look like a file path.
@@ -555,33 +655,8 @@ struct QueryArgs {
     #[arg(short = 'O', long)]
     output_file: Option<PathBuf>,
 
-    /// Enable OSV vulnerability enrichment
-    #[arg(long)]
-    enrich_vulns: bool,
-
-    /// Enable end-of-life detection via endoflife.date
-    #[arg(long)]
-    enrich_eol: bool,
-
-    /// Apply external VEX document(s) (OpenVEX format). Can be specified multiple times.
-    #[arg(long = "vex", value_name = "PATH")]
-    vex: Vec<PathBuf>,
-
-    /// Cache directory for enrichment data
-    #[arg(long)]
-    vuln_cache_dir: Option<PathBuf>,
-
-    /// Cache TTL in hours (default: 24)
-    #[arg(long, default_value = "24")]
-    vuln_cache_ttl: u64,
-
-    /// Bypass cache and fetch fresh data
-    #[arg(long)]
-    refresh_vulns: bool,
-
-    /// API timeout in seconds (default: 30)
-    #[arg(long, default_value = "30")]
-    api_timeout: u64,
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 
     /// Maximum number of results to return
     #[arg(long)]
@@ -594,6 +669,10 @@ struct QueryArgs {
 
 /// Arguments for the `watch` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools watch --dir ./sboms                                 # Monitor directory
+    sbom-tools watch --dir ./sboms --enrich-vulns --exit-on-change # CI mode
+    sbom-tools watch --dir ./sboms -i 30s --enrich-vulns -o json   # Streaming JSON")]
 struct WatchArgs {
     /// Directories to watch for SBOM file changes
     #[arg(long = "dir", short = 'd', required = true)]
@@ -619,33 +698,8 @@ struct WatchArgs {
     #[arg(long)]
     webhook: Option<String>,
 
-    /// Enable OSV vulnerability enrichment
-    #[arg(long)]
-    enrich_vulns: bool,
-
-    /// Enable end-of-life detection via endoflife.date
-    #[arg(long)]
-    enrich_eol: bool,
-
-    /// Apply external VEX document(s) (OpenVEX format). Can be specified multiple times.
-    #[arg(long = "vex", value_name = "PATH")]
-    vex: Vec<PathBuf>,
-
-    /// Cache directory for enrichment data
-    #[arg(long)]
-    vuln_cache_dir: Option<PathBuf>,
-
-    /// Cache TTL in hours (default: 24)
-    #[arg(long, default_value = "24")]
-    vuln_cache_ttl: u64,
-
-    /// Bypass cache and fetch fresh data
-    #[arg(long)]
-    refresh_vulns: bool,
-
-    /// API timeout in seconds (default: 30)
-    #[arg(long, default_value = "30")]
-    api_timeout: u64,
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 
     /// Debounce duration — wait after detecting a change before processing,
     /// to coalesce rapid writes (e.g., 2s, 500ms). Use 0s to disable.
@@ -805,7 +859,7 @@ struct VexArgs {
     #[arg(long)]
     vuln_cache_dir: Option<PathBuf>,
 
-    /// Cache TTL in hours (default: 24)
+    /// Cache TTL in hours
     #[arg(long, default_value = "24")]
     vuln_cache_ttl: u64,
 
@@ -813,7 +867,7 @@ struct VexArgs {
     #[arg(long)]
     refresh_vulns: bool,
 
-    /// API timeout in seconds (default: 30)
+    /// API timeout in seconds
     #[arg(long, default_value = "30")]
     api_timeout: u64,
 }
@@ -837,13 +891,23 @@ enum VerifyAction {
         /// SBOM file to audit
         file: PathBuf,
         /// Output format (table or json)
-        #[arg(short, long, default_value = "table")]
+        #[arg(
+            short = 'f',
+            long = "output",
+            alias = "format",
+            default_value = "table"
+        )]
         format: String,
     },
 }
 
 /// Arguments for the `license-check` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools license-check app.cdx.json                         # Default policy
+    sbom-tools license-check app.cdx.json --strict                 # Permissive-only
+    sbom-tools license-check app.cdx.json --policy policy.json     # Custom policy
+    sbom-tools license-check app.cdx.json --check-propagation      # Dep tree analysis")]
 struct LicenseCheckArgs {
     /// SBOM file to check
     file: PathBuf,
@@ -861,13 +925,23 @@ struct LicenseCheckArgs {
     strict: bool,
 
     /// Output format (table or json)
-    #[arg(short, long, default_value = "table")]
-    format: String,
+    #[arg(
+        short = 'f',
+        long = "output",
+        alias = "format",
+        default_value = "table"
+    )]
+    output_format: String,
 }
 
 /// Arguments for the `enrich` subcommand
 #[cfg(feature = "enrichment")]
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools enrich app.cdx.json --enrich-vulns                  # Add OSV vulns
+    sbom-tools enrich app.cdx.json --enrich-vulns --enrich-eol     # Vulns + EOL
+    sbom-tools enrich app.cdx.json --enrich-vulns -O enriched.json # Save to file
+    sbom-tools enrich app.cdx.json --vex vex.json --enrich-vulns   # With VEX overlay")]
 struct EnrichArgs {
     /// SBOM file to enrich
     file: PathBuf,
@@ -876,37 +950,17 @@ struct EnrichArgs {
     #[arg(short = 'O', long)]
     output_file: Option<PathBuf>,
 
-    /// Enable OSV vulnerability enrichment
-    #[arg(long)]
-    enrich_vulns: bool,
-
-    /// Enable end-of-life detection
-    #[arg(long)]
-    enrich_eol: bool,
-
-    /// Apply VEX document(s)
-    #[arg(long = "vex", value_name = "PATH")]
-    vex: Vec<PathBuf>,
-
-    /// Cache directory for enrichment data
-    #[arg(long)]
-    cache_dir: Option<PathBuf>,
-
-    /// Cache TTL in hours (default: 24)
-    #[arg(long, default_value = "24")]
-    cache_ttl: u64,
-
-    /// Bypass cache and fetch fresh data
-    #[arg(long)]
-    refresh: bool,
-
-    /// API timeout in seconds (default: 30)
-    #[arg(long, default_value = "30")]
-    api_timeout: u64,
+    #[command(flatten)]
+    enrichment: SharedEnrichmentArgs,
 }
 
 /// Arguments for the `tailor` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools tailor app.cdx.json --exclude-ecosystems npm        # Remove npm deps
+    sbom-tools tailor app.cdx.json --include-name \"my-org/*\"       # Keep only org pkgs
+    sbom-tools tailor app.cdx.json --strip-vulns -O clean.json     # Remove vuln data
+    sbom-tools tailor app.cdx.json --include-types library,framework")]
 struct TailorArgs {
     /// SBOM file to tailor
     file: PathBuf,
@@ -938,6 +992,10 @@ struct TailorArgs {
 
 /// Arguments for the `merge` subcommand
 #[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools merge primary.json secondary.json                   # Merge to stdout
+    sbom-tools merge primary.json secondary.json -O combined.json  # Merge to file
+    sbom-tools merge primary.json secondary.json --dedup purl      # Deduplicate by PURL")]
 struct MergeArgs {
     /// Primary SBOM (provides document metadata)
     primary: PathBuf,
@@ -988,17 +1046,7 @@ fn main() -> Result<()> {
     // Dispatch to command handlers
     match cli.command {
         Commands::Diff(args) => {
-            let enrichment = EnrichmentConfig {
-                enabled: args.enrich_vulns,
-                provider: "osv".to_string(),
-                cache_ttl_hours: args.vuln_cache_ttl,
-                max_concurrent: 10,
-                cache_dir: args.vuln_cache_dir.or_else(|| Some(dirs::osv_cache_dir())),
-                bypass_cache: args.refresh_vulns,
-                timeout_secs: args.api_timeout,
-                enable_eol: args.enrich_eol,
-                vex_paths: args.vex,
-            };
+            let enrichment = args.enrichment.to_enrichment_config();
 
             let config = DiffConfig {
                 paths: DiffPaths {
@@ -1051,7 +1099,7 @@ fn main() -> Result<()> {
                     GraphAwareDiffConfig::default()
                 },
                 rules: MatchingRulesPathConfig {
-                    rules_file: args.matching_rules,
+                    rules_file: args.enrichment.matching_rules,
                     dry_run: args.dry_run_rules,
                 },
                 ecosystem_rules: EcosystemRulesConfig {
@@ -1070,17 +1118,7 @@ fn main() -> Result<()> {
         }
 
         Commands::View(args) => {
-            let enrichment = EnrichmentConfig {
-                enabled: args.enrich_vulns,
-                provider: "osv".to_string(),
-                cache_ttl_hours: args.vuln_cache_ttl,
-                max_concurrent: 10,
-                cache_dir: args.vuln_cache_dir.or_else(|| Some(dirs::osv_cache_dir())),
-                bypass_cache: args.refresh_vulns,
-                timeout_secs: args.api_timeout,
-                enable_eol: args.enrich_eol,
-                vex_paths: args.vex,
-            };
+            let enrichment = args.enrichment.to_enrichment_config();
 
             let config = ViewConfig {
                 sbom_path: args.sbom,
@@ -1123,6 +1161,8 @@ fn main() -> Result<()> {
                 output: OutputConfig {
                     format: args.output,
                     file: args.output_file,
+                    no_color: cli.no_color,
+                    export_template: cli.export_template.clone(),
                     ..Default::default()
                 },
                 matching: MatchingConfig {
@@ -1131,21 +1171,33 @@ fn main() -> Result<()> {
                     ..Default::default()
                 },
                 filtering: FilterConfig {
-                    min_severity: args.enrichment.severity.clone(),
+                    min_severity: args.severity,
+                    exclude_vex_resolved: args.exclude_vex_resolved,
+                    fail_on_vex_gap: args.fail_on_vex_gap,
                     ..Default::default()
                 },
                 behavior: BehaviorConfig {
-                    fail_on_vuln: args.enrichment.fail_on_vuln,
+                    fail_on_vuln: args.fail_on_vuln,
                     fail_on_change: args.fail_on_change,
                     quiet: cli.quiet,
                     ..Default::default()
                 },
-                graph_diff: GraphAwareDiffConfig {
-                    enabled: args.graph_diff,
-                    ..Default::default()
+                graph_diff: if args.graph_diff {
+                    let mut gdc = GraphAwareDiffConfig::enabled();
+                    gdc.max_depth = args.graph_max_depth;
+                    if args.graph_impact_threshold != "low" {
+                        gdc.impact_threshold = Some(args.graph_impact_threshold.clone());
+                    }
+                    if let Some(ref rels) = args.graph_relations {
+                        gdc.relation_filter =
+                            rels.split(',').map(|s| s.trim().to_string()).collect();
+                    }
+                    gdc
+                } else {
+                    GraphAwareDiffConfig::default()
                 },
                 rules: MatchingRulesPathConfig {
-                    rules_file: args.enrichment.matching_rules.clone(),
+                    rules_file: args.enrichment.matching_rules,
                     ..Default::default()
                 },
                 ecosystem_rules: Default::default(),
@@ -1165,6 +1217,8 @@ fn main() -> Result<()> {
                 output: OutputConfig {
                     format: args.output,
                     file: args.output_file,
+                    no_color: cli.no_color,
+                    export_template: cli.export_template.clone(),
                     ..Default::default()
                 },
                 matching: MatchingConfig {
@@ -1172,20 +1226,33 @@ fn main() -> Result<()> {
                     ..Default::default()
                 },
                 filtering: FilterConfig {
-                    min_severity: args.enrichment.severity.clone(),
+                    min_severity: args.severity,
+                    exclude_vex_resolved: args.exclude_vex_resolved,
+                    fail_on_vex_gap: args.fail_on_vex_gap,
                     ..Default::default()
                 },
                 behavior: BehaviorConfig {
-                    fail_on_vuln: args.enrichment.fail_on_vuln,
+                    fail_on_vuln: args.fail_on_vuln,
+                    fail_on_change: args.fail_on_change,
                     quiet: cli.quiet,
                     ..Default::default()
                 },
-                graph_diff: GraphAwareDiffConfig {
-                    enabled: args.graph_diff,
-                    ..Default::default()
+                graph_diff: if args.graph_diff {
+                    let mut gdc = GraphAwareDiffConfig::enabled();
+                    gdc.max_depth = args.graph_max_depth;
+                    if args.graph_impact_threshold != "low" {
+                        gdc.impact_threshold = Some(args.graph_impact_threshold.clone());
+                    }
+                    if let Some(ref rels) = args.graph_relations {
+                        gdc.relation_filter =
+                            rels.split(',').map(|s| s.trim().to_string()).collect();
+                    }
+                    gdc
+                } else {
+                    GraphAwareDiffConfig::default()
                 },
                 rules: MatchingRulesPathConfig {
-                    rules_file: args.enrichment.matching_rules.clone(),
+                    rules_file: args.enrichment.matching_rules,
                     ..Default::default()
                 },
                 ecosystem_rules: Default::default(),
@@ -1205,6 +1272,8 @@ fn main() -> Result<()> {
                 output: OutputConfig {
                     format: args.output,
                     file: args.output_file,
+                    no_color: cli.no_color,
+                    export_template: cli.export_template.clone(),
                     ..Default::default()
                 },
                 matching: MatchingConfig {
@@ -1213,20 +1282,33 @@ fn main() -> Result<()> {
                 },
                 cluster_threshold: args.cluster_threshold,
                 filtering: FilterConfig {
-                    min_severity: args.enrichment.severity.clone(),
+                    min_severity: args.severity,
+                    exclude_vex_resolved: args.exclude_vex_resolved,
+                    fail_on_vex_gap: args.fail_on_vex_gap,
                     ..Default::default()
                 },
                 behavior: BehaviorConfig {
-                    fail_on_vuln: args.enrichment.fail_on_vuln,
+                    fail_on_vuln: args.fail_on_vuln,
+                    fail_on_change: args.fail_on_change,
                     quiet: cli.quiet,
                     ..Default::default()
                 },
-                graph_diff: GraphAwareDiffConfig {
-                    enabled: args.graph_diff,
-                    ..Default::default()
+                graph_diff: if args.graph_diff {
+                    let mut gdc = GraphAwareDiffConfig::enabled();
+                    gdc.max_depth = args.graph_max_depth;
+                    if args.graph_impact_threshold != "low" {
+                        gdc.impact_threshold = Some(args.graph_impact_threshold.clone());
+                    }
+                    if let Some(ref rels) = args.graph_relations {
+                        gdc.relation_filter =
+                            rels.split(',').map(|s| s.trim().to_string()).collect();
+                    }
+                    gdc
+                } else {
+                    GraphAwareDiffConfig::default()
                 },
                 rules: MatchingRulesPathConfig {
-                    rules_file: args.enrichment.matching_rules.clone(),
+                    rules_file: args.enrichment.matching_rules,
                     ..Default::default()
                 },
                 ecosystem_rules: Default::default(),
@@ -1265,17 +1347,7 @@ fn main() -> Result<()> {
                 anyhow::bail!("No SBOM files specified. Usage: sbom-tools query [PATTERN] FILE...");
             }
 
-            let enrichment = EnrichmentConfig {
-                enabled: args.enrich_vulns,
-                provider: "osv".to_string(),
-                cache_ttl_hours: args.vuln_cache_ttl,
-                max_concurrent: 10,
-                cache_dir: args.vuln_cache_dir.or_else(|| Some(dirs::osv_cache_dir())),
-                bypass_cache: args.refresh_vulns,
-                timeout_secs: args.api_timeout,
-                enable_eol: args.enrich_eol,
-                vex_paths: args.vex,
-            };
+            let enrichment = args.enrichment.to_enrichment_config();
 
             let filter = cli::QueryFilter {
                 pattern,
@@ -1344,17 +1416,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Watch(args) => {
-            let enrichment = EnrichmentConfig {
-                enabled: args.enrich_vulns,
-                provider: "osv".to_string(),
-                cache_ttl_hours: args.vuln_cache_ttl,
-                max_concurrent: 10,
-                cache_dir: args.vuln_cache_dir.or_else(|| Some(dirs::osv_cache_dir())),
-                bypass_cache: args.refresh_vulns,
-                timeout_secs: args.api_timeout,
-                enable_eol: args.enrich_eol,
-                vex_paths: args.vex,
-            };
+            let enrichment = args.enrichment.to_enrichment_config();
 
             let config = WatchConfig {
                 watch_dirs: args.dirs,
@@ -1490,7 +1552,7 @@ fn main() -> Result<()> {
                 args.policy.as_ref(),
                 args.check_propagation,
                 args.strict,
-                &args.format,
+                &args.output_format,
                 cli.quiet,
             )?;
             if exit_code != 0 {
@@ -1501,17 +1563,7 @@ fn main() -> Result<()> {
 
         #[cfg(feature = "enrichment")]
         Commands::Enrich(args) => {
-            let enrichment = EnrichmentConfig {
-                enabled: args.enrich_vulns,
-                provider: "osv".to_string(),
-                cache_ttl_hours: args.cache_ttl,
-                max_concurrent: 10,
-                cache_dir: args.cache_dir.or_else(|| Some(dirs::osv_cache_dir())),
-                bypass_cache: args.refresh,
-                timeout_secs: args.api_timeout,
-                enable_eol: args.enrich_eol,
-                vex_paths: args.vex,
-            };
+            let enrichment = args.enrichment.to_enrichment_config();
 
             let exit_code =
                 cli::run_enrich(&args.file, args.output_file.as_ref(), enrichment, cli.quiet)?;

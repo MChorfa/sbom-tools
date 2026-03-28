@@ -15,6 +15,8 @@ pub struct ComplianceView {
     max_violations: usize,
     /// Whether a compliance export was requested (consumed by bridge).
     export_requested: bool,
+    /// Whether a "go to component" navigation was requested (consumed by bridge).
+    go_to_component_requested: bool,
 }
 
 impl ComplianceView {
@@ -23,6 +25,7 @@ impl ComplianceView {
             inner: DiffComplianceState::new(),
             max_violations: 0,
             export_requested: false,
+            go_to_component_requested: false,
         }
     }
 
@@ -39,6 +42,13 @@ impl ComplianceView {
     pub(crate) fn take_export_request(&mut self) -> bool {
         let req = self.export_requested;
         self.export_requested = false;
+        req
+    }
+
+    /// Whether a "go to component" navigation was requested (consumed by bridge).
+    pub(crate) fn take_go_to_component_request(&mut self) -> bool {
+        let req = self.go_to_component_requested;
+        self.go_to_component_requested = false;
         req
     }
 }
@@ -85,8 +95,21 @@ impl ViewState for ComplianceView {
                 }
                 EventResult::Consumed
             }
+            KeyCode::Char('f') => {
+                self.inner.toggle_severity_filter();
+                let label = self.inner.severity_filter.label();
+                EventResult::status(format!("Compliance filter: {label}"))
+            }
             KeyCode::Tab => {
                 self.inner.next_view_mode();
+                EventResult::Consumed
+            }
+            KeyCode::Char('c') => {
+                // Navigate to the component referenced by the selected violation.
+                // The bridge resolves the component name from the violation data.
+                if self.max_violations > 0 {
+                    self.go_to_component_requested = true;
+                }
                 EventResult::Consumed
             }
             KeyCode::Char('E') => {
@@ -133,6 +156,7 @@ impl ViewState for ComplianceView {
             Shortcut::new("h/l", "Switch standard"),
             Shortcut::new("Tab", "View mode"),
             Shortcut::new("Enter", "Detail"),
+            Shortcut::new("c", "Go to component"),
             Shortcut::new("E", "Export"),
             Shortcut::new("g/G", "First/Last"),
         ]
@@ -206,5 +230,26 @@ mod tests {
         view.handle_key(make_key(KeyCode::Char('E')), &mut ctx);
         assert!(view.take_export_request());
         assert!(!view.take_export_request()); // consumed
+    }
+
+    #[test]
+    fn test_go_to_component_request() {
+        let mut view = ComplianceView::new();
+        view.set_max_violations(3);
+        let mut ctx = make_ctx();
+
+        view.handle_key(make_key(KeyCode::Char('c')), &mut ctx);
+        assert!(view.take_go_to_component_request());
+        assert!(!view.take_go_to_component_request()); // consumed
+    }
+
+    #[test]
+    fn test_go_to_component_ignored_when_no_violations() {
+        let mut view = ComplianceView::new();
+        // max_violations is 0
+        let mut ctx = make_ctx();
+
+        view.handle_key(make_key(KeyCode::Char('c')), &mut ctx);
+        assert!(!view.take_go_to_component_request());
     }
 }

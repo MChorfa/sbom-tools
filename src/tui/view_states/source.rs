@@ -155,6 +155,41 @@ impl ViewState for SourceView {
                 }
                 EventResult::Consumed
             }
+            // Toggle panel alignment (diff mode, tree mode only)
+            KeyCode::Char('a') => {
+                if self.inner.active_panel().view_mode == SourceViewMode::Tree
+                    && !self.inner.old_panel.change_annotations.is_empty()
+                {
+                    self.inner.toggle_align();
+                    if self.inner.align_enabled {
+                        EventResult::status("Panel alignment enabled")
+                    } else {
+                        EventResult::status("Panel alignment disabled")
+                    }
+                } else {
+                    EventResult::Consumed
+                }
+            }
+            // Toggle collapse of unchanged regions (tree mode, diff only)
+            KeyCode::Char('u') => {
+                if self.inner.active_panel().view_mode == SourceViewMode::Tree {
+                    let panel = self.inner.active_panel_mut();
+                    panel.collapse_unchanged = !panel.collapse_unchanged;
+                    panel.invalidate_flat_cache();
+                    if self.inner.is_synced() {
+                        let inactive = self.inner.inactive_panel_mut();
+                        inactive.collapse_unchanged = !inactive.collapse_unchanged;
+                        inactive.invalidate_flat_cache();
+                    }
+                    if self.inner.active_panel().collapse_unchanged {
+                        EventResult::status("Unchanged regions collapsed")
+                    } else {
+                        EventResult::status("Showing all items")
+                    }
+                } else {
+                    EventResult::Consumed
+                }
+            }
             // Toggle view mode (tree/raw)
             KeyCode::Char('v') => {
                 self.inner.old_panel.toggle_view_mode();
@@ -320,6 +355,8 @@ impl ViewState for SourceView {
             Shortcut::new("z/Z", "Fold/Unfold"),
             Shortcut::new("%", "Match bracket"),
             Shortcut::new("m", "Bookmark"),
+            Shortcut::new("a", "Align panels"),
+            Shortcut::new("u", "Collapse unchanged"),
             Shortcut::new("d", "Detail"),
         ]
     }
@@ -466,5 +503,175 @@ mod tests {
             view.handle_key(make_key(KeyCode::Char('E')), &mut ctx),
             EventResult::Ignored
         );
+    }
+
+    #[test]
+    fn test_align_toggle() {
+        use crate::tui::app_states::source::{SourceChangeStatus, SourceDiffState};
+
+        let old_json = r#"{"components": [
+            {"name": "foo", "version": "1.0"},
+            {"name": "bar", "version": "2.0"}
+        ]}"#;
+        let new_json = r#"{"components": [
+            {"name": "foo", "version": "1.0"},
+            {"name": "baz", "version": "3.0"}
+        ]}"#;
+
+        let mut state = SourceDiffState::new(old_json, new_json);
+        // Simulate diff annotations: bar removed from old, baz added to new
+        state.old_panel.change_annotations.insert(
+            "root.components.[1]".to_string(),
+            SourceChangeStatus::Removed,
+        );
+        state
+            .new_panel
+            .change_annotations
+            .insert("root.components.[1]".to_string(), SourceChangeStatus::Added);
+
+        // Alignment is enabled by default
+        assert!(state.align_enabled);
+
+        // Expand components in both panels so we get component items
+        state.old_panel.expanded.insert("root".to_string());
+        state
+            .old_panel
+            .expanded
+            .insert("root.components".to_string());
+        state.old_panel.invalidate_flat_cache();
+        state.new_panel.expanded.insert("root".to_string());
+        state
+            .new_panel
+            .expanded
+            .insert("root.components".to_string());
+        state.new_panel.invalidate_flat_cache();
+
+        // Build flat caches and apply alignment
+        state.old_panel.ensure_flat_cache();
+        state.new_panel.ensure_flat_cache();
+
+        let old_count_before = state.old_panel.cached_flat_items.len();
+        let new_count_before = state.new_panel.cached_flat_items.len();
+
+        state.align_component_panels();
+
+        // After alignment, gaps should be inserted
+        let old_count_after = state.old_panel.cached_flat_items.len();
+        let new_count_after = state.new_panel.cached_flat_items.len();
+
+        // Old panel should have a gap (for the added "baz" in new)
+        assert!(
+            old_count_after > old_count_before,
+            "Old panel should have gap items inserted"
+        );
+        // New panel should have a gap (for the removed "bar" in old)
+        assert!(
+            new_count_after > new_count_before,
+            "New panel should have gap items inserted"
+        );
+
+        // Verify gap items have __gap_ prefix
+        let old_gaps: Vec<_> = state
+            .old_panel
+            .cached_flat_items
+            .iter()
+            .filter(|item| item.node_id.starts_with("__gap_"))
+            .collect();
+        assert!(!old_gaps.is_empty(), "Old panel should contain gap items");
+        assert_eq!(
+            old_gaps[0].display_key,
+            "\u{00b7}\u{00b7}\u{00b7}\u{00b7}\u{00b7}"
+        );
+
+        let new_gaps: Vec<_> = state
+            .new_panel
+            .cached_flat_items
+            .iter()
+            .filter(|item| item.node_id.starts_with("__gap_"))
+            .collect();
+        assert!(!new_gaps.is_empty(), "New panel should contain gap items");
+
+        // Both panels should now have the same total item count (aligned)
+        assert_eq!(
+            old_count_after, new_count_after,
+            "After alignment, both panels should have the same item count"
+        );
+
+        // Alignment should be idempotent (calling again should not add more gaps)
+        state.align_component_panels();
+        assert_eq!(
+            state.old_panel.cached_flat_items.len(),
+            old_count_after,
+            "Second alignment call should be a no-op"
+        );
+    }
+
+    #[test]
+    fn test_align_toggle_key() {
+        use crate::tui::app_states::source::{SourceChangeStatus, SourceDiffState};
+
+        let old_json = r#"{"components": [{"name": "foo", "version": "1.0"}]}"#;
+        let new_json = r#"{"components": [{"name": "foo", "version": "1.0"}]}"#;
+
+        let mut state = SourceDiffState::new(old_json, new_json);
+        // Need at least one annotation to enable the align toggle
+        state.old_panel.change_annotations.insert(
+            "root.components.[0]".to_string(),
+            SourceChangeStatus::Modified,
+        );
+
+        let mut view = SourceView::with_state(state);
+        let mut ctx = make_ctx();
+
+        assert!(view.inner().align_enabled);
+
+        // Toggle alignment off
+        let result = view.handle_key(make_key(KeyCode::Char('a')), &mut ctx);
+        assert!(
+            matches!(result, EventResult::StatusMessage(_)),
+            "Expected StatusMessage, got {result:?}"
+        );
+        assert!(!view.inner().align_enabled);
+
+        // Toggle alignment back on
+        let result = view.handle_key(make_key(KeyCode::Char('a')), &mut ctx);
+        assert!(
+            matches!(result, EventResult::StatusMessage(_)),
+            "Expected StatusMessage, got {result:?}"
+        );
+        assert!(view.inner().align_enabled);
+    }
+
+    #[test]
+    fn test_align_no_annotations_noop() {
+        use crate::tui::app_states::source::SourceDiffState;
+
+        let old_json = r#"{"components": [{"name": "foo"}]}"#;
+        let new_json = r#"{"components": [{"name": "foo"}]}"#;
+
+        let mut state = SourceDiffState::new(old_json, new_json);
+        state.old_panel.expanded.insert("root".to_string());
+        state
+            .old_panel
+            .expanded
+            .insert("root.components".to_string());
+        state.old_panel.invalidate_flat_cache();
+        state.new_panel.expanded.insert("root".to_string());
+        state
+            .new_panel
+            .expanded
+            .insert("root.components".to_string());
+        state.new_panel.invalidate_flat_cache();
+        state.old_panel.ensure_flat_cache();
+        state.new_panel.ensure_flat_cache();
+
+        let old_count = state.old_panel.cached_flat_items.len();
+        let new_count = state.new_panel.cached_flat_items.len();
+
+        // No annotations, so alignment should be a no-op
+        state.align_component_panels();
+
+        assert_eq!(state.old_panel.cached_flat_items.len(), old_count);
+        assert_eq!(state.new_panel.cached_flat_items.len(), new_count);
     }
 }

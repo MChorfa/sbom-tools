@@ -27,6 +27,8 @@ pub struct DiffSearchState {
     pub selected: usize,
     /// Current search mode (substring or regex).
     pub mode: SearchMode,
+    /// Error message from invalid regex pattern.
+    pub search_error: Option<String>,
 }
 
 impl DiffSearchState {
@@ -37,6 +39,7 @@ impl DiffSearchState {
             results: Vec::new(),
             selected: 0,
             mode: SearchMode::Substring,
+            search_error: None,
         }
     }
 
@@ -64,6 +67,7 @@ impl DiffSearchState {
         self.query.clear();
         self.results.clear();
         self.selected = 0;
+        self.search_error = None;
     }
 }
 

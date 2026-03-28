@@ -15,7 +15,7 @@
   <a href="https://crates.io/crates/sbom-tools"><img src="https://img.shields.io/crates/d/sbom-tools" alt="downloads"></a>
   <a href="https://deps.rs/repo/github/sbom-tool/sbom-tools"><img src="https://deps.rs/repo/github/sbom-tool/sbom-tools/status.svg" alt="dependency status"></a>
   <a href="https://github.com/sbom-tool/sbom-tools"><img src="https://img.shields.io/crates/l/sbom-tools" alt="license"></a>
-  <a href="https://github.com/sbom-tool/sbom-tools"><img src="https://img.shields.io/badge/MSRV-1.86-blue" alt="MSRV"></a>
+  <a href="https://github.com/sbom-tool/sbom-tools"><img src="https://img.shields.io/badge/MSRV-1.88-blue" alt="MSRV"></a>
   <a href="https://www.bestpractices.dev/projects/11992"><img src="https://www.bestpractices.dev/projects/11992/badge" alt="OpenSSF Best Practices"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/sbom-tool/sbom-tools"><img src="https://api.scorecard.dev/projects/github.com/sbom-tool/sbom-tools/badge" alt="OpenSSF Scorecard"></a>
 </p>
@@ -30,13 +30,14 @@ Semantic SBOM diff and analysis tool. Compare, validate, and assess the quality 
 - **Multi-Format Support** — CycloneDX (1.4–1.7) and SPDX (2.2–2.3, 3.0) in JSON, JSON-LD, XML, tag-value, and RDF/XML with automatic format detection
 - **Streaming Parser** — Memory-efficient parsing for very large SBOMs (>512MB) with progress reporting
 - **Fuzzy Matching** — Multi-tier matching engine using exact PURL match, alias lookup, ecosystem-specific normalization, and string similarity with adaptive thresholds and LSH indexing
-- **Vulnerability Enrichment** — Integration with OSV and KEV databases to track new and resolved vulnerabilities (feature-gated)
+- **Vulnerability Enrichment** — Integration with OSV and KEV databases to track new and resolved vulnerabilities, with VEX (Vulnerability Exploitability eXchange) overlay support (feature-gated)
 - **EOL Detection** — End-of-life status for components via endoflife.date API with TUI visualization and compliance integration (feature-gated)
-- **Quality Assessment** — Score SBOMs against compliance standards including NTIA, FDA, CRA (Cyber Resilience Act), NIST SSDF, and EO 14028
-- **Fleet Comparison** — 1:N baseline comparison, timeline analysis across versions, and NxN matrix analysis
-- **Incremental Diff** — Track changes across SBOM versions with drift detection and divergence analysis
+- **Quality Assessment** — Score SBOMs against compliance standards including NTIA, FDA, CRA (Cyber Resilience Act), NIST SSDF, and EO 14028, with quality delta tracking across versions
+- **Fleet Comparison** — 1:N baseline comparison, timeline analysis across versions, and NxN matrix analysis, all with enrichment support
+- **Incremental Diff** — Section-selective recomputation for partial changes with cached matching results
+- **VEX Tracking** — Detect VEX state transitions (NotAffected → Affected) across SBOM versions, with `--fail-on-vex-gap` CI gate
 - **Multiple Output Formats** — JSON, SARIF, HTML, Markdown, CSV, table, side-by-side, summary, and an interactive TUI
-- **Ecosystem-Aware** — Configurable per-ecosystem normalization rules, typosquat detection, and cross-ecosystem package correlation
+- **Ecosystem-Aware** — Configurable per-ecosystem normalization rules, typosquat detection, pre-release version handling, and cross-ecosystem package correlation
 
 ## Installation
 
@@ -284,20 +285,29 @@ cargo run --manifest-path dagger/rust-sdk/Cargo.toml -- ci-all
 ## Usage
 
 ```sh
-# Compare two SBOMs
+# Compare two SBOMs (launches interactive TUI)
 sbom-tools diff old-sbom.json new-sbom.json
 
-# View SBOM contents interactively
-sbom-tools view sbom.json
+# Diff with vulnerability enrichment for CI
+sbom-tools diff old.json new.json --enrich-vulns --fail-on-vuln -o sarif
 
-# Search for components across SBOMs
+# View SBOM contents interactively
+sbom-tools view sbom.json --enrich-vulns
+
+# Search for vulnerable components across your fleet
 sbom-tools query "log4j" --version "<2.17.0" fleet/*.json
 
-# Validate compliance
-sbom-tools validate sbom.json --standard ntia
+# Validate against multiple compliance standards
+sbom-tools validate sbom.json --standard ntia,cra,eo14028
 
-# Assess quality
-sbom-tools quality sbom.json --profile security --recommendations
+# Assess quality with CI gate
+sbom-tools quality sbom.json --profile security --min-score 70
+
+# Track SBOM evolution over releases
+sbom-tools timeline v1.json v2.json v3.json --enrich-vulns
+
+# Enrich an SBOM with vulnerability + EOL data
+sbom-tools enrich app.cdx.json --enrich-vulns --enrich-eol -O enriched.json
 ```
 
 ### Diff
@@ -315,13 +325,17 @@ Compares two SBOMs and reports added, removed, and modified components with vers
 |------|-------------|
 | `--fail-on-change` | Exit with code 1 if changes are detected |
 | `--fail-on-vuln` | Exit with code 2 if new vulnerabilities are introduced |
+| `--fail-on-vex-gap` | Exit with code 4 if introduced vulnerabilities lack VEX statements |
 | `--graph-diff` | Enable dependency graph structure diffing |
 | `--ecosystem-rules <path>` | Load custom per-ecosystem normalization rules |
 | `--fuzzy-preset <preset>` | Matching preset: `strict`, `balanced` (default), `permissive` |
 | `--enrich-vulns` | Query OSV/KEV databases for vulnerability data |
 | `--enrich-eol` | Detect end-of-life status via endoflife.date API |
+| `--vex <path>` | Apply external VEX document(s) (OpenVEX format) |
+| `--exclude-vex-resolved` | Exclude vulnerabilities with VEX status `not_affected` or `fixed` |
 | `--detect-typosquats` | Flag components that look like known-package typosquats |
 | `--explain-matches` | Show why each component pair was matched |
+| `--severity <level>` | Filter by minimum severity (`critical`, `high`, `medium`, `low`) |
 
 </details>
 
@@ -611,6 +625,9 @@ sbom-tools diff old.json new.json --fail-on-change -o summary
 # Fail if new vulnerabilities are introduced, output SARIF for dashboards
 sbom-tools diff old.json new.json --fail-on-vuln --enrich-vulns -o sarif -O results.sarif
 
+# Fail if introduced vulnerabilities lack VEX statements
+sbom-tools diff old.json new.json --fail-on-vex-gap --vex vex.json --enrich-vulns
+
 # Fail if quality score drops below 80
 sbom-tools quality sbom.json --profile security --min-score 80 -o json
 
@@ -619,6 +636,9 @@ sbom-tools validate sbom.json --standard cra -o sarif -O compliance.sarif
 
 # Check for vulnerable Log4j versions across all SBOMs (exits 1 if found)
 sbom-tools query "log4j" --version "<2.17.0" fleet/*.json -o json
+
+# Check license compliance with strict policy
+sbom-tools license-check sbom.json --strict --check-propagation
 ```
 
 <details>
@@ -734,10 +754,11 @@ jobs:
 | Code | Meaning |
 |------|---------|
 | `0` | Success (no changes detected, or run without `--fail-on-change`) |
-| `1` | Changes detected (`--fail-on-change`) |
+| `1` | Changes detected (`--fail-on-change`) / no query matches |
 | `2` | New vulnerabilities introduced (`--fail-on-vuln`) |
 | `3` | Error |
 | `4` | VEX coverage gaps found (`--fail-on-vex-gap`) |
+| `5` | License policy violations found (`license-check`) |
 
 ## Configuration
 
@@ -762,17 +783,21 @@ See [`examples/ecosystem-rules.yaml`](examples/ecosystem-rules.yaml) for a full 
 
 ```
 src/
-├── cli/          Command handlers (diff, view, validate, quality, query, fleet commands)
+├── cli/          Command handlers (diff, view, validate, quality, query, fleet, vex, watch, ...)
 ├── config/       YAML/JSON config with presets, validation, schema generation
 ├── model/        Canonical SBOM representation (NormalizedSbom, Component, CanonicalId)
 ├── parsers/      Format detection + parsing (streaming for >512MB)
 ├── matching/     Multi-tier fuzzy matching (PURL, alias, ecosystem, adaptive, LSH)
-├── diff/         Semantic diffing engine with graph support + incremental diff
-├── enrichment/   OSV/KEV vulnerability data + EOL detection (feature-gated), file cache with TTL
-├── quality/      NTIA/FDA/CRA/NIST SSDF/EO 14028 compliance scoring
-├── pipeline/     parse → enrich → diff → report orchestration
-├── reports/      Output format generators + streaming reporter
-└── tui/          Ratatui-based interactive UI
+├── diff/         Semantic diffing engine with graph support + incremental section-selective diff
+├── enrichment/   OSV/KEV vulnerability data + EOL detection + VEX (feature-gated)
+├── quality/      8-category scoring engine + 9 compliance standards (NTIA/FDA/CRA/SSDF/EO 14028)
+├── pipeline/     parse → enrich → diff → report orchestration + shared enrichment pipeline
+├── reports/      9 output format generators + streaming reporter
+├── verification/ File hash verification + component hash auditing
+├── license/      License policy engine (allow/deny/review) + propagation analysis
+├── serialization/ Raw JSON enrichment, tailoring (filter), merging with dedup
+├── watch/        Continuous monitoring (file watcher, vulnerability alerts)
+└── tui/          Ratatui-based interactive UI (diff, view, multi-diff, timeline, matrix modes)
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for detailed module responsibilities and data flow.

@@ -3,7 +3,8 @@
 //! Provides interactive JSON tree rendering and raw text rendering for the Source tab.
 
 use crate::tui::app_states::source::{
-    JsonTreeNode, JsonValueType, SourcePanelState, SourceSortMode, SourceViewMode,
+    JsonTreeNode, JsonValueType, SourceChangeStatus, SourcePanelState, SourceSortMode,
+    SourceViewMode,
 };
 use crate::tui::theme::colors;
 use ratatui::{
@@ -235,6 +236,35 @@ fn render_source_tree(
     // State should be pre-computed via prepare_source_render() before frame render
     let item_count = state.cached_flat_items.len();
 
+    // Change summary bar (only in diff mode with sufficient height)
+    let (summary_area, inner) = if !state.change_annotations.is_empty() && inner.height > 5 {
+        (
+            Some(Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            }),
+            Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: inner.height.saturating_sub(1),
+            },
+        )
+    } else {
+        (None, inner)
+    };
+
+    if let Some(sa) = summary_area {
+        // Ensure change_indices is populated (lazily built on first n/N press,
+        // but the summary bar needs it immediately)
+        if state.change_indices.is_empty() && !state.change_annotations.is_empty() {
+            state.build_change_indices();
+        }
+        render_change_summary_bar(frame, sa, state, item_count, &scheme);
+    }
+
     // Render JSON path breadcrumb
     let inner = if inner.height > 3 {
         let breadcrumb = state
@@ -303,20 +333,75 @@ fn render_source_tree(
         let abs_idx = state.scroll_offset + i;
         let is_selected = abs_idx == state.selected;
 
+        // Render collapsed placeholder (skip normal rendering)
+        if item.node_id.starts_with("__collapsed_") {
+            let indent = "      ";
+            let display = format!("{indent}{}", item.display_key);
+            let style = if is_selected {
+                Style::default()
+                    .fg(scheme.muted)
+                    .italic()
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().fg(scheme.muted).italic()
+            };
+            render_str(frame.buffer_mut(), inner.x, y, &display, inner.width, style);
+            continue;
+        }
+
+        // Render gap placeholder for panel alignment (skip normal rendering)
+        if item.node_id.starts_with("__gap_") {
+            let style = Style::default()
+                .fg(scheme.muted)
+                .add_modifier(Modifier::DIM);
+            // Gutter space + indent to align with component depth
+            let indent = "      ";
+            let display = format!("{indent}{}", item.display_key);
+            render_str(frame.buffer_mut(), inner.x, y, &display, inner.width, style);
+            continue;
+        }
+
         let mut x = inner.x;
+
+        // Change gutter indicator (only in diff mode)
+        if !state.change_annotations.is_empty() {
+            let change_status = state.find_annotation(&item.node_id);
+            let (ch, color) = match change_status {
+                Some(SourceChangeStatus::Added) => ("+", scheme.added),
+                Some(SourceChangeStatus::Removed) => ("-", scheme.removed),
+                Some(SourceChangeStatus::Modified) => ("~", scheme.modified),
+                None => (" ", scheme.muted),
+            };
+            let span = Span::styled(ch, Style::default().fg(color).bold());
+            frame.buffer_mut().set_span(x, y, &span, 1);
+            x += 1;
+        }
 
         // Line number (when enabled)
         if state.show_line_numbers {
             let total = state.cached_flat_items.len();
             let gutter_w = format!("{total}").len();
             let num_str = format!("{:>gutter_w$} ", abs_idx + 1);
+            let line_num_style = if !state.change_annotations.is_empty() {
+                // In diff mode: bold + colored for changed lines, dimmed for unchanged
+                match state.find_annotation(&item.node_id) {
+                    Some(SourceChangeStatus::Added) => Style::default().fg(scheme.added).bold(),
+                    Some(SourceChangeStatus::Removed) => Style::default().fg(scheme.removed).bold(),
+                    Some(SourceChangeStatus::Modified) => {
+                        Style::default().fg(scheme.modified).bold()
+                    }
+                    None => Style::default().fg(scheme.muted),
+                }
+            } else {
+                Style::default().fg(scheme.text_muted)
+            };
             render_str(
                 frame.buffer_mut(),
                 x,
                 y,
                 &num_str,
                 inner.width,
-                Style::default().fg(scheme.text_muted),
+                line_num_style,
             );
             x += num_str.len() as u16;
         }
@@ -452,7 +537,86 @@ fn render_source_tree(
         // Value or child count (with smart preview for collapsed array elements)
         if x < remaining {
             let max_w = (remaining - x) as usize;
-            if item.is_expandable && !item.is_expanded && !item.preview.is_empty() {
+            if item.is_expandable
+                && !item.is_expanded
+                && !item.preview.is_empty()
+                && state.version_diffs.contains_key(&item.node_id)
+            {
+                // Inline version diff for modified components
+                let (old_v, new_v) = &state.version_diffs[&item.node_id];
+                let preview = &item.preview;
+                // Parse preview: "name@version (type)" or just "name@version"
+                let (name_part, type_suffix) = if let Some(at_pos) = preview.find('@') {
+                    let name = &preview[..at_pos];
+                    let rest = &preview[at_pos + 1..];
+                    let suffix = rest.find(" (").map_or("", |p| &rest[p..]);
+                    (name, suffix)
+                } else {
+                    (preview.as_str(), "")
+                };
+                // Render: name  old_v -> new_v  (type)
+                let buf = frame.buffer_mut();
+                render_str(
+                    buf,
+                    x,
+                    y,
+                    name_part,
+                    remaining - x,
+                    Style::default().fg(scheme.text),
+                );
+                x += (UnicodeWidthStr::width(name_part).min(max_w)) as u16;
+                if x < remaining {
+                    render_str(buf, x, y, " ", remaining - x, Style::default());
+                    x += 1;
+                }
+                if x < remaining {
+                    render_str(
+                        buf,
+                        x,
+                        y,
+                        old_v,
+                        remaining - x,
+                        Style::default()
+                            .fg(scheme.muted)
+                            .add_modifier(Modifier::DIM),
+                    );
+                    x += (UnicodeWidthStr::width(old_v.as_str()).min((remaining - x) as usize))
+                        as u16;
+                }
+                if x + 3 < remaining {
+                    render_str(
+                        buf,
+                        x,
+                        y,
+                        " \u{2192} ",
+                        remaining - x,
+                        Style::default().fg(scheme.modified),
+                    );
+                    x += 3;
+                }
+                if x < remaining {
+                    render_str(
+                        buf,
+                        x,
+                        y,
+                        new_v,
+                        remaining - x,
+                        Style::default().fg(scheme.modified).bold(),
+                    );
+                    x += (UnicodeWidthStr::width(new_v.as_str()).min((remaining - x) as usize))
+                        as u16;
+                }
+                if !type_suffix.is_empty() && x < remaining {
+                    render_str(
+                        buf,
+                        x,
+                        y,
+                        type_suffix,
+                        remaining - x,
+                        Style::default().fg(scheme.muted),
+                    );
+                }
+            } else if item.is_expandable && !item.is_expanded && !item.preview.is_empty() {
                 // Smart preview for collapsed array elements
                 let preview_str = crate::tui::widgets::truncate_str(&item.preview, max_w);
                 render_str(
@@ -512,20 +676,28 @@ fn render_source_tree(
             }
         }
 
-        // Diff change annotation highlighting
-        if !state.change_annotations.is_empty()
-            && let Some(status) = state.find_annotation(&item.node_id)
-        {
-            let bg = match status {
-                crate::tui::app_states::source::SourceChangeStatus::Added => scheme.success_bg,
-                crate::tui::app_states::source::SourceChangeStatus::Removed => scheme.error_bg,
-                crate::tui::app_states::source::SourceChangeStatus::Modified => {
-                    scheme.search_highlight_bg
+        // Diff change annotation: bold text on changed lines (difftastic-style)
+        // Instead of heavy background fills, use bold+colored text for emphasis
+        // and dim unchanged lines for contrast
+        if !state.change_annotations.is_empty() {
+            if let Some(status) = state.find_annotation(&item.node_id) {
+                let fg = match status {
+                    SourceChangeStatus::Added => scheme.added,
+                    SourceChangeStatus::Removed => scheme.removed,
+                    SourceChangeStatus::Modified => scheme.modified,
+                };
+                for col in inner.x..remaining {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                        cell.set_fg(fg);
+                        cell.modifier.insert(ratatui::style::Modifier::BOLD);
+                    }
                 }
-            };
-            for col in inner.x..remaining {
-                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                    cell.set_bg(bg);
+            } else {
+                // Dim unchanged lines for contrast (like difftastic)
+                for col in inner.x..remaining {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                        cell.set_fg(scheme.muted);
+                    }
                 }
             }
         }
@@ -649,6 +821,33 @@ fn render_source_raw(
 
     // State should be pre-computed via prepare_source_render() before frame render
 
+    // Change summary bar (only in diff mode with sufficient height)
+    let (summary_area, inner) = if !state.change_annotations.is_empty() && inner.height > 5 {
+        (
+            Some(Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: 1,
+            }),
+            Rect {
+                x: inner.x,
+                y: inner.y + 1,
+                width: inner.width,
+                height: inner.height.saturating_sub(1),
+            },
+        )
+    } else {
+        (None, inner)
+    };
+
+    if let Some(sa) = summary_area {
+        if state.change_indices.is_empty() && !state.change_annotations.is_empty() {
+            state.build_change_indices();
+        }
+        render_change_summary_bar(frame, sa, state, total_lines, &scheme);
+    }
+
     // Breadcrumb bar for raw mode (like tree view has)
     let inner = if inner.height > 3 && has_json_tree {
         let breadcrumb = state
@@ -756,11 +955,30 @@ fn render_source_raw(
         // [Feature 5] Structural line dimming
         let is_structural = is_structural_line(line);
 
+        // Change gutter indicator (only in diff mode)
+        let change_gutter_offset: u16 = if !state.change_annotations.is_empty() {
+            let change_status = state
+                .raw_line_node_ids
+                .get(abs_idx)
+                .and_then(|node_id| state.find_annotation(node_id));
+            let (ch, color) = match change_status {
+                Some(SourceChangeStatus::Added) => ("+", scheme.added),
+                Some(SourceChangeStatus::Removed) => ("-", scheme.removed),
+                Some(SourceChangeStatus::Modified) => ("~", scheme.modified),
+                None => (" ", scheme.muted),
+            };
+            let span = Span::styled(ch, Style::default().fg(color).bold());
+            frame.buffer_mut().set_span(inner.x, y, &span, 1);
+            1
+        } else {
+            0
+        };
+
         // Bookmark indicator
         if state.bookmarks.contains(&abs_idx) {
             render_str(
                 frame.buffer_mut(),
-                inner.x,
+                inner.x + change_gutter_offset,
                 y,
                 "\u{2605}",
                 1,
@@ -768,9 +986,21 @@ fn render_source_raw(
             );
         }
 
-        // Line number gutter — [Feature 2] highlight matching bracket line number
+        // Line number gutter — highlight matching bracket; diff-aware coloring
+        let raw_change_status = state
+            .raw_line_node_ids
+            .get(abs_idx)
+            .and_then(|node_id| state.find_annotation(node_id));
         let gutter_style = if is_bracket_match {
             Style::default().fg(scheme.accent).bold()
+        } else if !state.change_annotations.is_empty() {
+            // In diff mode: bold + colored for changed lines, dimmed for unchanged
+            match raw_change_status {
+                Some(SourceChangeStatus::Added) => Style::default().fg(scheme.added).bold(),
+                Some(SourceChangeStatus::Removed) => Style::default().fg(scheme.removed).bold(),
+                Some(SourceChangeStatus::Modified) => Style::default().fg(scheme.modified).bold(),
+                None => Style::default().fg(scheme.muted),
+            }
         } else if is_structural {
             Style::default().fg(scheme.muted)
         } else {
@@ -788,7 +1018,7 @@ fn render_source_raw(
         let num_str = format!("{fold_char}{line_num:>gutter_width$} \u{2502} ");
         render_str(
             frame.buffer_mut(),
-            inner.x,
+            inner.x + change_gutter_offset,
             y,
             &num_str,
             remaining - inner.x,
@@ -803,12 +1033,15 @@ fn render_source_raw(
             } else {
                 Style::default().fg(scheme.muted)
             };
-            if let Some(cell) = frame.buffer_mut().cell_mut((inner.x, y)) {
+            if let Some(cell) = frame
+                .buffer_mut()
+                .cell_mut((inner.x + change_gutter_offset, y))
+            {
                 cell.set_style(fold_style);
             }
         }
 
-        let content_x = inner.x + num_str.len() as u16;
+        let content_x = inner.x + change_gutter_offset + num_str.len() as u16;
         if content_x < remaining {
             let max_w = remaining - content_x;
 
@@ -936,21 +1169,30 @@ fn render_source_raw(
             }
         }
 
-        // Diff change annotation highlighting (raw mode)
-        if !state.change_annotations.is_empty()
-            && let Some(node_id) = state.raw_line_node_ids.get(abs_idx)
-            && let Some(status) = state.find_annotation(node_id)
-        {
-            let bg = match status {
-                crate::tui::app_states::source::SourceChangeStatus::Added => scheme.success_bg,
-                crate::tui::app_states::source::SourceChangeStatus::Removed => scheme.error_bg,
-                crate::tui::app_states::source::SourceChangeStatus::Modified => {
-                    scheme.search_highlight_bg
+        // Diff change annotation: bold text on changed lines (difftastic-style)
+        if !state.change_annotations.is_empty() {
+            let annotation = state
+                .raw_line_node_ids
+                .get(abs_idx)
+                .and_then(|node_id| state.find_annotation(node_id));
+            if let Some(status) = annotation {
+                let fg = match status {
+                    SourceChangeStatus::Added => scheme.added,
+                    SourceChangeStatus::Removed => scheme.removed,
+                    SourceChangeStatus::Modified => scheme.modified,
+                };
+                for col in inner.x..remaining {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                        cell.set_fg(fg);
+                        cell.modifier.insert(ratatui::style::Modifier::BOLD);
+                    }
                 }
-            };
-            for col in inner.x..remaining {
-                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                    cell.set_bg(bg);
+            } else {
+                // Dim unchanged lines for contrast
+                for col in inner.x..remaining {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                        cell.set_fg(scheme.muted);
+                    }
                 }
             }
         }
@@ -1606,6 +1848,73 @@ fn skip_display_chars(s: &str, skip_width: usize) -> String {
         }
     }
     chars.collect()
+}
+
+/// Render a 1-line summary bar showing change positions within the file.
+fn render_change_summary_bar(
+    frame: &mut Frame,
+    area: Rect,
+    state: &SourcePanelState,
+    total_items: usize,
+    scheme: &crate::tui::theme::ColorScheme,
+) {
+    if area.width < 12 || total_items == 0 {
+        return;
+    }
+
+    let change_count = state.change_indices.len();
+    // Reserve space for " N changes" label on the right
+    let label = format!(" {change_count} changes");
+    let bar_width = (area.width as usize).saturating_sub(label.len() + 4);
+    if bar_width < 5 {
+        return;
+    }
+
+    // Build bar characters
+    let mut bar: Vec<(char, Color)> = vec![('\u{2591}', scheme.muted); bar_width]; // ░
+
+    for &idx in &state.change_indices {
+        let col = (idx * bar_width) / total_items.max(1);
+        let col = col.min(bar_width - 1);
+        // Determine color
+        let color = state
+            .change_status_at_index(idx)
+            .map_or(scheme.modified, |s| match s {
+                SourceChangeStatus::Added => scheme.added,
+                SourceChangeStatus::Removed => scheme.removed,
+                SourceChangeStatus::Modified => scheme.modified,
+            });
+        bar[col] = ('\u{2588}', color); // █
+    }
+
+    // Cursor position marker
+    let cursor_col = if total_items > 0 {
+        (state.selected * bar_width) / total_items.max(1)
+    } else {
+        0
+    };
+    let cursor_col = cursor_col.min(bar_width.saturating_sub(1));
+
+    // Build spans
+    let mut spans: Vec<Span> = Vec::with_capacity(bar_width + 6);
+    spans.push(Span::raw("["));
+    for (i, (ch, color)) in bar.iter().enumerate() {
+        if i == cursor_col {
+            spans.push(Span::styled(
+                "\u{25b4}",
+                Style::default().fg(scheme.accent).bold(),
+            )); // ▴ cursor
+        } else {
+            spans.push(Span::styled(ch.to_string(), Style::default().fg(*color)));
+        }
+    }
+    spans.push(Span::raw("]"));
+    spans.push(Span::styled(label, Style::default().fg(scheme.muted)));
+
+    let line = Line::from(spans);
+    frame
+        .buffer_mut()
+        .set_line(area.x, area.y, &line, area.width);
 }
 
 /// Write a string into the buffer starting at (x, y), limited to `max_width`.
