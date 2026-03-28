@@ -150,7 +150,7 @@ fn render_grade_banner(frame: &mut Frame, area: Rect, quality_delta: Option<&Qua
         Span::styled(" \u{2192} ", Style::default().fg(scheme.text_muted)),
         Span::styled(new_letter, Style::default().fg(grade_color).bold()),
         Span::styled(
-            format!("  {arrow} {:+.1} pts", delta),
+            format!("  {arrow} {delta:+.1} pts"),
             Style::default().fg(grade_color),
         ),
     ]));
@@ -332,7 +332,7 @@ fn render_unified_metrics_table(
                 Span::styled("\u{2014}", Style::default().fg(scheme.muted))
             } else {
                 Span::styled(
-                    format!("{arrow} {:+.1}", delta),
+                    format!("{arrow} {delta:+.1}"),
                     Style::default().fg(delta_color),
                 )
             };

@@ -1864,7 +1864,7 @@ fn render_change_summary_bar(
 
     let change_count = state.change_indices.len();
     // Reserve space for " N changes" label on the right
-    let label = format!(" {} changes", change_count);
+    let label = format!(" {change_count} changes");
     let bar_width = (area.width as usize).saturating_sub(label.len() + 4);
     if bar_width < 5 {
         return;
