@@ -679,27 +679,21 @@ fn render_source_tree(
         // Diff change annotation: bold text on changed lines (difftastic-style)
         // Instead of heavy background fills, use bold+colored text for emphasis
         // and dim unchanged lines for contrast
-        if !state.change_annotations.is_empty() {
-            if let Some(status) = state.find_annotation(&item.node_id) {
-                let fg = match status {
-                    SourceChangeStatus::Added => scheme.added,
-                    SourceChangeStatus::Removed => scheme.removed,
-                    SourceChangeStatus::Modified => scheme.modified,
-                };
-                for col in inner.x..remaining {
-                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                        cell.set_fg(fg);
-                        cell.modifier.insert(ratatui::style::Modifier::BOLD);
-                    }
-                }
-            } else {
-                // Dim unchanged lines for contrast (like difftastic)
-                for col in inner.x..remaining {
-                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                        cell.set_fg(scheme.muted);
-                    }
+        if !state.change_annotations.is_empty()
+            && let Some(status) = state.find_annotation(&item.node_id)
+        {
+            let fg = match status {
+                SourceChangeStatus::Added => scheme.added,
+                SourceChangeStatus::Removed => scheme.removed,
+                SourceChangeStatus::Modified => scheme.modified,
+            };
+            for col in inner.x..remaining {
+                if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
+                    cell.set_fg(fg);
+                    cell.modifier.insert(ratatui::style::Modifier::BOLD);
                 }
             }
+            // Unchanged lines: keep original syntax highlighting (don't override)
         }
 
         // Highlight selected row background
@@ -1187,14 +1181,8 @@ fn render_source_raw(
                         cell.modifier.insert(ratatui::style::Modifier::BOLD);
                     }
                 }
-            } else {
-                // Dim unchanged lines for contrast
-                for col in inner.x..remaining {
-                    if let Some(cell) = frame.buffer_mut().cell_mut((col, y)) {
-                        cell.set_fg(scheme.muted);
-                    }
-                }
             }
+            // Unchanged lines: keep original syntax highlighting (don't override)
         }
 
         // Highlight selected row

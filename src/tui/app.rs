@@ -957,6 +957,15 @@ impl App {
             let right = result.components.added.len() + result.components.modified.len();
             self.side_by_side_state_mut().set_totals(left, right);
         }
+
+        // 10. Quality recommendation totals
+        let rec_total = self
+            .data
+            .new_quality
+            .as_ref()
+            .or(self.data.old_quality.as_ref())
+            .map_or(0, |r| r.recommendations.len());
+        self.quality_state_mut().total_recommendations = rec_total;
     }
 
     /// Pre-compute license totals for rendering.

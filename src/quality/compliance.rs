@@ -73,6 +73,22 @@ impl ComplianceLevel {
         }
     }
 
+    /// Get compact tab label (max ~8 chars) for terminal display.
+    #[must_use]
+    pub const fn short_name(&self) -> &'static str {
+        match self {
+            Self::Minimum => "Min",
+            Self::Standard => "Std",
+            Self::NtiaMinimum => "NTIA",
+            Self::CraPhase1 => "CRA-1",
+            Self::CraPhase2 => "CRA-2",
+            Self::FdaMedicalDevice => "FDA",
+            Self::NistSsdf => "SSDF",
+            Self::Eo14028 => "EO14028",
+            Self::Comprehensive => "Full",
+        }
+    }
+
     /// Get description of what this level checks
     #[must_use]
     pub const fn description(&self) -> &'static str {

@@ -429,6 +429,83 @@ fn render_diff_detail(
             ]));
         }
 
+        // Depth from dependency graph
+        let depth = ctx
+            .dependencies
+            .cached_depths
+            .get(comp.id.as_str())
+            .copied();
+        if let Some(d) = depth {
+            let label = match d {
+                0 => "Root",
+                1 => "Direct",
+                _ => "Transitive",
+            };
+            let depth_color = match d {
+                0 => colors().primary,
+                1 => colors().accent,
+                _ => colors().text_muted,
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Depth: ", Style::default().fg(colors().text_muted)),
+                Span::styled(format!("D{d}"), Style::default().fg(depth_color).bold()),
+                Span::styled(
+                    format!(" ({label})"),
+                    Style::default().fg(colors().text_muted),
+                ),
+            ]));
+        }
+
+        // Dependency counts from cached graphs
+        let deps_out = ctx
+            .dependencies
+            .cached_graph
+            .get(comp.id.as_str())
+            .map_or(0, Vec::len);
+        let deps_in = ctx
+            .dependencies
+            .cached_reverse_graph
+            .get(comp.id.as_str())
+            .map_or(0, Vec::len);
+        if deps_out > 0 || deps_in > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("Dependencies: ", Style::default().fg(colors().text_muted)),
+                Span::styled(deps_out.to_string(), Style::default().fg(colors().primary)),
+                Span::styled("  Dependents: ", Style::default().fg(colors().text_muted)),
+                Span::styled(deps_in.to_string(), Style::default().fg(colors().primary)),
+            ]));
+        }
+
+        // Hashes (look up component in new SBOM)
+        let full_component = ctx.new_sbom.as_ref().and_then(|sbom| {
+            let canonical_id = crate::model::CanonicalId::from_format_id(&comp.id);
+            sbom.components.get(&canonical_id)
+        });
+        if let Some(full_comp) = full_component
+            && !full_comp.hashes.is_empty()
+        {
+            for hash in full_comp.hashes.iter().take(2) {
+                let truncated_value = if hash.value.len() > 16 {
+                    format!("{}...", &hash.value[..16])
+                } else {
+                    hash.value.clone()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{}: ", hash.algorithm),
+                        Style::default().fg(colors().text_muted),
+                    ),
+                    Span::styled(truncated_value, Style::default().fg(colors().text)),
+                ]));
+            }
+            if full_comp.hashes.len() > 2 {
+                lines.push(Line::styled(
+                    format!("    ... and {} more", full_comp.hashes.len() - 2),
+                    Style::default().fg(colors().text_muted),
+                ));
+            }
+        }
+
         // Match confidence (item 1.5) — show how old/new components were correlated
         if let Some(match_info) = &comp.match_info {
             let scheme = colors();

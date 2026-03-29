@@ -829,8 +829,9 @@ impl FooterHints {
             }
             "compliance" => {
                 hints.insert(0, ("←→", "standard"));
-                hints.insert(1, ("Tab", "view"));
-                hints.insert(2, ("↑↓", "select"));
+                hints.insert(1, ("v", "view"));
+                hints.insert(2, ("g", "group"));
+                hints.insert(3, ("↑↓", "select"));
             }
             "source" => {
                 hints.insert(0, ("w", "panel"));

@@ -139,11 +139,13 @@ impl ViewState for DependenciesView {
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.inner.select_prev();
+                self.inner.adjust_scroll_to_selection();
                 self.inner.update_breadcrumbs();
                 EventResult::Consumed
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.inner.select_next();
+                self.inner.adjust_scroll_to_selection();
                 self.inner.update_breadcrumbs();
                 EventResult::Consumed
             }

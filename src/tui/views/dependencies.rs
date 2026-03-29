@@ -33,6 +33,32 @@ pub fn update_graph_cache(deps: &mut DependenciesState, data: &DataContext, mode
 }
 
 fn update_diff_mode_cache(deps: &mut DependenciesState, data: &DataContext) {
+    // Always rebuild visible nodes and update total (needed for arrow key navigation + detail panel)
+    let total = rebuild_visible_nodes(deps, data);
+    deps.total = total;
+    // Set viewport_height if not yet set (needed for scroll adjustment)
+    if deps.viewport_height == 0 {
+        deps.viewport_height = 30; // reasonable default until render sets it precisely
+    }
+    // Clamp selection to valid range
+    if total == 0 {
+        deps.selected = 0;
+        deps.scroll_offset = 0;
+    } else if deps.selected >= total {
+        deps.selected = total - 1;
+    }
+    // Auto-adjust scroll_offset to keep selection visible
+    // Use a viewport estimate (will be refined during render)
+    let viewport_est = 30usize; // reasonable estimate
+    if deps.selected >= deps.scroll_offset + viewport_est {
+        deps.scroll_offset = deps.selected.saturating_sub(viewport_est / 2);
+    } else if deps.selected < deps.scroll_offset {
+        deps.scroll_offset = deps.selected;
+    }
+    if deps.scroll_offset >= total {
+        deps.scroll_offset = total.saturating_sub(1);
+    }
+
     // Fast path: once the cache is valid, skip entirely.
     // The diff_result is immutable during TUI operation, so the graph
     // structure never changes after the initial cache build.
@@ -95,6 +121,73 @@ fn update_diff_mode_cache(deps: &mut DependenciesState, data: &DataContext) {
             deps.cached_display_names = display_names;
         }
     }
+}
+
+/// Compute visible tree nodes for navigation and detail panel.
+///
+/// Builds the `visible_nodes` list matching what `render_diff_tree_cached` produces,
+/// using the same node ID format (`source:+:child`, `source:-:child`).
+/// This runs in `prepare_render()` so the detail panel can look up the selected node.
+fn rebuild_visible_nodes(deps: &mut DependenciesState, data: &DataContext) -> usize {
+    let max_roots = deps.max_roots;
+    let roots: Vec<String> = deps.cached_roots.iter().take(max_roots).cloned().collect();
+
+    deps.visible_nodes.clear();
+
+    // Header + spacer (matching render_diff_tree_cached)
+    deps.visible_nodes.push("__header__".to_string());
+    deps.visible_nodes.push("__spacer__".to_string());
+
+    // Build added/removed lookup matching render logic
+    let mut added_by_source: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut removed_by_source: HashMap<&str, Vec<&str>> = HashMap::new();
+
+    if let Some(result) = &data.diff_result {
+        if !matches!(deps.change_filter, DependencyChangeFilter::Removed) {
+            for dep in &result.dependencies.added {
+                added_by_source.entry(&dep.from).or_default().push(&dep.to);
+            }
+        }
+        if !matches!(deps.change_filter, DependencyChangeFilter::Added) {
+            for dep in &result.dependencies.removed {
+                removed_by_source
+                    .entry(&dep.from)
+                    .or_default()
+                    .push(&dep.to);
+            }
+        }
+    }
+
+    for source in &roots {
+        deps.visible_nodes.push(source.clone());
+
+        if deps.expanded_nodes.contains(source) {
+            // Added children
+            if let Some(added) = added_by_source.get(source.as_str()) {
+                for dep in added {
+                    deps.visible_nodes.push(format!("{source}:+:{dep}"));
+                }
+            }
+            // Removed children
+            if let Some(removed) = removed_by_source.get(source.as_str()) {
+                for dep in removed {
+                    deps.visible_nodes.push(format!("{source}:-:{dep}"));
+                }
+            }
+            // If no children at all, add empty placeholder
+            let has_added = added_by_source
+                .get(source.as_str())
+                .is_some_and(|v| !v.is_empty());
+            let has_removed = removed_by_source
+                .get(source.as_str())
+                .is_some_and(|v| !v.is_empty());
+            if !has_added && !has_removed {
+                deps.visible_nodes.push("__empty__".to_string());
+            }
+        }
+    }
+
+    deps.visible_nodes.len()
 }
 
 pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
@@ -471,18 +564,33 @@ fn render_dependency_tree(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // here we use the pre-computed state from ctx.
 
     // Apply selection and search highlighting with virtual scrolling
-    let selected = ctx.dependencies.selected;
-    let scroll_offset = ctx.dependencies.scroll_offset;
+    let total_len = visible_nodes.len();
+    if total_len == 0 {
+        // Nothing to render — show empty tree block and return
+        let block = Block::default()
+            .title(" Dependency Tree ")
+            .title_style(Style::default().fg(scheme.primary).bold())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(scheme.border));
+        frame.render_widget(block, tree_area);
+        render_detail_panel(frame, detail_area, ctx);
+        return;
+    }
+
+    let selected = ctx.dependencies.selected.min(total_len - 1);
+    let scroll_offset = ctx.dependencies.scroll_offset.min(total_len - 1);
 
     // Only process lines in the visible range (virtual scrolling)
     let visible_start = scroll_offset;
-    let visible_end = (scroll_offset + viewport_height).min(visible_nodes.len());
+    let visible_end = (scroll_offset + viewport_height)
+        .min(total_len)
+        .min(lines.len());
 
     let highlighted_lines: Vec<Line> = lines
         .into_iter()
         .enumerate()
         .skip(visible_start)
-        .take(visible_end - visible_start)
+        .take(visible_end.saturating_sub(visible_start))
         .map(|(idx, line)| {
             let node_id = visible_nodes.get(idx);
             let is_match = node_id.is_some_and(|id| has_search && search_matches.contains(id));
@@ -605,73 +713,94 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             // Look up component in SBOMs for rich details
             let component = find_component_in_sboms(component_id, ctx);
 
-            if let Some(comp) = component {
-                if let Some(ref ver) = comp.version {
-                    lines.push(Line::from(vec![
-                        Span::styled("Version: ", Style::default().fg(scheme.text_muted)),
-                        Span::styled(ver, Style::default().fg(scheme.text)),
-                    ]));
-                }
-
-                lines.push(Line::from(vec![
-                    Span::styled("Type: ", Style::default().fg(scheme.text_muted)),
-                    Span::styled(
-                        format!("{:?}", comp.component_type),
-                        Style::default().fg(scheme.text),
-                    ),
-                ]));
-
-                if let Some(ref eco) = comp.ecosystem {
-                    lines.push(Line::from(vec![
-                        Span::styled("Ecosystem: ", Style::default().fg(scheme.text_muted)),
-                        Span::styled(format!("{eco:?}"), Style::default().fg(scheme.text)),
-                    ]));
-                }
-
-                if let Some(ref purl) = comp.identifiers.purl
-                    && purl != component_id
-                {
-                    lines.push(Line::from(vec![
-                        Span::styled("PURL: ", Style::default().fg(scheme.text_muted)),
-                        Span::styled(purl, Style::default().fg(scheme.accent)),
-                    ]));
-                }
-
-                if !comp.vulnerabilities.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("Vulns: ", Style::default().fg(scheme.text_muted)),
-                        Span::styled(
-                            format!("{}", comp.vulnerabilities.len()),
-                            Style::default().fg(scheme.critical).bold(),
-                        ),
-                    ]));
-                }
-            }
-
-            // Dependency counts from cached graphs
-            let dep_count = ctx
+            // Gather dependency context
+            let depth = ctx.dependencies.cached_depths.get(component_id).copied();
+            let deps_out = ctx
                 .dependencies
                 .cached_graph
                 .get(component_id)
                 .map_or(0, Vec::len);
-            let depended_on_count = ctx
+            let deps_in = ctx
                 .dependencies
                 .cached_reverse_graph
                 .get(component_id)
                 .map_or(0, Vec::len);
 
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("Dependencies: ", Style::default().fg(scheme.text_muted)),
-                Span::styled(dep_count.to_string(), Style::default().fg(scheme.primary)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("Depended-on-by: ", Style::default().fg(scheme.text_muted)),
-                Span::styled(
-                    depended_on_count.to_string(),
-                    Style::default().fg(scheme.primary),
-                ),
-            ]));
+            if let Some(comp) = component {
+                // Use shared component info renderer
+                lines.extend(crate::tui::shared::components::render_component_info_lines(
+                    comp, depth, deps_out, deps_in,
+                ));
+            } else {
+                // Fallback: show basic info from cached data
+                if deps_out > 0 || deps_in > 0 {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(vec![
+                        Span::styled("Dependencies: ", Style::default().fg(scheme.text_muted)),
+                        Span::styled(deps_out.to_string(), Style::default().fg(scheme.primary)),
+                        Span::styled("  Dependents: ", Style::default().fg(scheme.text_muted)),
+                        Span::styled(deps_in.to_string(), Style::default().fg(scheme.primary)),
+                    ]));
+                }
+            }
+
+            // "Depends on:" listing (children from forward graph)
+            if let Some(children) = ctx.dependencies.cached_graph.get(component_id)
+                && !children.is_empty()
+            {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("━━━ ", Style::default().fg(scheme.border)),
+                    Span::styled("Depends on", Style::default().fg(scheme.accent).bold()),
+                    Span::styled(" ━━━", Style::default().fg(scheme.border)),
+                ]));
+                for child in children.iter().take(8) {
+                    let display = ctx
+                        .dependencies
+                        .cached_display_names
+                        .get(child.as_str())
+                        .map_or_else(|| child.clone(), Clone::clone);
+                    lines.push(Line::from(vec![
+                        Span::styled("  \u{2022} ", Style::default().fg(scheme.text_muted)),
+                        Span::styled(display, Style::default().fg(scheme.text)),
+                    ]));
+                }
+                if children.len() > 8 {
+                    lines.push(Line::styled(
+                        format!("    ... and {} more", children.len() - 8),
+                        Style::default().fg(scheme.text_muted),
+                    ));
+                }
+            }
+
+            // "Depended on by:" listing (parents from reverse graph)
+            if let Some(parents) = ctx.dependencies.cached_reverse_graph.get(component_id)
+                && !parents.is_empty()
+            {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("━━━ ", Style::default().fg(scheme.border)),
+                    Span::styled("Depended on by", Style::default().fg(scheme.accent).bold()),
+                    Span::styled(" ━━━", Style::default().fg(scheme.border)),
+                ]));
+                for parent in parents.iter().take(8) {
+                    let display = ctx
+                        .dependencies
+                        .cached_display_names
+                        .get(parent.as_str())
+                        .map_or_else(|| parent.clone(), Clone::clone);
+                    lines.push(Line::from(vec![
+                        Span::styled("  \u{2022} ", Style::default().fg(scheme.text_muted)),
+                        Span::styled(display, Style::default().fg(scheme.text)),
+                    ]));
+                }
+                if parents.len() > 8 {
+                    lines.push(Line::styled(
+                        format!("    ... and {} more", parents.len() - 8),
+                        Style::default().fg(scheme.text_muted),
+                    ));
+                }
+            }
 
             // Canonical ID (dimmed, for reference)
             lines.push(Line::from(""));
@@ -840,6 +969,20 @@ fn render_diff_tree_cached(
                 spans.push(Span::styled(" ⚠", Style::default().fg(scheme.critical)));
             }
 
+            // Depth badge
+            if let Some(&d) = ctx.dependencies.cached_depths.get(source_str) {
+                let badge = format!("D{d}");
+                let color = match d {
+                    0 => scheme.accent,
+                    1 => scheme.primary,
+                    _ => scheme.text_muted,
+                };
+                spans.push(Span::styled(
+                    format!(" {badge}"),
+                    Style::default().fg(color),
+                ));
+            }
+
             lines.push(Line::from(spans));
             visible_nodes.push((*source).clone());
 
@@ -871,6 +1014,20 @@ fn render_diff_tree_cached(
                                 .push(Span::styled(" ⚠", Style::default().fg(scheme.critical)));
                         }
 
+                        // Depth badge
+                        if let Some(&d) = ctx.dependencies.cached_depths.get(*dep) {
+                            let badge = format!("D{d}");
+                            let color = match d {
+                                0 => scheme.accent,
+                                1 => scheme.primary,
+                                _ => scheme.text_muted,
+                            };
+                            dep_spans.push(Span::styled(
+                                format!(" {badge}"),
+                                Style::default().fg(color),
+                            ));
+                        }
+
                         lines.push(Line::from(dep_spans));
                         visible_nodes.push(format!("{source}:+:{dep}"));
                     }
@@ -898,6 +1055,20 @@ fn render_diff_tree_cached(
                         if dep_has_vuln {
                             dep_spans
                                 .push(Span::styled(" ⚠", Style::default().fg(scheme.critical)));
+                        }
+
+                        // Depth badge
+                        if let Some(&d) = ctx.dependencies.cached_depths.get(*dep) {
+                            let badge = format!("D{d}");
+                            let color = match d {
+                                0 => scheme.accent,
+                                1 => scheme.primary,
+                                _ => scheme.text_muted,
+                            };
+                            dep_spans.push(Span::styled(
+                                format!(" {badge}"),
+                                Style::default().fg(color),
+                            ));
                         }
 
                         lines.push(Line::from(dep_spans));
