@@ -355,14 +355,14 @@ fn render_category_bar_chart(
             buf.set_string(
                 x + col_delta,
                 y,
-                format!("  \u{25b2}+{:.0}", delta),
+                format!("  \u{25b2}+{delta:.0}"),
                 Style::default().fg(scheme.added),
             );
         } else if delta < -0.5 {
             buf.set_string(
                 x + col_delta,
                 y,
-                format!("  \u{25bc}{:.0}", delta),
+                format!("  \u{25bc}{delta:.0}"),
                 Style::default().fg(scheme.removed),
             );
         }
