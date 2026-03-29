@@ -73,7 +73,7 @@ ffi = []
 [dev-dependencies]
 criterion = "0.8"
 proptest = "1.11"
-tempfile = "3.25"
+tempfile = "3.27"
 
 [[bench]]
 name = "diff_benchmark"
