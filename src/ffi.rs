@@ -363,22 +363,19 @@ pub extern "C" fn sbom_tools_score_sbom_json(
 /// Free memory allocated by the ABI result.
 ///
 /// # Safety
-/// - The caller must not free the same result twice
-/// - The result must not be used after this call
-/// - **Defense:** Passed by value per C ABI; caller may hold copies.
-///   Pointers are zeroed after freeing to defend against accidental double-free on copies.
-///
-/// # Design
-/// Takes the result by value (C calling convention). The caller may pass a copy.
-/// We zero internal pointers after freeing; subsequent free() calls on copies become no-ops
-/// because `is_null()` checks will skip the release.
+/// - The caller must call this exactly once per result.
+/// - The result must not be used after this call.
+/// - Calling free twice on the same result is **undefined behavior**: the struct
+///   is passed by value (C calling convention), so the caller's copy retains
+///   the original (now-dangling) pointers. The internal pointer zeroing only
+///   affects the local copy inside this function.
 ///
 /// # C Usage
 /// ```c
 /// SbomToolsStringResult result = sbom_tools_parse_sbom_str_json(content);
 /// // use result.data and result.error_message
 /// sbom_tools_string_result_free(result);
-/// // Calling sbom_tools_string_result_free(result) again is safe (no-op due to NULL pointers)
+/// // Do NOT call sbom_tools_string_result_free(result) again — undefined behavior.
 /// ```
 #[unsafe(no_mangle)]
 pub extern "C" fn sbom_tools_string_result_free(mut result: SbomToolsStringResult) {
