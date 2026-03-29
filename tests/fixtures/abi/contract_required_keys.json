@@ -1,0 +1,51 @@
+{
+  "abi_version_json": {
+    "required_keys": [
+      "abi_version",
+      "crate_version"
+    ]
+  },
+  "detected_format_json": {
+    "required_keys": [
+      "format_name",
+      "confidence",
+      "variant",
+      "version",
+      "warnings"
+    ]
+  },
+  "normalized_sbom_json": {
+    "required_keys": [
+      "document",
+      "components",
+      "edges",
+      "extensions",
+      "content_hash",
+      "primary_component_id",
+      "collision_count"
+    ]
+  },
+  "diff_result_json": {
+    "required_keys": [
+      "summary",
+      "components",
+      "dependencies",
+      "licenses",
+      "vulnerabilities",
+      "semantic_score",
+      "graph_changes",
+      "graph_summary",
+      "rules_applied"
+    ]
+  },
+  "quality_report_json": {
+    "required_keys": [
+      "scoring_engine_version",
+      "overall_score",
+      "grade",
+      "profile",
+      "compliance",
+      "recommendations"
+    ]
+  }
+}

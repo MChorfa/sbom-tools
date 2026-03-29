@@ -106,6 +106,182 @@ cargo build --release --no-default-features
 
 The binary is placed at `target/release/sbom-tools`.
 
+### Go and Swift bindings MVP
+
+The repository now includes a shared C ABI plus thin Go and Swift wrappers for the MVP binding surface.
+
+- Shared ABI header: [bindings/swift/Sources/CSbomTools/include/sbom_tools.h](bindings/swift/Sources/CSbomTools/include/sbom_tools.h)
+- Go wrapper package: [bindings/go](bindings/go)
+- Swift package: [bindings/swift](bindings/swift)
+
+Current ABI scope:
+
+- `detect_format` on raw content
+- Parse from file path or raw SBOM string into normalized JSON
+- Diff two normalized SBOM JSON payloads
+- Score a normalized SBOM JSON payload
+
+Current ABI exclusions:
+
+- CLI subcommands
+- TUI and watch mode
+- Enrichment providers
+- Non-JSON report formats
+
+Build the native Rust library before using either wrapper:
+
+```sh
+bash ./scripts/build-bindings-mvp.sh
+```
+
+#### Go wrapper
+
+```sh
+cd bindings/go
+go test ./...
+```
+
+Example:
+
+```go
+package main
+
+import (
+  "fmt"
+  "log"
+
+  sbomtools "github.com/sbom-tool/sbom-tools/bindings/go"
+)
+
+func main() {
+  version, err := sbomtools.Version()
+  if err != nil {
+    log.Fatal(err)
+  }
+
+  parsed, err := sbomtools.ParsePathJSON("../../tests/fixtures/cyclonedx/minimal.cdx.json")
+  if err != nil {
+    log.Fatal(err)
+  }
+
+  fmt.Println(version.ABIVersion)
+  fmt.Println(string(parsed))
+}
+```
+
+#### Swift wrapper
+
+```sh
+cd bindings/swift
+swift test
+```
+
+Example:
+
+```swift
+import SbomTools
+
+let version = try SbomTools.version()
+let json = try SbomTools.parsePathJSON("../../tests/fixtures/cyclonedx/minimal.cdx.json")
+
+print(version.abiVersion)
+print(json)
+```
+
+Memory and compatibility rules:
+
+- The Rust ABI owns returned memory and wrappers must call `sbom_tools_string_result_free` exactly once.
+- JSON payload shape is the compatibility contract for normalized SBOMs, diff results, and quality reports.
+- Error codes are stable across Go and Swift wrappers.
+
+Typed helper APIs are available in both wrappers:
+
+- Go: `ParsePath`, `ParseString`, `Diff`, `Score` over typed payload structs
+- Swift: `parsePath`, `parseString`, `diff`, `score` over Codable payload structs
+
+Deduplication helper APIs are available in both wrappers:
+
+- Go payload methods: `DeduplicateInPlace`, `Deduplicated`
+- Swift payload methods: `deduplicateInPlace`, `deduplicated`
+- Go helper APIs: `DiffDeduplicated`, `ScoreDeduplicated`
+- Swift helper APIs: `diffDeduplicated`, `scoreDeduplicated`
+
+Deduplication semantics:
+
+- Components are deduplicated by canonical identifier with last occurrence winning.
+- Dependency edges are deduplicated by full edge object equality with last occurrence winning.
+- Dedup-aware diff/score helpers are opt-in and return deduplication stats so callers can track normalization impact.
+
+Go dedup-aware helper example:
+
+```go
+oldPayload, err := sbomtools.ParsePath("../../tests/fixtures/demo-old.cdx.json")
+if err != nil {
+  log.Fatal(err)
+}
+
+newPayload, err := sbomtools.ParsePath("../../tests/fixtures/demo-new.cdx.json")
+if err != nil {
+  log.Fatal(err)
+}
+
+diff, err := sbomtools.DiffDeduplicated(oldPayload, newPayload)
+if err != nil {
+  log.Fatal(err)
+}
+
+score, err := sbomtools.ScoreDeduplicated(newPayload)
+if err != nil {
+  log.Fatal(err)
+}
+
+fmt.Println(diff.Result.Summary.TotalChanges, diff.NewStats.ComponentsRemoved)
+fmt.Println(score.Result.OverallScore, score.Stats.ComponentsRemoved)
+```
+
+Swift dedup-aware helper example:
+
+```swift
+let oldPayload = try SbomTools.parsePath("../../tests/fixtures/demo-old.cdx.json")
+let newPayload = try SbomTools.parsePath("../../tests/fixtures/demo-new.cdx.json")
+
+let diff = try SbomTools.diffDeduplicated(old: oldPayload, new: newPayload)
+let score = try SbomTools.scoreDeduplicated(newPayload)
+
+print(diff.result.summary.totalChanges, diff.newStats.componentsRemoved)
+print(score.result.overallScore, score.stats.componentsRemoved)
+```
+
+ABI contract snapshots are enforced in [tests/ffi_schema_snapshots.rs](tests/ffi_schema_snapshots.rs) using fixtures under [tests/fixtures/abi](tests/fixtures/abi).
+
+Bindings CI checks (dedup-focused):
+
+```sh
+# Convenience script (runs both)
+./scripts/test-bindings-dedup.sh all
+
+# Go (dedup helper regression checks)
+cd bindings/go
+go test ./... -run 'TestDeduplicateInPlace_LastWins|TestDeduplicated_DoesNotMutateOriginal|TestDiffAndScoreDeduplicatedHelpers'
+
+# Swift (dedup helper regression checks)
+cd ../swift
+swift test --filter dedup
+```
+
+### Dagger Rust SDK CI/CD
+
+The repository now includes a Dagger Rust SDK runner for bindings CI/CD tasks and static library build/release activities.
+
+- Dagger runner: [dagger/rust-sdk/src/main.rs](dagger/rust-sdk/src/main.rs)
+- Commands: `build-staticlib`, `release-staticlib`, `test-abi`, `ci-all`
+
+Run locally:
+
+```sh
+cargo run --manifest-path dagger/rust-sdk/Cargo.toml -- ci-all
+```
+
 ## Usage
 
 ```sh

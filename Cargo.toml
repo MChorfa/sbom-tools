@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/sbom-tools-ffi"]
+exclude = ["dagger/rust-sdk"]
+
 [package]
 name = "sbom-tools"
 version = "0.1.17"
@@ -9,6 +13,10 @@ readme = "README.md"
 repository = "https://github.com/sbom-tool/sbom-tools"
 keywords = ["sbom", "cyclonedx", "spdx", "diff", "security"]
 categories = ["command-line-utilities", "development-tools", "security"]
+
+[lib]
+name = "sbom_tools"
+crate-type = ["rlib"]
 
 [dependencies]
 # Signal Handling
@@ -60,6 +68,7 @@ schemars = "1.2"
 [features]
 default = ["enrichment"]
 enrichment = ["reqwest"]
+ffi = []
 
 [dev-dependencies]
 criterion = "0.8"
@@ -73,6 +82,22 @@ harness = false
 [[bench]]
 name = "large_sbom"
 harness = false
+
+[[test]]
+name = "ffi_bindings"
+required-features = ["ffi"]
+
+[[test]]
+name = "ffi_schema_snapshots"
+required-features = ["ffi"]
+
+[[test]]
+name = "conformance_ffi"
+required-features = ["ffi"]
+
+[[test]]
+name = "ffi_regression"
+required-features = ["ffi"]
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"

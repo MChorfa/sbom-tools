@@ -48,3 +48,6 @@ homebrew-tap/
 # Claude Code memory and working files
 memory/
 .claude/
+
+# Swift Package Manager build directories (all nested .build/ dirs)
+**/.build/
