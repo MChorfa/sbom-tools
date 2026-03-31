@@ -1,0 +1,69 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-01-12T09:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:npm/fleet-app@1.1.0",
+      "name": "fleet-app",
+      "version": "1.1.0",
+      "purl": "pkg:npm/fleet-app@1.1.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/express@4.19.2",
+      "name": "express",
+      "version": "4.19.2",
+      "purl": "pkg:npm/express@4.19.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/axios@1.7.9",
+      "name": "axios",
+      "version": "1.7.9",
+      "purl": "pkg:npm/axios@1.7.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/zod@3.23.8",
+      "name": "zod",
+      "version": "3.23.8",
+      "purl": "pkg:npm/zod@3.23.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:npm/fleet-app@1.1.0",
+      "dependsOn": [
+        "pkg:npm/express@4.19.2",
+        "pkg:npm/axios@1.7.9",
+        "pkg:npm/zod@3.23.8"
+      ]
+    }
+  ]
+}

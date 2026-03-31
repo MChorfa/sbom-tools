@@ -516,7 +516,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     // Append copy preview: [y] copy <value>
     if let Some(yank_text) = super::events::get_yank_text(app) {
         let truncated = if yank_text.len() > 30 {
-            format!("{}...", &yank_text[..27])
+            let end = super::shared::floor_char_boundary(&yank_text, 27);
+            format!("{}...", &yank_text[..end])
         } else {
             yank_text
         };

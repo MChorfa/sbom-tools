@@ -119,6 +119,23 @@ fn update_diff_mode_cache(deps: &mut DependenciesState, data: &DataContext) {
                 }
             }
             deps.cached_display_names = display_names;
+
+            // Cache edge relationship/scope info
+            let mut edge_info = HashMap::new();
+            for dep in result
+                .dependencies
+                .added
+                .iter()
+                .chain(result.dependencies.removed.iter())
+            {
+                edge_info
+                    .entry((dep.from.clone(), dep.to.clone()))
+                    .or_insert_with(|| crate::tui::app_states::EdgeInfo {
+                        relationship: dep.relationship.clone(),
+                        scope: dep.scope.clone(),
+                    });
+            }
+            deps.cached_edge_info = edge_info;
         }
     }
 }
@@ -130,7 +147,17 @@ fn update_diff_mode_cache(deps: &mut DependenciesState, data: &DataContext) {
 /// This runs in `prepare_render()` so the detail panel can look up the selected node.
 fn rebuild_visible_nodes(deps: &mut DependenciesState, data: &DataContext) -> usize {
     let max_roots = deps.max_roots;
-    let roots: Vec<String> = deps.cached_roots.iter().take(max_roots).cloned().collect();
+    let mut roots: Vec<String> = if deps.show_transitive {
+        deps.cached_roots.to_vec()
+    } else {
+        deps.cached_roots
+            .iter()
+            .filter(|id| deps.cached_depths.get(id.as_str()).copied().unwrap_or(0) <= 1)
+            .cloned()
+            .collect()
+    };
+    deps.sort_roots(&mut roots);
+    roots.truncate(max_roots);
 
     deps.visible_nodes.clear();
 
@@ -201,7 +228,7 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let show_breadcrumbs =
         ctx.dependencies.show_breadcrumbs && !ctx.dependencies.breadcrumb_trail.is_empty();
 
-    let mut context_height = 3u16;
+    let mut context_height = 2u16;
     if is_searching || has_search_query {
         context_height += 1;
     }
@@ -214,7 +241,6 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         .constraints([Constraint::Length(context_height), Constraint::Min(5)])
         .split(area);
 
-    // Context bar with options and selection info (compact 3-line layout)
     let selected = ctx.dependencies.selected;
     let total = ctx.dependencies.total;
     let expanded_count = ctx.dependencies.expanded_nodes.len();
@@ -223,62 +249,44 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let show_cycles = ctx.dependencies.show_cycles;
     let cycle_count = ctx.dependencies.detected_cycles.len();
     let (root_overflow, depth_limited) = dependency_limit_info_ctx(ctx, max_roots, max_depth);
-
-    // Use cached vulnerability components (O(1) lookup, no rebuild)
     let vuln_count = ctx.dependencies.cached_vuln_components.len();
-
     let is_diff_mode = ctx.mode == AppMode::Diff;
 
-    // Line 1: Toggles + Depth/Roots (merged from old lines 1 & 2)
     let on_style = Style::default().fg(scheme.success).bold();
     let off_style = Style::default().fg(scheme.text_muted);
-    let trans_style = if ctx.dependencies.show_transitive {
-        on_style
-    } else {
-        off_style
-    };
-    let cycle_style = if show_cycles { on_style } else { off_style };
     let sort_order = ctx.dependencies.sort_order.display_name();
 
+    // Line 1: Toggles (color = state) │ Settings │ Filter (only when non-default)
     let mut line1_spans = vec![
-        Span::styled("[t]", Style::default().fg(scheme.accent)),
         Span::styled(
+            "Transitive",
             if ctx.dependencies.show_transitive {
-                " Trans:On"
+                on_style
             } else {
-                " Trans:Off"
+                off_style
             },
-            trans_style,
         ),
+        Span::styled("  ", Style::default()),
     ];
 
     if is_diff_mode {
-        let hl_style = if ctx.dependencies.highlight_changes {
-            on_style
-        } else {
-            off_style
-        };
-        line1_spans.push(Span::styled("  [h]", Style::default().fg(scheme.accent)));
         line1_spans.push(Span::styled(
+            "Highlight",
             if ctx.dependencies.highlight_changes {
-                " HL:On"
+                on_style
             } else {
-                " HL:Off"
+                off_style
             },
-            hl_style,
         ));
+        line1_spans.push(Span::styled("  ", Style::default()));
     }
 
+    line1_spans.push(Span::styled(
+        "Cycles",
+        if show_cycles { on_style } else { off_style },
+    ));
+
     line1_spans.extend(vec![
-        Span::styled("  [y]", Style::default().fg(scheme.accent)),
-        Span::styled(
-            if show_cycles {
-                " Cycles:On"
-            } else {
-                " Cycles:Off"
-            },
-            cycle_style,
-        ),
         Span::styled("  │  ", Style::default().fg(scheme.border)),
         Span::styled(
             format!("Depth:{max_depth}"),
@@ -296,59 +304,64 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         ),
     ]);
 
-    if is_diff_mode {
+    // Show Filter only when non-default
+    if is_diff_mode && !matches!(ctx.dependencies.change_filter, DependencyChangeFilter::All) {
         let filter_label = ctx.dependencies.change_filter.label();
-        let filter_style = if matches!(ctx.dependencies.change_filter, DependencyChangeFilter::All)
-        {
-            Style::default().fg(scheme.text_muted)
-        } else {
-            Style::default().fg(scheme.accent).bold()
-        };
-        line1_spans.push(Span::styled("  [f]", Style::default().fg(scheme.accent)));
+        line1_spans.push(Span::styled("  ", Style::default()));
         line1_spans.push(Span::styled(
-            format!(" Filter:{filter_label}"),
-            filter_style,
+            format!("Filter:{filter_label}"),
+            Style::default().fg(scheme.accent).bold(),
         ));
     }
 
     let line1 = Line::from(line1_spans);
 
-    // Compute total node and edge counts for display
+    // Line 2: Selection + change counts │ Graph stats + Expanded │ Alerts │ Warnings
     let node_count = ctx.dependencies.cached_graph.len();
     let edge_count: usize = ctx.dependencies.cached_graph.values().map(Vec::len).sum();
     let direct_count = ctx.dependencies.cached_direct_deps.len();
+    let expandable_count = ctx.dependencies.cached_roots.len().min(max_roots);
 
-    // Line 2: Selection info + stats (merged from old line3 + hints)
-    let mut line2_spans = vec![
-        Span::styled(
-            format!("{}/{}", if total > 0 { selected + 1 } else { 0 }, total),
-            Style::default().fg(scheme.primary).bold(),
-        ),
-        Span::styled(" selected", Style::default().fg(scheme.text_muted)),
-        Span::styled("  │  ", Style::default().fg(scheme.border)),
-        Span::styled(
-            format!("{node_count} nodes  {edge_count} edges"),
-            Style::default().fg(scheme.text_muted),
-        ),
-        Span::styled(
-            format!("  ({direct_count} direct)"),
-            Style::default().fg(scheme.text_muted),
-        ),
-        Span::styled("  │  ", Style::default().fg(scheme.border)),
-        Span::styled(
-            format!("Expanded: {expanded_count}"),
-            if expanded_count > 0 {
-                Style::default().fg(scheme.success)
-            } else {
-                Style::default().fg(scheme.text_muted)
-            },
-        ),
-    ];
+    let mut line2_spans = vec![Span::styled(
+        format!("{}/{}", if total > 0 { selected + 1 } else { 0 }, total),
+        Style::default().fg(scheme.primary).bold(),
+    )];
+
+    // Added/removed summary from diff result
+    if let Some(result) = ctx.diff_result {
+        let added = result.dependencies.added.len();
+        let removed = result.dependencies.removed.len();
+        line2_spans.push(Span::styled("  ", Style::default()));
+        line2_spans.push(Span::styled(
+            format!("+{added}"),
+            Style::default().fg(scheme.added).bold(),
+        ));
+        line2_spans.push(Span::styled("  ", Style::default()));
+        line2_spans.push(Span::styled(
+            format!("-{removed}"),
+            Style::default().fg(scheme.removed).bold(),
+        ));
+    }
+
+    line2_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
+    line2_spans.push(Span::styled(
+        format!("{node_count} nodes  {edge_count} edges ({direct_count} direct)"),
+        Style::default().fg(scheme.text_muted),
+    ));
+    line2_spans.push(Span::styled("  ", Style::default()));
+    line2_spans.push(Span::styled(
+        format!("Expanded: {expanded_count}/{expandable_count}"),
+        if expanded_count > 0 {
+            Style::default().fg(scheme.success)
+        } else {
+            Style::default().fg(scheme.text_muted)
+        },
+    ));
 
     if vuln_count > 0 {
         line2_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
         line2_spans.push(Span::styled(
-            format!("⚠ {vuln_count} vuln"),
+            format!("⚠ {vuln_count} vulnerabilities"),
             Style::default().fg(scheme.critical).bold(),
         ));
     }
@@ -356,7 +369,7 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     if show_cycles && cycle_count > 0 {
         line2_spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
         line2_spans.push(Span::styled(
-            format!("⟳ {cycle_count}"),
+            format!("⟳ {cycle_count} cycles"),
             Style::default().fg(scheme.warning).bold(),
         ));
     }
@@ -382,21 +395,7 @@ pub fn render_dependencies(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     let line2 = Line::from(line2_spans);
 
-    // Line 3: Key hints (compact)
-    let line3 = Line::from(vec![
-        Span::styled("[+/-]", Style::default().fg(scheme.accent)),
-        Span::styled(" depth ", Style::default().fg(scheme.text_muted)),
-        Span::styled("[</>]", Style::default().fg(scheme.accent)),
-        Span::styled(" roots ", Style::default().fg(scheme.text_muted)),
-        Span::styled("[s]", Style::default().fg(scheme.accent)),
-        Span::styled(" sort ", Style::default().fg(scheme.text_muted)),
-        Span::styled("[e/E]", Style::default().fg(scheme.accent)),
-        Span::styled(" expand/collapse ", Style::default().fg(scheme.text_muted)),
-        Span::styled("[?]", Style::default().fg(scheme.accent)),
-        Span::styled(" help", Style::default().fg(scheme.text_muted)),
-    ]);
-
-    let mut context_lines = vec![line1, line2, line3];
+    let mut context_lines = vec![line1, line2];
 
     // Add search bar if searching
     if is_searching {
@@ -679,23 +678,21 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         } else {
             // For diff mode child nodes, extract the actual component ID
             // Format: "parent:+:child" or "parent:-:child"
-            let (component_id, change_marker) = if let Some(pos) = raw_id.find(":+:") {
-                (&raw_id[pos + 3..], Some("+"))
+            let (parent_id, component_id, change_marker) = if let Some(pos) = raw_id.find(":+:") {
+                (Some(&raw_id[..pos]), &raw_id[pos + 3..], Some("+"))
             } else if let Some(pos) = raw_id.find(":-:") {
-                (&raw_id[pos + 3..], Some("-"))
+                (Some(&raw_id[..pos]), &raw_id[pos + 3..], Some("-"))
             } else {
-                (raw_id, None)
+                (None, raw_id, None)
             };
 
-            // Display name
+            // Section header with display name
             let display_name = ctx.dependencies.cached_display_names.get(component_id);
-
-            if let Some(name) = display_name {
-                lines.push(Line::from(vec![
-                    Span::styled("Name: ", Style::default().fg(scheme.text_muted)),
-                    Span::styled(name, Style::default().fg(scheme.text).bold()),
-                ]));
-            }
+            let header = display_name.map_or(component_id.to_string(), Clone::clone);
+            lines.push(Line::styled(
+                header,
+                Style::default().fg(scheme.accent).bold(),
+            ));
 
             // Change type (diff mode)
             if let Some(marker) = change_marker {
@@ -708,6 +705,26 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                     Span::styled("Change: ", Style::default().fg(scheme.text_muted)),
                     Span::styled(label, style),
                 ]));
+            }
+
+            // Edge relationship and scope (for child nodes)
+            if let Some(parent) = parent_id {
+                if let Some(info) = ctx
+                    .dependencies
+                    .cached_edge_info
+                    .get(&(parent.to_string(), component_id.to_string()))
+                {
+                    lines.push(Line::from(vec![
+                        Span::styled("Relationship: ", Style::default().fg(scheme.text_muted)),
+                        Span::styled(&info.relationship, Style::default().fg(scheme.text)),
+                    ]));
+                    if let Some(scope) = &info.scope {
+                        lines.push(Line::from(vec![
+                            Span::styled("Scope: ", Style::default().fg(scheme.text_muted)),
+                            Span::styled(scope, Style::default().fg(scheme.text)),
+                        ]));
+                    }
+                }
             }
 
             // Look up component in SBOMs for rich details
@@ -802,6 +819,77 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 }
             }
 
+            // Vulnerability details
+            if let Some(result) = ctx.diff_result {
+                let vulns: Vec<(&crate::diff::VulnerabilityDetail, &str)> = result
+                    .vulnerabilities
+                    .introduced
+                    .iter()
+                    .filter(|v| v.component_name == component_id || v.component_id == component_id)
+                    .map(|v| (v, "introduced"))
+                    .chain(
+                        result
+                            .vulnerabilities
+                            .resolved
+                            .iter()
+                            .filter(|v| {
+                                v.component_name == component_id || v.component_id == component_id
+                            })
+                            .map(|v| (v, "resolved")),
+                    )
+                    .chain(
+                        result
+                            .vulnerabilities
+                            .persistent
+                            .iter()
+                            .filter(|v| {
+                                v.component_name == component_id || v.component_id == component_id
+                            })
+                            .map(|v| (v, "persistent")),
+                    )
+                    .collect();
+
+                if !vulns.is_empty() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(vec![
+                        Span::styled("━━━ ", Style::default().fg(scheme.border)),
+                        Span::styled(
+                            format!("Vulnerabilities ({})", vulns.len()),
+                            Style::default().fg(scheme.critical).bold(),
+                        ),
+                        Span::styled(" ━━━", Style::default().fg(scheme.border)),
+                    ]));
+                    for (vuln, status) in vulns.iter().take(5) {
+                        let sev_color = scheme.severity_color(&vuln.severity);
+                        let status_style = match *status {
+                            "introduced" => Style::default().fg(scheme.removed),
+                            "resolved" => Style::default().fg(scheme.added),
+                            _ => Style::default().fg(scheme.text_muted),
+                        };
+                        let mut vuln_spans = vec![
+                            Span::styled("  ", Style::default()),
+                            Span::styled(&vuln.severity, Style::default().fg(sev_color).bold()),
+                            Span::styled(" ", Style::default()),
+                            Span::styled(&vuln.id, Style::default().fg(scheme.text)),
+                            Span::styled(format!(" ({status})"), status_style),
+                        ];
+                        if vuln.is_kev {
+                            vuln_spans.push(Span::styled(
+                                " KEV",
+                                Style::default().fg(scheme.critical).bold(),
+                            ));
+                        }
+                        lines.push(Line::from(vuln_spans));
+                    }
+                    if vulns.len() > 5 {
+                        lines.push(Line::styled(
+                            format!("    ... and {} more", vulns.len() - 5),
+                            Style::default().fg(scheme.text_muted),
+                        ));
+                    }
+                }
+            }
+
             // Canonical ID (dimmed, for reference)
             lines.push(Line::from(""));
             lines.push(Line::styled(
@@ -820,6 +908,7 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         ));
     }
 
+    let detail_scroll = ctx.dependencies.detail_scroll as u16;
     let para = Paragraph::new(lines)
         .block(
             Block::default()
@@ -828,7 +917,8 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(scheme.border)),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((detail_scroll, 0));
 
     frame.render_widget(para, area);
 }
@@ -852,6 +942,38 @@ fn find_component_in_sboms<'a>(
         }
     }
     None
+}
+
+/// Generate an edge-info badge span (e.g., `[dev]`, `[opt]`) for non-default relationships.
+fn edge_badge<'a>(
+    from: &str,
+    to: &str,
+    edge_info: &HashMap<(String, String), crate::tui::app_states::EdgeInfo>,
+    scheme: crate::tui::theme::ColorScheme,
+) -> Option<Span<'a>> {
+    let info = edge_info.get(&(from.to_string(), to.to_string()))?;
+    let label = match info.relationship.as_str() {
+        "DevDependsOn" => "dev",
+        "BuildDependsOn" => "build",
+        "TestDependsOn" => "test",
+        "OptionalDependsOn" => "opt",
+        "RuntimeDependsOn" => "rt",
+        "ProvidedDependsOn" => "provided",
+        "DependsOn" => match info.scope.as_deref() {
+            Some("Optional") => "opt",
+            Some("Excluded") => "excluded",
+            _ => return None,
+        },
+        _ => match info.scope.as_deref() {
+            Some("Optional") => "opt",
+            Some("Excluded") => "excluded",
+            _ => return None,
+        },
+    };
+    Some(Span::styled(
+        format!(" [{label}]"),
+        Style::default().fg(scheme.text_muted).dim(),
+    ))
 }
 
 /// Render diff dependency tree using cached graph structure.
@@ -915,24 +1037,36 @@ fn render_diff_tree_cached(
             }
         }
 
-        // Apply search filter if active
-        let sources_to_show: Vec<&String> = if filter_mode && !search_matches.is_empty() {
+        // Sort + filter sources
+        let show_transitive = ctx.dependencies.show_transitive;
+        let depths = &ctx.dependencies.cached_depths;
+        let mut sorted_sources: Vec<String> = if filter_mode && !search_matches.is_empty() {
             sources
                 .iter()
                 .filter(|s| search_matches.contains(*s))
-                .take(max_roots)
+                .filter(|s| show_transitive || depths.get(s.as_str()).copied().unwrap_or(0) <= 1)
+                .cloned()
+                .collect()
+        } else if !show_transitive {
+            sources
+                .iter()
+                .filter(|s| depths.get(s.as_str()).copied().unwrap_or(0) <= 1)
+                .cloned()
                 .collect()
         } else {
-            sources.iter().take(max_roots).collect()
+            sources.clone()
         };
+        ctx.dependencies.sort_roots(&mut sorted_sources);
+        sorted_sources.truncate(max_roots);
+        let sources_to_show: Vec<&String> = sorted_sources.iter().collect();
 
         for (idx, source) in sources_to_show.iter().enumerate() {
             let source_str: &str = source;
             let added = added_by_source.get(source_str);
             let removed = removed_by_source.get(source_str);
 
-            let child_count =
-                added.map_or(0, std::vec::Vec::len) + removed.map_or(0, std::vec::Vec::len);
+            let added_count = added.map_or(0, std::vec::Vec::len);
+            let removed_count = removed.map_or(0, std::vec::Vec::len);
             let is_expanded = expanded.contains(*source);
             let is_last = idx == sources_to_show.len() - 1;
 
@@ -959,11 +1093,30 @@ fn render_diff_tree_cached(
                 Span::styled(expand_icon, Style::default().fg(scheme.accent)),
                 Span::raw(" "),
                 Span::styled(short_source, source_style.bold()),
-                Span::styled(
-                    format!(" ({child_count})"),
-                    Style::default().fg(scheme.text_muted),
-                ),
             ];
+
+            // Show child count breakdown: (+N -M), (+N), or (-M)
+            match (added_count, removed_count) {
+                (0, 0) => {}
+                (a, 0) => spans.push(Span::styled(
+                    format!(" (+{a})"),
+                    Style::default().fg(scheme.added),
+                )),
+                (0, r) => spans.push(Span::styled(
+                    format!(" (-{r})"),
+                    Style::default().fg(scheme.removed),
+                )),
+                (a, r) => {
+                    spans.push(Span::styled(
+                        format!(" (+{a}"),
+                        Style::default().fg(scheme.added),
+                    ));
+                    spans.push(Span::styled(
+                        format!(" -{r})"),
+                        Style::default().fg(scheme.removed),
+                    ));
+                }
+            }
 
             if source_has_vuln {
                 spans.push(Span::styled(" ⚠", Style::default().fg(scheme.critical)));
@@ -1028,6 +1181,13 @@ fn render_diff_tree_cached(
                             ));
                         }
 
+                        // Edge relationship badge
+                        if let Some(badge) =
+                            edge_badge(source, dep, &ctx.dependencies.cached_edge_info, scheme)
+                        {
+                            dep_spans.push(badge);
+                        }
+
                         lines.push(Line::from(dep_spans));
                         visible_nodes.push(format!("{source}:+:{dep}"));
                     }
@@ -1069,6 +1229,13 @@ fn render_diff_tree_cached(
                                 format!(" {badge}"),
                                 Style::default().fg(color),
                             ));
+                        }
+
+                        // Edge relationship badge
+                        if let Some(badge) =
+                            edge_badge(source, dep, &ctx.dependencies.cached_edge_info, scheme)
+                        {
+                            dep_spans.push(badge);
                         }
 
                         lines.push(Line::from(dep_spans));
