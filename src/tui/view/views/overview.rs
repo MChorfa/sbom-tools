@@ -325,7 +325,15 @@ fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{:>12} ", if eco.len() > 12 { &eco[..12] } else { eco }),
+                {
+                    use crate::tui::shared::floor_char_boundary;
+                    let e = if eco.len() > 12 {
+                        &eco[..floor_char_boundary(eco, 12)]
+                    } else {
+                        eco
+                    };
+                    format!("{e:>12} ")
+                },
                 Style::default().fg(color).bold(),
             ),
             Span::styled("█".repeat(filled), Style::default().fg(color)),
@@ -392,7 +400,7 @@ fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
         let color = palette[i % palette.len()];
 
         let display_name = if lic.len() > 12 {
-            &lic[..12]
+            &lic[..crate::tui::shared::floor_char_boundary(lic, 12)]
         } else {
             lic.as_str()
         };
@@ -610,7 +618,8 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
             Span::styled("Serial:  ", label_style),
             Span::styled(
                 if serial.len() > 36 {
-                    format!("{}...", &serial[..36])
+                    let end = crate::tui::shared::floor_char_boundary(serial, 36);
+                    format!("{}...", &serial[..end])
                 } else {
                     serial.clone()
                 },
@@ -729,7 +738,8 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
         if let Some(url) = &doc.vulnerability_disclosure_url {
             let display_url = if url.len() > 40 {
-                format!("{}...", &url[..40])
+                let end = crate::tui::shared::floor_char_boundary(url, 40);
+                format!("{}...", &url[..end])
             } else {
                 url.clone()
             };
@@ -831,7 +841,8 @@ fn render_top_vulnerable(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
             Row::new(vec![
                 if display_name.len() > 45 {
-                    format!("{}...", &display_name[..42])
+                    let end = crate::tui::shared::floor_char_boundary(&display_name, 42);
+                    format!("{}...", &display_name[..end])
                 } else {
                     display_name
                 },
@@ -897,7 +908,8 @@ fn render_top_depended_on(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
             Row::new(vec![
                 if display_name.len() > 35 {
-                    format!("{}...", &display_name[..32])
+                    let end = crate::tui::shared::floor_char_boundary(&display_name, 32);
+                    format!("{}...", &display_name[..end])
                 } else {
                     display_name
                 },

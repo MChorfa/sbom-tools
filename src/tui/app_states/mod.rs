@@ -27,7 +27,7 @@ pub use compliance::{
     PolicyPreset,
 };
 pub use components::{ComponentFilter, ComponentSort, ComponentsState, sort_component_changes};
-pub use dependencies::{DependenciesState, DependencyChangeFilter};
+pub use dependencies::{DependenciesState, DependencyChangeFilter, EdgeInfo};
 pub use graph_changes::GraphChangesState;
 pub use licenses::{LicenseGroupBy, LicenseRiskFilter, LicenseSort, LicensesState};
 pub use matrix::{MatrixSortBy, MatrixState, SimilarityThreshold};

@@ -166,6 +166,10 @@ pub struct DiffComplianceState {
     pub show_detail: bool,
     /// Severity filter for violation display
     pub severity_filter: ComplianceSeverityFilter,
+    /// Whether violations are grouped by component/element
+    pub group_by_element: bool,
+    /// Which element groups are currently expanded (by element name)
+    pub expanded_groups: std::collections::HashSet<String>,
 }
 
 /// What to show in the diff compliance tab
@@ -192,6 +196,8 @@ impl Default for DiffComplianceState {
             show_detail: false,
             view_mode: DiffComplianceViewMode::Overview,
             severity_filter: ComplianceSeverityFilter::default(),
+            group_by_element: false,
+            expanded_groups: std::collections::HashSet::new(),
         }
     }
 }
@@ -246,6 +252,13 @@ impl DiffComplianceState {
     /// Cycle the severity filter and reset selection.
     pub const fn toggle_severity_filter(&mut self) {
         self.severity_filter = self.severity_filter.next();
+        self.selected_violation = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Toggle grouping violations by component/element.
+    pub fn toggle_group_by_element(&mut self) {
+        self.group_by_element = !self.group_by_element;
         self.selected_violation = 0;
         self.scroll_offset = 0;
     }

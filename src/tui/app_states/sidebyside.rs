@@ -8,14 +8,17 @@ pub enum AlignmentMode {
     Grouped,
     /// Align matched components on same row for easy comparison
     Aligned,
+    /// Unified upgrade view matching removed+added by name to show version upgrades
+    Unified,
 }
 
 impl AlignmentMode {
-    /// Toggle to next mode
+    /// Cycle to next mode
     pub const fn toggle(&mut self) {
         *self = match self {
             Self::Grouped => Self::Aligned,
-            Self::Aligned => Self::Grouped,
+            Self::Aligned => Self::Unified,
+            Self::Unified => Self::Grouped,
         };
     }
 
@@ -24,7 +27,13 @@ impl AlignmentMode {
         match self {
             Self::Grouped => "Grouped",
             Self::Aligned => "Aligned",
+            Self::Unified => "Unified",
         }
+    }
+
+    /// Returns true if this mode uses row-based selection (not panel scrolling)
+    pub const fn uses_row_selection(self) -> bool {
+        matches!(self, Self::Aligned | Self::Unified)
     }
 }
 
@@ -202,8 +211,8 @@ impl SideBySideState {
                 self.scroll_both_up();
             }
         }
-        // Update selected row in aligned mode
-        if self.alignment_mode == AlignmentMode::Aligned {
+        // Update selected row in aligned/unified mode
+        if self.alignment_mode.uses_row_selection() {
             self.selected_row = self.selected_row.saturating_sub(1);
         }
     }
@@ -228,8 +237,8 @@ impl SideBySideState {
                 self.scroll_both_down();
             }
         }
-        // Update selected row in aligned mode
-        if self.alignment_mode == AlignmentMode::Aligned && self.total_rows > 0 {
+        // Update selected row in aligned/unified mode
+        if self.alignment_mode.uses_row_selection() && self.total_rows > 0 {
             self.selected_row = (self.selected_row + 1).min(self.total_rows.saturating_sub(1));
         }
     }
@@ -250,7 +259,7 @@ impl SideBySideState {
                 self.right_scroll = self.right_scroll.saturating_sub(page_size);
             }
         }
-        if self.alignment_mode == AlignmentMode::Aligned {
+        if self.alignment_mode.uses_row_selection() {
             self.selected_row = self.selected_row.saturating_sub(page_size);
         }
     }
@@ -275,7 +284,7 @@ impl SideBySideState {
                     (self.right_scroll + page_size).min(self.right_total.saturating_sub(1));
             }
         }
-        if self.alignment_mode == AlignmentMode::Aligned && self.total_rows > 0 {
+        if self.alignment_mode.uses_row_selection() && self.total_rows > 0 {
             self.selected_row =
                 (self.selected_row + page_size).min(self.total_rows.saturating_sub(1));
         }
@@ -325,7 +334,7 @@ impl SideBySideState {
         } else {
             self.left_scroll = 0;
         }
-        if self.alignment_mode == AlignmentMode::Aligned {
+        if self.alignment_mode.uses_row_selection() {
             self.selected_row = 0;
         }
     }
@@ -337,7 +346,7 @@ impl SideBySideState {
         } else {
             self.left_scroll = self.left_total.saturating_sub(1);
         }
-        if self.alignment_mode == AlignmentMode::Aligned && self.total_rows > 0 {
+        if self.alignment_mode.uses_row_selection() && self.total_rows > 0 {
             self.selected_row = self.total_rows - 1;
         }
     }

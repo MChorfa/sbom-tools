@@ -13,7 +13,7 @@ pub(super) fn handle_diff_compliance_keys(app: &mut App, key: KeyEvent) {
     };
 
     // Process the key in a scoped borrow, extracting all side-effect flags
-    let (result, wants_export, wants_go_to_component) = {
+    let (result, wants_export, wants_go_to_component, wants_toggle_group) = {
         let Some(view) = app.compliance_view.as_mut() else {
             return;
         };
@@ -32,13 +32,24 @@ pub(super) fn handle_diff_compliance_keys(app: &mut App, key: KeyEvent) {
         let result = view.handle_key(key, &mut ctx);
         let wants_export = view.take_export_request();
         let wants_go_to_component = view.take_go_to_component_request();
+        let wants_toggle_group = view.take_toggle_group_entry_request();
 
-        (result, wants_export, wants_go_to_component)
+        (
+            result,
+            wants_export,
+            wants_go_to_component,
+            wants_toggle_group,
+        )
     };
     // `view` borrow is now dropped — safe to use `app` freely
 
     if wants_export {
         app.export_compliance(crate::tui::export::ExportFormat::Json);
+    }
+
+    if wants_toggle_group {
+        toggle_selected_group(app);
+        return;
     }
 
     if wants_go_to_component {
@@ -53,6 +64,28 @@ pub(super) fn handle_diff_compliance_keys(app: &mut App, key: KeyEvent) {
     }
 
     app.handle_event_result(result);
+}
+
+/// Toggle the expand/collapse state of the group at the currently selected position.
+fn toggle_selected_group(app: &mut App) {
+    use crate::tui::views::resolve_selected_group_element;
+
+    let element = {
+        let ctx = RenderContext::from_app(app);
+        resolve_selected_group_element(&ctx)
+    };
+
+    if let Some(element) = element {
+        let Some(view) = app.compliance_view.as_mut() else {
+            return;
+        };
+        let state = &mut view.inner_mut().expanded_groups;
+        if state.contains(&element) {
+            state.remove(&element);
+        } else {
+            state.insert(element);
+        }
+    }
 }
 
 /// Get the component name from the currently selected compliance violation.

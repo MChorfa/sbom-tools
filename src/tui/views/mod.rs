@@ -18,7 +18,9 @@ mod vulnerabilities;
 pub use components::render_components;
 pub use dependencies::render_dependencies;
 pub(crate) use dependencies::update_graph_cache;
-pub use diff_compliance::{diff_compliance_violation_count, render_diff_compliance};
+pub use diff_compliance::{
+    diff_compliance_violation_count, render_diff_compliance, resolve_selected_group_element,
+};
 pub use graph_changes::render_graph_changes;
 pub use licenses::render_licenses;
 pub use matrix::{MatrixPanel, render_matrix};

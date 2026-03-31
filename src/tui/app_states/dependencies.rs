@@ -130,6 +130,17 @@ pub struct DependenciesState {
     pub cached_depths: HashMap<String, usize>,
     /// Cached display names: canonical ID → "name@version"
     pub cached_display_names: HashMap<String, String>,
+    /// Cached edge relationship types: (from, to) → relationship label
+    pub cached_edge_info: HashMap<(String, String), EdgeInfo>,
+    /// Detail panel scroll offset
+    pub detail_scroll: usize,
+}
+
+/// Cached info about a dependency edge.
+#[derive(Debug, Clone)]
+pub struct EdgeInfo {
+    pub relationship: String,
+    pub scope: Option<String>,
 }
 
 impl DependenciesState {
@@ -169,6 +180,8 @@ impl DependenciesState {
             change_filter: DependencyChangeFilter::default(),
             cached_depths: HashMap::new(),
             cached_display_names: HashMap::new(),
+            cached_edge_info: HashMap::new(),
+            detail_scroll: 0,
         }
     }
 
@@ -262,6 +275,30 @@ impl DependenciesState {
     /// Cycle to next sort order
     pub const fn toggle_sort(&mut self) {
         self.sort_order = self.sort_order.next();
+    }
+
+    /// Sort a list of root IDs according to the current `sort_order`.
+    pub fn sort_roots(&self, roots: &mut [String]) {
+        match self.sort_order {
+            DependencySort::Name => {} // cached_roots already sorted by name
+            DependencySort::Depth => {
+                roots.sort_by_key(|id| self.cached_depths.get(id).copied().unwrap_or(0));
+            }
+            DependencySort::VulnCount => {
+                roots.sort_by(|a, b| {
+                    let va = self.cached_vuln_components.contains(a);
+                    let vb = self.cached_vuln_components.contains(b);
+                    vb.cmp(&va).then_with(|| a.cmp(b))
+                });
+            }
+            DependencySort::DependentCount => {
+                roots.sort_by(|a, b| {
+                    let da = self.cached_reverse_graph.get(a).map_or(0, Vec::len);
+                    let db = self.cached_reverse_graph.get(b).map_or(0, Vec::len);
+                    db.cmp(&da).then_with(|| a.cmp(b))
+                });
+            }
+        }
     }
 
     /// Cycle to next change filter
@@ -431,15 +468,17 @@ impl DependenciesState {
         if self.search_matches.is_empty() || self.visible_nodes.is_empty() {
             return;
         }
+        let len = self.visible_nodes.len();
+        let sel = self.selected.min(len.saturating_sub(1));
         // Find next match after current selection
-        for i in (self.selected + 1)..self.visible_nodes.len() {
+        for i in (sel + 1)..len {
             if self.search_matches.contains(&self.visible_nodes[i]) {
                 self.selected = i;
                 return;
             }
         }
         // Wrap around
-        for i in 0..=self.selected {
+        for i in 0..=sel {
             if self.search_matches.contains(&self.visible_nodes[i]) {
                 self.selected = i;
                 return;
@@ -452,15 +491,17 @@ impl DependenciesState {
         if self.search_matches.is_empty() || self.visible_nodes.is_empty() {
             return;
         }
+        let len = self.visible_nodes.len();
+        let sel = self.selected.min(len.saturating_sub(1));
         // Find previous match before current selection
-        for i in (0..self.selected).rev() {
+        for i in (0..sel).rev() {
             if self.search_matches.contains(&self.visible_nodes[i]) {
                 self.selected = i;
                 return;
             }
         }
         // Wrap around
-        for i in (self.selected..self.visible_nodes.len()).rev() {
+        for i in (sel..len).rev() {
             if self.search_matches.contains(&self.visible_nodes[i]) {
                 self.selected = i;
                 return;

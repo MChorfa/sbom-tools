@@ -196,31 +196,53 @@ fn render(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Build a human-readable label for an SBOM: "name@version" or just "name".
+///
+/// Tries multiple sources for name+version: primary component, document name
+/// + matching component, or just document name.
+fn sbom_label(sbom: Option<&crate::model::NormalizedSbom>) -> String {
+    let Some(sbom) = sbom else {
+        return "SBOM".to_string();
+    };
+
+    // 1. Try primary component (most reliable)
+    if let Some(comp) = sbom.primary_component() {
+        if let Some(ref v) = comp.version
+            && !v.is_empty()
+        {
+            return format!("{}@{v}", comp.name);
+        }
+        return comp.name.clone();
+    }
+
+    // 2. Try document name + find matching component for version
+    if let Some(ref doc_name) = sbom.document.name {
+        // Look for a component with this name to get its version
+        let version = sbom
+            .components
+            .values()
+            .find(|c| c.name == *doc_name)
+            .and_then(|c| c.version.as_ref())
+            .filter(|v| !v.is_empty());
+        if let Some(v) = version {
+            return format!("{doc_name}@{v}");
+        }
+        return doc_name.clone();
+    }
+
+    "SBOM".to_string()
+}
+
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let (mode_name, subtitle) = match app.mode {
         AppMode::Diff => {
-            let old_name = app
-                .data
-                .old_sbom
-                .as_ref()
-                .and_then(|s| s.document.name.clone())
-                .unwrap_or_else(|| "SBOM A".to_string());
-            let new_name = app
-                .data
-                .new_sbom
-                .as_ref()
-                .and_then(|s| s.document.name.clone())
-                .unwrap_or_else(|| "SBOM B".to_string());
-            ("diff", format!("{old_name} ⟷ {new_name}"))
+            let old_label = sbom_label(app.data.old_sbom.as_ref());
+            let new_label = sbom_label(app.data.new_sbom.as_ref());
+            ("diff", format!("{old_label} \u{27f7} {new_label}"))
         }
         AppMode::View => {
-            let sbom_name = app
-                .data
-                .sbom
-                .as_ref()
-                .and_then(|s| s.document.name.clone())
-                .unwrap_or_else(|| "SBOM".to_string());
-            ("view", sbom_name)
+            let label = sbom_label(app.data.sbom.as_ref());
+            ("view", label)
         }
         AppMode::MultiDiff => ("multi-diff", "Multi-Diff Comparison".to_string()),
         AppMode::Timeline => ("timeline", "Timeline Analysis".to_string()),
@@ -494,7 +516,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     // Append copy preview: [y] copy <value>
     if let Some(yank_text) = super::events::get_yank_text(app) {
         let truncated = if yank_text.len() > 30 {
-            format!("{}...", &yank_text[..27])
+            let end = super::shared::floor_char_boundary(&yank_text, 27);
+            format!("{}...", &yank_text[..end])
         } else {
             yank_text
         };

@@ -17,6 +17,8 @@ pub struct ComplianceView {
     export_requested: bool,
     /// Whether a "go to component" navigation was requested (consumed by bridge).
     go_to_component_requested: bool,
+    /// Whether a group toggle was requested via Enter on a grouped header (consumed by bridge).
+    toggle_group_entry_requested: bool,
 }
 
 impl ComplianceView {
@@ -26,6 +28,7 @@ impl ComplianceView {
             max_violations: 0,
             export_requested: false,
             go_to_component_requested: false,
+            toggle_group_entry_requested: false,
         }
     }
 
@@ -34,11 +37,16 @@ impl ComplianceView {
         &self.inner
     }
 
+    /// Access the inner state mutably.
+    pub(crate) fn inner_mut(&mut self) -> &mut DiffComplianceState {
+        &mut self.inner
+    }
+
     pub(crate) fn set_max_violations(&mut self, max: usize) {
         self.max_violations = max;
     }
 
-    /// Whether a compliance export was requested (set during handle_key, consumed by bridge).
+    /// Whether a compliance export was requested (set during `handle_key`, consumed by bridge).
     pub(crate) fn take_export_request(&mut self) -> bool {
         let req = self.export_requested;
         self.export_requested = false;
@@ -49,6 +57,13 @@ impl ComplianceView {
     pub(crate) fn take_go_to_component_request(&mut self) -> bool {
         let req = self.go_to_component_requested;
         self.go_to_component_requested = false;
+        req
+    }
+
+    /// Whether a group header toggle was requested via Enter (consumed by bridge).
+    pub(crate) fn take_toggle_group_entry_request(&mut self) -> bool {
+        let req = self.toggle_group_entry_requested;
+        self.toggle_group_entry_requested = false;
         req
     }
 }
@@ -91,7 +106,13 @@ impl ViewState for ComplianceView {
             }
             KeyCode::Enter => {
                 if self.max_violations > 0 {
-                    self.inner.show_detail = true;
+                    if self.inner.group_by_element {
+                        // In grouped mode, Enter toggles group expand/collapse
+                        // (the bridge resolves which group is selected)
+                        self.toggle_group_entry_requested = true;
+                    } else {
+                        self.inner.show_detail = true;
+                    }
                 }
                 EventResult::Consumed
             }
@@ -100,9 +121,24 @@ impl ViewState for ComplianceView {
                 let label = self.inner.severity_filter.label();
                 EventResult::status(format!("Compliance filter: {label}"))
             }
-            KeyCode::Tab => {
+            KeyCode::Char('g') => {
+                self.inner.toggle_group_by_element();
+                EventResult::status(if self.inner.group_by_element {
+                    "Violations grouped by component"
+                } else {
+                    "Flat violation list"
+                })
+            }
+            KeyCode::Char('v') => {
                 self.inner.next_view_mode();
-                EventResult::Consumed
+                let mode_label = match self.inner.view_mode {
+                    crate::tui::app_states::compliance::DiffComplianceViewMode::Overview => "Overview",
+                    crate::tui::app_states::compliance::DiffComplianceViewMode::NewViolations => "New violations",
+                    crate::tui::app_states::compliance::DiffComplianceViewMode::ResolvedViolations => "Resolved violations",
+                    crate::tui::app_states::compliance::DiffComplianceViewMode::OldViolations => "Old SBOM violations",
+                    crate::tui::app_states::compliance::DiffComplianceViewMode::NewSbomViolations => "New SBOM violations",
+                };
+                EventResult::status(format!("View: {mode_label}"))
             }
             KeyCode::Char('c') => {
                 // Navigate to the component referenced by the selected violation.
@@ -154,11 +190,12 @@ impl ViewState for ComplianceView {
         vec![
             Shortcut::primary("j/k", "Navigate"),
             Shortcut::new("h/l", "Switch standard"),
-            Shortcut::new("Tab", "View mode"),
+            Shortcut::new("v", "View mode"),
             Shortcut::new("Enter", "Detail"),
+            Shortcut::new("g", "Group"),
             Shortcut::new("c", "Go to component"),
             Shortcut::new("E", "Export"),
-            Shortcut::new("g/G", "First/Last"),
+            Shortcut::new("G", "Last"),
         ]
     }
 }

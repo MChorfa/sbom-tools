@@ -1,0 +1,84 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-01-19T09:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:npm/fleet-app@1.2.0",
+      "name": "fleet-app",
+      "version": "1.2.0",
+      "purl": "pkg:npm/fleet-app@1.2.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/express@5.0.1",
+      "name": "express",
+      "version": "5.0.1",
+      "purl": "pkg:npm/express@5.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/axios@1.7.9",
+      "name": "axios",
+      "version": "1.7.9",
+      "purl": "pkg:npm/axios@1.7.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/zod@3.24.1",
+      "name": "zod",
+      "version": "3.24.1",
+      "purl": "pkg:npm/zod@3.24.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/prisma@6.0.0",
+      "name": "prisma",
+      "version": "6.0.0",
+      "purl": "pkg:npm/prisma@6.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:npm/fleet-app@1.2.0",
+      "dependsOn": [
+        "pkg:npm/express@5.0.1",
+        "pkg:npm/axios@1.7.9",
+        "pkg:npm/zod@3.24.1",
+        "pkg:npm/prisma@6.0.0"
+      ]
+    }
+  ]
+}

@@ -1332,7 +1332,8 @@ fn handle_yank(app: &mut ViewApp) {
 
     if crate::tui::clipboard::copy_to_clipboard(&text) {
         let display = if text.len() > 50 {
-            format!("{}...", &text[..47])
+            let end = crate::tui::shared::floor_char_boundary(&text, 47);
+            format!("{}...", &text[..end])
         } else {
             text
         };

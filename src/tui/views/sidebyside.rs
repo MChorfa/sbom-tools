@@ -1,12 +1,14 @@
 //! Side-by-side diff view similar to difftastic.
 //!
-//! This view supports two modes:
+//! This view supports three modes:
 //! - Grouped: Changes organized by type (removed, modified, added)
 //! - Aligned: Components aligned on same row for direct comparison
+//! - Unified: Matches removed+added by name to show version upgrades/downgrades
 
-use crate::diff::ChangeType;
+use crate::diff::{ChangeType, DiffResult};
 use crate::tui::app::{AlignmentMode, AppMode};
 use crate::tui::render_context::RenderContext;
+use crate::tui::security::{VersionChange, detect_version_downgrade};
 use crate::tui::theme::colors;
 use ratatui::{
     prelude::*,
@@ -40,6 +42,34 @@ pub enum DiffSpanStyle {
     Unchanged,
     Removed,
     Added,
+}
+
+/// Entry in the unified upgrade view
+#[derive(Debug, Clone)]
+struct UnifiedEntry {
+    name: String,
+    old_version: Option<String>,
+    new_version: Option<String>,
+    change_type: UnifiedChangeType,
+}
+
+/// Classification for unified view entries
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnifiedChangeType {
+    Upgrade,
+    Downgrade,
+    Modified,
+    Added,
+    Removed,
+}
+
+/// Semver bump level for sorting upgrades
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SemverBump {
+    Major,
+    Minor,
+    Patch,
+    Unknown,
 }
 
 /// Render side-by-side diff view
@@ -77,6 +107,7 @@ fn render_diff_sidebyside(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     match ctx.side_by_side.alignment_mode {
         AlignmentMode::Grouped => render_grouped_mode(frame, area, ctx),
         AlignmentMode::Aligned => render_aligned_mode(frame, area, ctx),
+        AlignmentMode::Unified => render_unified_mode(frame, area, ctx),
     }
 }
 
@@ -288,6 +319,364 @@ fn build_aligned_rows(ctx: &RenderContext) -> Vec<AlignedRow> {
     }
 
     rows
+}
+
+/// Build unified entries that match removed+added by name to show version upgrades.
+fn build_unified_entries(result: &DiffResult) -> Vec<UnifiedEntry> {
+    let mut entries = Vec::new();
+
+    // 1. All modified components are Modified entries
+    for comp in &result.components.modified {
+        let change_type = match (comp.old_version.as_deref(), comp.new_version.as_deref()) {
+            (Some(old), Some(new)) if old != new => match detect_version_downgrade(old, new) {
+                VersionChange::Downgrade => UnifiedChangeType::Downgrade,
+                VersionChange::Upgrade => UnifiedChangeType::Upgrade,
+                VersionChange::NoChange | VersionChange::Unknown => UnifiedChangeType::Modified,
+            },
+            _ => UnifiedChangeType::Modified,
+        };
+        entries.push(UnifiedEntry {
+            name: comp.name.clone(),
+            old_version: comp.old_version.clone(),
+            new_version: comp.new_version.clone(),
+            change_type,
+        });
+    }
+
+    // 2. Match removed+added by name to find upgrades/downgrades
+    let mut matched_added: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for removed_comp in &result.components.removed {
+        let removed_name_lower = removed_comp.name.to_lowercase();
+        // Find matching added component by name (case-insensitive)
+        let matched = result
+            .components
+            .added
+            .iter()
+            .enumerate()
+            .find(|(idx, added_comp)| {
+                !matched_added.contains(idx) && added_comp.name.to_lowercase() == removed_name_lower
+            });
+
+        if let Some((idx, added_comp)) = matched {
+            matched_added.insert(idx);
+            let change_type = match (
+                removed_comp.old_version.as_deref(),
+                added_comp.new_version.as_deref(),
+            ) {
+                (Some(old), Some(new)) => match detect_version_downgrade(old, new) {
+                    VersionChange::Downgrade => UnifiedChangeType::Downgrade,
+                    _ => UnifiedChangeType::Upgrade,
+                },
+                _ => UnifiedChangeType::Upgrade,
+            };
+            entries.push(UnifiedEntry {
+                name: removed_comp.name.clone(),
+                old_version: removed_comp.old_version.clone(),
+                new_version: added_comp.new_version.clone(),
+                change_type,
+            });
+        } else {
+            // Unmatched removed
+            entries.push(UnifiedEntry {
+                name: removed_comp.name.clone(),
+                old_version: removed_comp.old_version.clone(),
+                new_version: None,
+                change_type: UnifiedChangeType::Removed,
+            });
+        }
+    }
+
+    // 3. Remaining unmatched added
+    for (idx, comp) in result.components.added.iter().enumerate() {
+        if !matched_added.contains(&idx) {
+            entries.push(UnifiedEntry {
+                name: comp.name.clone(),
+                old_version: None,
+                new_version: comp.new_version.clone(),
+                change_type: UnifiedChangeType::Added,
+            });
+        }
+    }
+
+    // 4. Sort: upgrades with MAJOR first, then minor, patch, downgrades, modified, removed, added
+    entries.sort_by(|a, b| {
+        let priority_a = unified_sort_key(a);
+        let priority_b = unified_sort_key(b);
+        priority_a.cmp(&priority_b)
+    });
+
+    entries
+}
+
+/// Sort key: (change priority, semver bump, name)
+fn unified_sort_key(entry: &UnifiedEntry) -> (u8, SemverBump, String) {
+    let (priority, bump) = match entry.change_type {
+        UnifiedChangeType::Upgrade => (
+            0,
+            classify_semver_bump(entry.old_version.as_deref(), entry.new_version.as_deref()),
+        ),
+        UnifiedChangeType::Downgrade => (1, SemverBump::Unknown),
+        UnifiedChangeType::Modified => (2, SemverBump::Unknown),
+        UnifiedChangeType::Removed => (3, SemverBump::Unknown),
+        UnifiedChangeType::Added => (4, SemverBump::Unknown),
+    };
+    (priority, bump, entry.name.to_lowercase())
+}
+
+/// Classify the semver bump level between two versions.
+fn classify_semver_bump(old: Option<&str>, new: Option<&str>) -> SemverBump {
+    let (Some(old), Some(new)) = (old, new) else {
+        return SemverBump::Unknown;
+    };
+    let old_parts: Vec<u32> = old
+        .split('.')
+        .filter_map(|s| s.trim_start_matches('v').parse().ok())
+        .collect();
+    let new_parts: Vec<u32> = new
+        .split('.')
+        .filter_map(|s| s.trim_start_matches('v').parse().ok())
+        .collect();
+
+    if old_parts.first() != new_parts.first() {
+        SemverBump::Major
+    } else if old_parts.get(1) != new_parts.get(1) {
+        SemverBump::Minor
+    } else if old_parts.get(2) != new_parts.get(2) {
+        SemverBump::Patch
+    } else {
+        SemverBump::Unknown
+    }
+}
+
+/// Get version badge text and color for unified view.
+fn version_badge(
+    old: Option<&str>,
+    new: Option<&str>,
+    scheme: &crate::tui::theme::ColorScheme,
+) -> (&'static str, Color) {
+    match (old, new) {
+        (Some(o), Some(n)) => match detect_version_downgrade(o, n) {
+            VersionChange::Downgrade => ("DOWN!", scheme.critical),
+            VersionChange::NoChange => ("=", scheme.muted),
+            VersionChange::Upgrade | VersionChange::Unknown => classify_upgrade_badge(o, n, scheme),
+        },
+        (None, Some(_)) => ("(new)", scheme.added),
+        (Some(_), None) => ("(gone)", scheme.removed),
+        (None, None) => ("", scheme.muted),
+    }
+}
+
+/// Classify upgrade level for badge display.
+fn classify_upgrade_badge(
+    old: &str,
+    new: &str,
+    scheme: &crate::tui::theme::ColorScheme,
+) -> (&'static str, Color) {
+    let old_parts: Vec<u32> = old
+        .split('.')
+        .filter_map(|s| s.trim_start_matches('v').parse().ok())
+        .collect();
+    let new_parts: Vec<u32> = new
+        .split('.')
+        .filter_map(|s| s.trim_start_matches('v').parse().ok())
+        .collect();
+
+    if old_parts.first() != new_parts.first() {
+        ("MAJOR", scheme.warning)
+    } else if old_parts.get(1) != new_parts.get(1) {
+        ("minor", scheme.modified)
+    } else {
+        ("patch", scheme.muted)
+    }
+}
+
+/// Render the unified upgrade mode as a single full-width panel.
+fn render_unified_mode(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+    let scheme = colors();
+
+    // Split into context bar and main content
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Context bar
+            Constraint::Min(10),   // Main content
+        ])
+        .split(area);
+
+    // Render context bar
+    render_sidebyside_context_bar(frame, main_chunks[0], ctx);
+
+    let content_area = main_chunks[1];
+
+    let Some(result) = ctx.diff_result else {
+        let empty = Paragraph::new("No diff result available")
+            .style(Style::default().fg(scheme.muted))
+            .block(
+                Block::default()
+                    .title(" Unified Upgrade View ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(scheme.muted)),
+            );
+        frame.render_widget(empty, content_area);
+        return;
+    };
+
+    let entries = build_unified_entries(result);
+
+    // Render border block first
+    let block = Block::default()
+        .title(" Unified Upgrade View ")
+        .title_style(Style::default().fg(scheme.accent).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(scheme.accent));
+    let inner = block.inner(content_area);
+    frame.render_widget(block, content_area);
+
+    if inner.height < 2 || inner.width < 40 {
+        return;
+    }
+
+    let buf = frame.buffer_mut();
+    let x = inner.x;
+
+    // Column layout — adapt to available width
+    let col_name: u16 = 1;
+    let name_width = 25u16.min(inner.width.saturating_sub(42));
+    let col_old = col_name + name_width + 1;
+    let col_arrow = col_old + 15;
+    let col_new = col_arrow + 3;
+    let col_badge = col_new + 15;
+
+    // Header row
+    let header_style = Style::default().fg(scheme.muted).bold();
+    buf.set_string(x + col_name, inner.y, "Component", header_style);
+    buf.set_string(x + col_old, inner.y, "Old Version", header_style);
+    buf.set_string(x + col_arrow, inner.y, "   ", header_style);
+    buf.set_string(x + col_new, inner.y, "New Version", header_style);
+    buf.set_string(x + col_badge, inner.y, "Change", header_style);
+
+    // Separator line
+    if inner.height >= 2 {
+        let sep: String = "\u{2500}".repeat(inner.width.saturating_sub(1) as usize);
+        buf.set_string(x, inner.y + 1, &sep, Style::default().fg(scheme.muted));
+    }
+
+    // Data rows
+    let visible_height = (inner.height.saturating_sub(2)) as usize; // header + separator
+    let scroll = ctx.side_by_side.left_scroll;
+    let selected = ctx.side_by_side.selected_row;
+
+    for (i, entry) in entries.iter().enumerate().skip(scroll).take(visible_height) {
+        let y = inner.y + 2 + (i - scroll) as u16;
+        if y >= inner.y + inner.height {
+            break;
+        }
+
+        let is_selected = i == selected;
+
+        // Row background for selection
+        if is_selected {
+            let sel_style = Style::default().bg(scheme.selection_bg);
+            // Fill entire row with selection background
+            for cx in x..(x + inner.width) {
+                buf[(cx, y)].set_style(sel_style);
+            }
+        }
+
+        // Determine row color by change type
+        let row_color = match entry.change_type {
+            UnifiedChangeType::Upgrade => {
+                match classify_semver_bump(
+                    entry.old_version.as_deref(),
+                    entry.new_version.as_deref(),
+                ) {
+                    SemverBump::Major => scheme.warning,
+                    SemverBump::Minor => scheme.modified,
+                    SemverBump::Patch | SemverBump::Unknown => scheme.muted,
+                }
+            }
+            UnifiedChangeType::Downgrade => scheme.critical,
+            UnifiedChangeType::Modified => scheme.modified,
+            UnifiedChangeType::Added => scheme.added,
+            UnifiedChangeType::Removed => scheme.removed,
+        };
+
+        let name_style = Style::default().fg(row_color);
+        let version_style = Style::default().fg(scheme.text);
+
+        // Component name (truncated)
+        let name_display = if entry.name.len() > name_width as usize {
+            format!("{}..", &entry.name[..name_width as usize - 2])
+        } else {
+            format!("{:<width$}", entry.name, width = name_width as usize)
+        };
+        buf.set_string(x + col_name, y, &name_display, name_style);
+
+        // Old version
+        let old_display = entry
+            .old_version
+            .as_deref()
+            .unwrap_or(match entry.change_type {
+                UnifiedChangeType::Added => "(new)",
+                _ => "",
+            });
+        let old_style = if entry.change_type == UnifiedChangeType::Added {
+            Style::default()
+                .fg(scheme.muted)
+                .add_modifier(Modifier::DIM)
+        } else {
+            version_style
+        };
+        buf.set_string(x + col_old, y, format!("{old_display:<15}"), old_style);
+
+        // Arrow
+        let arrow = match entry.change_type {
+            UnifiedChangeType::Upgrade | UnifiedChangeType::Modified => "\u{2192}",
+            UnifiedChangeType::Downgrade => "\u{2193}",
+            UnifiedChangeType::Added => " + ",
+            UnifiedChangeType::Removed => " x ",
+        };
+        let arrow_style = Style::default().fg(row_color);
+        buf.set_string(x + col_arrow, y, format!(" {arrow} "), arrow_style);
+
+        // New version
+        let new_display = entry
+            .new_version
+            .as_deref()
+            .unwrap_or(match entry.change_type {
+                UnifiedChangeType::Removed => "(removed)",
+                _ => "",
+            });
+        let new_style = if entry.change_type == UnifiedChangeType::Removed {
+            Style::default()
+                .fg(scheme.removed)
+                .add_modifier(Modifier::DIM)
+        } else {
+            version_style
+        };
+        buf.set_string(x + col_new, y, format!("{new_display:<15}"), new_style);
+
+        // Change badge
+        if col_badge < inner.width {
+            let (badge_text, badge_color) = version_badge(
+                entry.old_version.as_deref(),
+                entry.new_version.as_deref(),
+                &scheme,
+            );
+            let badge_style = if entry.change_type == UnifiedChangeType::Downgrade {
+                Style::default().fg(badge_color).bold()
+            } else {
+                Style::default().fg(badge_color)
+            };
+            buf.set_string(x + col_badge, y, badge_text, badge_style);
+        }
+    }
+
+    // Render scrollbar if needed
+    if entries.len() > visible_height {
+        crate::tui::widgets::render_scrollbar(frame, inner, entries.len(), scroll);
+    }
 }
 
 fn render_aligned_row<'a>(
@@ -969,6 +1358,7 @@ fn render_with_search_input(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
     match ctx.side_by_side.alignment_mode {
         AlignmentMode::Grouped => render_grouped_mode(frame, area, ctx),
         AlignmentMode::Aligned => render_aligned_mode(frame, area, ctx),
+        AlignmentMode::Unified => render_unified_mode(frame, area, ctx),
     }
 
     // Then render search input overlay at bottom
@@ -1011,6 +1401,7 @@ fn render_with_detail_modal(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
     match ctx.side_by_side.alignment_mode {
         AlignmentMode::Grouped => render_grouped_mode(frame, area, ctx),
         AlignmentMode::Aligned => render_aligned_mode(frame, area, ctx),
+        AlignmentMode::Unified => render_unified_mode(frame, area, ctx),
     }
 
     // Calculate modal area (centered, 80% width, 70% height)

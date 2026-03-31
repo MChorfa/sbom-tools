@@ -139,12 +139,33 @@ impl ViewState for DependenciesView {
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.inner.select_prev();
+                self.inner.adjust_scroll_to_selection();
                 self.inner.update_breadcrumbs();
+                self.inner.detail_scroll = 0;
                 EventResult::Consumed
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.inner.select_next();
+                self.inner.adjust_scroll_to_selection();
                 self.inner.update_breadcrumbs();
+                self.inner.detail_scroll = 0;
+                EventResult::Consumed
+            }
+            // Scroll detail panel
+            KeyCode::Char('d')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                self.inner.detail_scroll = self.inner.detail_scroll.saturating_add(3);
+                EventResult::Consumed
+            }
+            KeyCode::Char('u')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                self.inner.detail_scroll = self.inner.detail_scroll.saturating_sub(3);
                 EventResult::Consumed
             }
             KeyCode::Enter => {
@@ -171,6 +192,7 @@ impl ViewState for DependenciesView {
                 self.inner.selected = 0;
                 self.inner.adjust_scroll_to_selection();
                 self.inner.update_breadcrumbs();
+                self.inner.detail_scroll = 0;
                 EventResult::Consumed
             }
             KeyCode::End | KeyCode::Char('G') => {
@@ -178,6 +200,7 @@ impl ViewState for DependenciesView {
                     self.inner.selected = self.inner.total - 1;
                     self.inner.adjust_scroll_to_selection();
                     self.inner.update_breadcrumbs();
+                    self.inner.detail_scroll = 0;
                 }
                 EventResult::Consumed
             }
@@ -186,6 +209,7 @@ impl ViewState for DependenciesView {
                 self.inner.selected = self.inner.selected.saturating_sub(jump);
                 self.inner.adjust_scroll_to_selection();
                 self.inner.update_breadcrumbs();
+                self.inner.detail_scroll = 0;
                 EventResult::Consumed
             }
             KeyCode::PageDown => {
@@ -195,6 +219,7 @@ impl ViewState for DependenciesView {
                     self.inner.selected = new_sel.min(self.inner.total - 1);
                     self.inner.adjust_scroll_to_selection();
                     self.inner.update_breadcrumbs();
+                    self.inner.detail_scroll = 0;
                 }
                 EventResult::Consumed
             }

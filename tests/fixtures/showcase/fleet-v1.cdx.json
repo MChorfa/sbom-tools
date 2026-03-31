@@ -1,0 +1,54 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-01-05T09:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:npm/fleet-app@1.0.0",
+      "name": "fleet-app",
+      "version": "1.0.0",
+      "purl": "pkg:npm/fleet-app@1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/express@4.18.2",
+      "name": "express",
+      "version": "4.18.2",
+      "purl": "pkg:npm/express@4.18.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/axios@1.7.9",
+      "name": "axios",
+      "version": "1.7.9",
+      "purl": "pkg:npm/axios@1.7.9",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:npm/fleet-app@1.0.0",
+      "dependsOn": [
+        "pkg:npm/express@4.18.2",
+        "pkg:npm/axios@1.7.9"
+      ]
+    }
+  ]
+}

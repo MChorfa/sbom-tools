@@ -14,12 +14,15 @@ use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 /// that returns `EventResult` instead of mutating `App` directly.
 pub struct QualityView {
     inner: QualityState,
+    /// Set when Enter is pressed on a recommendation — bridge resolves the navigation
+    pub(crate) enter_requested: bool,
 }
 
 impl QualityView {
     pub(crate) const fn new() -> Self {
         Self {
             inner: QualityState::new(),
+            enter_requested: false,
         }
     }
 
@@ -77,6 +80,11 @@ impl ViewState for QualityView {
                     self.inner.selected_recommendation =
                         self.inner.total_recommendations.saturating_sub(1);
                 }
+                EventResult::Consumed
+            }
+            KeyCode::Enter => {
+                // Navigate to the tab related to the selected recommendation's category
+                self.enter_requested = true;
                 EventResult::Consumed
             }
             _ => EventResult::Ignored,

@@ -275,6 +275,172 @@ pub fn render_flagged_lines(
     lines
 }
 
+/// Render standard component info lines for detail panels.
+///
+/// Produces a consistent set of sections for any component:
+/// Identity, Depth, Dependency counts, Licenses, Hashes, Supplier, Vulnerabilities, PURL.
+///
+/// Used by both the Components and Dependencies detail panels to ensure
+/// consistent presentation.
+#[must_use]
+pub fn render_component_info_lines(
+    component: &crate::model::Component,
+    depth: Option<usize>,
+    deps_out: usize,
+    deps_in: usize,
+) -> Vec<Line<'static>> {
+    let scheme = colors();
+    let mut lines = vec![];
+
+    // --- Identity ---
+    lines.push(Line::from(vec![
+        Span::styled("Name: ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            component.name.clone(),
+            Style::default().fg(scheme.text).bold(),
+        ),
+    ]));
+    if let Some(ref ver) = component.version {
+        lines.push(Line::from(vec![
+            Span::styled("Version: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(ver.clone(), Style::default().fg(scheme.text)),
+        ]));
+    }
+    if let Some(ref eco) = component.ecosystem {
+        lines.push(Line::from(vec![
+            Span::styled("Ecosystem: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(format!("{eco:?}"), Style::default().fg(scheme.accent)),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("Type: ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("{:?}", component.component_type),
+            Style::default().fg(scheme.text),
+        ),
+    ]));
+
+    // --- Depth ---
+    if let Some(d) = depth {
+        let label = match d {
+            0 => "Root",
+            1 => "Direct",
+            _ => "Transitive",
+        };
+        let depth_color = match d {
+            0 => scheme.primary,
+            1 => scheme.accent,
+            _ => scheme.text_muted,
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Depth: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(format!("D{d}"), Style::default().fg(depth_color).bold()),
+            Span::styled(
+                format!(" ({label})"),
+                Style::default().fg(scheme.text_muted),
+            ),
+        ]));
+    }
+
+    // --- Dependency counts ---
+    if deps_out > 0 || deps_in > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("Dependencies: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(deps_out.to_string(), Style::default().fg(scheme.primary)),
+            Span::styled("  Dependents: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(deps_in.to_string(), Style::default().fg(scheme.primary)),
+        ]));
+    }
+
+    // --- Licenses ---
+    if !component.licenses.declared.is_empty() {
+        let license_strs: Vec<String> = component
+            .licenses
+            .declared
+            .iter()
+            .take(3)
+            .map(|l| l.expression.clone())
+            .collect();
+        lines.push(Line::from(vec![
+            Span::styled("Licenses: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(license_strs.join(", "), Style::default().fg(scheme.text)),
+        ]));
+        if component.licenses.declared.len() > 3 {
+            lines.push(Line::styled(
+                format!("    ... and {} more", component.licenses.declared.len() - 3),
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
+    }
+
+    // --- Hashes ---
+    if !component.hashes.is_empty() {
+        for hash in component.hashes.iter().take(2) {
+            let truncated_value = if hash.value.len() > 16 {
+                format!("{}...", &hash.value[..16])
+            } else {
+                hash.value.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}: ", hash.algorithm),
+                    Style::default().fg(scheme.text_muted),
+                ),
+                Span::styled(truncated_value, Style::default().fg(scheme.text)),
+            ]));
+        }
+        if component.hashes.len() > 2 {
+            lines.push(Line::styled(
+                format!("    ... and {} more", component.hashes.len() - 2),
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
+    }
+
+    // --- Supplier ---
+    if let Some(ref supplier) = component.supplier {
+        lines.push(Line::from(vec![
+            Span::styled("Supplier: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(supplier.name.clone(), Style::default().fg(scheme.text)),
+        ]));
+    }
+
+    // --- Vulnerabilities ---
+    if !component.vulnerabilities.is_empty() {
+        let count = component.vulnerabilities.len();
+        let mut vuln_spans = vec![
+            Span::styled("Vulns: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                count.to_string(),
+                Style::default().fg(scheme.critical).bold(),
+            ),
+        ];
+        let ids: Vec<String> = component
+            .vulnerabilities
+            .iter()
+            .take(3)
+            .map(|v| v.id.clone())
+            .collect();
+        if !ids.is_empty() {
+            vuln_spans.push(Span::styled(
+                format!(" ({})", ids.join(", ")),
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
+        lines.push(Line::from(vuln_spans));
+    }
+
+    // --- PURL ---
+    if let Some(ref purl) = component.identifiers.purl {
+        lines.push(Line::from(vec![
+            Span::styled("PURL: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(purl.clone(), Style::default().fg(scheme.accent)),
+        ]));
+    }
+
+    lines
+}
+
 /// Render a detail panel: wraps `lines` in a bordered Paragraph with focus-aware styling.
 pub fn render_detail_block(
     frame: &mut Frame,

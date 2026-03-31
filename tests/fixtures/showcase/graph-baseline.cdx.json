@@ -1,0 +1,66 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-01-01T12:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:generic/acme-graph-app@1.0.0",
+      "name": "acme-graph-app",
+      "version": "1.0.0",
+      "purl": "pkg:generic/acme-graph-app@1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "service",
+      "bom-ref": "pkg:generic/api-gateway@1.0.0",
+      "name": "api-gateway",
+      "version": "1.0.0",
+      "purl": "pkg:generic/api-gateway@1.0.0"
+    },
+    {
+      "type": "service",
+      "bom-ref": "pkg:generic/auth-service@1.0.0",
+      "name": "auth-service",
+      "version": "1.0.0",
+      "purl": "pkg:generic/auth-service@1.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:generic/policy-engine@1.0.0",
+      "name": "policy-engine",
+      "version": "1.0.0",
+      "purl": "pkg:generic/policy-engine@1.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:generic/audit-sdk@1.0.0",
+      "name": "audit-sdk",
+      "version": "1.0.0",
+      "purl": "pkg:generic/audit-sdk@1.0.0"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:generic/acme-graph-app@1.0.0",
+      "dependsOn": [
+        "pkg:generic/api-gateway@1.0.0",
+        "pkg:generic/auth-service@1.0.0"
+      ]
+    },
+    {
+      "ref": "pkg:generic/auth-service@1.0.0",
+      "dependsOn": [
+        "pkg:generic/policy-engine@1.0.0"
+      ]
+    },
+    {
+      "ref": "pkg:generic/policy-engine@1.0.0",
+      "dependsOn": [
+        "pkg:generic/audit-sdk@1.0.0"
+      ]
+    }
+  ]
+}

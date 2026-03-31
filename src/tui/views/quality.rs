@@ -8,11 +8,11 @@ use crate::quality::QualityReport;
 use crate::tui::app::AppMode;
 use crate::tui::render_context::RenderContext;
 use crate::tui::shared::quality as shared;
-use crate::tui::theme::colors;
+use crate::tui::theme::{ColorScheme, colors};
 use crate::tui::widgets;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Gauge, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
 pub fn render_quality(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
@@ -33,31 +33,18 @@ fn render_diff_quality(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     let quality_delta = ctx.diff_result.and_then(|r| r.quality_delta.as_ref());
 
-    // Compute dynamic height for the grade/regression banner:
-    // 1 line for grade transition, 1 line for regressions (if any), + 2 for borders
-    let has_regressions = quality_delta.is_some_and(|qd| !qd.regressions.is_empty());
-    let banner_height = if quality_delta.is_some() {
-        if has_regressions { 4 } else { 3 }
-    } else {
-        0
-    };
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),             // score gauges
-            Constraint::Length(banner_height), // grade transition + regression banner
-            Constraint::Length(14),            // metrics comparison with delta
-            Constraint::Min(8),                // recommendations
+            Constraint::Length(5),  // Compact header (2 gauges + separator + 2 border)
+            Constraint::Length(12), // Category bar chart
+            Constraint::Min(8),     // Linked recommendations
         ])
         .split(area);
 
-    render_score_comparison(frame, chunks[0], old_report, new_report);
-    if quality_delta.is_some() {
-        render_grade_banner(frame, chunks[1], quality_delta);
-    }
-    render_metrics_comparison(frame, chunks[2], old_report, new_report, quality_delta);
-    render_combined_recommendations(frame, chunks[3], old_report, new_report, ctx);
+    render_quality_header(frame, chunks[0], old_report, new_report, quality_delta);
+    render_category_bar_chart(frame, chunks[1], old_report, new_report, quality_delta);
+    render_combined_recommendations(frame, chunks[2], old_report, new_report, ctx);
 }
 
 fn render_no_quality_data(frame: &mut Frame, area: Rect) {
@@ -72,9 +59,346 @@ fn render_no_quality_data(frame: &mut Frame, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
-// Diff-specific rendering
+// Compact header: scores + grade in one card (replaces gauges + grade banner)
 // ---------------------------------------------------------------------------
 
+fn render_quality_header(
+    frame: &mut Frame,
+    area: Rect,
+    old_report: Option<&QualityReport>,
+    new_report: Option<&QualityReport>,
+    quality_delta: Option<&QualityDelta>,
+) {
+    let scheme = colors();
+
+    // Build title with score transition
+    let old_score = old_report.map_or(0.0, |r| r.overall_score);
+    let new_score = new_report.map_or(0.0, |r| r.overall_score);
+    let old_grade = old_report.map_or("?", |r| r.grade.letter());
+    let new_grade = new_report.map_or("?", |r| r.grade.letter());
+
+    let delta_label = if let Some(qd) = quality_delta {
+        if qd.overall_score_delta > 0.5 {
+            "improved"
+        } else if qd.overall_score_delta < -0.5 {
+            "regressed"
+        } else {
+            "unchanged"
+        }
+    } else {
+        ""
+    };
+
+    let border_color = if delta_label == "improved" {
+        scheme.added
+    } else if delta_label == "regressed" {
+        scheme.removed
+    } else {
+        scheme.border
+    };
+
+    let title = format!(
+        " Quality: {old_score:.0}/100 ({old_grade}) \u{2192} {new_score:.0}/100 ({new_grade})  {delta_label} "
+    );
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Render two gauge bars with a separator line between them
+    if inner.height >= 1 {
+        render_text_gauge(
+            frame,
+            inner.x,
+            inner.y,
+            inner.width,
+            old_score,
+            "Old",
+            &scheme,
+        );
+    }
+    if inner.height >= 2 {
+        // Thin separator line
+        let separator = "\u{2500}".repeat(inner.width as usize);
+        frame.buffer_mut().set_string(
+            inner.x,
+            inner.y + 1,
+            separator,
+            Style::default().fg(scheme.border),
+        );
+    }
+    if inner.height >= 3 {
+        render_text_gauge(
+            frame,
+            inner.x,
+            inner.y + 2,
+            inner.width,
+            new_score,
+            "New",
+            &scheme,
+        );
+    }
+}
+
+fn render_text_gauge(
+    frame: &mut Frame,
+    x: u16,
+    y: u16,
+    width: u16,
+    score: f32,
+    label: &str,
+    scheme: &ColorScheme,
+) {
+    let label_prefix = format!(" {label}: ");
+    let prefix_len = label_prefix.len();
+    let bar_width = (width as usize).saturating_sub(prefix_len + 10); // Reserve for "Old: " + " XX%"
+    let filled = ((score / 100.0) * bar_width as f32) as usize;
+    let filled = filled.min(bar_width);
+    let bar_color = if score >= 80.0 {
+        scheme.added
+    } else if score >= 50.0 {
+        scheme.warning
+    } else {
+        scheme.removed
+    };
+
+    let spans = vec![
+        Span::styled(label_prefix, Style::default().fg(scheme.muted)),
+        Span::styled("\u{2588}".repeat(filled), Style::default().fg(bar_color)),
+        Span::styled(
+            "\u{2591}".repeat(bar_width.saturating_sub(filled)),
+            Style::default().fg(scheme.muted),
+        ),
+        Span::styled(
+            format!(" {score:>3.0}%  {label}"),
+            Style::default().fg(scheme.text),
+        ),
+    ];
+    frame.buffer_mut().set_line(x, y, &Line::from(spans), width);
+}
+
+// ---------------------------------------------------------------------------
+// Category bar chart (replaces metrics comparison table)
+// ---------------------------------------------------------------------------
+
+fn render_category_bar_chart(
+    frame: &mut Frame,
+    area: Rect,
+    old_report: Option<&QualityReport>,
+    new_report: Option<&QualityReport>,
+    _quality_delta: Option<&QualityDelta>,
+) {
+    let scheme = colors();
+    let (Some(old), Some(new)) = (old_report, new_report) else {
+        // Fallback for single report — render a simple placeholder
+        let label = if old_report.is_some() {
+            "Only old report available"
+        } else {
+            "Only new report available"
+        };
+        let paragraph = Paragraph::new(format!(
+            " {label} — category comparison requires both SBOMs"
+        ))
+        .block(
+            Block::default()
+                .title(" Category Scores ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(scheme.border)),
+        );
+        frame.render_widget(paragraph, area);
+        return;
+    };
+
+    let weights = shared::get_profile_weights(new.profile);
+
+    // Build categories (skip N/A with 0 weight)
+    let mut categories: Vec<(&str, f32, f32, f32)> = vec![
+        (
+            "Completeness",
+            old.completeness_score,
+            new.completeness_score,
+            weights.0,
+        ),
+        (
+            "Identifiers",
+            old.identifier_score,
+            new.identifier_score,
+            weights.1,
+        ),
+        ("Licenses", old.license_score, new.license_score, weights.2),
+        (
+            "Dependencies",
+            old.dependency_score,
+            new.dependency_score,
+            weights.4,
+        ),
+        (
+            "Integrity",
+            old.integrity_score,
+            new.integrity_score,
+            weights.5,
+        ),
+        (
+            "Provenance",
+            old.provenance_score,
+            new.provenance_score,
+            weights.6,
+        ),
+    ];
+    // Only add optional categories if they have data
+    if let (Some(ov), Some(nv)) = (old.vulnerability_score, new.vulnerability_score) {
+        categories.push(("VulnDocs", ov, nv, weights.3));
+    }
+    if let (Some(ol), Some(nl)) = (old.lifecycle_score, new.lifecycle_score) {
+        categories.push(("Lifecycle", ol, nl, weights.7));
+    }
+
+    // Sort by new score DESCENDING (best at top, worst at bottom)
+    categories.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    let block = Block::default()
+        .title(" Category Scores ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(scheme.border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Render using absolute column positions for guaranteed alignment.
+    // Column layout (relative to inner.x):
+    //   col_name  = 1       (14 chars)  Category name
+    //   col_bar   = 16      (20 chars)  Bar chart ████░░░░
+    //   col_old   = 37      (5 chars)   Old score " 89%"
+    //   col_new   = 43      (5 chars)   New score " 92%"
+    //   col_delta = 49      (5 chars)   Delta "▲+3" or empty
+    //   col_wt    = 55      (7 chars)   Weight "×20%"
+    //   col_warn  = 63      (5 chars)   Warning badge
+    let col_name: u16 = 1;
+    let col_bar: u16 = 16;
+    let bar_width: u16 = 20;
+    let col_old = col_bar + bar_width + 1;
+    let col_new = col_old + 6;
+    let col_delta = col_new + 6;
+    let col_wt = col_delta + 6;
+    let col_warn = col_wt + 8;
+
+    let buf = frame.buffer_mut();
+    let x = inner.x;
+    let bold_muted = Style::default().fg(scheme.muted).bold();
+
+    // Header row
+    if inner.height >= 1 {
+        buf.set_string(x + col_old, inner.y, "  Old", bold_muted);
+        buf.set_string(x + col_new, inner.y, "  New", bold_muted);
+        buf.set_string(x + col_delta, inner.y, " Delta", bold_muted);
+        buf.set_string(x + col_wt, inner.y, " Weight", bold_muted);
+    }
+
+    // Data rows
+    for (i, (name, old_s, new_s, weight)) in categories.iter().enumerate() {
+        let y = inner.y + 1 + i as u16;
+        if y >= inner.y + inner.height {
+            break;
+        }
+
+        let delta = new_s - old_s;
+        let name_color = if delta < -0.5 {
+            scheme.removed
+        } else {
+            scheme.text
+        };
+
+        // Category name
+        buf.set_string(
+            x + col_name,
+            y,
+            format!("{name:<14}"),
+            Style::default().fg(name_color).bold(),
+        );
+
+        // Bar chart
+        let filled = ((*new_s / 100.0) * bar_width as f32) as usize;
+        let filled = filled.min(bar_width as usize);
+        let bar_color = if *new_s >= 80.0 {
+            scheme.added
+        } else if *new_s >= 50.0 {
+            scheme.warning
+        } else {
+            scheme.removed
+        };
+        for c in 0..bar_width as usize {
+            let ch = if c < filled { "\u{2588}" } else { "\u{2591}" };
+            let color = if c < filled { bar_color } else { scheme.muted };
+            buf.set_string(x + col_bar + c as u16, y, ch, Style::default().fg(color));
+        }
+
+        // Old score
+        buf.set_string(
+            x + col_old,
+            y,
+            format!("{old_s:>4.0}%"),
+            Style::default().fg(scheme.muted),
+        );
+
+        // New score
+        buf.set_string(
+            x + col_new,
+            y,
+            format!("{new_s:>4.0}%"),
+            Style::default().fg(scheme.text).bold(),
+        );
+
+        // Delta
+        if delta > 0.5 {
+            buf.set_string(
+                x + col_delta,
+                y,
+                format!("  \u{25b2}+{delta:.0}"),
+                Style::default().fg(scheme.added),
+            );
+        } else if delta < -0.5 {
+            buf.set_string(
+                x + col_delta,
+                y,
+                format!("  \u{25bc}{delta:.0}"),
+                Style::default().fg(scheme.removed),
+            );
+        }
+
+        // Weight
+        buf.set_string(
+            x + col_wt,
+            y,
+            format!("  \u{00d7}{:.0}%", weight * 100.0),
+            Style::default().fg(scheme.muted),
+        );
+
+        // Warning badge
+        if *new_s == 0.0 {
+            buf.set_string(
+                x + col_warn,
+                y,
+                " \u{2717}",
+                Style::default().fg(scheme.removed),
+            );
+        } else if *new_s < 30.0 {
+            buf.set_string(
+                x + col_warn,
+                y,
+                " \u{26a0}low",
+                Style::default().fg(scheme.warning),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy diff-specific rendering (retained for fallback / reference)
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)]
 fn render_score_comparison(
     frame: &mut Frame,
     area: Rect,
@@ -99,7 +423,9 @@ fn render_score_comparison(
     }
 }
 
+#[allow(dead_code)]
 fn render_empty_gauge(frame: &mut Frame, area: Rect, title: &str) {
+    use ratatui::widgets::Gauge;
     let scheme = colors();
     let gauge = Gauge::default()
         .block(
@@ -119,6 +445,7 @@ fn render_empty_gauge(frame: &mut Frame, area: Rect, title: &str) {
 // Grade transition badge + regression alert banner (4.2, 4.3)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn render_grade_banner(frame: &mut Frame, area: Rect, quality_delta: Option<&QualityDelta>) {
     let Some(qd) = quality_delta else { return };
     let scheme = colors();
@@ -192,6 +519,7 @@ fn render_grade_banner(frame: &mut Frame, area: Rect, quality_delta: Option<&Qua
 // Metrics comparison with delta column (4.1)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn render_metrics_comparison(
     frame: &mut Frame,
     area: Rect,
@@ -227,6 +555,7 @@ fn render_metrics_comparison(
 
 /// Render a single unified table showing all categories with Old, New, and
 /// Delta columns. The delta column uses colored arrows for quick scanning.
+#[allow(dead_code)]
 fn render_unified_metrics_table(
     frame: &mut Frame,
     area: Rect,
@@ -370,6 +699,7 @@ fn render_unified_metrics_table(
     frame.render_widget(table, area);
 }
 
+#[allow(dead_code)]
 fn render_metrics_panel_with_explanation(
     frame: &mut Frame,
     area: Rect,
@@ -444,6 +774,7 @@ fn render_metrics_panel_with_explanation(
     frame.render_widget(table, area);
 }
 
+#[allow(dead_code)]
 fn render_empty_metrics(frame: &mut Frame, area: Rect, label: &str) {
     crate::tui::widgets::render_empty_state_enhanced(
         frame,
@@ -519,6 +850,10 @@ fn render_combined_recommendations(
                 Span::styled(
                     format!(" (+{:.0}pts)", rec.impact),
                     Style::default().fg(scheme.success),
+                ),
+                Span::styled(
+                    format!("  {}", rec.category.name()),
+                    Style::default().fg(scheme.accent),
                 ),
             ]));
         }
