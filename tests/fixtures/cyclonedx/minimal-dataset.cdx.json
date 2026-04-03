@@ -29,9 +29,18 @@
         "type": "training",
         "contents": {
           "properties": [
-            "size: 500GB",
-            "records: 10M",
-            "format: parquet"
+            {
+              "name": "size",
+              "value": "500GB"
+            },
+            {
+              "name": "records",
+              "value": "10M"
+            },
+            {
+              "name": "format",
+              "value": "parquet"
+            }
           ]
         },
         "sensitivityData": [

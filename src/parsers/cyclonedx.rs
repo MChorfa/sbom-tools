@@ -418,6 +418,7 @@ impl CycloneDxParser {
                     "website" => ExternalRefType::Website,
                     "advisories" => ExternalRefType::Advisories,
                     "bom" => ExternalRefType::Bom,
+                    "model-card" => ExternalRefType::ModelCard,
                     "documentation" => ExternalRefType::Documentation,
                     "support" => ExternalRefType::Support,
                     "security-contact" => ExternalRefType::SecurityContact,
@@ -462,6 +463,10 @@ impl CycloneDxParser {
         // Set ML model metadata (CycloneDX 1.5+)
         if let Some(ml_model) = &cdx.ml_model {
             let mut ml_info = crate::model::MlModelInfo::default();
+            let model_card = ml_model
+                .model_card
+                .as_ref()
+                .and_then(|value| serde_json::from_value::<CdxMlModelCard>(value.clone()).ok());
 
             if let Some(approach) = &ml_model.approach {
                 ml_info.approach = approach.approach_type.clone();
@@ -471,7 +476,13 @@ impl CycloneDxParser {
                 ml_info.architecture_family = Some(arch_family.clone());
             }
 
-            if let Some(model_params) = &ml_model.model_parameters {
+            let model_parameters = ml_model.model_parameters.as_ref().or_else(|| {
+                model_card
+                    .as_ref()
+                    .and_then(|card| card.model_parameters.as_ref())
+            });
+
+            if let Some(model_params) = model_parameters {
                 ml_info.task = model_params.task.clone();
 
                 if let Some(arch) = &model_params.architecture {
@@ -487,16 +498,34 @@ impl CycloneDxParser {
                 }
             }
 
-            if let Some(quantization) = &ml_model.quantization {
+            let quantization = ml_model.quantization.as_ref().or_else(|| {
+                model_card
+                    .as_ref()
+                    .and_then(|card| card.quantization.as_ref())
+            });
+
+            if let Some(quantization) = quantization {
                 ml_info.quantization = quantization.mode.clone();
             }
 
-            if let Some(limitations) = &ml_model.limitations {
+            let limitations = ml_model.limitations.as_ref().or_else(|| {
+                model_card
+                    .as_ref()
+                    .and_then(|card| card.limitations.as_ref())
+            });
+
+            if let Some(limitations) = limitations {
                 ml_info.limitations = Some(limitations.clone());
             }
 
             // Extract energy consumption from considerations
-            if let Some(considerations) = &ml_model.considerations {
+            let considerations = ml_model.considerations.as_ref().or_else(|| {
+                model_card
+                    .as_ref()
+                    .and_then(|card| card.considerations.as_ref())
+            });
+
+            if let Some(considerations) = considerations {
                 if let Some(env_considerations) = &considerations.environmental_considerations {
                     for energy in &env_considerations.energy_consumptions {
                         if energy.activity.as_deref() == Some("training") {
@@ -1148,7 +1177,17 @@ struct CdxProperty {
 struct CdxMlModel {
     approach: Option<CdxMlApproach>,
     architecture_family: Option<String>,
-    model_card: Option<serde_json::Value>,  // Preserve as raw JSON for now
+    model_card: Option<serde_json::Value>, // Preserve as raw JSON for now
+    model_parameters: Option<CdxModelParameters>,
+    quantization: Option<CdxQuantization>,
+    limitations: Option<String>,
+    considerations: Option<CdxConsiderations>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxMlModelCard {
     model_parameters: Option<CdxModelParameters>,
     quantization: Option<CdxQuantization>,
     limitations: Option<String>,
@@ -1222,10 +1261,11 @@ struct CdxEnvironmentalConsiderations {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxEnergyConsumption {
+    #[serde(alias = "type")]
     activity: Option<String>,
     energy_provider: Option<String>,
     energy_source: Option<String>,
-    #[serde(rename = "energyKwh")]
+    #[serde(rename = "energyKwh", alias = "value")]
     energy_kwh: Option<f64>,
 }
 

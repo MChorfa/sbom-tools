@@ -689,17 +689,54 @@ impl Component {
         self
     }
 
+    fn extend_with_optional_str(hasher_input: &mut Vec<u8>, value: &Option<String>) {
+        if let Some(value) = value {
+            hasher_input.extend(value.as_bytes());
+        }
+    }
+
+    fn extend_with_string_list(hasher_input: &mut Vec<u8>, values: &[String]) {
+        for value in values {
+            hasher_input.extend(value.as_bytes());
+        }
+    }
+
+    fn extend_with_ml_model(hasher_input: &mut Vec<u8>, ml_model: &Option<super::MlModelInfo>) {
+        if let Some(ml_model) = ml_model {
+            Self::extend_with_optional_str(hasher_input, &ml_model.approach);
+            Self::extend_with_optional_str(hasher_input, &ml_model.architecture_family);
+            Self::extend_with_optional_str(hasher_input, &ml_model.architecture_name);
+            Self::extend_with_optional_str(hasher_input, &ml_model.task);
+            Self::extend_with_optional_str(hasher_input, &ml_model.quantization);
+            Self::extend_with_optional_str(hasher_input, &ml_model.limitations);
+            Self::extend_with_optional_str(hasher_input, &ml_model.model_card_url);
+
+            if let Some(energy) = ml_model.energy_kwh_training {
+                hasher_input.extend(energy.to_le_bytes());
+            }
+
+            for dataset in &ml_model.training_datasets {
+                Self::extend_with_optional_str(hasher_input, &dataset.name);
+                Self::extend_with_optional_str(hasher_input, &dataset.purl);
+            }
+        }
+    }
+
+    fn extend_with_dataset(hasher_input: &mut Vec<u8>, dataset: &Option<super::DatasetInfo>) {
+        if let Some(dataset) = dataset {
+            Self::extend_with_optional_str(hasher_input, &dataset.dataset_type);
+            Self::extend_with_string_list(hasher_input, &dataset.sensitivity_classifications);
+            Self::extend_with_string_list(hasher_input, &dataset.governance_owners);
+        }
+    }
+
     /// Calculate and update content hash
     pub fn calculate_content_hash(&mut self) {
         let mut hasher_input = Vec::new();
 
         hasher_input.extend(self.name.as_bytes());
-        if let Some(v) = &self.version {
-            hasher_input.extend(v.as_bytes());
-        }
-        if let Some(purl) = &self.identifiers.purl {
-            hasher_input.extend(purl.as_bytes());
-        }
+        Self::extend_with_optional_str(&mut hasher_input, &self.version);
+        Self::extend_with_optional_str(&mut hasher_input, &self.identifiers.purl);
         for license in &self.licenses.declared {
             hasher_input.extend(license.expression.as_bytes());
         }
@@ -718,6 +755,8 @@ impl Component {
         if let Some(vr) = &self.version_range {
             hasher_input.extend(vr.as_bytes());
         }
+        Self::extend_with_ml_model(&mut hasher_input, &self.ml_model);
+        Self::extend_with_dataset(&mut hasher_input, &self.dataset);
 
         self.content_hash = xxh3_64(&hasher_input);
     }
