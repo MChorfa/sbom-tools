@@ -396,6 +396,389 @@ mod parser_tests {
         );
     }
 
+    #[test]
+    fn test_parse_cyclonedx_standard_ml_model_card_and_data_array() {
+        let content = r#"{
+                        "bomFormat": "CycloneDX",
+                        "specVersion": "1.6",
+                        "version": 1,
+                        "metadata": {
+                            "timestamp": "2026-03-27T00:00:00Z",
+                            "component": {
+                                "bom-ref": "root",
+                                "type": "application",
+                                "name": "test-ai-app",
+                                "version": "1.0.0"
+                            }
+                        },
+                        "components": [
+                            {
+                                "bom-ref": "dataset-1",
+                                "type": "data",
+                                "name": "training-data",
+                                "data": [
+                                    {
+                                        "type": "dataset",
+                                        "name": "training-data",
+                                        "sensitiveData": ["pii"],
+                                        "governance": {
+                                            "owners": [
+                                                {
+                                                    "contact": {
+                                                        "email": "data-team@example.com"
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "bom-ref": "model-1",
+                                "type": "machine-learning-model",
+                                "name": "bert-base",
+                                "modelCard": {
+                                    "modelParameters": {
+                                        "approach": { "type": "supervised" },
+                                        "task": "classification",
+                                        "architectureFamily": "transformer",
+                                        "modelArchitecture": "BERT",
+                                        "datasets": [
+                                            { "ref": "dataset-1" }
+                                        ]
+                                    },
+                                    "considerations": {
+                                        "environmentalConsiderations": {
+                                            "energyConsumptions": [
+                                                {
+                                                    "activity": "training",
+                                                    "energyProviders": [
+                                                        {
+                                                            "organization": { "name": "Grid" },
+                                                            "energySource": "solar",
+                                                            "energyProvided": { "value": 20.0, "unit": "kWh" }
+                                                        }
+                                                    ],
+                                                    "activityEnergyCost": { "value": 20.0, "unit": "kWh" }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                }"#;
+
+        let sbom =
+            parse_sbom_str(content).expect("Failed to parse standards-shaped CycloneDX ML BOM");
+
+        let dataset = sbom
+            .components
+            .values()
+            .find(|component| component.name == "training-data")
+            .expect("training-data not found");
+        let dataset_info = dataset.dataset.as_ref().expect("dataset metadata missing");
+        assert_eq!(dataset_info.dataset_type.as_deref(), Some("dataset"));
+        assert_eq!(dataset_info.sensitivity_classifications, vec!["pii"]);
+        assert_eq!(
+            dataset_info.governance_owners,
+            vec!["data-team@example.com"]
+        );
+
+        let model = sbom
+            .components
+            .values()
+            .find(|component| component.name == "bert-base")
+            .expect("bert-base not found");
+        let ml_info = model.ml_model.as_ref().expect("ML metadata missing");
+        assert_eq!(ml_info.approach.as_deref(), Some("supervised"));
+        assert_eq!(ml_info.architecture_family.as_deref(), Some("transformer"));
+        assert_eq!(ml_info.architecture_name.as_deref(), Some("BERT"));
+        assert_eq!(ml_info.task.as_deref(), Some("classification"));
+        assert_eq!(ml_info.energy_kwh_training, Some(20.0));
+        assert_eq!(ml_info.training_datasets.len(), 1);
+        assert_eq!(
+            ml_info.training_datasets[0].reference.as_deref(),
+            Some("dataset-1")
+        );
+    }
+
+    #[test]
+    fn test_parse_cyclonedx_1_7_preserves_raw_extensions_and_external_ref_hashes() {
+        let content = r#"{
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.7",
+            "version": 1,
+            "metadata": {
+                "timestamp": "2026-04-01T00:00:00Z",
+                "component": {
+                    "bom-ref": "app",
+                    "type": "application",
+                    "name": "ai-app",
+                    "version": "1.0.0"
+                },
+                "distributionConstraints": {
+                    "tlp": "AMBER"
+                }
+            },
+            "annotations": [
+                {
+                    "bom-ref": "ann-1",
+                    "subjects": ["model-1"],
+                    "annotator": { "individual": { "name": "qa-review" } },
+                    "timestamp": "2026-04-01T00:00:00Z",
+                    "text": "Reviewed after training"
+                }
+            ],
+            "formulation": [
+                {
+                    "bom-ref": "formula-1",
+                    "components": [],
+                    "workflows": []
+                }
+            ],
+            "declarations": {
+                "claims": [
+                    {
+                        "bom-ref": "claim-1",
+                        "target": "model-1",
+                        "predicate": "benchmark-reviewed"
+                    }
+                ]
+            },
+            "definitions": {
+                "patents": [
+                    {
+                        "bom-ref": "patent-1",
+                        "patentNumber": "US1234567B1"
+                    }
+                ]
+            },
+            "citations": [
+                {
+                    "bom-ref": "citation-1",
+                    "timestamp": "2026-04-01T00:00:00Z",
+                    "process": "formula-1",
+                    "pointers": ["/components/0/modelCard"],
+                    "note": "Imported from training provenance"
+                }
+            ],
+            "components": [
+                {
+                    "bom-ref": "model-1",
+                    "type": "machine-learning-model",
+                    "name": "vision-model",
+                    "version": "2.0.0",
+                    "modelCard": {
+                        "modelParameters": {
+                            "approach": { "type": "supervised" },
+                            "task": "classification",
+                            "architectureFamily": "transformer",
+                            "modelArchitecture": "ViT",
+                            "datasets": [
+                                {
+                                    "type": "dataset",
+                                    "name": "benchmark-dataset",
+                                    "description": "Evaluation corpus",
+                                    "classification": "internal",
+                                    "contents": { "url": "https://example.com/datasets/benchmark" },
+                                    "sensitiveData": ["pii"]
+                                }
+                            ]
+                        },
+                        "quantitativeAnalysis": {
+                            "performanceMetrics": [
+                                { "type": "accuracy", "value": "0.91" }
+                            ]
+                        }
+                    },
+                    "externalReferences": [
+                        {
+                            "type": "citation",
+                            "url": "https://example.com/papers/benchmark",
+                            "hashes": [
+                                {
+                                    "alg": "SHA-256",
+                                    "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                }
+                            ],
+                            "properties": [
+                                { "name": "channel", "value": "benchmark-paper" }
+                            ]
+                        },
+                        {
+                            "type": "formulation",
+                            "url": "urn:cdx:11111111-2222-3333-4444-555555555555/1#formula-1",
+                            "comment": "Training workflow"
+                        }
+                    ],
+                    "patentAssertions": [
+                        {
+                            "assertionType": "ownership",
+                            "asserter": { "organization": { "name": "Acme AI" } }
+                        }
+                    ],
+                    "cryptoProperties": {
+                        "assetType": "algorithm"
+                    }
+                }
+            ]
+        }"#;
+
+        let sbom =
+            parse_sbom_str(content).expect("Failed to parse CycloneDX 1.7 raw extension BOM");
+
+        assert_eq!(sbom.document.spec_version, "1.7");
+        assert_eq!(
+            sbom.document.distribution_classification.as_deref(),
+            Some("AMBER")
+        );
+        assert_eq!(sbom.document.citations_count, 1);
+
+        let top_level = sbom
+            .extensions
+            .cyclonedx
+            .as_ref()
+            .expect("CycloneDX extensions missing");
+        assert!(top_level.get("citations").is_some());
+        assert!(top_level.get("annotations").is_some());
+        assert!(top_level.get("formulation").is_some());
+        assert!(top_level.get("declarations").is_some());
+        assert!(top_level.get("definitions").is_some());
+
+        let model = sbom
+            .components
+            .values()
+            .find(|component| component.name == "vision-model")
+            .expect("vision-model not found");
+
+        let ml_info = model.ml_model.as_ref().expect("ML metadata missing");
+        assert_eq!(ml_info.approach.as_deref(), Some("supervised"));
+        assert_eq!(ml_info.architecture_name.as_deref(), Some("ViT"));
+
+        let citation_ref = model
+            .external_refs
+            .iter()
+            .find(|reference| reference.ref_type == sbom_tools::model::ExternalRefType::Citation)
+            .expect("citation external reference missing");
+        assert_eq!(citation_ref.hashes.len(), 1);
+        assert_eq!(
+            citation_ref.hashes[0].algorithm,
+            sbom_tools::model::HashAlgorithm::Sha256
+        );
+
+        assert!(model.external_refs.iter().any(|reference| {
+            reference.ref_type == sbom_tools::model::ExternalRefType::Formulation
+        }));
+
+        let raw = model
+            .extensions
+            .raw
+            .as_ref()
+            .expect("component raw extensions missing");
+        assert!(raw.get("modelCard").is_some());
+        assert!(raw.get("externalReferences").is_some());
+        assert!(raw.get("patentAssertions").is_some());
+        assert!(raw.get("cryptoProperties").is_some());
+    }
+
+    #[test]
+    fn test_parse_cyclonedx_1_7_xml_preserves_top_level_extensions() {
+        let content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.7"
+         serialNumber="urn:uuid:11111111-2222-4333-8444-555555555555"
+         version="3">
+    <metadata>
+        <timestamp>2026-04-03T00:00:00Z</timestamp>
+        <distributionConstraints>
+            <tlp>GREEN</tlp>
+        </distributionConstraints>
+    </metadata>
+    <annotations>
+        <annotation bom-ref="ann-1">
+            <subjects>
+                <subject ref="formula-1" />
+            </subjects>
+            <annotator>
+                <individual>
+                    <name>reviewer</name>
+                </individual>
+            </annotator>
+            <timestamp>2026-04-03T00:00:00Z</timestamp>
+            <text>Reviewed after XML import</text>
+        </annotation>
+    </annotations>
+    <formulation>
+        <formula bom-ref="formula-1">
+            <workflows />
+        </formula>
+    </formulation>
+    <declarations>
+        <claims>
+            <claim bom-ref="claim-1">
+                <predicate>reviewed</predicate>
+            </claim>
+        </claims>
+    </declarations>
+    <definitions>
+        <patents>
+            <patent bom-ref="patent-1">
+                <patentNumber>US1234567B1</patentNumber>
+                <jurisdiction>US</jurisdiction>
+                <patentLegalStatus>granted</patentLegalStatus>
+            </patent>
+        </patents>
+    </definitions>
+    <citations>
+        <citation bom-ref="citation-1">
+            <pointers>
+                <pointer>/metadata</pointer>
+            </pointers>
+            <timestamp>2026-04-03T00:00:00Z</timestamp>
+            <process>formula-1</process>
+            <note>Imported from XML provenance</note>
+        </citation>
+    </citations>
+</bom>"#;
+
+        let sbom = parse_sbom_str(content).expect("Failed to parse CycloneDX 1.7 XML SBOM");
+
+        assert_eq!(sbom.document.spec_version, "1.7");
+        assert_eq!(sbom.document.format_version, "1.7");
+        assert_eq!(
+            sbom.document.distribution_classification.as_deref(),
+            Some("GREEN")
+        );
+        assert_eq!(sbom.document.citations_count, 1);
+
+        let top_level = sbom
+            .extensions
+            .cyclonedx
+            .as_ref()
+            .expect("CycloneDX extensions missing");
+        assert_eq!(top_level["citations"][0]["process"], "formula-1");
+        assert!(
+            top_level["annotations"]
+                .as_str()
+                .is_some_and(|value| value.contains("<annotation bom-ref=\"ann-1\""))
+        );
+        assert!(
+            top_level["formulation"]
+                .as_str()
+                .is_some_and(|value| value.contains("<formula bom-ref=\"formula-1\""))
+        );
+        assert!(
+            top_level["declarations"]
+                .as_str()
+                .is_some_and(|value| value.contains("<claim bom-ref=\"claim-1\""))
+        );
+        assert!(
+            top_level["definitions"]
+                .as_str()
+                .is_some_and(|value| value.contains("<patent bom-ref=\"patent-1\""))
+        );
+    }
+
     // ========================================================================
     // SPDX 3.0 Parser Tests
     // ========================================================================
@@ -841,6 +1224,134 @@ mod diff_engine_tests {
                 .iter()
                 .any(|field| field.field == "ml_model"),
             "Expected ml_model field change, got {:?}",
+            change.field_changes
+        );
+    }
+
+    #[test]
+    fn test_diff_detects_ml_dataset_reference_changes() {
+        let old_content = r#"{
+                        "bomFormat": "CycloneDX",
+                        "specVersion": "1.6",
+                        "version": 1,
+                        "components": [
+                            {
+                                "bom-ref": "dataset-1",
+                                "type": "data",
+                                "name": "training-data",
+                                "data": [{ "type": "dataset" }]
+                            },
+                            {
+                                "bom-ref": "model-1",
+                                "type": "machine-learning-model",
+                                "name": "bert-base",
+                                "modelCard": {
+                                    "modelParameters": {
+                                        "datasets": [{ "ref": "dataset-1" }]
+                                    }
+                                }
+                            }
+                        ]
+                }"#;
+
+        let new_content = old_content.replace("dataset-1", "dataset-2");
+
+        let old =
+            parse_sbom_str(old_content).expect("Failed to parse original standards-shaped ML BOM");
+        let new =
+            parse_sbom_str(&new_content).expect("Failed to parse updated standards-shaped ML BOM");
+
+        let engine = DiffEngine::new();
+        let result = engine.diff(&old, &new).expect("diff should succeed");
+
+        assert_eq!(result.summary.components_modified, 1);
+        let change = result
+            .components
+            .modified
+            .iter()
+            .find(|change| change.name == "bert-base")
+            .expect("bert-base change not found");
+        assert!(
+            change
+                .field_changes
+                .iter()
+                .any(|field| field.field == "ml_model"),
+            "Expected ml_model field change for dataset ref update, got {:?}",
+            change.field_changes
+        );
+    }
+
+    #[test]
+    fn test_diff_detects_cyclonedx_1_7_raw_extension_changes() {
+        let old_content = r#"{
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.7",
+            "version": 1,
+            "components": [
+                {
+                    "bom-ref": "model-1",
+                    "type": "machine-learning-model",
+                    "name": "vision-model",
+                    "version": "2.0.0",
+                    "modelCard": {
+                        "modelParameters": {
+                            "approach": { "type": "supervised" },
+                            "task": "classification"
+                        },
+                        "quantitativeAnalysis": {
+                            "performanceMetrics": [
+                                { "type": "accuracy", "value": "0.91" }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let new_content = r#"{
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.7",
+            "version": 1,
+            "components": [
+                {
+                    "bom-ref": "model-1",
+                    "type": "machine-learning-model",
+                    "name": "vision-model",
+                    "version": "2.0.0",
+                    "modelCard": {
+                        "modelParameters": {
+                            "approach": { "type": "supervised" },
+                            "task": "classification"
+                        },
+                        "quantitativeAnalysis": {
+                            "performanceMetrics": [
+                                { "type": "accuracy", "value": "0.96" }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let old = parse_sbom_str(old_content).expect("failed to parse old 1.7 BOM");
+        let new = parse_sbom_str(new_content).expect("failed to parse new 1.7 BOM");
+
+        let result = DiffEngine::new()
+            .diff(&old, &new)
+            .expect("diff should succeed");
+
+        let change = result
+            .components
+            .modified
+            .iter()
+            .find(|change| change.name == "vision-model")
+            .expect("vision-model change not found");
+        assert!(
+            change
+                .field_changes
+                .iter()
+                .any(|field| field.field == "raw_extensions"),
+            "Expected raw_extensions field change, got {:?}",
             change.field_changes
         );
     }

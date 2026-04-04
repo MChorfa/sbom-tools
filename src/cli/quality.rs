@@ -98,9 +98,10 @@ fn parse_scoring_profile(profile_name: &str) -> Result<ScoringProfile> {
         "license-compliance" | "license" => Ok(ScoringProfile::LicenseCompliance),
         "cra" | "cyber-resilience" => Ok(ScoringProfile::Cra),
         "comprehensive" | "full" => Ok(ScoringProfile::Comprehensive),
+        "ai-readiness" | "ai_readiness" => Ok(ScoringProfile::AiReadiness),
         _ => {
             bail!(
-                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, comprehensive"
+                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, comprehensive, ai-readiness"
             );
         }
     }
