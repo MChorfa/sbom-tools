@@ -542,6 +542,8 @@ pub struct MlModelInfo {
 /// Reference to a dataset used for training or evaluation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetRef {
+    /// BOM reference to the dataset when the source document links by identifier
+    pub reference: Option<String>,
     /// Dataset name
     pub name: Option<String>,
     /// Package URL (PURL) if the dataset is packaged

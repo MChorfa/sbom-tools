@@ -17,6 +17,13 @@ impl ComponentChangeComputer {
         Self { cost_model }
     }
 
+    fn serialize_value<T: serde::Serialize>(value: &T) -> Option<String> {
+        Some(
+            serde_json::to_string(value)
+                .unwrap_or_else(|_| String::from("\"<serialization-error>\"")),
+        )
+    }
+
     fn serialize_optional<T: serde::Serialize>(value: &Option<T>) -> Option<String> {
         value.as_ref().map(|value| {
             serde_json::to_string(value)
@@ -34,6 +41,27 @@ impl ComponentChangeComputer {
     ) {
         let old_value = Self::serialize_optional(old);
         let new_value = Self::serialize_optional(new);
+
+        if old_value != new_value {
+            changes.push(FieldChange {
+                field: field.to_string(),
+                old_value,
+                new_value,
+            });
+            *total_cost += field_cost;
+        }
+    }
+
+    fn push_serialized_value_change<T: serde::Serialize>(
+        changes: &mut Vec<FieldChange>,
+        field: &str,
+        old: &T,
+        new: &T,
+        total_cost: &mut u32,
+        field_cost: u32,
+    ) {
+        let old_value = Self::serialize_value(old);
+        let new_value = Self::serialize_value(new);
 
         if old_value != new_value {
             changes.push(FieldChange {
@@ -132,6 +160,23 @@ impl ComponentChangeComputer {
             }
         }
 
+        Self::push_serialized_value_change(
+            &mut changes,
+            "external_refs",
+            &old.external_refs,
+            &new.external_refs,
+            &mut total_cost,
+            self.cost_model.supplier_changed,
+        );
+        Self::push_serialized_value_change(
+            &mut changes,
+            "properties",
+            &old.extensions.properties,
+            &new.extensions.properties,
+            &mut total_cost,
+            self.cost_model.supplier_changed,
+        );
+
         Self::push_serialized_change(
             &mut changes,
             "ml_model",
@@ -145,6 +190,14 @@ impl ComponentChangeComputer {
             "dataset",
             &old.dataset,
             &new.dataset,
+            &mut total_cost,
+            self.cost_model.supplier_changed,
+        );
+        Self::push_serialized_change(
+            &mut changes,
+            "raw_extensions",
+            &old.extensions.raw,
+            &new.extensions.raw,
             &mut total_cost,
             self.cost_model.supplier_changed,
         );

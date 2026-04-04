@@ -31,6 +31,9 @@ pub const fn get_profile_weights(
         ScoringProfile::LicenseCompliance => (0.15, 0.12, 0.35, 0.05, 0.10, 0.05, 0.10, 0.08),
         ScoringProfile::Cra => (0.12, 0.18, 0.08, 0.15, 0.12, 0.12, 0.15, 0.08),
         ScoringProfile::Comprehensive => (0.15, 0.13, 0.13, 0.10, 0.12, 0.12, 0.13, 0.12),
+        // AiReadiness uses its own scoring path; return neutral weights here
+        // so the TUI progress bars still render without panicking.
+        ScoringProfile::AiReadiness => (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     }
 }
 
