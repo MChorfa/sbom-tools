@@ -83,9 +83,16 @@ pub const fn view_tab_to_report_type(tab: ViewTab) -> ReportType {
         ViewTab::Vulnerabilities => ReportType::Vulnerabilities,
         ViewTab::Licenses => ReportType::Licenses,
         ViewTab::Dependencies => ReportType::Dependencies,
-        ViewTab::Overview | ViewTab::Quality | ViewTab::Compliance | ViewTab::Source => {
-            ReportType::All
-        }
+        ViewTab::Overview
+        | ViewTab::Quality
+        | ViewTab::Compliance
+        | ViewTab::Source
+        | ViewTab::Crypto
+        | ViewTab::Algorithms
+        | ViewTab::Certificates
+        | ViewTab::Keys
+        | ViewTab::Protocols
+        | ViewTab::PqcCompliance => ReportType::All,
     }
 }
 

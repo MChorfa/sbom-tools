@@ -52,6 +52,10 @@ pub enum ComplianceLevel {
     NistSsdf,
     /// Executive Order 14028 Section 4 — Enhancing Software Supply Chain Security
     Eo14028,
+    /// NSA CNSA 2.0 — Commercial National Security Algorithm Suite 2.0
+    Cnsa2,
+    /// NIST PQC Readiness — Post-Quantum Cryptography migration (IR 8547 + FIPS 203/204/205)
+    NistPqc,
     /// Comprehensive compliance (all recommended fields)
     Comprehensive,
 }
@@ -69,6 +73,8 @@ impl ComplianceLevel {
             Self::FdaMedicalDevice => "FDA Medical Device",
             Self::NistSsdf => "NIST SSDF (SP 800-218)",
             Self::Eo14028 => "EO 14028 Section 4",
+            Self::Cnsa2 => "CNSA 2.0",
+            Self::NistPqc => "NIST PQC Readiness",
             Self::Comprehensive => "Comprehensive",
         }
     }
@@ -85,6 +91,8 @@ impl ComplianceLevel {
             Self::FdaMedicalDevice => "FDA",
             Self::NistSsdf => "SSDF",
             Self::Eo14028 => "EO14028",
+            Self::Cnsa2 => "CNSA2",
+            Self::NistPqc => "PQC",
             Self::Comprehensive => "Full",
         }
     }
@@ -109,6 +117,12 @@ impl ComplianceLevel {
             Self::Eo14028 => {
                 "Executive Order 14028 — machine-readable SBOM, auto-generation, supply chain security"
             }
+            Self::Cnsa2 => {
+                "CNSA 2.0 — AES-256, SHA-384+, ML-KEM-1024, ML-DSA-87, quantum security level 5"
+            }
+            Self::NistPqc => {
+                "NIST PQC — quantum-vulnerable algorithm detection, FIPS 203/204/205, SP 800-131A"
+            }
             Self::Comprehensive => "All recommended fields and best practices",
         }
     }
@@ -125,6 +139,8 @@ impl ComplianceLevel {
             Self::FdaMedicalDevice,
             Self::NistSsdf,
             Self::Eo14028,
+            Self::Cnsa2,
+            Self::NistPqc,
             Self::Comprehensive,
         ]
     }
@@ -248,6 +264,8 @@ pub enum ViolationCategory {
     SecurityInfo,
     /// Format-specific requirement
     FormatSpecific,
+    /// Cryptographic algorithm/key/protocol issue
+    CryptographyInfo,
 }
 
 impl ViolationCategory {
@@ -262,6 +280,7 @@ impl ViolationCategory {
             Self::IntegrityInfo => "Integrity Information",
             Self::SecurityInfo => "Security Information",
             Self::FormatSpecific => "Format-Specific",
+            Self::CryptographyInfo => "Cryptography",
         }
     }
 
@@ -277,6 +296,7 @@ impl ViolationCategory {
             Self::IntegrityInfo => "Integrity",
             Self::SecurityInfo => "Security",
             Self::FormatSpecific => "Format",
+            Self::CryptographyInfo => "Crypto",
         }
     }
 
@@ -292,6 +312,7 @@ impl ViolationCategory {
             Self::DependencyInfo,
             Self::SecurityInfo,
             Self::FormatSpecific,
+            Self::CryptographyInfo,
         ]
     }
 }
@@ -384,6 +405,12 @@ impl ComplianceChecker {
             }
             ComplianceLevel::Eo14028 => {
                 self.check_eo14028(sbom, &mut violations);
+            }
+            ComplianceLevel::Cnsa2 => {
+                self.check_cnsa2(sbom, &mut violations);
+            }
+            ComplianceLevel::NistPqc => {
+                self.check_nist_pqc(sbom, &mut violations);
             }
             _ => {
                 // Check document-level requirements
@@ -1702,6 +1729,323 @@ impl ComplianceChecker {
             }
         }
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // CNSA 2.0 compliance checks
+    // ════════════════════════════════════════════════════════════════════
+
+    fn check_cnsa2(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+        use crate::model::{ComponentType, CryptoAssetType};
+
+        for comp in sbom.components.values() {
+            if comp.component_type != ComponentType::Cryptographic {
+                continue;
+            }
+            let Some(cp) = &comp.crypto_properties else {
+                continue;
+            };
+
+            match cp.asset_type {
+                CryptoAssetType::Algorithm => {
+                    if let Some(algo) = &cp.algorithm_properties {
+                        // CNSA2-ALG-007: quantum security level must be >= 5
+                        if let Some(ql) = algo.nist_quantum_security_level
+                            && ql < 5 {
+                                // Check if it's a symmetric/hash (allowed at lower levels)
+                                let is_symmetric_or_hash = matches!(
+                                    algo.primitive,
+                                    crate::model::CryptoPrimitive::Ae
+                                        | crate::model::CryptoPrimitive::BlockCipher
+                                        | crate::model::CryptoPrimitive::Hash
+                                        | crate::model::CryptoPrimitive::Mac
+                                        | crate::model::CryptoPrimitive::Kdf
+                                );
+                                if !is_symmetric_or_hash && ql == 0 {
+                                    violations.push(Violation {
+                                        severity: ViolationSeverity::Error,
+                                        category: ViolationCategory::CryptographyInfo,
+                                        message: format!(
+                                            "'{}' is quantum-vulnerable (level {}), must migrate to PQC",
+                                            comp.name, ql
+                                        ),
+                                        element: Some(comp.name.clone()),
+                                        requirement: "CNSA 2.0 PQC Migration".to_string(),
+                                    });
+                                } else if !is_symmetric_or_hash && ql < 5 {
+                                    violations.push(Violation {
+                                        severity: ViolationSeverity::Error,
+                                        category: ViolationCategory::CryptographyInfo,
+                                        message: format!(
+                                            "'{}' quantum level {} < 5, CNSA 2.0 requires Level 5",
+                                            comp.name, ql
+                                        ),
+                                        element: Some(comp.name.clone()),
+                                        requirement: "CNSA 2.0 Level 5".to_string(),
+                                    });
+                                }
+                            }
+
+                        // CNSA2-ALG-001: symmetric must be AES-256
+                        if let Some(family) = &algo.algorithm_family {
+                            let upper = family.to_uppercase();
+                            if upper == "AES"
+                                && let Some(param) = &algo.parameter_set_identifier
+                                    && param != "256" {
+                                        violations.push(Violation {
+                                            severity: ViolationSeverity::Error,
+                                            category: ViolationCategory::CryptographyInfo,
+                                            message: format!(
+                                                "'{}' uses AES-{}, CNSA 2.0 requires AES-256 only",
+                                                comp.name, param
+                                            ),
+                                            element: Some(comp.name.clone()),
+                                            requirement: "CNSA 2.0 Symmetric".to_string(),
+                                        });
+                                    }
+
+                            // CNSA2-ALG-002: hash must be SHA-384+
+                            if (upper == "SHA-2" || upper == "SHA2")
+                                && let Some(param) = &algo.parameter_set_identifier
+                                && param == "256"
+                            {
+                                violations.push(Violation {
+                                    severity: ViolationSeverity::Error,
+                                    category: ViolationCategory::CryptographyInfo,
+                                    message: format!(
+                                        "'{}' uses SHA-256, CNSA 2.0 requires SHA-384 or SHA-512",
+                                        comp.name
+                                    ),
+                                    element: Some(comp.name.clone()),
+                                    requirement: "CNSA 2.0 Hash".to_string(),
+                                });
+                            }
+
+                            // CNSA2-ALG-003: KEM must be ML-KEM-1024 only
+                            if upper == "ML-KEM"
+                                && let Some(param) = &algo.parameter_set_identifier
+                                && param != "1024"
+                            {
+                                violations.push(Violation {
+                                    severity: ViolationSeverity::Error,
+                                    category: ViolationCategory::CryptographyInfo,
+                                    message: format!(
+                                        "'{}' uses ML-KEM-{}, CNSA 2.0 requires ML-KEM-1024 only",
+                                        comp.name, param
+                                    ),
+                                    element: Some(comp.name.clone()),
+                                    requirement: "CNSA 2.0 KEM".to_string(),
+                                });
+                            }
+
+                            // CNSA2-ALG-004: signature must be ML-DSA-87 only
+                            if upper == "ML-DSA"
+                                && let Some(param) = &algo.parameter_set_identifier
+                                && param != "87"
+                            {
+                                violations.push(Violation {
+                                    severity: ViolationSeverity::Error,
+                                    category: ViolationCategory::CryptographyInfo,
+                                    message: format!(
+                                        "'{}' uses ML-DSA-{}, CNSA 2.0 requires ML-DSA-87 only",
+                                        comp.name, param
+                                    ),
+                                    element: Some(comp.name.clone()),
+                                    requirement: "CNSA 2.0 Signature".to_string(),
+                                });
+                            }
+
+                            // CNSA2-ALG-006: quantum-vulnerable families
+                            const CNSA2_VULNERABLE: &[&str] = &[
+                                "RSA", "DSA", "DH", "ECDSA", "ECDH", "EDDSA", "X25519", "X448",
+                            ];
+                            if CNSA2_VULNERABLE.iter().any(|v| upper == *v) {
+                                violations.push(Violation {
+                                    severity: ViolationSeverity::Error,
+                                    category: ViolationCategory::CryptographyInfo,
+                                    message: format!(
+                                        "'{}' ({}) is quantum-vulnerable, must migrate to CNSA 2.0 approved algorithm",
+                                        comp.name, family
+                                    ),
+                                    element: Some(comp.name.clone()),
+                                    requirement: "CNSA 2.0 PQC Migration".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+                CryptoAssetType::Certificate => {
+                    // CNSA2-CERT-001: cert must use CNSA 2.0 signature algorithm
+                    if let Some(cert) = &cp.certificate_properties
+                        && let Some(sig_ref) = &cert.signature_algorithm_ref
+                    {
+                        // Check if the referenced algorithm is a quantum-vulnerable family
+                        // Exclude ML-DSA (approved PQC) and SLH-DSA from false positives
+                        let sig_lower = sig_ref.to_lowercase();
+                        let is_pqc_sig = sig_lower.contains("ml-dsa")
+                            || sig_lower.contains("slh-dsa")
+                            || sig_lower.contains("lms")
+                            || sig_lower.contains("xmss");
+                        if !is_pqc_sig
+                            && (sig_lower.contains("rsa")
+                                || sig_lower.contains("ecdsa")
+                                || sig_lower.contains("dsa"))
+                        {
+                            violations.push(Violation {
+                                severity: ViolationSeverity::Error,
+                                category: ViolationCategory::CryptographyInfo,
+                                message: format!(
+                                    "Certificate '{}' signed with non-CNSA 2.0 algorithm (ref: {})",
+                                    comp.name, sig_ref
+                                ),
+                                element: Some(comp.name.clone()),
+                                requirement: "CNSA 2.0 Certificate".to_string(),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // NIST PQC Readiness checks
+    // ════════════════════════════════════════════════════════════════════
+
+    fn check_nist_pqc(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+        use crate::model::{ComponentType, CryptoAssetType};
+
+        /// Broken/disallowed algorithms per SP 800-131A
+        const BROKEN: &[&str] = &[
+            "MD5", "MD4", "MD2", "SHA-1", "DES", "3DES", "TDEA", "RC2", "RC4", "BLOWFISH",
+            "IDEA", "CAST5",
+        ];
+
+        for comp in sbom.components.values() {
+            if comp.component_type != ComponentType::Cryptographic {
+                continue;
+            }
+            let Some(cp) = &comp.crypto_properties else {
+                continue;
+            };
+
+            if cp.asset_type == CryptoAssetType::Algorithm
+                && let Some(algo) = &cp.algorithm_properties {
+                    // PQC-001: quantum-vulnerable algorithm
+                    if algo.nist_quantum_security_level == Some(0) {
+                        violations.push(Violation {
+                            severity: ViolationSeverity::Error,
+                            category: ViolationCategory::CryptographyInfo,
+                            message: format!(
+                                "'{}' has nistQuantumSecurityLevel=0, quantum-vulnerable (IR 8547)",
+                                comp.name
+                            ),
+                            element: Some(comp.name.clone()),
+                            requirement: "IR 8547: quantum-vulnerable".to_string(),
+                        });
+                    }
+
+                    // PQC-012: missing quantum security level
+                    if algo.nist_quantum_security_level.is_none() {
+                        violations.push(Violation {
+                            severity: ViolationSeverity::Warning,
+                            category: ViolationCategory::CryptographyInfo,
+                            message: format!(
+                                "'{}' missing nistQuantumSecurityLevel field",
+                                comp.name
+                            ),
+                            element: Some(comp.name.clone()),
+                            requirement: "IR 8547: quantum assessment required".to_string(),
+                        });
+                    }
+
+                    // PQC-005/006/007: broken algorithms
+                    if let Some(family) = &algo.algorithm_family {
+                        let upper = family.to_uppercase();
+                        if BROKEN.iter().any(|b| upper == *b) {
+                            violations.push(Violation {
+                                severity: ViolationSeverity::Error,
+                                category: ViolationCategory::CryptographyInfo,
+                                message: format!(
+                                    "'{}' ({}) is broken/disallowed per SP 800-131A",
+                                    comp.name, family
+                                ),
+                                element: Some(comp.name.clone()),
+                                requirement: "SP 800-131A: disallowed".to_string(),
+                            });
+                        }
+                    }
+
+                    // PQC-008: ECB mode
+                    if algo.mode == Some(crate::model::CryptoMode::Ecb) {
+                        violations.push(Violation {
+                            severity: ViolationSeverity::Error,
+                            category: ViolationCategory::CryptographyInfo,
+                            message: format!(
+                                "'{}' uses ECB mode, disallowed per SP 800-131A Rev 3",
+                                comp.name
+                            ),
+                            element: Some(comp.name.clone()),
+                            requirement: "SP 800-131A Rev 3: ECB disallowed".to_string(),
+                        });
+                    }
+
+                    // PQC-009: approved PQC (informational)
+                    if let Some(family) = &algo.algorithm_family {
+                        let upper = family.to_uppercase();
+                        if matches!(upper.as_str(), "ML-KEM" | "ML-DSA" | "SLH-DSA") {
+                            violations.push(Violation {
+                                severity: ViolationSeverity::Info,
+                                category: ViolationCategory::CryptographyInfo,
+                                message: format!(
+                                    "'{}' uses NIST-approved PQC algorithm (FIPS 203/204/205)",
+                                    comp.name
+                                ),
+                                element: Some(comp.name.clone()),
+                                requirement: "FIPS 203/204/205: approved".to_string(),
+                            });
+                        }
+                    }
+
+                    // PQC-010: hybrid PQC combiner (informational)
+                    if algo.is_hybrid_pqc() {
+                        violations.push(Violation {
+                            severity: ViolationSeverity::Info,
+                            category: ViolationCategory::CryptographyInfo,
+                            message: format!(
+                                "'{}' is a hybrid PQC combiner — good migration practice",
+                                comp.name
+                            ),
+                            element: Some(comp.name.clone()),
+                            requirement: "IR 8547: recommended transition".to_string(),
+                        });
+                    }
+                }
+
+            // PQC-KEY-001: symmetric key < 128 bits
+            if cp.asset_type == CryptoAssetType::RelatedCryptoMaterial
+                && let Some(mat) = &cp.related_crypto_material_properties
+                    && let Some(size) = mat.size {
+                        let is_symmetric = matches!(
+                            mat.material_type,
+                            crate::model::CryptoMaterialType::SymmetricKey
+                                | crate::model::CryptoMaterialType::SecretKey
+                        );
+                        if is_symmetric && size < 128 {
+                            violations.push(Violation {
+                                severity: ViolationSeverity::Error,
+                                category: ViolationCategory::CryptographyInfo,
+                                message: format!(
+                                    "'{}' symmetric key size {} bits < 128 minimum",
+                                    comp.name, size
+                                ),
+                                element: Some(comp.name.clone()),
+                                requirement: "NIST: minimum key size".to_string(),
+                            });
+                        }
+                    }
+        }
+    }
 }
 
 impl Default for ComplianceChecker {
@@ -1814,5 +2158,78 @@ mod tests {
         assert_eq!(result.error_count, 1);
         assert_eq!(result.warning_count, 1);
         assert_eq!(result.info_count, 1);
+    }
+
+    fn make_crypto_sbom(algos: &[(&str, &str, Option<&str>, Option<u8>)]) -> NormalizedSbom {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoProperties, CryptoPrimitive,
+        };
+        let mut sbom = NormalizedSbom::default();
+        for (name, family, param, ql) in algos {
+            let mut c = crate::model::Component::new(name.to_string(), format!("{name}@1.0"));
+            c.component_type = ComponentType::Cryptographic;
+            let mut algo = AlgorithmProperties::new(CryptoPrimitive::Ae)
+                .with_algorithm_family(family.to_string());
+            if let Some(p) = param {
+                algo = algo.with_parameter_set_identifier(p.to_string());
+            }
+            if let Some(level) = ql {
+                algo = algo.with_nist_quantum_security_level(*level);
+            }
+            c.crypto_properties =
+                Some(CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(algo));
+            sbom.add_component(c);
+        }
+        sbom
+    }
+
+    #[test]
+    fn test_cnsa2_aes128_violation() {
+        let sbom = make_crypto_sbom(&[("AES-128-GCM", "AES", Some("128"), Some(1))]);
+        let checker = ComplianceChecker::new(ComplianceLevel::Cnsa2);
+        let result = checker.check(&sbom);
+        assert!(
+            result.violations.iter().any(|v| v.severity == ViolationSeverity::Error
+                && v.message.contains("AES-128")),
+            "CNSA 2.0 should flag AES-128"
+        );
+    }
+
+    #[test]
+    fn test_cnsa2_mlkem1024_passes() {
+        let sbom = make_crypto_sbom(&[("ML-KEM-1024", "ML-KEM", Some("1024"), Some(5))]);
+        let checker = ComplianceChecker::new(ComplianceLevel::Cnsa2);
+        let result = checker.check(&sbom);
+        let algo_errors: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.severity == ViolationSeverity::Error
+                && v.element.as_deref() == Some("ML-KEM-1024"))
+            .collect();
+        assert!(algo_errors.is_empty(), "ML-KEM-1024 should pass CNSA 2.0");
+    }
+
+    #[test]
+    fn test_pqc_quantum_vulnerable() {
+        let sbom = make_crypto_sbom(&[("RSA-2048", "RSA", None, Some(0))]);
+        let checker = ComplianceChecker::new(ComplianceLevel::NistPqc);
+        let result = checker.check(&sbom);
+        assert!(
+            result.violations.iter().any(|v| v.severity == ViolationSeverity::Error
+                && v.message.contains("quantum-vulnerable")),
+            "PQC should flag RSA-2048 as quantum-vulnerable"
+        );
+    }
+
+    #[test]
+    fn test_pqc_approved_algorithm_info() {
+        let sbom = make_crypto_sbom(&[("ML-DSA-65", "ML-DSA", Some("65"), Some(3))]);
+        let checker = ComplianceChecker::new(ComplianceLevel::NistPqc);
+        let result = checker.check(&sbom);
+        assert!(
+            result.violations.iter().any(|v| v.severity == ViolationSeverity::Info
+                && v.message.contains("approved")),
+            "PQC should report ML-DSA-65 as approved"
+        );
     }
 }

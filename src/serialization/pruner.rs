@@ -7,6 +7,8 @@ use crate::model::{LicenseFamily, NormalizedSbom};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::ValueExt;
+
 /// Configuration for SBOM tailoring
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TailorConfig {
@@ -18,6 +20,8 @@ pub struct TailorConfig {
     pub include_types: Vec<String>,
     /// Include only components matching this name pattern
     pub include_name_pattern: Option<String>,
+    /// Include only these crypto asset types (algorithm, certificate, key, protocol)
+    pub include_crypto_types: Vec<String>,
     /// Strip vulnerability data from output
     pub strip_vulns: bool,
     /// Strip extension/property data
@@ -91,6 +95,23 @@ pub fn tailor_sbom_json(
             }
         }
 
+        // Filter by crypto asset type
+        if !config.include_crypto_types.is_empty() {
+            if let Some(cp) = &comp.crypto_properties {
+                let asset_str = cp.asset_type.to_string().to_lowercase();
+                if !config
+                    .include_crypto_types
+                    .iter()
+                    .any(|t| t.to_lowercase() == asset_str)
+                {
+                    keep = false;
+                }
+            } else {
+                // No crypto properties — exclude if we're filtering by crypto type
+                keep = false;
+            }
+        }
+
         if !keep {
             // Track both format_id and name for removal
             if !comp.identifiers.format_id.is_empty() {
@@ -116,8 +137,8 @@ fn prune_cyclonedx(doc: &mut Value, remove_ids: &[String], config: &TailorConfig
     // Remove components
     if let Some(components) = doc.get_mut("components").and_then(Value::as_array_mut) {
         components.retain(|comp| {
-            let name = comp.get("name").and_then(Value::as_str).unwrap_or("");
-            let bom_ref = comp.get("bom-ref").and_then(Value::as_str).unwrap_or("");
+            let name = comp.str_field("name");
+            let bom_ref = comp.str_field("bom-ref");
             !remove_ids.iter().any(|id| id == name || id == bom_ref)
         });
     }
@@ -125,7 +146,7 @@ fn prune_cyclonedx(doc: &mut Value, remove_ids: &[String], config: &TailorConfig
     // Remove corresponding dependency entries
     if let Some(deps) = doc.get_mut("dependencies").and_then(Value::as_array_mut) {
         deps.retain(|dep| {
-            let ref_val = dep.get("ref").and_then(Value::as_str).unwrap_or("");
+            let ref_val = dep.str_field("ref");
             !remove_ids.iter().any(|id| id == ref_val)
         });
 
@@ -165,8 +186,8 @@ fn prune_spdx3(doc: &mut Value, remove_ids: &[String], config: &TailorConfig) {
 
     if let Some(elems) = elements {
         elems.retain(|elem| {
-            let name = elem.get("name").and_then(Value::as_str).unwrap_or("");
-            let elem_type = elem.get("type").and_then(Value::as_str).unwrap_or("");
+            let name = elem.str_field("name");
+            let elem_type = elem.str_field("type");
 
             // Only filter software packages, keep relationships and other elements
             if !elem_type.contains("Package") && !elem_type.contains("package") {
@@ -186,8 +207,8 @@ fn prune_spdx2(doc: &mut Value, remove_ids: &[String], config: &TailorConfig) {
     // Remove packages
     if let Some(packages) = doc.get_mut("packages").and_then(Value::as_array_mut) {
         packages.retain(|pkg| {
-            let name = pkg.get("name").and_then(Value::as_str).unwrap_or("");
-            let spdx_id = pkg.get("SPDXID").and_then(Value::as_str).unwrap_or("");
+            let name = pkg.str_field("name");
+            let spdx_id = pkg.str_field("SPDXID");
             !remove_ids.iter().any(|id| id == name || id == spdx_id)
         });
     }

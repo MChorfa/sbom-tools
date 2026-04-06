@@ -5,9 +5,7 @@ use crate::tui::traits::{EventResult, TabTarget, ViewContext, ViewMode, ViewStat
 use crossterm::event::KeyEvent;
 
 pub(super) fn handle_licenses_keys(app: &mut App, key: KeyEvent) {
-    let Some(view) = app.licenses_view.as_mut() else {
-        return;
-    };
+    let view = &mut app.licenses_view;
 
     let mut ctx = ViewContext {
         mode: ViewMode::from_app_mode(app.mode),

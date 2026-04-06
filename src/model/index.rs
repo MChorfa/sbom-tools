@@ -40,6 +40,8 @@ pub struct NormalizedSbomIndex {
     by_name_lower: HashMap<String, Vec<CanonicalId>>,
     /// Pre-computed sort keys for each component
     sort_keys: HashMap<CanonicalId, ComponentSortKey>,
+    /// Bom-ref (format_id) to canonical ID mapping for crypto cross-reference resolution
+    bom_ref_map: HashMap<String, CanonicalId>,
     /// Total component count
     component_count: usize,
     /// Total edge count
@@ -112,6 +114,7 @@ impl NormalizedSbomIndex {
         let mut edges_by_target: HashMap<CanonicalId, Vec<usize>> = HashMap::new();
         let mut by_name_lower: HashMap<String, Vec<CanonicalId>> = HashMap::new();
         let mut sort_keys: HashMap<CanonicalId, ComponentSortKey> = HashMap::new();
+        let mut bom_ref_map: HashMap<String, CanonicalId> = HashMap::new();
 
         // Index edges
         for (idx, edge) in sbom.edges.iter().enumerate() {
@@ -136,6 +139,12 @@ impl NormalizedSbomIndex {
 
             // Build sort key
             sort_keys.insert(id.clone(), ComponentSortKey::from_component(comp));
+
+            // Index bom-ref (format_id) for crypto cross-reference resolution
+            let format_id = &comp.identifiers.format_id;
+            if !format_id.is_empty() {
+                bom_ref_map.insert(format_id.clone(), id.clone());
+            }
         }
 
         Self {
@@ -143,6 +152,7 @@ impl NormalizedSbomIndex {
             edges_by_target,
             by_name_lower,
             sort_keys,
+            bom_ref_map,
             component_count: sbom.components.len(),
             edge_count: sbom.edges.len(),
         }
@@ -232,6 +242,14 @@ impl NormalizedSbomIndex {
     #[must_use]
     pub const fn sort_keys(&self) -> &HashMap<CanonicalId, ComponentSortKey> {
         &self.sort_keys
+    }
+
+    /// Resolve a bom-ref string (used in crypto cross-references like
+    /// `signatureAlgorithmRef`, `subjectPublicKeyRef`, `algorithmRef`)
+    /// to the canonical component ID.
+    #[must_use]
+    pub fn resolve_bom_ref(&self, bom_ref: &str) -> Option<&CanonicalId> {
+        self.bom_ref_map.get(bom_ref)
     }
 
     /// Check if component has any dependencies.
@@ -338,6 +356,7 @@ impl SbomIndexBuilder {
         let mut edges_by_target: HashMap<CanonicalId, Vec<usize>> = HashMap::new();
         let mut by_name_lower: HashMap<String, Vec<CanonicalId>> = HashMap::new();
         let mut sort_keys: HashMap<CanonicalId, ComponentSortKey> = HashMap::new();
+        let mut bom_ref_map: HashMap<String, CanonicalId> = HashMap::new();
 
         // Always index edges
         for (idx, edge) in sbom.edges.iter().enumerate() {
@@ -365,6 +384,12 @@ impl SbomIndexBuilder {
                 if self.build_sort_keys {
                     sort_keys.insert(id.clone(), ComponentSortKey::from_component(comp));
                 }
+
+                // Always index bom-refs for crypto cross-reference resolution
+                let format_id = &comp.identifiers.format_id;
+                if !format_id.is_empty() {
+                    bom_ref_map.insert(format_id.clone(), id.clone());
+                }
             }
         }
 
@@ -373,6 +398,7 @@ impl SbomIndexBuilder {
             edges_by_target,
             by_name_lower,
             sort_keys,
+            bom_ref_map,
             component_count: sbom.components.len(),
             edge_count: sbom.edges.len(),
         }

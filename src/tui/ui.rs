@@ -26,7 +26,7 @@ use std::io::{self, stdout};
 pub fn run_tui(app: &mut App) -> io::Result<()> {
     // Load saved theme preference
     let prefs = TuiPreferences::load();
-    set_theme(Theme::from_name(&prefs.theme));
+    set_theme(Theme::from_name(prefs.theme.as_str()));
 
     // Setup terminal
     enable_raw_mode()?;

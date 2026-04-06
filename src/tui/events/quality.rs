@@ -6,9 +6,7 @@ use crate::tui::traits::{EventResult, TabTarget, ViewContext, ViewMode, ViewStat
 use crossterm::event::KeyEvent;
 
 pub(super) fn handle_quality_keys(app: &mut App, key: KeyEvent) {
-    let Some(quality_view) = app.quality_view.as_mut() else {
-        return;
-    };
+    let quality_view = &mut app.quality_view;
 
     let mut ctx = ViewContext {
         mode: ViewMode::from_app_mode(app.mode),

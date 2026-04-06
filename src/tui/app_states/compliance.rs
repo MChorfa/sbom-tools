@@ -17,6 +17,10 @@ pub enum PolicyPreset {
     NistSsdf,
     /// Executive Order 14028 Section 4
     Eo14028,
+    /// NSA CNSA 2.0 — Post-Quantum Cryptography (strictest)
+    Cnsa2,
+    /// NIST PQC Readiness — IR 8547 + FIPS 203/204/205
+    NistPqc,
 }
 
 impl PolicyPreset {
@@ -29,7 +33,9 @@ impl PolicyPreset {
             Self::Ntia => Self::Fda,
             Self::Fda => Self::NistSsdf,
             Self::NistSsdf => Self::Eo14028,
-            Self::Eo14028 => Self::Enterprise,
+            Self::Eo14028 => Self::Cnsa2,
+            Self::Cnsa2 => Self::NistPqc,
+            Self::NistPqc => Self::Enterprise,
         }
     }
 
@@ -43,6 +49,8 @@ impl PolicyPreset {
             Self::Fda => "FDA",
             Self::NistSsdf => "NIST SSDF",
             Self::Eo14028 => "EO 14028",
+            Self::Cnsa2 => "CNSA 2.0",
+            Self::NistPqc => "NIST PQC",
         }
     }
 
@@ -50,7 +58,13 @@ impl PolicyPreset {
     pub const fn is_standards_based(self) -> bool {
         matches!(
             self,
-            Self::Cra | Self::Ntia | Self::Fda | Self::NistSsdf | Self::Eo14028
+            Self::Cra
+                | Self::Ntia
+                | Self::Fda
+                | Self::NistSsdf
+                | Self::Eo14028
+                | Self::Cnsa2
+                | Self::NistPqc
         )
     }
 
@@ -62,6 +76,8 @@ impl PolicyPreset {
             Self::Fda => Some(crate::quality::ComplianceLevel::FdaMedicalDevice),
             Self::NistSsdf => Some(crate::quality::ComplianceLevel::NistSsdf),
             Self::Eo14028 => Some(crate::quality::ComplianceLevel::Eo14028),
+            Self::Cnsa2 => Some(crate::quality::ComplianceLevel::Cnsa2),
+            Self::NistPqc => Some(crate::quality::ComplianceLevel::NistPqc),
             _ => None,
         }
     }

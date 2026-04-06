@@ -248,6 +248,7 @@ impl FuzzyMatchConfig {
     /// Supported presets:
     /// - "strict", "balanced", "permissive" - single-field (name only)
     /// - "strict-multi", "balanced-multi" - multi-field scoring enabled
+    /// - "security-focused" - strict matching with security-weighted multi-field scoring
     #[must_use]
     pub fn from_preset(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {
@@ -256,7 +257,19 @@ impl FuzzyMatchConfig {
             "permissive" => Some(Self::permissive()),
             "strict-multi" | "strict_multi" => Some(Self::strict_multi_field()),
             "balanced-multi" | "balanced_multi" => Some(Self::balanced_multi_field()),
+            "security-focused" | "security_focused" => Some(Self::security_focused()),
             _ => None,
+        }
+    }
+
+    /// Security-focused preset: strict thresholds with multi-field scoring
+    /// weighted toward security-relevant fields.
+    #[must_use]
+    pub fn security_focused() -> Self {
+        Self {
+            threshold: 0.85,
+            field_weights: Some(MultiFieldWeights::security_focused()),
+            ..Self::strict()
         }
     }
 }

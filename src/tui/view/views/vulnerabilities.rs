@@ -1988,7 +1988,7 @@ fn render_group_detail_panel(
     }
 
     // Phase 2: Scrollable paragraph with scrollbar
-    let content_height = lines.len() as u16;
+    let content_height = lines.len().min(u16::MAX as usize) as u16;
     let block = Block::default()
         .title(" Group Details ")
         .borders(Borders::ALL)
@@ -2528,7 +2528,7 @@ fn render_vuln_detail_panel(
 
     // Clamp scroll offset so it doesn't exceed content
     let content_height = area.height.saturating_sub(2); // borders
-    let total_lines = lines.len() as u16;
+    let total_lines = lines.len().min(u16::MAX as usize) as u16;
     let max_scroll = total_lines.saturating_sub(content_height);
     if *detail_scroll > max_scroll {
         *detail_scroll = max_scroll;

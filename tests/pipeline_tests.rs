@@ -543,7 +543,7 @@ mod multi_diff_pipeline {
                 ..Default::default()
             },
             matching: MatchingConfig {
-                fuzzy_preset: "balanced".to_string(),
+                fuzzy_preset: sbom_tools::config::FuzzyPreset::Balanced,
                 ..Default::default()
             },
             behavior: BehaviorConfig::default(),
@@ -580,7 +580,7 @@ mod multi_diff_pipeline {
                 ..Default::default()
             },
             matching: MatchingConfig {
-                fuzzy_preset: "balanced".to_string(),
+                fuzzy_preset: sbom_tools::config::FuzzyPreset::Balanced,
                 ..Default::default()
             },
             behavior: BehaviorConfig::default(),
@@ -610,7 +610,7 @@ mod multi_diff_pipeline {
                 ..Default::default()
             },
             matching: MatchingConfig {
-                fuzzy_preset: "balanced".to_string(),
+                fuzzy_preset: sbom_tools::config::FuzzyPreset::Balanced,
                 ..Default::default()
             },
             behavior: BehaviorConfig::default(),
@@ -646,7 +646,7 @@ mod multi_diff_pipeline {
                 ..Default::default()
             },
             matching: MatchingConfig {
-                fuzzy_preset: "balanced".to_string(),
+                fuzzy_preset: sbom_tools::config::FuzzyPreset::Balanced,
                 ..Default::default()
             },
             cluster_threshold: 0.7,
@@ -681,7 +681,7 @@ mod multi_diff_pipeline {
                 ..Default::default()
             },
             matching: MatchingConfig {
-                fuzzy_preset: "balanced".to_string(),
+                fuzzy_preset: sbom_tools::config::FuzzyPreset::Balanced,
                 ..Default::default()
             },
             cluster_threshold: 0.7,

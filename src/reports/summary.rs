@@ -324,6 +324,64 @@ impl ReportGenerator for SummaryReporter {
             }
         }
 
+        // Crypto summary (if crypto components exist)
+        let crypto_metrics = crate::quality::CryptographyMetrics::from_sbom(sbom);
+        if crypto_metrics.has_data() {
+            lines.push(String::new());
+            lines.push(self.color(
+                &format!("Crypto: {} assets", crypto_metrics.total_crypto_components),
+                "bold",
+            ));
+            lines.push(format!(
+                "  Algorithms: {} | Certificates: {} | Keys: {} | Protocols: {}",
+                crypto_metrics.algorithms_count,
+                crypto_metrics.certificates_count,
+                crypto_metrics.keys_count,
+                crypto_metrics.protocols_count,
+            ));
+            if crypto_metrics.algorithms_count > 0 {
+                let readiness = crypto_metrics.quantum_readiness_score();
+                let color = if readiness >= 80.0 {
+                    "green"
+                } else if readiness >= 40.0 {
+                    "yellow"
+                } else {
+                    "red"
+                };
+                lines.push(format!(
+                    "  {}",
+                    self.color(&format!("Quantum readiness: {readiness:.0}%"), color)
+                ));
+            }
+            if crypto_metrics.weak_algorithm_count > 0 {
+                lines.push(format!(
+                    "  {}",
+                    self.color(
+                        &format!("Weak algorithms: {}", crypto_metrics.weak_algorithm_count),
+                        "red"
+                    )
+                ));
+            }
+            if crypto_metrics.expired_certificates > 0 {
+                lines.push(format!(
+                    "  {}",
+                    self.color(
+                        &format!("Expired certificates: {}", crypto_metrics.expired_certificates),
+                        "red"
+                    )
+                ));
+            }
+            if crypto_metrics.compromised_keys > 0 {
+                lines.push(format!(
+                    "  {}",
+                    self.color(
+                        &format!("Compromised keys: {}", crypto_metrics.compromised_keys),
+                        "red"
+                    )
+                ));
+            }
+        }
+
         Ok(lines.join("\n"))
     }
 

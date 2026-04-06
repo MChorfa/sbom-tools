@@ -636,6 +636,81 @@ impl ReportGenerator for MarkdownReporter {
             )?;
         }
 
+        // Cryptographic Inventory section (only if crypto components exist)
+        {
+            let crypto_comps: Vec<_> = sbom
+                .components
+                .values()
+                .filter(|c| c.component_type == crate::model::ComponentType::Cryptographic)
+                .collect();
+            if !crypto_comps.is_empty() {
+                writeln!(md, "\n## Cryptographic Inventory\n")?;
+                writeln!(md, "| Name | Asset Type | Family | Primitive | Security Level | Quantum Level |")?;
+                writeln!(md, "|------|-----------|--------|-----------|---------------|--------------|")?;
+                for comp in &crypto_comps {
+                    if let Some(cp) = &comp.crypto_properties {
+                        let family = cp
+                            .algorithm_properties
+                            .as_ref()
+                            .and_then(|a| a.algorithm_family.as_deref())
+                            .unwrap_or("-");
+                        let primitive = cp
+                            .algorithm_properties
+                            .as_ref()
+                            .map(|a| a.primitive.to_string())
+                            .unwrap_or_else(|| "-".to_string());
+                        let sec_level = cp
+                            .algorithm_properties
+                            .as_ref()
+                            .and_then(|a| a.classical_security_level)
+                            .map(|l| format!("{l}"))
+                            .unwrap_or_else(|| "-".to_string());
+                        let quantum = cp
+                            .algorithm_properties
+                            .as_ref()
+                            .and_then(|a| a.nist_quantum_security_level)
+                            .map(|l| format!("{l}"))
+                            .unwrap_or_else(|| "-".to_string());
+                        writeln!(
+                            md,
+                            "| {} | {} | {} | {} | {} | {} |",
+                            escape_markdown_table(&comp.name),
+                            cp.asset_type,
+                            escape_markdown_table(family),
+                            primitive,
+                            sec_level,
+                            quantum,
+                        )?;
+                    } else {
+                        writeln!(
+                            md,
+                            "| {} | - | - | - | - | - |",
+                            escape_markdown_table(&comp.name),
+                        )?;
+                    }
+                }
+
+                // Quantum readiness summary
+                let metrics = crate::quality::CryptographyMetrics::from_sbom(sbom);
+                if metrics.algorithms_count > 0 {
+                    writeln!(
+                        md,
+                        "\n**Quantum Readiness:** {:.0}% ({} safe / {} total algorithms)",
+                        metrics.quantum_readiness_score(),
+                        metrics.quantum_safe_count,
+                        metrics.algorithms_count,
+                    )?;
+                }
+                if !metrics.weak_algorithm_names.is_empty() {
+                    writeln!(
+                        md,
+                        "\n**Weak Algorithms:** {}",
+                        metrics.weak_algorithm_names.join(", ")
+                    )?;
+                }
+            }
+        }
+
         // CRA Compliance section
         {
             let cra = config

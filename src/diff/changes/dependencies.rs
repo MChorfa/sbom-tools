@@ -2,8 +2,34 @@
 
 use crate::diff::DependencyChange;
 use crate::diff::traits::{ChangeComputer, ComponentMatches, DependencyChangeSet};
-use crate::model::NormalizedSbom;
+use crate::model::{DependencyEdge, NormalizedSbom};
 use std::collections::HashSet;
+
+type EdgeKey = (String, String, String, Option<String>);
+
+/// Build a normalized edge key, optionally mapping IDs through component matches.
+fn edge_key(edge: &DependencyEdge, matches: Option<&ComponentMatches>) -> EdgeKey {
+    let from = if let Some(m) = matches {
+        m.get(&edge.from)
+            .and_then(|v| v.as_ref())
+            .map_or_else(|| edge.from.to_string(), ToString::to_string)
+    } else {
+        edge.from.to_string()
+    };
+    let to = if let Some(m) = matches {
+        m.get(&edge.to)
+            .and_then(|v| v.as_ref())
+            .map_or_else(|| edge.to.to_string(), ToString::to_string)
+    } else {
+        edge.to.to_string()
+    };
+    (
+        from,
+        to,
+        edge.relationship.to_string(),
+        edge.scope.as_ref().map(ToString::to_string),
+    )
+}
 
 /// Computes dependency-level changes between SBOMs.
 pub struct DependencyChangeComputer;
@@ -33,69 +59,25 @@ impl ChangeComputer for DependencyChangeComputer {
     ) -> DependencyChangeSet {
         let mut result = DependencyChangeSet::new();
 
-        // Edge key includes (from, to, relationship, scope) for full identity comparison
-        type EdgeKey = (String, String, String, Option<String>);
+        // Normalize old edges (map through component matches)
+        let normalized_old_edges: HashSet<EdgeKey> =
+            old.edges.iter().map(|e| edge_key(e, Some(matches))).collect();
 
-        // Map old edges to their canonical form for comparison
-        let mut normalized_old_edges: HashSet<EdgeKey> = HashSet::new();
-        for edge in &old.edges {
-            let from = matches
-                .get(&edge.from)
-                .and_then(|v| v.as_ref())
-                .map_or_else(|| edge.from.to_string(), std::string::ToString::to_string);
-            let to = matches
-                .get(&edge.to)
-                .and_then(|v| v.as_ref())
-                .map_or_else(|| edge.to.to_string(), std::string::ToString::to_string);
-            normalized_old_edges.insert((
-                from,
-                to,
-                edge.relationship.to_string(),
-                edge.scope.as_ref().map(std::string::ToString::to_string),
-            ));
-        }
+        // Normalize new edges (no match mapping needed)
+        let normalized_new_edges: HashSet<EdgeKey> =
+            new.edges.iter().map(|e| edge_key(e, None)).collect();
 
-        // Find added dependencies
+        // Find added dependencies (in new but not in old)
         for edge in &new.edges {
-            let key: EdgeKey = (
-                edge.from.to_string(),
-                edge.to.to_string(),
-                edge.relationship.to_string(),
-                edge.scope.as_ref().map(std::string::ToString::to_string),
-            );
+            let key = edge_key(edge, None);
             if !normalized_old_edges.contains(&key) {
                 result.added.push(DependencyChange::added(edge));
             }
         }
 
-        // Map new edges for comparison with old
-        let mut normalized_new_edges: HashSet<EdgeKey> = HashSet::new();
-        for edge in &new.edges {
-            normalized_new_edges.insert((
-                edge.from.to_string(),
-                edge.to.to_string(),
-                edge.relationship.to_string(),
-                edge.scope.as_ref().map(std::string::ToString::to_string),
-            ));
-        }
-
-        // Find removed dependencies
+        // Find removed dependencies (in old but not in new)
         for edge in &old.edges {
-            let from = matches
-                .get(&edge.from)
-                .and_then(|v| v.as_ref())
-                .map_or_else(|| edge.from.to_string(), std::string::ToString::to_string);
-            let to = matches
-                .get(&edge.to)
-                .and_then(|v| v.as_ref())
-                .map_or_else(|| edge.to.to_string(), std::string::ToString::to_string);
-
-            let key: EdgeKey = (
-                from,
-                to,
-                edge.relationship.to_string(),
-                edge.scope.as_ref().map(std::string::ToString::to_string),
-            );
+            let key = edge_key(edge, Some(matches));
             if !normalized_new_edges.contains(&key) {
                 result.removed.push(DependencyChange::removed(edge));
             }

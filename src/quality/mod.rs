@@ -38,8 +38,8 @@ pub use compliance::{
 };
 pub use metrics::{
     AuditabilityMetrics, CompletenessMetrics, ComplexityFactors, ComplexityLevel,
-    DependencyMetrics, HashQualityMetrics, IdentifierMetrics, LicenseMetrics, LifecycleMetrics,
-    ProvenanceMetrics, VulnerabilityMetrics,
+    CryptographyMetrics, DependencyMetrics, HashQualityMetrics, IdentifierMetrics, LicenseMetrics,
+    LifecycleMetrics, ProvenanceMetrics, VulnerabilityMetrics,
 };
 pub use scorer::{
     QualityGrade, QualityReport, QualityScorer, Recommendation, RecommendationCategory,

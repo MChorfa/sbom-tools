@@ -17,6 +17,9 @@ pub struct ViewApp {
     /// The SBOM being viewed
     pub(crate) sbom: NormalizedSbom,
 
+    /// BOM profile (SBOM / CBOM) — determines tab set and mode-specific behavior
+    pub(crate) bom_profile: crate::model::BomProfile,
+
     /// Current active view/tab
     pub(crate) active_tab: ViewTab,
 
@@ -109,6 +112,17 @@ pub struct ViewApp {
     /// Source tab state
     pub(crate) source_state: SourcePanelState,
 
+    /// Legacy Crypto tab: selected list index (all asset types)
+    pub(crate) crypto_list_selected: usize,
+    /// CBOM Algorithms tab: selected index
+    pub(crate) algorithms_selected: usize,
+    /// CBOM Certificates tab: selected index
+    pub(crate) certificates_selected: usize,
+    /// CBOM Keys tab: selected index
+    pub(crate) keys_selected: usize,
+    /// CBOM Protocols tab: selected index
+    pub(crate) protocols_selected: usize,
+
     /// Bookmarked component canonical IDs (in-memory, no persistence)
     pub(crate) bookmarked: HashSet<String>,
 
@@ -119,7 +133,7 @@ pub struct ViewApp {
 impl ViewApp {
     /// Create a new `ViewApp` for the given SBOM.
     #[must_use]
-    pub fn new(sbom: NormalizedSbom, raw_content: &str) -> Self {
+    pub fn new(sbom: NormalizedSbom, raw_content: &str, bom_profile: crate::model::BomProfile) -> Self {
         let stats = SbomStats::from_sbom(&sbom);
 
         // Calculate quality score
@@ -141,15 +155,18 @@ impl ViewApp {
             tree_state.expand(&format!("eco:{eco}"));
         }
 
-        // Restore last active tab from preferences
+        // Restore last active tab from preferences (must be valid for this profile)
+        let available_tabs = ViewTab::tabs_for_profile(bom_profile);
         let initial_tab = crate::config::TuiPreferences::load()
             .last_view_tab
             .as_deref()
             .and_then(ViewTab::from_str_opt)
+            .filter(|t| available_tabs.contains(t))
             .unwrap_or(ViewTab::Overview);
 
         let mut app = Self {
             sbom,
+            bom_profile,
             active_tab: initial_tab,
             tree_state,
             tree_group_by: TreeGroupBy::Ecosystem,
@@ -181,6 +198,11 @@ impl ViewApp {
             compliance_state,
             sbom_index,
             source_state,
+            crypto_list_selected: 0,
+            algorithms_selected: 0,
+            certificates_selected: 0,
+            keys_selected: 0,
+            protocols_selected: 0,
             bookmarked: HashSet::new(),
             export_template: None,
         };
@@ -199,40 +221,78 @@ impl ViewApp {
         }
     }
 
-    /// Switch to the next tab, resetting focus to left panel.
-    pub const fn next_tab(&mut self) {
-        self.active_tab = match self.active_tab {
-            ViewTab::Overview => ViewTab::Tree,
-            ViewTab::Tree => ViewTab::Vulnerabilities,
-            ViewTab::Vulnerabilities => ViewTab::Licenses,
-            ViewTab::Licenses => ViewTab::Dependencies,
-            ViewTab::Dependencies => ViewTab::Quality,
-            ViewTab::Quality => ViewTab::Compliance,
-            ViewTab::Compliance => ViewTab::Source,
-            ViewTab::Source => ViewTab::Overview,
-        };
+    /// Switch to the next tab (cycles within profile's tab set).
+    pub fn next_tab(&mut self) {
+        let tabs = ViewTab::tabs_for_profile(self.bom_profile);
+        let idx = tabs.iter().position(|t| *t == self.active_tab).unwrap_or(0);
+        self.active_tab = tabs[(idx + 1) % tabs.len()];
         self.focus_panel = FocusPanel::Left;
     }
 
-    /// Switch to the previous tab, resetting focus to left panel.
-    pub const fn prev_tab(&mut self) {
-        self.active_tab = match self.active_tab {
-            ViewTab::Overview => ViewTab::Source,
-            ViewTab::Tree => ViewTab::Overview,
-            ViewTab::Vulnerabilities => ViewTab::Tree,
-            ViewTab::Licenses => ViewTab::Vulnerabilities,
-            ViewTab::Dependencies => ViewTab::Licenses,
-            ViewTab::Quality => ViewTab::Dependencies,
-            ViewTab::Compliance => ViewTab::Quality,
-            ViewTab::Source => ViewTab::Compliance,
-        };
+    /// Switch to the previous tab (cycles within profile's tab set).
+    pub fn prev_tab(&mut self) {
+        let tabs = ViewTab::tabs_for_profile(self.bom_profile);
+        let idx = tabs.iter().position(|t| *t == self.active_tab).unwrap_or(0);
+        self.active_tab = tabs[(idx + tabs.len() - 1) % tabs.len()];
         self.focus_panel = FocusPanel::Left;
     }
 
     /// Select a specific tab, resetting focus to the left (list) panel.
-    pub const fn select_tab(&mut self, tab: ViewTab) {
+    pub fn select_tab(&mut self, tab: ViewTab) {
         self.active_tab = tab;
         self.focus_panel = FocusPanel::Left;
+    }
+
+    // ========================================================================
+    // CBOM per-tab selection helpers
+    // ========================================================================
+
+    /// Get the selection index for the active CBOM tab.
+    pub fn active_crypto_selected(&self) -> usize {
+        match self.active_tab {
+            ViewTab::Algorithms => self.algorithms_selected,
+            ViewTab::Certificates => self.certificates_selected,
+            ViewTab::Keys => self.keys_selected,
+            ViewTab::Protocols => self.protocols_selected,
+            _ => self.crypto_list_selected,
+        }
+    }
+
+    /// Get a mutable reference to the selection index for the active CBOM tab.
+    pub fn active_crypto_selected_mut(&mut self) -> &mut usize {
+        match self.active_tab {
+            ViewTab::Algorithms => &mut self.algorithms_selected,
+            ViewTab::Certificates => &mut self.certificates_selected,
+            ViewTab::Keys => &mut self.keys_selected,
+            ViewTab::Protocols => &mut self.protocols_selected,
+            _ => &mut self.crypto_list_selected,
+        }
+    }
+
+    /// Count crypto components for the active tab (filtered by asset type).
+    pub fn crypto_count_for_tab(&self) -> usize {
+        use crate::model::{ComponentType, CryptoAssetType};
+        let filter = match self.active_tab {
+            ViewTab::Algorithms => Some(CryptoAssetType::Algorithm),
+            ViewTab::Certificates => Some(CryptoAssetType::Certificate),
+            ViewTab::Keys => Some(CryptoAssetType::RelatedCryptoMaterial),
+            ViewTab::Protocols => Some(CryptoAssetType::Protocol),
+            _ => None,
+        };
+        self.sbom
+            .components
+            .values()
+            .filter(|c| {
+                c.component_type == ComponentType::Cryptographic
+                    && filter
+                        .as_ref()
+                        .is_none_or(|f| {
+                            c.crypto_properties
+                                .as_ref()
+                                .is_some_and(|cp| &cp.asset_type == f)
+                        })
+            })
+            .count()
     }
 
     // ========================================================================
@@ -753,7 +813,12 @@ impl ViewApp {
             ViewTab::Quality => self.quality_state.select_prev(),
             ViewTab::Compliance => self.compliance_state.select_prev(),
             ViewTab::Source => self.source_state.select_prev(),
-            ViewTab::Overview => {} // Overview has no list navigation
+            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
+            | ViewTab::Keys | ViewTab::Protocols => {
+                let sel = self.active_crypto_selected_mut();
+                *sel = sel.saturating_sub(1);
+            }
+            ViewTab::Overview | ViewTab::PqcCompliance => {}
         }
     }
 
@@ -771,7 +836,13 @@ impl ViewApp {
                 self.compliance_state.select_next(max);
             }
             ViewTab::Source => self.source_state.select_next(),
-            ViewTab::Overview => {} // Overview has no list navigation
+            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
+            | ViewTab::Keys | ViewTab::Protocols => {
+                let max = self.crypto_count_for_tab().saturating_sub(1);
+                let sel = self.active_crypto_selected_mut();
+                *sel = sel.saturating_add(1).min(max);
+            }
+            ViewTab::Overview | ViewTab::PqcCompliance => {}
         }
     }
 
@@ -818,7 +889,7 @@ impl ViewApp {
     }
 
     /// Go to first item in current view.
-    pub const fn go_first(&mut self) {
+    pub fn go_first(&mut self) {
         match self.active_tab {
             ViewTab::Tree => self.tree_state.select_first(),
             ViewTab::Vulnerabilities => self.vuln_state.selected = 0,
@@ -827,7 +898,9 @@ impl ViewApp {
             ViewTab::Quality => self.quality_state.scroll_offset = 0,
             ViewTab::Compliance => self.compliance_state.selected_violation = 0,
             ViewTab::Source => self.source_state.select_first(),
-            ViewTab::Overview => {}
+            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
+            | ViewTab::Keys | ViewTab::Protocols => *self.active_crypto_selected_mut() = 0,
+            ViewTab::Overview | ViewTab::PqcCompliance => {}
         }
     }
 
@@ -854,7 +927,12 @@ impl ViewApp {
                 self.compliance_state.selected_violation = max.saturating_sub(1);
             }
             ViewTab::Source => self.source_state.select_last(),
-            ViewTab::Overview => {}
+            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
+            | ViewTab::Keys | ViewTab::Protocols => {
+                let max = self.crypto_count_for_tab();
+                *self.active_crypto_selected_mut() = max.saturating_sub(1);
+            }
+            ViewTab::Overview | ViewTab::PqcCompliance => {}
         }
     }
 
@@ -1022,7 +1100,9 @@ impl ViewApp {
                     self.quality_state.view_mode = QualityViewMode::Recommendations;
                 }
             }
-            ViewTab::Overview => {}
+            ViewTab::Overview | ViewTab::Crypto | ViewTab::Algorithms
+            | ViewTab::Certificates | ViewTab::Keys | ViewTab::Protocols
+            | ViewTab::PqcCompliance => {}
         }
     }
 
@@ -1663,8 +1743,15 @@ fn flatten_tree_for_selection(
 /// View tabs for the single SBOM viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewTab {
-    /// High-level SBOM overview with stats
+    // ── Shared across profiles ──
+    /// Overview: SBOM stats or CBOM quantum dashboard (adapts per profile)
     Overview,
+    /// Quality score view (metrics adapt per profile)
+    Quality,
+    /// Original SBOM source viewer
+    Source,
+
+    // ── SBOM-specific ──
     /// Hierarchical component tree
     Tree,
     /// Vulnerability explorer
@@ -1673,41 +1760,55 @@ pub enum ViewTab {
     Licenses,
     /// Dependency graph view
     Dependencies,
-    /// Quality score view
-    Quality,
-    /// Compliance validation view
+    /// Compliance validation view (NTIA/CRA/FDA/SSDF/EO14028)
     Compliance,
-    /// Original SBOM source viewer
-    Source,
+
+    // ── CBOM-specific ──
+    /// Algorithm inventory with quantum readiness indicators
+    Algorithms,
+    /// Certificate validity tracking and expiry timeline
+    Certificates,
+    /// Key material state monitoring
+    Keys,
+    /// Protocol and cipher suite analysis
+    Protocols,
+    /// PQC compliance (CNSA 2.0 + NIST PQC dedicated view)
+    PqcCompliance,
+
+    // ── Legacy ──
+    /// Single crypto tab (kept for preference migration)
+    Crypto,
 }
 
 impl ViewTab {
+    /// Tab display title.
     #[must_use]
     pub const fn title(&self) -> &'static str {
         match self {
             Self::Overview => "Overview",
-            Self::Tree => "Components",
-            Self::Vulnerabilities => "Vulnerabilities",
-            Self::Licenses => "Licenses",
-            Self::Dependencies => "Dependencies",
             Self::Quality => "Quality",
-            Self::Compliance => "Compliance",
             Self::Source => "Source",
+            Self::Tree => "Components",
+            Self::Vulnerabilities => "Vulns",
+            Self::Licenses => "Licenses",
+            Self::Dependencies => "Deps",
+            Self::Compliance => "Compliance",
+            Self::Algorithms => "Algorithms",
+            Self::Certificates => "Certs",
+            Self::Keys => "Keys",
+            Self::Protocols => "Protocols",
+            Self::PqcCompliance => "PQC Compliance",
+            Self::Crypto => "Crypto",
         }
     }
 
+    /// Positional shortcut key based on tab position in the profile's tab set.
     #[must_use]
-    pub const fn shortcut(&self) -> &'static str {
-        match self {
-            Self::Overview => "1",
-            Self::Tree => "2",
-            Self::Vulnerabilities => "3",
-            Self::Licenses => "4",
-            Self::Dependencies => "5",
-            Self::Quality => "6",
-            Self::Compliance => "7",
-            Self::Source => "8",
-        }
+    pub fn shortcut_for_profile(&self, profile: crate::model::BomProfile) -> Option<usize> {
+        Self::tabs_for_profile(profile)
+            .iter()
+            .position(|t| t == self)
+            .map(|i| i + 1)
     }
 
     /// Stable string identifier for persistence.
@@ -1715,13 +1816,49 @@ impl ViewTab {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Overview => "overview",
+            Self::Quality => "quality",
+            Self::Source => "source",
             Self::Tree => "tree",
             Self::Vulnerabilities => "vulnerabilities",
             Self::Licenses => "licenses",
             Self::Dependencies => "dependencies",
-            Self::Quality => "quality",
             Self::Compliance => "compliance",
-            Self::Source => "source",
+            Self::Algorithms => "algorithms",
+            Self::Certificates => "certificates",
+            Self::Keys => "keys",
+            Self::Protocols => "protocols",
+            Self::PqcCompliance => "pqc-compliance",
+            Self::Crypto => "crypto",
+        }
+    }
+
+    /// Get the tab set for a given BOM profile.
+    ///
+    /// Each profile defines its own ordered set of tabs.
+    /// Number keys 1-8 map positionally to this slice.
+    #[must_use]
+    pub const fn tabs_for_profile(profile: crate::model::BomProfile) -> &'static [ViewTab] {
+        match profile {
+            crate::model::BomProfile::Sbom => &[
+                Self::Overview,
+                Self::Tree,
+                Self::Vulnerabilities,
+                Self::Licenses,
+                Self::Dependencies,
+                Self::Quality,
+                Self::Compliance,
+                Self::Source,
+            ],
+            crate::model::BomProfile::Cbom => &[
+                Self::Overview,
+                Self::Algorithms,
+                Self::Certificates,
+                Self::Keys,
+                Self::Protocols,
+                Self::Quality,
+                Self::PqcCompliance,
+                Self::Source,
+            ],
         }
     }
 
@@ -1730,13 +1867,19 @@ impl ViewTab {
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s {
             "overview" => Some(Self::Overview),
+            "quality" => Some(Self::Quality),
+            "source" => Some(Self::Source),
             "tree" => Some(Self::Tree),
             "vulnerabilities" => Some(Self::Vulnerabilities),
             "licenses" => Some(Self::Licenses),
             "dependencies" => Some(Self::Dependencies),
-            "quality" => Some(Self::Quality),
             "compliance" => Some(Self::Compliance),
-            "source" => Some(Self::Source),
+            "algorithms" => Some(Self::Algorithms),
+            "certificates" => Some(Self::Certificates),
+            "keys" => Some(Self::Keys),
+            "protocols" => Some(Self::Protocols),
+            "pqc-compliance" => Some(Self::PqcCompliance),
+            "crypto" => Some(Self::Crypto),
             _ => None,
         }
     }
@@ -2816,7 +2959,7 @@ mod tests {
     #[test]
     fn test_view_app_creation() {
         let sbom = NormalizedSbom::default();
-        let mut app = ViewApp::new(sbom, "");
+        let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
         // Reset to known state (preferences may override default)
         app.active_tab = ViewTab::Overview;
         assert_eq!(app.active_tab, ViewTab::Overview);
@@ -2826,7 +2969,7 @@ mod tests {
     #[test]
     fn test_tab_navigation() {
         let sbom = NormalizedSbom::default();
-        let mut app = ViewApp::new(sbom, "");
+        let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
         // Start from known state regardless of saved preferences
         app.active_tab = ViewTab::Overview;
 
@@ -2931,5 +3074,137 @@ mod tests {
 
         state.toggle_expand("node1");
         assert!(!state.is_expanded("node1"));
+    }
+
+    #[test]
+    fn test_tabs_for_profile_sbom() {
+        let tabs = ViewTab::tabs_for_profile(crate::model::BomProfile::Sbom);
+        assert_eq!(tabs.len(), 8);
+        assert_eq!(tabs[0], ViewTab::Overview);
+        assert_eq!(tabs[1], ViewTab::Tree);
+        assert_eq!(tabs[7], ViewTab::Source);
+        assert!(!tabs.contains(&ViewTab::Algorithms));
+    }
+
+    #[test]
+    fn test_tabs_for_profile_cbom() {
+        let tabs = ViewTab::tabs_for_profile(crate::model::BomProfile::Cbom);
+        assert_eq!(tabs.len(), 8);
+        assert_eq!(tabs[0], ViewTab::Overview);
+        assert_eq!(tabs[1], ViewTab::Algorithms);
+        assert_eq!(tabs[2], ViewTab::Certificates);
+        assert_eq!(tabs[3], ViewTab::Keys);
+        assert_eq!(tabs[4], ViewTab::Protocols);
+        assert_eq!(tabs[5], ViewTab::Quality);
+        assert_eq!(tabs[6], ViewTab::PqcCompliance);
+        assert_eq!(tabs[7], ViewTab::Source);
+        assert!(!tabs.contains(&ViewTab::Tree));
+    }
+
+    #[test]
+    fn test_cbom_tab_navigation_cycles() {
+        let sbom = NormalizedSbom::default();
+        let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+        app.active_tab = ViewTab::Overview;
+
+        app.next_tab();
+        assert_eq!(app.active_tab, ViewTab::Algorithms);
+
+        app.next_tab();
+        assert_eq!(app.active_tab, ViewTab::Certificates);
+
+        // Cycle back from Source → Overview
+        app.active_tab = ViewTab::Source;
+        app.next_tab();
+        assert_eq!(app.active_tab, ViewTab::Overview);
+
+        // Prev from Overview → Source
+        app.prev_tab();
+        assert_eq!(app.active_tab, ViewTab::Source);
+    }
+
+    #[test]
+    fn test_per_tab_selection_independent() {
+        let mut sbom = NormalizedSbom::default();
+        // Add crypto components for navigation
+        for i in 0..5 {
+            let mut c = crate::model::Component::new(
+                format!("algo-{i}"),
+                format!("algo-{i}@1.0"),
+            );
+            c.component_type = crate::model::ComponentType::Cryptographic;
+            c.crypto_properties = Some(
+                crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Algorithm),
+            );
+            sbom.add_component(c);
+        }
+        for i in 0..2 {
+            let mut c = crate::model::Component::new(
+                format!("cert-{i}"),
+                format!("cert-{i}@1.0"),
+            );
+            c.component_type = crate::model::ComponentType::Cryptographic;
+            c.crypto_properties = Some(
+                crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Certificate),
+            );
+            sbom.add_component(c);
+        }
+
+        let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+
+        // Navigate on Algorithms tab
+        app.active_tab = ViewTab::Algorithms;
+        app.navigate_down();
+        app.navigate_down();
+        assert_eq!(app.algorithms_selected, 2);
+
+        // Switch to Certificates — selection should be independent
+        app.active_tab = ViewTab::Certificates;
+        assert_eq!(app.certificates_selected, 0);
+
+        // Navigate on Certificates
+        app.navigate_down();
+        assert_eq!(app.certificates_selected, 1);
+
+        // Switch back to Algorithms — preserved at 2
+        app.active_tab = ViewTab::Algorithms;
+        assert_eq!(app.algorithms_selected, 2);
+    }
+
+    #[test]
+    fn test_crypto_count_for_tab() {
+        let mut sbom = NormalizedSbom::default();
+        for i in 0..3 {
+            let mut c = crate::model::Component::new(
+                format!("algo-{i}"),
+                format!("algo-{i}@1.0"),
+            );
+            c.component_type = crate::model::ComponentType::Cryptographic;
+            c.crypto_properties = Some(
+                crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Algorithm),
+            );
+            sbom.add_component(c);
+        }
+        let mut c = crate::model::Component::new("cert-0".to_string(), "cert-0@1.0".to_string());
+        c.component_type = crate::model::ComponentType::Cryptographic;
+        c.crypto_properties = Some(
+            crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Certificate),
+        );
+        sbom.add_component(c);
+
+        let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+
+        app.active_tab = ViewTab::Algorithms;
+        assert_eq!(app.crypto_count_for_tab(), 3);
+
+        app.active_tab = ViewTab::Certificates;
+        assert_eq!(app.crypto_count_for_tab(), 1);
+
+        app.active_tab = ViewTab::Keys;
+        assert_eq!(app.crypto_count_for_tab(), 0);
+
+        // Legacy Crypto tab counts all
+        app.active_tab = ViewTab::Crypto;
+        assert_eq!(app.crypto_count_for_tab(), 4);
     }
 }

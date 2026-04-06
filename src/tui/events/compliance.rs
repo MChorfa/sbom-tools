@@ -14,9 +14,7 @@ pub(super) fn handle_diff_compliance_keys(app: &mut App, key: KeyEvent) {
 
     // Process the key in a scoped borrow, extracting all side-effect flags
     let (result, wants_export, wants_go_to_component, wants_toggle_group) = {
-        let Some(view) = app.compliance_view.as_mut() else {
-            return;
-        };
+        let view = &mut app.compliance_view;
 
         view.set_max_violations(max_violations);
 
@@ -76,9 +74,7 @@ fn toggle_selected_group(app: &mut App) {
     };
 
     if let Some(element) = element {
-        let Some(view) = app.compliance_view.as_mut() else {
-            return;
-        };
+        let view = &mut app.compliance_view;
         let state = &mut view.inner_mut().expanded_groups;
         if state.contains(&element) {
             state.remove(&element);

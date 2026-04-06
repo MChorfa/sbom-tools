@@ -4,7 +4,7 @@
 //! license, ecosystem, supplier, or vulnerability ID.
 
 use crate::config::QueryConfig;
-use crate::model::{Component, NormalizedSbom, NormalizedSbomIndex};
+use crate::model::{Component, ComponentType, CryptoAssetType, NormalizedSbom, NormalizedSbomIndex};
 use crate::pipeline::{OutputTarget, auto_detect_format, write_output};
 use crate::reports::ReportFormat;
 use anyhow::{Result, bail};
@@ -37,6 +37,12 @@ pub struct QueryFilter {
     pub supplier: Option<String>,
     /// Vulnerability ID filter (exact match on vuln IDs)
     pub affected_by: Option<String>,
+    /// Crypto asset type filter (algorithm, certificate, key, protocol)
+    pub crypto_type: Option<String>,
+    /// Algorithm family filter (substring, e.g., "AES", "RSA", "ML-KEM")
+    pub algorithm_family: Option<String>,
+    /// Quantum safety filter: true = quantum-safe only, false = quantum-vulnerable only
+    pub quantum_safe: Option<bool>,
 }
 
 impl QueryFilter {
@@ -93,6 +99,24 @@ impl QueryFilter {
 
         if let Some(ref vuln_id) = self.affected_by
             && !self.matches_vuln(component, vuln_id)
+        {
+            return false;
+        }
+
+        if let Some(ref ct) = self.crypto_type
+            && !self.matches_crypto_type(component, ct)
+        {
+            return false;
+        }
+
+        if let Some(ref af) = self.algorithm_family
+            && !self.matches_algorithm_family(component, af)
+        {
+            return false;
+        }
+
+        if let Some(qs) = self.quantum_safe
+            && !self.matches_quantum_safe(component, qs)
         {
             return false;
         }
@@ -158,6 +182,60 @@ impl QueryFilter {
             .any(|v| v.id.to_uppercase() == id_upper)
     }
 
+    fn matches_crypto_type(&self, component: &Component, crypto_type: &str) -> bool {
+        if component.component_type != ComponentType::Cryptographic {
+            return false;
+        }
+        let Some(cp) = &component.crypto_properties else {
+            return false;
+        };
+        let ct_lower = crypto_type.to_lowercase();
+        match ct_lower.as_str() {
+            "algorithm" | "algo" => cp.asset_type == CryptoAssetType::Algorithm,
+            "certificate" | "cert" => cp.asset_type == CryptoAssetType::Certificate,
+            "key" | "material" => cp.asset_type == CryptoAssetType::RelatedCryptoMaterial,
+            "protocol" | "proto" => cp.asset_type == CryptoAssetType::Protocol,
+            _ => cp.asset_type.to_string().to_lowercase().contains(&ct_lower),
+        }
+    }
+
+    fn matches_algorithm_family(&self, component: &Component, family_filter: &str) -> bool {
+        if component.component_type != ComponentType::Cryptographic {
+            return false;
+        }
+        let Some(cp) = &component.crypto_properties else {
+            return false;
+        };
+        let filter_lower = family_filter.to_lowercase();
+        // Check algorithm_properties.algorithm_family
+        if let Some(algo) = &cp.algorithm_properties
+            && let Some(fam) = &algo.algorithm_family
+            && fam.to_lowercase().contains(&filter_lower)
+        {
+            return true;
+        }
+        // Fallback: check component name
+        component.name.to_lowercase().contains(&filter_lower)
+    }
+
+    fn matches_quantum_safe(&self, component: &Component, want_safe: bool) -> bool {
+        if component.component_type != ComponentType::Cryptographic {
+            return false;
+        }
+        let Some(cp) = &component.crypto_properties else {
+            return false;
+        };
+        let Some(algo) = &cp.algorithm_properties else {
+            // Non-algorithm crypto assets: include them if filtering for safe
+            return want_safe;
+        };
+        if want_safe {
+            algo.is_quantum_safe()
+        } else {
+            !algo.is_quantum_safe()
+        }
+    }
+
     /// Returns true if no filters are set (would match everything).
     pub fn is_empty(&self) -> bool {
         self.pattern.is_none()
@@ -168,6 +246,9 @@ impl QueryFilter {
             && self.ecosystem.is_none()
             && self.supplier.is_none()
             && self.affected_by.is_none()
+            && self.crypto_type.is_none()
+            && self.algorithm_family.is_none()
+            && self.quantum_safe.is_none()
     }
 
     /// Build a human-readable description of the active filters.
@@ -196,6 +277,19 @@ impl QueryFilter {
         }
         if let Some(ref v) = self.affected_by {
             parts.push(format!("affected-by={v}"));
+        }
+        if let Some(ref ct) = self.crypto_type {
+            parts.push(format!("crypto-type={ct}"));
+        }
+        if let Some(ref af) = self.algorithm_family {
+            parts.push(format!("algorithm-family=\"{af}\""));
+        }
+        if let Some(qs) = self.quantum_safe {
+            parts.push(if qs {
+                "quantum-safe".to_string()
+            } else {
+                "quantum-vulnerable".to_string()
+            });
         }
         if parts.is_empty() {
             "*".to_string()
@@ -229,6 +323,10 @@ pub(crate) struct QueryMatch {
     pub vuln_ids: Vec<String>,
     pub found_in: Vec<SbomSource>,
     pub eol_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crypto_asset_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crypto_quantum_level: Option<u8>,
 }
 
 /// Summary of an SBOM that was searched.
@@ -263,7 +361,7 @@ pub fn run_query(config: QueryConfig, filter: QueryFilter) -> Result<()> {
 
     if filter.is_empty() {
         bail!(
-            "No query filters specified. Provide a search pattern or use --name, --purl, --version, --license, --ecosystem, --supplier, or --affected-by"
+            "No query filters specified. Provide a search pattern or use --name, --purl, --version, --license, --ecosystem, --supplier, --affected-by, --crypto-type, --algorithm-family, --quantum-safe, or --quantum-vulnerable"
         );
     }
 
@@ -418,6 +516,15 @@ fn build_query_match(component: &Component, source: SbomSource) -> QueryMatch {
             .eol
             .as_ref()
             .map_or_else(String::new, |e| format!("{:?}", e.status)),
+        crypto_asset_type: component
+            .crypto_properties
+            .as_ref()
+            .map(|cp| cp.asset_type.to_string()),
+        crypto_quantum_level: component
+            .crypto_properties
+            .as_ref()
+            .and_then(|cp| cp.algorithm_properties.as_ref())
+            .and_then(|a| a.nist_quantum_security_level),
     }
 }
 
@@ -904,11 +1011,98 @@ mod tests {
                     path: "sbom1.json".to_string(),
                 }],
                 eol_status: String::new(),
+                crypto_asset_type: None,
+                crypto_quantum_level: None,
             }],
             sbom_summaries: vec![],
         };
         let csv = format_csv_output(&result);
         assert!(csv.starts_with("Component,Version"));
         assert!(csv.contains("lodash,4.17.21,npm,MIT"));
+    }
+
+    fn make_crypto_component(
+        name: &str,
+        asset_type: crate::model::CryptoAssetType,
+        ql: Option<u8>,
+    ) -> Component {
+        let mut c = Component::new(name.to_string(), format!("{name}@1.0"));
+        c.component_type = ComponentType::Cryptographic;
+        let mut props = crate::model::CryptoProperties::new(asset_type);
+        if let Some(level) = ql {
+            props = props.with_algorithm_properties(
+                crate::model::AlgorithmProperties::new(crate::model::CryptoPrimitive::Ae)
+                    .with_nist_quantum_security_level(level),
+            );
+        }
+        c.crypto_properties = Some(props);
+        c
+    }
+
+    #[test]
+    fn test_filter_crypto_type_algorithm() {
+        let comp = make_crypto_component("AES-256", CryptoAssetType::Algorithm, Some(1));
+        let key = ComponentSortKey::from_component(&comp);
+        let filter = QueryFilter {
+            crypto_type: Some("algorithm".to_string()),
+            ..Default::default()
+        };
+        assert!(filter.matches(&comp, &key));
+
+        let filter2 = QueryFilter {
+            crypto_type: Some("certificate".to_string()),
+            ..Default::default()
+        };
+        assert!(!filter2.matches(&comp, &key));
+    }
+
+    #[test]
+    fn test_filter_quantum_safe() {
+        let safe = make_crypto_component("ML-KEM-1024", CryptoAssetType::Algorithm, Some(5));
+        let key_safe = ComponentSortKey::from_component(&safe);
+        let vuln = make_crypto_component("RSA-2048", CryptoAssetType::Algorithm, Some(0));
+        let key_vuln = ComponentSortKey::from_component(&vuln);
+
+        let filter = QueryFilter {
+            quantum_safe: Some(true),
+            ..Default::default()
+        };
+        assert!(filter.matches(&safe, &key_safe));
+        assert!(!filter.matches(&vuln, &key_vuln));
+    }
+
+    #[test]
+    fn test_filter_quantum_vulnerable() {
+        let vuln = make_crypto_component("RSA-2048", CryptoAssetType::Algorithm, Some(0));
+        let key = ComponentSortKey::from_component(&vuln);
+
+        let filter = QueryFilter {
+            quantum_safe: Some(false),
+            ..Default::default()
+        };
+        assert!(filter.matches(&vuln, &key));
+    }
+
+    #[test]
+    fn test_filter_algorithm_family() {
+        let mut comp = make_crypto_component("AES-256-GCM", CryptoAssetType::Algorithm, Some(1));
+        if let Some(ref mut cp) = comp.crypto_properties {
+            if let Some(ref mut algo) = cp.algorithm_properties {
+                algo.algorithm_family = Some("AES".to_string());
+            }
+        }
+        let key = ComponentSortKey::from_component(&comp);
+
+        let filter = QueryFilter {
+            algorithm_family: Some("AES".to_string()),
+            ..Default::default()
+        };
+        assert!(filter.matches(&comp, &key));
+
+        let filter2 = QueryFilter {
+            algorithm_family: Some("RSA".to_string()),
+            ..Default::default()
+        };
+        assert!(!filter2.matches(&comp, &key));
     }
 }

@@ -6,9 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 /// Handle source-tab-specific key events.
 pub fn handle_source_keys(app: &mut App, key: KeyEvent) {
-    let Some(view) = app.source_view.as_mut() else {
-        return;
-    };
+    let view = &mut app.source_view;
 
     let mut ctx = ViewContext {
         mode: ViewMode::from_app_mode(app.mode),

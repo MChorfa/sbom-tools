@@ -534,6 +534,42 @@ fn violation_to_rule_id(requirement: &str) -> &'static str {
         "SBOM-CRA-ANNEX-III"
     } else if req.contains("annex i") || req.contains("annex_i") {
         "SBOM-CRA-ANNEX-I"
+    }
+    // CNSA 2.0 rules
+    else if req.contains("cnsa 2.0 symmetric") {
+        "SBOM-CNSA2-ALG-001"
+    } else if req.contains("cnsa 2.0 hash") {
+        "SBOM-CNSA2-ALG-002"
+    } else if req.contains("cnsa 2.0 kem") {
+        "SBOM-CNSA2-ALG-003"
+    } else if req.contains("cnsa 2.0 signature") {
+        "SBOM-CNSA2-ALG-004"
+    } else if req.contains("cnsa 2.0 level 5") {
+        "SBOM-CNSA2-ALG-007"
+    } else if req.contains("cnsa 2.0 pqc migration") {
+        "SBOM-CNSA2-ALG-006"
+    } else if req.contains("cnsa 2.0 certificate") {
+        "SBOM-CNSA2-CERT-001"
+    } else if req.starts_with("cnsa 2.0") {
+        "SBOM-CNSA2-GENERAL"
+    }
+    // NIST PQC rules
+    else if req.contains("ir 8547: quantum-vulnerable") {
+        "SBOM-PQC-001"
+    } else if req.contains("ir 8547: quantum assessment") {
+        "SBOM-PQC-012"
+    } else if req.contains("ir 8547: recommended transition") {
+        "SBOM-PQC-010"
+    } else if req.contains("sp 800-131a: disallowed") {
+        "SBOM-PQC-005"
+    } else if req.contains("sp 800-131a rev 3: ecb") {
+        "SBOM-PQC-008"
+    } else if req.contains("fips 203/204/205") {
+        "SBOM-PQC-009"
+    } else if req.contains("nist: minimum key size") {
+        "SBOM-PQC-KEY-001"
+    } else if req.starts_with("ir 8547") || req.starts_with("sp 800-131a") {
+        "SBOM-PQC-GENERAL"
     } else {
         "SBOM-CRA-GENERAL"
     }

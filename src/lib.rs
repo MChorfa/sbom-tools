@@ -264,7 +264,9 @@ pub use matching::{
     RuleEngine,
 };
 pub use model::{
-    CanonicalId, Component, ComponentSortKey, NormalizedSbom, NormalizedSbomIndex, SbomIndexBuilder,
+    AlgorithmProperties, BomProfile, CanonicalId, CertificateProperties, CipherSuite, Component,
+    ComponentSortKey, CryptoAssetType, CryptoProperties, NormalizedSbom, NormalizedSbomIndex,
+    ProtocolProperties, RelatedCryptoMaterialProperties, SbomIndexBuilder,
 };
 pub use parsers::{SbomParser, parse_sbom, parse_sbom_str};
 pub use quality::{QualityGrade, QualityReport, QualityScorer, ScoringProfile};

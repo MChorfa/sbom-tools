@@ -1,9 +1,9 @@
 //! Core SBOM and Component data structures.
 
 use super::{
-    CanonicalId, ComponentExtensions, ComponentIdentifiers, ComponentType, DependencyScope,
-    DependencyType, DocumentMetadata, Ecosystem, ExternalReference, FormatExtensions, Hash,
-    LicenseInfo, Organization, VexStatus, VulnerabilityRef,
+    CanonicalId, ComponentExtensions, ComponentIdentifiers, ComponentType, CryptoProperties,
+    DependencyScope, DependencyType, DocumentMetadata, Ecosystem, ExternalReference,
+    FormatExtensions, Hash, LicenseInfo, Organization, VexStatus, VulnerabilityRef,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -461,7 +461,7 @@ impl StalenessInfo {
     /// Create from last published date
     #[must_use]
     pub fn from_date(last_published: chrono::DateTime<chrono::Utc>) -> Self {
-        let days = (chrono::Utc::now() - last_published).num_days() as u32;
+        let days = (chrono::Utc::now() - last_published).num_days().max(0) as u32;
         let level = StalenessLevel::from_days(days);
         Self {
             level,
@@ -621,6 +621,9 @@ pub struct Component {
     pub staleness: Option<StalenessInfo>,
     /// End-of-life information (populated by enrichment)
     pub eol: Option<EolInfo>,
+    /// Cryptographic properties (CycloneDX 1.6+ cryptoProperties)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crypto_properties: Option<CryptoProperties>,
 }
 
 impl Component {
@@ -654,6 +657,7 @@ impl Component {
             version_range: None,
             staleness: None,
             eol: None,
+            crypto_properties: None,
         }
     }
 
@@ -711,6 +715,31 @@ impl Component {
         }
         if let Some(vr) = &self.version_range {
             hasher_input.extend(vr.as_bytes());
+        }
+        // Crypto properties: include fields that affect security semantics
+        if let Some(cp) = &self.crypto_properties {
+            hasher_input.extend(cp.asset_type.to_string().as_bytes());
+            if let Some(oid) = &cp.oid {
+                hasher_input.extend(oid.as_bytes());
+            }
+            if let Some(algo) = &cp.algorithm_properties {
+                if let Some(family) = &algo.algorithm_family {
+                    hasher_input.extend(family.as_bytes());
+                }
+                if let Some(level) = algo.nist_quantum_security_level {
+                    hasher_input.push(level);
+                }
+            }
+            if let Some(mat) = &cp.related_crypto_material_properties
+                && let Some(state) = &mat.state
+            {
+                hasher_input.extend(state.to_string().as_bytes());
+            }
+            if let Some(cert) = &cp.certificate_properties
+                && let Some(expiry) = &cert.not_valid_after
+            {
+                hasher_input.extend(expiry.to_rfc3339().as_bytes());
+            }
         }
 
         self.content_hash = xxh3_64(&hasher_input);

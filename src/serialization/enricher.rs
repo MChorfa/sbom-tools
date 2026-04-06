@@ -6,6 +6,8 @@
 use crate::model::NormalizedSbom;
 use serde_json::Value;
 
+use super::ValueExt;
+
 /// Enrich a raw SBOM JSON with vulnerability and EOL data from the parsed model.
 ///
 /// Takes the raw JSON content and the enriched `NormalizedSbom`, then injects
@@ -85,7 +87,7 @@ fn inject_cyclonedx_vulns(doc: &mut Value, sbom: &NormalizedSbom) {
 fn inject_cyclonedx_eol(doc: &mut Value, sbom: &NormalizedSbom) {
     if let Some(components) = doc.get_mut("components").and_then(Value::as_array_mut) {
         for comp_val in components {
-            let name = comp_val.get("name").and_then(Value::as_str).unwrap_or("");
+            let name = comp_val.str_field("name");
 
             // Find matching component in our model
             let matching = sbom

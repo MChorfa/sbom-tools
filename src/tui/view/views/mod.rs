@@ -1,9 +1,15 @@
 //! View-specific rendering for the `ViewApp`.
 
+mod algorithms;
+mod certificates;
 mod compliance;
+mod crypto;
 mod dependencies;
+mod keys;
 mod licenses;
 mod overview;
+mod pqc_compliance;
+mod protocols;
 mod quality;
 mod source;
 mod tree;
@@ -11,6 +17,12 @@ mod vulnerabilities;
 
 pub(crate) use compliance::build_groups;
 pub use compliance::{StandardComplianceState, compute_compliance_results, render_compliance};
+pub use algorithms::render_algorithms;
+pub use certificates::render_certificates;
+pub use crypto::render_crypto;
+pub use keys::render_keys;
+pub use pqc_compliance::render_pqc_compliance;
+pub use protocols::render_protocols;
 pub use dependencies::{FlatDepNode, render_dependencies};
 pub use licenses::render_licenses;
 pub(crate) use licenses::{build_license_data_from_app, get_first_component_id_for_license};

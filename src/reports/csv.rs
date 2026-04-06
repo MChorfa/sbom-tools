@@ -84,7 +84,7 @@ impl ReportGenerator for CsvReporter {
         let mut content = String::with_capacity(sbom.components.len() * 150 + 100);
 
         content.push_str(
-            "Name,Version,Ecosystem,Type,PURL,Licenses,Vulnerabilities,EOL Status,EOL Date\n",
+            "Name,Version,Ecosystem,Type,PURL,Licenses,Vulnerabilities,EOL Status,EOL Date,Crypto Asset Type,Algorithm Family,Quantum Level\n",
         );
 
         for (_, comp) in &sbom.components {
@@ -106,9 +106,34 @@ impl ReportGenerator for CsvReporter {
                 .and_then(|e| e.eol_date.map(|d| d.to_string()));
             let eol_date = eol_date.as_deref().unwrap_or("-");
 
+            // Crypto fields
+            let crypto_type = comp
+                .crypto_properties
+                .as_ref()
+                .map(|cp| cp.asset_type.to_string())
+                .unwrap_or_default();
+            let algo_family = comp
+                .crypto_properties
+                .as_ref()
+                .and_then(|cp| {
+                    cp.algorithm_properties
+                        .as_ref()
+                        .and_then(|a| a.algorithm_family.clone())
+                })
+                .unwrap_or_default();
+            let quantum_level = comp
+                .crypto_properties
+                .as_ref()
+                .and_then(|cp| {
+                    cp.algorithm_properties
+                        .as_ref()
+                        .and_then(|a| a.nist_quantum_security_level.map(|l| l.to_string()))
+                })
+                .unwrap_or_default();
+
             let _ = writeln!(
                 content,
-                "\"{}\",\"{}\",\"{}\",\"{:?}\",\"{}\",\"{}\",{},\"{}\",\"{}\"",
+                "\"{}\",\"{}\",\"{}\",\"{:?}\",\"{}\",\"{}\",{},\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"",
                 escape_csv(&comp.name),
                 comp.version.as_deref().unwrap_or("-"),
                 ecosystem,
@@ -118,6 +143,9 @@ impl ReportGenerator for CsvReporter {
                 vuln_count,
                 eol_status,
                 eol_date,
+                crypto_type,
+                algo_family,
+                quantum_level,
             );
         }
 

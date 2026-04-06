@@ -32,6 +32,18 @@ pub struct CostModel {
     pub dependency_removed: u32,
     /// Cost for hash mismatch (integrity concern)
     pub hash_mismatch: u32,
+    /// Cost for crypto algorithm family change
+    pub crypto_algorithm_changed: u32,
+    /// Cost for crypto security downgrade (weaker algorithm or lower security level)
+    pub crypto_downgrade: u32,
+    /// Cost for crypto key rotation
+    pub crypto_key_rotated: u32,
+    /// Cost for certificate expiry date change
+    pub crypto_cert_expiry_changed: u32,
+    /// Cost for protocol version change
+    pub crypto_protocol_changed: u32,
+    /// Cost for quantum security level change
+    pub crypto_quantum_level_changed: u32,
 }
 
 impl Default for CostModel {
@@ -49,6 +61,12 @@ impl Default for CostModel {
             dependency_added: 5,
             dependency_removed: 5,
             hash_mismatch: 8,
+            crypto_algorithm_changed: 8,
+            crypto_downgrade: 20,
+            crypto_key_rotated: 3,
+            crypto_cert_expiry_changed: 5,
+            crypto_protocol_changed: 6,
+            crypto_quantum_level_changed: 10,
         }
     }
 }
@@ -62,6 +80,9 @@ impl CostModel {
             vulnerability_resolved: -5,
             hash_mismatch: 15,
             supplier_changed: 8,
+            crypto_downgrade: 30,
+            crypto_quantum_level_changed: 15,
+            crypto_algorithm_changed: 12,
             ..Default::default()
         }
     }
@@ -144,6 +165,12 @@ mod tests {
         assert_eq!(model.vulnerability_introduced, 15);
         assert_eq!(model.vulnerability_resolved, -3);
         assert_eq!(model.hash_mismatch, 8);
+        assert_eq!(model.crypto_algorithm_changed, 8);
+        assert_eq!(model.crypto_downgrade, 20);
+        assert_eq!(model.crypto_key_rotated, 3);
+        assert_eq!(model.crypto_cert_expiry_changed, 5);
+        assert_eq!(model.crypto_protocol_changed, 6);
+        assert_eq!(model.crypto_quantum_level_changed, 10);
     }
 
     #[test]
@@ -153,6 +180,8 @@ mod tests {
         assert!(model.vulnerability_introduced > default.vulnerability_introduced);
         assert!(model.hash_mismatch > default.hash_mismatch);
         assert!(model.vulnerability_resolved < default.vulnerability_resolved);
+        assert!(model.crypto_downgrade > default.crypto_downgrade);
+        assert!(model.crypto_quantum_level_changed > default.crypto_quantum_level_changed);
     }
 
     #[test]

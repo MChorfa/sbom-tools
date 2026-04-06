@@ -7,4 +7,4 @@ mod audit;
 mod hash;
 
 pub use audit::{HashAuditReport, HashAuditResult, audit_component_hashes};
-pub use hash::{HashVerifyResult, read_hash_file, verify_file_hash};
+pub use hash::{HashError, HashVerifyResult, read_hash_file, verify_file_hash};

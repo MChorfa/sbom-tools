@@ -491,7 +491,7 @@ impl StalenessEnricher {
         }
 
         if let Some(last_published) = metadata.last_published {
-            let days = (Utc::now() - last_published).num_days() as u32;
+            let days = (Utc::now() - last_published).num_days().max(0) as u32;
 
             if days >= self.config.abandoned_threshold_days {
                 return StalenessLevel::Abandoned;
@@ -515,6 +515,11 @@ impl StalenessEnricher {
         let mut stats = StalenessEnrichmentStats::default();
 
         for component in components.iter_mut() {
+            // Skip cryptographic assets — not registry-published packages.
+            if component.component_type == crate::model::ComponentType::Cryptographic {
+                stats.skipped_count += 1;
+                continue;
+            }
             stats.components_checked += 1;
 
             // Skip unsupported ecosystems
@@ -536,7 +541,7 @@ impl StalenessEnricher {
                     let level = self.calculate_staleness(&metadata);
                     let days_since_update = metadata
                         .last_published
-                        .map(|d| (Utc::now() - d).num_days() as u32);
+                        .map(|d| (Utc::now() - d).num_days().max(0) as u32);
 
                     component.staleness = Some(StalenessInfo {
                         level,

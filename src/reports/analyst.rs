@@ -20,6 +20,9 @@ pub struct AnalystReport {
     pub component_findings: ComponentFindings,
     /// Compliance status summary
     pub compliance_status: ComplianceStatus,
+    /// Cryptographic asset findings
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crypto_findings: Option<CryptoFindings>,
     /// Analyst notes and annotations
     pub analyst_notes: Vec<AnalystNote>,
     /// Recommended actions
@@ -38,6 +41,7 @@ impl AnalystReport {
             vulnerability_findings: VulnerabilityFindings::default(),
             component_findings: ComponentFindings::default(),
             compliance_status: ComplianceStatus::default(),
+            crypto_findings: None,
             analyst_notes: Vec::new(),
             recommendations: Vec::new(),
             generated_at: Utc::now(),
@@ -53,11 +57,16 @@ impl AnalystReport {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         // Estimate capacity: ~200 bytes per section, plus variable content
+        let crypto_size = self
+            .crypto_findings
+            .as_ref()
+            .map_or(0, |cf| 500 + cf.weak_algorithms.len() * 100 + cf.deprecation_warnings.len() * 80);
         let estimated_size = 2000
             + self.vulnerability_findings.kev_vulnerabilities.len() * 100
             + self.component_findings.license_issues.len() * 150
             + self.recommendations.len() * 300
-            + self.analyst_notes.len() * 100;
+            + self.analyst_notes.len() * 100
+            + crypto_size;
         let mut md = String::with_capacity(estimated_size);
 
         // Title
@@ -209,6 +218,70 @@ impl AnalystReport {
                 );
             }
             md.push('\n');
+        }
+
+        // Cryptographic Findings
+        if let Some(cf) = &self.crypto_findings {
+            md.push_str("## Cryptographic Asset Findings\n\n");
+            md.push_str("| Metric | Value |\n");
+            md.push_str("|--------|-------|\n");
+            let _ = writeln!(md, "| Total Crypto Assets | {} |", cf.total_crypto_assets);
+            let _ = writeln!(md, "| Algorithms | {} |", cf.algorithms_count);
+            let _ = writeln!(md, "| Certificates | {} |", cf.certificates_count);
+            let _ = writeln!(md, "| Key Material | {} |", cf.keys_count);
+            let _ = writeln!(md, "| Protocols | {} |", cf.protocols_count);
+            let _ = writeln!(
+                md,
+                "| Quantum Readiness | {:.0}% ({}/{}) |",
+                cf.quantum_readiness_pct, cf.quantum_safe_count, cf.algorithms_count
+            );
+            if cf.hybrid_pqc_count > 0 {
+                let _ = writeln!(md, "| Hybrid PQC Combiners | {} |", cf.hybrid_pqc_count);
+            }
+            md.push('\n');
+
+            if !cf.weak_algorithms.is_empty() {
+                md.push_str("### Weak/Broken Algorithms\n\n");
+                md.push_str("| Algorithm | Family | Quantum Level | Reason |\n");
+                md.push_str("|-----------|--------|---------------|--------|\n");
+                for algo in &cf.weak_algorithms {
+                    let family = algo.family.as_deref().unwrap_or("-");
+                    let ql = algo
+                        .quantum_level
+                        .map_or("-".to_string(), |l| l.to_string());
+                    let _ = writeln!(md, "| {} | {family} | {ql} | {} |", algo.name, algo.reason);
+                }
+                md.push('\n');
+            }
+
+            if !cf.expired_certificates.is_empty() {
+                md.push_str("### Expired Certificates\n\n");
+                for cert in &cf.expired_certificates {
+                    let expires = cert.expires.as_deref().unwrap_or("unknown");
+                    let _ = writeln!(md, "- **{}** — expired {expires}", cert.name);
+                }
+                md.push('\n');
+            }
+
+            if !cf.compromised_keys.is_empty() {
+                md.push_str("### Compromised Key Material\n\n");
+                for key in &cf.compromised_keys {
+                    let _ = writeln!(
+                        md,
+                        "- **{}** ({}) — state: {}",
+                        key.name, key.material_type, key.state
+                    );
+                }
+                md.push('\n');
+            }
+
+            if !cf.deprecation_warnings.is_empty() {
+                md.push_str("### Quantum Deprecation Warnings\n\n");
+                for warning in &cf.deprecation_warnings {
+                    let _ = writeln!(md, "- {warning}");
+                }
+                md.push('\n');
+            }
         }
 
         // Compliance Status
@@ -578,6 +651,72 @@ impl std::fmt::Display for IssueSeverity {
     }
 }
 
+/// Cryptographic asset findings
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CryptoFindings {
+    /// Total cryptographic components
+    pub total_crypto_assets: usize,
+    /// Algorithm count
+    pub algorithms_count: usize,
+    /// Certificate count
+    pub certificates_count: usize,
+    /// Key material count
+    pub keys_count: usize,
+    /// Protocol count
+    pub protocols_count: usize,
+    /// Quantum readiness percentage (0-100)
+    pub quantum_readiness_pct: f32,
+    /// Quantum-safe algorithm count
+    pub quantum_safe_count: usize,
+    /// Quantum-vulnerable algorithm count
+    pub quantum_vulnerable_count: usize,
+    /// Hybrid PQC combiner count
+    pub hybrid_pqc_count: usize,
+    /// Weak/broken algorithms found
+    pub weak_algorithms: Vec<CryptoAlgorithmFinding>,
+    /// Expired certificates
+    pub expired_certificates: Vec<CryptoCertFinding>,
+    /// Compromised key material
+    pub compromised_keys: Vec<CryptoKeyFinding>,
+    /// Deprecation warnings (quantum-vulnerable classical algorithms)
+    pub deprecation_warnings: Vec<String>,
+}
+
+/// Individual algorithm finding for analyst reports
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CryptoAlgorithmFinding {
+    /// Algorithm name
+    pub name: String,
+    /// Algorithm family (e.g., "SHA-1", "DES")
+    pub family: Option<String>,
+    /// NIST quantum security level (0 = vulnerable)
+    pub quantum_level: Option<u8>,
+    /// Why this is flagged
+    pub reason: String,
+}
+
+/// Certificate finding for analyst reports
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CryptoCertFinding {
+    /// Certificate subject or component name
+    pub name: String,
+    /// Expiry date
+    pub expires: Option<String>,
+    /// Days overdue (positive = expired)
+    pub days_overdue: Option<i64>,
+}
+
+/// Key material finding for analyst reports
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CryptoKeyFinding {
+    /// Key component name
+    pub name: String,
+    /// Material type
+    pub material_type: String,
+    /// Current state
+    pub state: String,
+}
+
 /// Compliance status summary
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComplianceStatus {
@@ -683,6 +822,8 @@ pub enum NoteTargetType {
     Component,
     /// Note about a license
     License,
+    /// Note about a cryptographic asset
+    Cryptography,
     /// General note
     General,
 }
@@ -693,6 +834,7 @@ impl std::fmt::Display for NoteTargetType {
             Self::Vulnerability => write!(f, "Vulnerability"),
             Self::Component => write!(f, "Component"),
             Self::License => write!(f, "License"),
+            Self::Cryptography => write!(f, "Cryptography"),
             Self::General => write!(f, "General"),
         }
     }
@@ -770,6 +912,8 @@ pub enum RecommendationCategory {
     AddInfo,
     /// Fix configuration
     Config,
+    /// Cryptographic migration or remediation
+    Cryptography,
 }
 
 impl std::fmt::Display for RecommendationCategory {
@@ -781,6 +925,7 @@ impl std::fmt::Display for RecommendationCategory {
             Self::Monitor => write!(f, "Monitor"),
             Self::AddInfo => write!(f, "Add Information"),
             Self::Config => write!(f, "Configuration"),
+            Self::Cryptography => write!(f, "Cryptography"),
         }
     }
 }

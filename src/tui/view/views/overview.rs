@@ -5,10 +5,17 @@ use crate::tui::view::app::ViewApp;
 use crate::tui::widgets::{SeverityBar, extract_display_name, format_count};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Row, Table},
+    widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
 };
 
 pub fn render_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    match app.bom_profile {
+        crate::model::BomProfile::Cbom => render_cbom_overview(frame, area, app),
+        crate::model::BomProfile::Sbom => render_sbom_overview(frame, area, app),
+    }
+}
+
+fn render_sbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
     // Split into left (stats) and right (details) panels
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -17,6 +24,193 @@ pub fn render_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
     render_stats_panel(frame, chunks[0], app);
     render_details_panel(frame, chunks[1], app);
+}
+
+fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    use crate::model::{ComponentType, CryptoAssetType};
+    use crate::quality::CryptographyMetrics;
+
+    let metrics = CryptographyMetrics::from_sbom(&app.sbom);
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    // ── Left: asset summary ──
+    let readiness = metrics.quantum_readiness_score();
+    let readiness_color = if readiness >= 80.0 {
+        Color::Green
+    } else if readiness >= 40.0 {
+        Color::Yellow
+    } else {
+        Color::Red
+    };
+
+    let bar_filled = ((readiness / 100.0) * 20.0) as usize;
+    let bar_empty = 20_usize.saturating_sub(bar_filled);
+    let bar = format!(
+        "{}{}",
+        "\u{2588}".repeat(bar_filled),
+        "\u{2591}".repeat(bar_empty)
+    );
+
+    let mut left_lines = vec![
+        Line::from(vec![
+            Span::styled(" Quantum Readiness  ", Style::default().add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(&bar, Style::default().fg(readiness_color)),
+            Span::styled(
+                format!(" {readiness:.0}%"),
+                Style::default()
+                    .fg(readiness_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!("  ({}/{})", metrics.quantum_safe_count, metrics.algorithms_count)),
+        ]),
+        Line::raw(""),
+        Line::styled(
+            format!(" Algorithms:    {}", metrics.algorithms_count),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::from(format!(
+            "   Quantum-safe  {}",
+            metrics.quantum_safe_count
+        )),
+        Line::from(format!(
+            "   Vulnerable    {}",
+            metrics.quantum_vulnerable_count
+        )),
+    ];
+
+    if metrics.weak_algorithm_count > 0 {
+        left_lines.push(Line::styled(
+            format!("   Weak/broken   {}", metrics.weak_algorithm_count),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if metrics.hybrid_pqc_count > 0 {
+        left_lines.push(Line::styled(
+            format!("   Hybrid PQC    {}", metrics.hybrid_pqc_count),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+
+    left_lines.push(Line::raw(""));
+    left_lines.push(Line::styled(
+        format!(" Certificates:  {}", metrics.certificates_count),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    if metrics.expired_certificates > 0 {
+        left_lines.push(Line::styled(
+            format!("   Expired       {}", metrics.expired_certificates),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if metrics.expiring_soon_certificates > 0 {
+        left_lines.push(Line::styled(
+            format!("   Expiring      {}", metrics.expiring_soon_certificates),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    left_lines.push(Line::raw(""));
+    left_lines.push(Line::styled(
+        format!(" Keys:          {}", metrics.keys_count),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    if metrics.compromised_keys > 0 {
+        left_lines.push(Line::styled(
+            format!("   Compromised   {}", metrics.compromised_keys),
+            Style::default().fg(Color::Red),
+        ));
+    }
+
+    left_lines.push(Line::raw(""));
+    left_lines.push(Line::styled(
+        format!(" Protocols:     {}", metrics.protocols_count),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+
+    let left_panel = Paragraph::new(left_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" CBOM Overview "),
+    );
+    frame.render_widget(left_panel, chunks[0]);
+
+    // ── Right: PQC migration status + warnings ──
+    let mut right_lines = vec![
+        Line::styled(
+            " PQC Migration Status",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+
+    // List algorithms with their PQC status
+    let algos: Vec<_> = app
+        .sbom
+        .components
+        .values()
+        .filter(|c| {
+            c.component_type == ComponentType::Cryptographic
+                && c.crypto_properties
+                    .as_ref()
+                    .is_some_and(|cp| cp.asset_type == CryptoAssetType::Algorithm)
+        })
+        .collect();
+
+    for comp in &algos {
+        let algo = comp
+            .crypto_properties
+            .as_ref()
+            .and_then(|cp| cp.algorithm_properties.as_ref());
+        let (icon, color) = if let Some(a) = algo {
+            if a.is_weak_by_name(&comp.name) {
+                ("!", Color::Red)
+            } else if a.is_quantum_safe() {
+                ("\u{2713}", Color::Green)
+            } else {
+                ("\u{2717}", Color::Yellow)
+            }
+        } else {
+            ("?", Color::DarkGray)
+        };
+        right_lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{icon} "), Style::default().fg(color)),
+            Span::raw(&comp.name),
+        ]));
+    }
+
+    // Weak algorithm warnings
+    if !metrics.weak_algorithm_names.is_empty() {
+        right_lines.push(Line::raw(""));
+        right_lines.push(Line::styled(
+            " Weak Algorithms",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ));
+        for name in &metrics.weak_algorithm_names {
+            right_lines.push(Line::styled(
+                format!("  ! {name}"),
+                Style::default().fg(Color::Red),
+            ));
+        }
+    }
+
+    let right_panel = Paragraph::new(right_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Migration & Warnings "),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(right_panel, chunks[1]);
 }
 
 fn render_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {

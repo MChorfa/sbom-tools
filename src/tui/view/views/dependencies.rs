@@ -1160,7 +1160,7 @@ fn render_dependency_stats(
     }
 
     // Scrolling support
-    let content_height = lines.len() as u16;
+    let content_height = lines.len().min(u16::MAX as usize) as u16;
     // Focused panel border highlighting
     let detail_border_color = if app.focus_panel == FocusPanel::Right {
         scheme.border_focused
