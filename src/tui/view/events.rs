@@ -1222,8 +1222,11 @@ fn handle_list_click(app: &mut ViewApp, clicked_index: usize, _x: u16) {
         ViewTab::Overview | ViewTab::PqcCompliance => {
             // No list navigation
         }
-        ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
-        | ViewTab::Keys | ViewTab::Protocols => {
+        ViewTab::Crypto
+        | ViewTab::Algorithms
+        | ViewTab::Certificates
+        | ViewTab::Keys
+        | ViewTab::Protocols => {
             let max = app.crypto_count_for_tab();
             if clicked_index < max {
                 *app.active_crypto_selected_mut() = clicked_index;
@@ -1324,8 +1327,11 @@ pub fn get_yank_text(app: &ViewApp) -> Option<String> {
                 .get(app.source_state.selected)
                 .map(|line| line.trim().to_string()),
         },
-        ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
-        | ViewTab::Keys | ViewTab::Protocols => {
+        ViewTab::Crypto
+        | ViewTab::Algorithms
+        | ViewTab::Certificates
+        | ViewTab::Keys
+        | ViewTab::Protocols => {
             let crypto_components: Vec<_> = app
                 .sbom
                 .components

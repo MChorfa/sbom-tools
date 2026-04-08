@@ -4,8 +4,8 @@
 //! profile-specific defaults for quality scoring, compliance standards, and
 //! TUI tab selection.
 
-use super::sbom::NormalizedSbom;
 use super::metadata::ComponentType;
+use super::sbom::NormalizedSbom;
 use serde::{Deserialize, Serialize};
 
 /// BOM profile — determines mode-specific behavior across TUI and CLI.

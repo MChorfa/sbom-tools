@@ -86,7 +86,7 @@ pub fn verify_file_hash(path: &Path, expected: &str) -> Result<HashVerifyResult,
             _ => {
                 return Err(HashError::UnrecognizedFormat {
                     length: expected.len(),
-                })
+                });
             }
         }
     };

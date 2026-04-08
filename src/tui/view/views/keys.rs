@@ -4,11 +4,11 @@
 
 use crate::model::{ComponentType, CryptoAssetType, CryptoMaterialState};
 use crate::tui::view::app::ViewApp;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
 /// Render the keys tab (CBOM mode).
 pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
@@ -18,9 +18,9 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .values()
         .filter(|c| {
             c.component_type == ComponentType::Cryptographic
-                && c.crypto_properties.as_ref().is_some_and(|cp| {
-                    cp.asset_type == CryptoAssetType::RelatedCryptoMaterial
-                })
+                && c.crypto_properties
+                    .as_ref()
+                    .is_some_and(|cp| cp.asset_type == CryptoAssetType::RelatedCryptoMaterial)
         })
         .collect();
 
@@ -58,9 +58,7 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 })
                 .unwrap_or(("?", Color::DarkGray));
 
-            let type_label = mat
-                .map(|m| m.material_type.to_string())
-                .unwrap_or_default();
+            let type_label = mat.map(|m| m.material_type.to_string()).unwrap_or_default();
 
             let style = if i == app.keys_selected {
                 Style::default()
@@ -71,10 +69,7 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
             };
 
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("{state_icon} "),
-                    Style::default().fg(state_color),
-                ),
+                Span::styled(format!("{state_icon} "), Style::default().fg(state_color)),
                 Span::raw(&comp.name),
                 Span::styled(
                     format!("  ({type_label})"),
@@ -93,9 +88,7 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
     frame.render_widget(list, panels[0]);
 
     // ── Right: detail panel ──
-    let selected = app
-        .crypto_list_selected
-        .min(keys.len().saturating_sub(1));
+    let selected = app.crypto_list_selected.min(keys.len().saturating_sub(1));
     let Some(comp) = keys.get(selected) else {
         frame.render_widget(
             Paragraph::new("No selection")
@@ -114,58 +107,54 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
     if let Some(cp) = &comp.crypto_properties
         && let Some(mat) = &cp.related_crypto_material_properties
     {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(format!("Type:   {}", mat.material_type)));
+        if let Some(state) = &mat.state {
+            let color = match state {
+                CryptoMaterialState::Active => Color::Green,
+                CryptoMaterialState::Compromised => Color::Red,
+                CryptoMaterialState::Deactivated => Color::DarkGray,
+                _ => Color::Yellow,
+            };
+            lines.push(Line::from(vec![
+                Span::raw("State:  "),
+                Span::styled(state.to_string(), Style::default().fg(color)),
+            ]));
+        }
+        if let Some(size) = mat.size {
+            lines.push(Line::from(format!("Size:   {size} bits")));
+        }
+        if let Some(fmt) = &mat.format {
+            lines.push(Line::from(format!("Format: {fmt}")));
+        }
+        if let Some(algo_ref) = &mat.algorithm_ref {
+            lines.push(Line::from(format!("Algo:   {algo_ref}")));
+        }
+        if let Some(sb) = &mat.secured_by {
             lines.push(Line::raw(""));
-            lines.push(Line::from(format!("Type:   {}", mat.material_type)));
-            if let Some(state) = &mat.state {
-                let color = match state {
-                    CryptoMaterialState::Active => Color::Green,
-                    CryptoMaterialState::Compromised => Color::Red,
-                    CryptoMaterialState::Deactivated => Color::DarkGray,
-                    _ => Color::Yellow,
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("State:  "),
-                    Span::styled(state.to_string(), Style::default().fg(color)),
-                ]));
+            lines.push(Line::styled(
+                "-- Secured By --",
+                Style::default().fg(Color::Cyan),
+            ));
+            lines.push(Line::from(format!("Mechanism: {}", sb.mechanism)));
+            if let Some(a) = &sb.algorithm_ref {
+                lines.push(Line::from(format!("Algorithm: {a}")));
             }
-            if let Some(size) = mat.size {
-                lines.push(Line::from(format!("Size:   {size} bits")));
-            }
-            if let Some(fmt) = &mat.format {
-                lines.push(Line::from(format!("Format: {fmt}")));
-            }
-            if let Some(algo_ref) = &mat.algorithm_ref {
-                lines.push(Line::from(format!("Algo:   {algo_ref}")));
-            }
-            if let Some(sb) = &mat.secured_by {
-                lines.push(Line::raw(""));
-                lines.push(Line::styled(
-                    "-- Secured By --",
-                    Style::default().fg(Color::Cyan),
-                ));
-                lines.push(Line::from(format!("Mechanism: {}", sb.mechanism)));
-                if let Some(a) = &sb.algorithm_ref {
-                    lines.push(Line::from(format!("Algorithm: {a}")));
-                }
-            }
-            lines.push(Line::raw(""));
-            if let Some(d) = &mat.creation_date {
-                lines.push(Line::from(format!("Created:   {}", d.format("%Y-%m-%d"))));
-            }
-            if let Some(d) = &mat.activation_date {
-                lines.push(Line::from(format!("Activated: {}", d.format("%Y-%m-%d"))));
-            }
-            if let Some(d) = &mat.expiration_date {
-                lines.push(Line::from(format!("Expires:   {}", d.format("%Y-%m-%d"))));
-            }
+        }
+        lines.push(Line::raw(""));
+        if let Some(d) = &mat.creation_date {
+            lines.push(Line::from(format!("Created:   {}", d.format("%Y-%m-%d"))));
+        }
+        if let Some(d) = &mat.activation_date {
+            lines.push(Line::from(format!("Activated: {}", d.format("%Y-%m-%d"))));
+        }
+        if let Some(d) = &mat.expiration_date {
+            lines.push(Line::from(format!("Expires:   {}", d.format("%Y-%m-%d"))));
+        }
     }
 
     let detail = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Key Detail "),
-        )
+        .block(Block::default().borders(Borders::ALL).title(" Key Detail "))
         .wrap(Wrap { trim: true });
     frame.render_widget(detail, panels[1]);
 }

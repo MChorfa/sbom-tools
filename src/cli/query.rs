@@ -4,7 +4,9 @@
 //! license, ecosystem, supplier, or vulnerability ID.
 
 use crate::config::QueryConfig;
-use crate::model::{Component, ComponentType, CryptoAssetType, NormalizedSbom, NormalizedSbomIndex};
+use crate::model::{
+    Component, ComponentType, CryptoAssetType, NormalizedSbom, NormalizedSbomIndex,
+};
 use crate::pipeline::{OutputTarget, auto_detect_format, write_output};
 use crate::reports::ReportFormat;
 use anyhow::{Result, bail};

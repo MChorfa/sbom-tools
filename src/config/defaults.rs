@@ -289,7 +289,10 @@ mod tests {
     #[test]
     fn test_security_preset() {
         let config = AppConfig::security_preset();
-        assert_eq!(config.matching.fuzzy_preset, crate::config::FuzzyPreset::Strict);
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert!(config.behavior.fail_on_vuln);
         assert!(config.ecosystem_rules.detect_typosquats);
         assert!(config.enrichment.is_some());
@@ -307,7 +310,10 @@ mod tests {
     #[test]
     fn test_permissive_preset() {
         let config = AppConfig::permissive_preset();
-        assert_eq!(config.matching.fuzzy_preset, crate::config::FuzzyPreset::Permissive);
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Permissive
+        );
         assert_eq!(config.matching.threshold, Some(0.6));
         assert!(config.matching.include_unchanged);
     }
@@ -315,7 +321,10 @@ mod tests {
     #[test]
     fn test_strict_preset() {
         let config = AppConfig::strict_preset();
-        assert_eq!(config.matching.fuzzy_preset, crate::config::FuzzyPreset::Strict);
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert_eq!(config.matching.threshold, Some(0.95));
         assert!(config.graph_diff.enabled);
     }
@@ -325,8 +334,14 @@ mod tests {
         let default = AppConfig::from_preset(ConfigPreset::Default);
         let security = AppConfig::from_preset(ConfigPreset::Security);
 
-        assert_eq!(default.matching.fuzzy_preset, crate::config::FuzzyPreset::Balanced);
-        assert_eq!(security.matching.fuzzy_preset, crate::config::FuzzyPreset::Strict);
+        assert_eq!(
+            default.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Balanced
+        );
+        assert_eq!(
+            security.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
     }
 
     #[test]

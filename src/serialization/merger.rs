@@ -147,7 +147,11 @@ fn merge_cyclonedx(
     Ok(())
 }
 
-fn merge_spdx3(primary: &mut Value, secondary: &Value, config: &MergeConfig) -> Result<(), MergeError> {
+fn merge_spdx3(
+    primary: &mut Value,
+    secondary: &Value,
+    config: &MergeConfig,
+) -> Result<(), MergeError> {
     let primary_key = if primary.get("element").is_some() {
         "element"
     } else {
@@ -189,7 +193,11 @@ fn merge_spdx3(primary: &mut Value, secondary: &Value, config: &MergeConfig) -> 
     Ok(())
 }
 
-fn merge_spdx2(primary: &mut Value, secondary: &Value, config: &MergeConfig) -> Result<(), MergeError> {
+fn merge_spdx2(
+    primary: &mut Value,
+    secondary: &Value,
+    config: &MergeConfig,
+) -> Result<(), MergeError> {
     // Merge packages
     if let (Some(p_pkgs), Some(s_pkgs)) = (
         primary.get_mut("packages").and_then(Value::as_array_mut),

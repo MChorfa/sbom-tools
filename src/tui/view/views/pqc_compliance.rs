@@ -6,11 +6,11 @@
 use crate::model::{ComponentType, CryptoAssetType};
 use crate::quality::{ComplianceLevel, ViolationSeverity};
 use crate::tui::view::app::ViewApp;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Wrap};
-use ratatui::Frame;
 
 /// Render the PQC compliance tab (CBOM mode).
 pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
@@ -62,24 +62,50 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         .split(area);
 
     // ── Header: compliance summary ──
-    let cnsa2_errors = cnsa2_result.violations.iter().filter(|v| v.severity == ViolationSeverity::Error).count();
-    let pqc_errors = pqc_result.violations.iter().filter(|v| v.severity == ViolationSeverity::Error).count();
+    let cnsa2_errors = cnsa2_result
+        .violations
+        .iter()
+        .filter(|v| v.severity == ViolationSeverity::Error)
+        .count();
+    let pqc_errors = pqc_result
+        .violations
+        .iter()
+        .filter(|v| v.severity == ViolationSeverity::Error)
+        .count();
 
-    let cnsa2_color = if cnsa2_errors == 0 { Color::Green } else { Color::Red };
-    let pqc_color = if pqc_errors == 0 { Color::Green } else { Color::Red };
+    let cnsa2_color = if cnsa2_errors == 0 {
+        Color::Green
+    } else {
+        Color::Red
+    };
+    let pqc_color = if pqc_errors == 0 {
+        Color::Green
+    } else {
+        Color::Red
+    };
 
     let header_lines = vec![
         Line::from(vec![
             Span::raw(" CNSA 2.0: "),
             Span::styled(
-                if cnsa2_errors == 0 { "COMPLIANT" } else { "NON-COMPLIANT" },
-                Style::default().fg(cnsa2_color).add_modifier(Modifier::BOLD),
+                if cnsa2_errors == 0 {
+                    "COMPLIANT"
+                } else {
+                    "NON-COMPLIANT"
+                },
+                Style::default()
+                    .fg(cnsa2_color)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(" ({cnsa2_errors} errors)")),
             Span::raw("   │   "),
             Span::raw("NIST PQC: "),
             Span::styled(
-                if pqc_errors == 0 { "COMPLIANT" } else { "NON-COMPLIANT" },
+                if pqc_errors == 0 {
+                    "COMPLIANT"
+                } else {
+                    "NON-COMPLIANT"
+                },
                 Style::default().fg(pqc_color).add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(" ({pqc_errors} errors)")),
@@ -91,8 +117,11 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         ),
     ];
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::ALL).title(" PQC Compliance "));
+    let header = Paragraph::new(header_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" PQC Compliance "),
+    );
     frame.render_widget(header, chunks[0]);
 
     // ── Table: per-algorithm compliance status ──
@@ -116,7 +145,11 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                 .map_or("-".to_string(), |l| l.to_string());
 
             // Check CNSA 2.0 status for this algorithm
-            let cnsa2_status = if cnsa2_result.violations.iter().any(|v| v.element.as_deref() == Some(&comp.name)) {
+            let cnsa2_status = if cnsa2_result
+                .violations
+                .iter()
+                .any(|v| v.element.as_deref() == Some(&comp.name))
+            {
                 Span::styled("FAIL", Style::default().fg(Color::Red))
             } else {
                 Span::styled("PASS", Style::default().fg(Color::Green))
@@ -124,13 +157,11 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
 
             // Check NIST PQC status for this algorithm
             let pqc_status = if pqc_result.violations.iter().any(|v| {
-                v.element.as_deref() == Some(&comp.name)
-                    && v.severity == ViolationSeverity::Error
+                v.element.as_deref() == Some(&comp.name) && v.severity == ViolationSeverity::Error
             }) {
                 Span::styled("FAIL", Style::default().fg(Color::Red))
             } else if pqc_result.violations.iter().any(|v| {
-                v.element.as_deref() == Some(&comp.name)
-                    && v.severity == ViolationSeverity::Info
+                v.element.as_deref() == Some(&comp.name) && v.severity == ViolationSeverity::Info
             }) {
                 Span::styled("OK", Style::default().fg(Color::Green))
             } else {

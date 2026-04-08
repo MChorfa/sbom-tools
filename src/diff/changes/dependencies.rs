@@ -60,8 +60,11 @@ impl ChangeComputer for DependencyChangeComputer {
         let mut result = DependencyChangeSet::new();
 
         // Normalize old edges (map through component matches)
-        let normalized_old_edges: HashSet<EdgeKey> =
-            old.edges.iter().map(|e| edge_key(e, Some(matches))).collect();
+        let normalized_old_edges: HashSet<EdgeKey> = old
+            .edges
+            .iter()
+            .map(|e| edge_key(e, Some(matches)))
+            .collect();
 
         // Normalize new edges (no match mapping needed)
         let normalized_new_edges: HashSet<EdgeKey> =

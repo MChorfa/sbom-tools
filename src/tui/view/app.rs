@@ -133,7 +133,11 @@ pub struct ViewApp {
 impl ViewApp {
     /// Create a new `ViewApp` for the given SBOM.
     #[must_use]
-    pub fn new(sbom: NormalizedSbom, raw_content: &str, bom_profile: crate::model::BomProfile) -> Self {
+    pub fn new(
+        sbom: NormalizedSbom,
+        raw_content: &str,
+        bom_profile: crate::model::BomProfile,
+    ) -> Self {
         let stats = SbomStats::from_sbom(&sbom);
 
         // Calculate quality score
@@ -284,13 +288,11 @@ impl ViewApp {
             .values()
             .filter(|c| {
                 c.component_type == ComponentType::Cryptographic
-                    && filter
-                        .as_ref()
-                        .is_none_or(|f| {
-                            c.crypto_properties
-                                .as_ref()
-                                .is_some_and(|cp| &cp.asset_type == f)
-                        })
+                    && filter.as_ref().is_none_or(|f| {
+                        c.crypto_properties
+                            .as_ref()
+                            .is_some_and(|cp| &cp.asset_type == f)
+                    })
             })
             .count()
     }
@@ -813,8 +815,11 @@ impl ViewApp {
             ViewTab::Quality => self.quality_state.select_prev(),
             ViewTab::Compliance => self.compliance_state.select_prev(),
             ViewTab::Source => self.source_state.select_prev(),
-            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
-            | ViewTab::Keys | ViewTab::Protocols => {
+            ViewTab::Crypto
+            | ViewTab::Algorithms
+            | ViewTab::Certificates
+            | ViewTab::Keys
+            | ViewTab::Protocols => {
                 let sel = self.active_crypto_selected_mut();
                 *sel = sel.saturating_sub(1);
             }
@@ -836,8 +841,11 @@ impl ViewApp {
                 self.compliance_state.select_next(max);
             }
             ViewTab::Source => self.source_state.select_next(),
-            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
-            | ViewTab::Keys | ViewTab::Protocols => {
+            ViewTab::Crypto
+            | ViewTab::Algorithms
+            | ViewTab::Certificates
+            | ViewTab::Keys
+            | ViewTab::Protocols => {
                 let max = self.crypto_count_for_tab().saturating_sub(1);
                 let sel = self.active_crypto_selected_mut();
                 *sel = sel.saturating_add(1).min(max);
@@ -898,8 +906,11 @@ impl ViewApp {
             ViewTab::Quality => self.quality_state.scroll_offset = 0,
             ViewTab::Compliance => self.compliance_state.selected_violation = 0,
             ViewTab::Source => self.source_state.select_first(),
-            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
-            | ViewTab::Keys | ViewTab::Protocols => *self.active_crypto_selected_mut() = 0,
+            ViewTab::Crypto
+            | ViewTab::Algorithms
+            | ViewTab::Certificates
+            | ViewTab::Keys
+            | ViewTab::Protocols => *self.active_crypto_selected_mut() = 0,
             ViewTab::Overview | ViewTab::PqcCompliance => {}
         }
     }
@@ -927,8 +938,11 @@ impl ViewApp {
                 self.compliance_state.selected_violation = max.saturating_sub(1);
             }
             ViewTab::Source => self.source_state.select_last(),
-            ViewTab::Crypto | ViewTab::Algorithms | ViewTab::Certificates
-            | ViewTab::Keys | ViewTab::Protocols => {
+            ViewTab::Crypto
+            | ViewTab::Algorithms
+            | ViewTab::Certificates
+            | ViewTab::Keys
+            | ViewTab::Protocols => {
                 let max = self.crypto_count_for_tab();
                 *self.active_crypto_selected_mut() = max.saturating_sub(1);
             }
@@ -1100,8 +1114,12 @@ impl ViewApp {
                     self.quality_state.view_mode = QualityViewMode::Recommendations;
                 }
             }
-            ViewTab::Overview | ViewTab::Crypto | ViewTab::Algorithms
-            | ViewTab::Certificates | ViewTab::Keys | ViewTab::Protocols
+            ViewTab::Overview
+            | ViewTab::Crypto
+            | ViewTab::Algorithms
+            | ViewTab::Certificates
+            | ViewTab::Keys
+            | ViewTab::Protocols
             | ViewTab::PqcCompliance => {}
         }
     }
@@ -3128,25 +3146,19 @@ mod tests {
         let mut sbom = NormalizedSbom::default();
         // Add crypto components for navigation
         for i in 0..5 {
-            let mut c = crate::model::Component::new(
-                format!("algo-{i}"),
-                format!("algo-{i}@1.0"),
-            );
+            let mut c = crate::model::Component::new(format!("algo-{i}"), format!("algo-{i}@1.0"));
             c.component_type = crate::model::ComponentType::Cryptographic;
-            c.crypto_properties = Some(
-                crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Algorithm),
-            );
+            c.crypto_properties = Some(crate::model::CryptoProperties::new(
+                crate::model::CryptoAssetType::Algorithm,
+            ));
             sbom.add_component(c);
         }
         for i in 0..2 {
-            let mut c = crate::model::Component::new(
-                format!("cert-{i}"),
-                format!("cert-{i}@1.0"),
-            );
+            let mut c = crate::model::Component::new(format!("cert-{i}"), format!("cert-{i}@1.0"));
             c.component_type = crate::model::ComponentType::Cryptographic;
-            c.crypto_properties = Some(
-                crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Certificate),
-            );
+            c.crypto_properties = Some(crate::model::CryptoProperties::new(
+                crate::model::CryptoAssetType::Certificate,
+            ));
             sbom.add_component(c);
         }
 
@@ -3175,21 +3187,18 @@ mod tests {
     fn test_crypto_count_for_tab() {
         let mut sbom = NormalizedSbom::default();
         for i in 0..3 {
-            let mut c = crate::model::Component::new(
-                format!("algo-{i}"),
-                format!("algo-{i}@1.0"),
-            );
+            let mut c = crate::model::Component::new(format!("algo-{i}"), format!("algo-{i}@1.0"));
             c.component_type = crate::model::ComponentType::Cryptographic;
-            c.crypto_properties = Some(
-                crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Algorithm),
-            );
+            c.crypto_properties = Some(crate::model::CryptoProperties::new(
+                crate::model::CryptoAssetType::Algorithm,
+            ));
             sbom.add_component(c);
         }
         let mut c = crate::model::Component::new("cert-0".to_string(), "cert-0@1.0".to_string());
         c.component_type = crate::model::ComponentType::Cryptographic;
-        c.crypto_properties = Some(
-            crate::model::CryptoProperties::new(crate::model::CryptoAssetType::Certificate),
-        );
+        c.crypto_properties = Some(crate::model::CryptoProperties::new(
+            crate::model::CryptoAssetType::Certificate,
+        ));
         sbom.add_component(c);
 
         let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);

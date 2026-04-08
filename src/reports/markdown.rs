@@ -645,8 +645,14 @@ impl ReportGenerator for MarkdownReporter {
                 .collect();
             if !crypto_comps.is_empty() {
                 writeln!(md, "\n## Cryptographic Inventory\n")?;
-                writeln!(md, "| Name | Asset Type | Family | Primitive | Security Level | Quantum Level |")?;
-                writeln!(md, "|------|-----------|--------|-----------|---------------|--------------|")?;
+                writeln!(
+                    md,
+                    "| Name | Asset Type | Family | Primitive | Security Level | Quantum Level |"
+                )?;
+                writeln!(
+                    md,
+                    "|------|-----------|--------|-----------|---------------|--------------|"
+                )?;
                 for comp in &crypto_comps {
                     if let Some(cp) = &comp.crypto_properties {
                         let family = cp

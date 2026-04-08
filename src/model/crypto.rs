@@ -175,8 +175,8 @@ impl AlgorithmProperties {
     pub fn is_weak(&self) -> bool {
         /// Unconditionally broken/weak algorithm families.
         const WEAK_FAMILIES: &[&str] = &[
-            "MD5", "MD4", "MD2", "SHA-1", "DES", "3DES", "TDEA", "RC2", "RC4", "BLOWFISH",
-            "IDEA", "CAST5",
+            "MD5", "MD4", "MD2", "SHA-1", "DES", "3DES", "TDEA", "RC2", "RC4", "BLOWFISH", "IDEA",
+            "CAST5",
         ];
 
         if let Some(family) = &self.algorithm_family {
@@ -968,12 +968,12 @@ mod tests {
 
     #[test]
     fn algorithm_is_quantum_safe() {
-        let algo = AlgorithmProperties::new(CryptoPrimitive::Kem)
-            .with_nist_quantum_security_level(5);
+        let algo =
+            AlgorithmProperties::new(CryptoPrimitive::Kem).with_nist_quantum_security_level(5);
         assert!(algo.is_quantum_safe());
 
-        let classical = AlgorithmProperties::new(CryptoPrimitive::Pke)
-            .with_nist_quantum_security_level(0);
+        let classical =
+            AlgorithmProperties::new(CryptoPrimitive::Pke).with_nist_quantum_security_level(0);
         assert!(!classical.is_quantum_safe());
 
         let unknown = AlgorithmProperties::new(CryptoPrimitive::Pke);
@@ -1007,8 +1007,8 @@ mod tests {
             .with_algorithm_family("RC4".to_string());
         assert!(rc4.is_weak());
 
-        let aes = AlgorithmProperties::new(CryptoPrimitive::Ae)
-            .with_algorithm_family("AES".to_string());
+        let aes =
+            AlgorithmProperties::new(CryptoPrimitive::Ae).with_algorithm_family("AES".to_string());
         assert!(!aes.is_weak());
 
         let ml_kem = AlgorithmProperties::new(CryptoPrimitive::Kem)
@@ -1075,7 +1075,10 @@ mod tests {
     #[test]
     fn display_impls() {
         assert_eq!(CryptoAssetType::Algorithm.to_string(), "algorithm");
-        assert_eq!(CryptoAssetType::RelatedCryptoMaterial.to_string(), "related-crypto-material");
+        assert_eq!(
+            CryptoAssetType::RelatedCryptoMaterial.to_string(),
+            "related-crypto-material"
+        );
         assert_eq!(CryptoPrimitive::Kem.to_string(), "kem");
         assert_eq!(CryptoPrimitive::Combiner.to_string(), "combiner");
         assert_eq!(CryptoMode::Gcm.to_string(), "gcm");

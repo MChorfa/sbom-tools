@@ -6,11 +6,11 @@
 use crate::model::{ComponentType, CryptoAssetType};
 use crate::quality::CryptographyMetrics;
 use crate::tui::view::app::ViewApp;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
 /// Render the crypto inventory tab.
 pub fn render_crypto(frame: &mut Frame, area: Rect, app: &ViewApp) {
@@ -96,14 +96,15 @@ fn render_header(frame: &mut Frame, area: Rect, metrics: &CryptographyMetrics) {
     if metrics.compromised_keys > 0 {
         spans.push(Span::styled(
             format!("| Compromised:{} ", metrics.compromised_keys),
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
     }
 
-    let header = Paragraph::new(Line::from(spans))
-        .block(Block::default().borders(Borders::ALL).title(" Crypto Summary "));
+    let header = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Crypto Summary "),
+    );
     frame.render_widget(header, area);
 }
 
@@ -132,7 +133,10 @@ fn render_list(
                 .and_then(|p| p.algorithm_properties.as_ref())
                 .map(|a| {
                     if a.is_weak_by_name(&comp.name) {
-                        Span::styled("!", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                        Span::styled(
+                            "!",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        )
                     } else if a.is_quantum_safe() {
                         Span::styled("Q", Style::default().fg(Color::Green))
                     } else if a.nist_quantum_security_level == Some(0) {
@@ -175,7 +179,9 @@ fn render_detail(
     app: &ViewApp,
     crypto_components: &[&crate::model::Component],
 ) {
-    let selected = app.crypto_list_selected.min(crypto_components.len().saturating_sub(1));
+    let selected = app
+        .crypto_list_selected
+        .min(crypto_components.len().saturating_sub(1));
     let Some(comp) = crypto_components.get(selected) else {
         let empty = Paragraph::new("No selection")
             .block(Block::default().borders(Borders::ALL).title(" Detail "));
@@ -249,9 +255,7 @@ fn render_detail(
             if algo.is_weak_by_name(&comp.name) {
                 lines.push(Line::styled(
                     "WARNING: Weak/broken algorithm",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ));
             }
             if algo.is_hybrid_pqc() {
@@ -261,12 +265,19 @@ fn render_detail(
                 ));
             }
             if !algo.crypto_functions.is_empty() {
-                let funcs: Vec<_> = algo.crypto_functions.iter().map(|f| f.to_string()).collect();
+                let funcs: Vec<_> = algo
+                    .crypto_functions
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect();
                 lines.push(Line::from(format!("Functions: {}", funcs.join(", "))));
             }
             if !algo.certification_level.is_empty() {
-                let certs: Vec<_> =
-                    algo.certification_level.iter().map(|c| c.to_string()).collect();
+                let certs: Vec<_> = algo
+                    .certification_level
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect();
                 lines.push(Line::from(format!("Certified: {}", certs.join(", "))));
             }
             if let Some(env) = &algo.execution_environment {
@@ -301,7 +312,10 @@ fn render_detail(
                 };
                 lines.push(Line::from(vec![
                     Span::raw("Valid To:   "),
-                    Span::styled(na.format("%Y-%m-%d").to_string(), Style::default().fg(color)),
+                    Span::styled(
+                        na.format("%Y-%m-%d").to_string(),
+                        Style::default().fg(color),
+                    ),
                     if cert.is_expired() {
                         Span::styled(" EXPIRED", Style::default().fg(Color::Red))
                     } else if cert.is_expiring_soon(90) {

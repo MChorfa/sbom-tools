@@ -1155,7 +1155,10 @@ fn main() -> Result<()> {
                 vulnerable_only: args.vulnerable_only,
                 ecosystem_filter: args.ecosystem,
                 fail_on_vuln: args.fail_on_vuln,
-                bom_profile: args.bom_type.as_deref().and_then(sbom_tools::BomProfile::from_str_opt),
+                bom_profile: args
+                    .bom_type
+                    .as_deref()
+                    .and_then(sbom_tools::BomProfile::from_str_opt),
                 enrichment,
             };
             let exit_code = cli::run_view(config)?;

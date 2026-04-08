@@ -865,11 +865,7 @@ impl App {
     /// [`RenderContext`]: super::render_context::RenderContext
     pub fn prepare_render(&mut self) {
         // 1. Graph cache for dependencies (was inline in render_dependencies)
-        super::views::update_graph_cache(
-            self.dependencies_view.inner_mut(),
-            &self.data,
-            self.mode,
-        );
+        super::views::update_graph_cache(self.dependencies_view.inner_mut(), &self.data, self.mode);
 
         // 2. Compliance results (was inline in render_diff_compliance)
         self.ensure_compliance_results();

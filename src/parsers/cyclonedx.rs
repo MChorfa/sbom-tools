@@ -3,16 +3,16 @@
 //! Supports `CycloneDX` versions 1.4, 1.5, 1.6, and 1.7 in JSON and XML formats.
 
 use crate::model::{
-    CanonicalId, CertificationLevel, CertificateProperties, CipherSuite, CompletenessDeclaration,
-    Component, ComponentType, Creator, CreatorType, CryptoAssetType, CryptoFunction, CryptoMode,
-    CryptoMaterialState, CryptoMaterialType, CryptoPadding, CryptoPrimitive, CryptoProperties,
-    CvssScore, CvssVersion, DependencyEdge, DependencyScope, DependencyType, DocumentMetadata,
-    ExecutionEnvironment, ExternalRefType, ExternalReference, Hash, HashAlgorithm,
-    Ikev2TransformTypes, ImplementationPlatform, LicenseExpression, NormalizedSbom, Organization,
-    Property, ProtocolProperties, ProtocolType, RelatedCryptoMaterialProperties, Remediation,
-    RemediationType, SbomFormat, SecuredBy, Severity, SignatureInfo, VexJustification, VexResponse,
-    VexState, VexStatus, VulnerabilityRef, VulnerabilitySource,
-    AlgorithmProperties,
+    AlgorithmProperties, CanonicalId, CertificateProperties, CertificationLevel, CipherSuite,
+    CompletenessDeclaration, Component, ComponentType, Creator, CreatorType, CryptoAssetType,
+    CryptoFunction, CryptoMaterialState, CryptoMaterialType, CryptoMode, CryptoPadding,
+    CryptoPrimitive, CryptoProperties, CvssScore, CvssVersion, DependencyEdge, DependencyScope,
+    DependencyType, DocumentMetadata, ExecutionEnvironment, ExternalRefType, ExternalReference,
+    Hash, HashAlgorithm, Ikev2TransformTypes, ImplementationPlatform, LicenseExpression,
+    NormalizedSbom, Organization, Property, ProtocolProperties, ProtocolType,
+    RelatedCryptoMaterialProperties, Remediation, RemediationType, SbomFormat, SecuredBy, Severity,
+    SignatureInfo, VexJustification, VexResponse, VexState, VexStatus, VulnerabilityRef,
+    VulnerabilitySource,
 };
 use crate::parsers::traits::{ParseError, SbomParser};
 use chrono::{DateTime, Utc};
@@ -485,18 +485,16 @@ impl CycloneDxParser {
 
     /// Convert CycloneDX crypto properties to canonical model.
     fn convert_crypto_properties(cdx: &CdxCryptoProperties) -> CryptoProperties {
-        let asset_type = cdx
-            .asset_type
-            .as_deref()
-            .map_or(CryptoAssetType::Other("unknown".to_string()), |s| {
-                match s {
+        let asset_type =
+            cdx.asset_type
+                .as_deref()
+                .map_or(CryptoAssetType::Other("unknown".to_string()), |s| match s {
                     "algorithm" => CryptoAssetType::Algorithm,
                     "certificate" => CryptoAssetType::Certificate,
                     "related-crypto-material" => CryptoAssetType::RelatedCryptoMaterial,
                     "protocol" => CryptoAssetType::Protocol,
                     other => CryptoAssetType::Other(other.to_string()),
-                }
-            });
+                });
 
         let mut props = CryptoProperties::new(asset_type);
         props.oid.clone_from(&cdx.oid);
@@ -665,8 +663,7 @@ impl CycloneDxParser {
             .clone_from(&cdx.signature_algorithm_ref);
         cert.subject_public_key_ref
             .clone_from(&cdx.subject_public_key_ref);
-        cert.certificate_format
-            .clone_from(&cdx.certificate_format);
+        cert.certificate_format.clone_from(&cdx.certificate_format);
         cert.certificate_extension
             .clone_from(&cdx.certificate_extension);
         cert
@@ -739,23 +736,23 @@ impl CycloneDxParser {
     }
 
     fn convert_protocol_properties(cdx: &CdxProtocolProperties) -> ProtocolProperties {
-        let protocol_type = cdx
-            .protocol_type
-            .as_deref()
-            .map_or(ProtocolType::Unknown, |s| match s {
-                "tls" => ProtocolType::Tls,
-                "dtls" => ProtocolType::Dtls,
-                "ipsec" => ProtocolType::Ipsec,
-                "ssh" => ProtocolType::Ssh,
-                "srtp" => ProtocolType::Srtp,
-                "wireguard" => ProtocolType::Wireguard,
-                "ikev1" => ProtocolType::Ikev1,
-                "ikev2" => ProtocolType::Ikev2,
-                "zrtp" => ProtocolType::Zrtp,
-                "mikey" => ProtocolType::Mikey,
-                "unknown" => ProtocolType::Unknown,
-                other => ProtocolType::Other(other.to_string()),
-            });
+        let protocol_type =
+            cdx.protocol_type
+                .as_deref()
+                .map_or(ProtocolType::Unknown, |s| match s {
+                    "tls" => ProtocolType::Tls,
+                    "dtls" => ProtocolType::Dtls,
+                    "ipsec" => ProtocolType::Ipsec,
+                    "ssh" => ProtocolType::Ssh,
+                    "srtp" => ProtocolType::Srtp,
+                    "wireguard" => ProtocolType::Wireguard,
+                    "ikev1" => ProtocolType::Ikev1,
+                    "ikev2" => ProtocolType::Ikev2,
+                    "zrtp" => ProtocolType::Zrtp,
+                    "mikey" => ProtocolType::Mikey,
+                    "unknown" => ProtocolType::Unknown,
+                    other => ProtocolType::Other(other.to_string()),
+                });
 
         let mut proto = ProtocolProperties::new(protocol_type);
         proto.version.clone_from(&cdx.version);

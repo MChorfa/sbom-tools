@@ -5,11 +5,11 @@
 
 use crate::model::{ComponentType, CryptoAssetType};
 use crate::tui::view::app::ViewApp;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
 /// Render the algorithms tab (CBOM mode).
 pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
@@ -53,9 +53,7 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                     if a.is_weak_by_name(&comp.name) {
                         Span::styled(
                             "!",
-                            Style::default()
-                                .fg(Color::Red)
-                                .add_modifier(Modifier::BOLD),
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                         )
                     } else if a.is_quantum_safe() {
                         Span::styled("Q", Style::default().fg(Color::Green))
@@ -81,7 +79,10 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 qi,
                 Span::raw(" "),
                 Span::raw(&comp.name),
-                Span::styled(format!("  [{family}]"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  [{family}]"),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]))
             .style(style)
         })
@@ -163,9 +164,7 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
             if algo.is_weak_by_name(&comp.name) {
                 lines.push(Line::styled(
                     "WARNING: Weak/broken algorithm",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ));
             }
             if algo.is_hybrid_pqc() {
@@ -175,19 +174,30 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 ));
             }
             if !algo.crypto_functions.is_empty() {
-                let funcs: Vec<_> = algo.crypto_functions.iter().map(|f| f.to_string()).collect();
+                let funcs: Vec<_> = algo
+                    .crypto_functions
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect();
                 lines.push(Line::from(format!("Functions: {}", funcs.join(", "))));
             }
             if !algo.certification_level.is_empty() {
-                let certs: Vec<_> =
-                    algo.certification_level.iter().map(|c| c.to_string()).collect();
+                let certs: Vec<_> = algo
+                    .certification_level
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect();
                 lines.push(Line::from(format!("Certified: {}", certs.join(", "))));
             }
         }
     }
 
     let detail = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(" Algorithm Detail "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Algorithm Detail "),
+        )
         .wrap(Wrap { trim: true });
     frame.render_widget(detail, panels[1]);
 }

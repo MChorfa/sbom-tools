@@ -57,10 +57,9 @@ impl AnalystReport {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         // Estimate capacity: ~200 bytes per section, plus variable content
-        let crypto_size = self
-            .crypto_findings
-            .as_ref()
-            .map_or(0, |cf| 500 + cf.weak_algorithms.len() * 100 + cf.deprecation_warnings.len() * 80);
+        let crypto_size = self.crypto_findings.as_ref().map_or(0, |cf| {
+            500 + cf.weak_algorithms.len() * 100 + cf.deprecation_warnings.len() * 80
+        });
         let estimated_size = 2000
             + self.vulnerability_findings.kev_vulnerabilities.len() * 100
             + self.component_findings.license_issues.len() * 150

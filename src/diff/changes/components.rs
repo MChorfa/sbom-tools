@@ -106,8 +106,7 @@ impl ComponentChangeComputer {
 
         // Cryptographic property changes
         if old.crypto_properties != new.crypto_properties {
-            total_cost +=
-                Self::compute_crypto_changes(&self.cost_model, old, new, &mut changes);
+            total_cost += Self::compute_crypto_changes(&self.cost_model, old, new, &mut changes);
         }
 
         (changes, total_cost)
@@ -174,20 +173,17 @@ impl ComponentChangeComputer {
             if old_algo.nist_quantum_security_level != new_algo.nist_quantum_security_level {
                 changes.push(FieldChange {
                     field: "crypto_quantum_level".to_string(),
-                    old_value: old_algo
-                        .nist_quantum_security_level
-                        .map(|l| l.to_string()),
-                    new_value: new_algo
-                        .nist_quantum_security_level
-                        .map(|l| l.to_string()),
+                    old_value: old_algo.nist_quantum_security_level.map(|l| l.to_string()),
+                    new_value: new_algo.nist_quantum_security_level.map(|l| l.to_string()),
                 });
                 cost += cost_model.crypto_quantum_level_changed;
             }
 
             // Security downgrade detection: classical security level decreased
-            if let (Some(old_bits), Some(new_bits)) =
-                (old_algo.classical_security_level, new_algo.classical_security_level)
-                && new_bits < old_bits
+            if let (Some(old_bits), Some(new_bits)) = (
+                old_algo.classical_security_level,
+                new_algo.classical_security_level,
+            ) && new_bits < old_bits
             {
                 changes.push(FieldChange {
                     field: "crypto_downgrade".to_string(),

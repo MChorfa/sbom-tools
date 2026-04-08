@@ -427,7 +427,10 @@ behavior:
         std::fs::write(&config_path, yaml).unwrap();
 
         let config = load_config_file(&config_path).unwrap();
-        assert_eq!(config.matching.fuzzy_preset, crate::config::FuzzyPreset::Strict);
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert_eq!(config.matching.threshold, Some(0.9));
         assert!(config.behavior.fail_on_vuln);
     }
@@ -456,7 +459,10 @@ behavior:
 
         base.merge(&override_config);
 
-        assert_eq!(base.matching.fuzzy_preset, crate::config::FuzzyPreset::Strict);
+        assert_eq!(
+            base.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert_eq!(base.matching.threshold, Some(0.95));
         assert!(base.behavior.fail_on_vuln);
     }

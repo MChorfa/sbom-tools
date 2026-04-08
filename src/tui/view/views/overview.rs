@@ -56,9 +56,10 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
     );
 
     let mut left_lines = vec![
-        Line::from(vec![
-            Span::styled(" Quantum Readiness  ", Style::default().add_modifier(Modifier::BOLD)),
-        ]),
+        Line::from(vec![Span::styled(
+            " Quantum Readiness  ",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
         Line::from(vec![
             Span::raw(" "),
             Span::styled(&bar, Style::default().fg(readiness_color)),
@@ -68,17 +69,17 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
                     .fg(readiness_color)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!("  ({}/{})", metrics.quantum_safe_count, metrics.algorithms_count)),
+            Span::raw(format!(
+                "  ({}/{})",
+                metrics.quantum_safe_count, metrics.algorithms_count
+            )),
         ]),
         Line::raw(""),
         Line::styled(
             format!(" Algorithms:    {}", metrics.algorithms_count),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Line::from(format!(
-            "   Quantum-safe  {}",
-            metrics.quantum_safe_count
-        )),
+        Line::from(format!("   Quantum-safe  {}", metrics.quantum_safe_count)),
         Line::from(format!(
             "   Vulnerable    {}",
             metrics.quantum_vulnerable_count
@@ -191,9 +192,7 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
         right_lines.push(Line::raw(""));
         right_lines.push(Line::styled(
             " Weak Algorithms",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
         for name in &metrics.weak_algorithm_names {
             right_lines.push(Line::styled(

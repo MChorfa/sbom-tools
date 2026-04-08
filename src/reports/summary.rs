@@ -366,7 +366,10 @@ impl ReportGenerator for SummaryReporter {
                 lines.push(format!(
                     "  {}",
                     self.color(
-                        &format!("Expired certificates: {}", crypto_metrics.expired_certificates),
+                        &format!(
+                            "Expired certificates: {}",
+                            crypto_metrics.expired_certificates
+                        ),
                         "red"
                     )
                 ));
