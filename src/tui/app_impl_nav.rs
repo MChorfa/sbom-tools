@@ -312,10 +312,7 @@ impl App {
             TabKind::Vulnerabilities => self.vulnerabilities_state().selected,
             TabKind::Licenses => self.licenses_state().selected,
             TabKind::Dependencies => self.dependencies_state().selected,
-            TabKind::Compliance => self
-                .compliance_view
-                .as_ref()
-                .map_or(0, |v| v.inner().selected_violation),
+            TabKind::Compliance => self.compliance_view.inner().selected_violation,
             TabKind::Source => {
                 let state = self.source_state();
                 match state.active_side {

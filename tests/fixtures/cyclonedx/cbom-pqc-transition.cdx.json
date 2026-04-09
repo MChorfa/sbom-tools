@@ -1,0 +1,524 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:a7b8c9d0-e1f2-3456-ab78-901234567890",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-04-01T22:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "name": "transition-scanner",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "transition-app",
+      "name": "pqc-transition-app",
+      "version": "2.0.0",
+      "purl": "pkg:cargo/pqc-transition-app@2.0.0",
+      "description": "Application in mid-migration from classical to post-quantum cryptography"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "hybrid-crypto-lib",
+      "name": "hybrid-crypto",
+      "version": "3.0.0",
+      "purl": "pkg:cargo/hybrid-crypto@3.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "legacy-compat-lib",
+      "name": "legacy-compat",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/legacy-compat@1.0.0",
+      "description": "Legacy compatibility layer for classical crypto clients"
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/hybrid-x25519-ml-kem-768",
+      "name": "X25519-ML-KEM-768",
+      "description": "Hybrid KEM combiner: classical X25519 + post-quantum ML-KEM-768 (recommended PQC transition pattern)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "combiner",
+          "algorithmFamily": "Hybrid-KEM",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "encapsulate", "decapsulate"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 3
+        },
+        "oid": "1.3.6.1.5.5.7.6.42"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/hybrid-ecdh-ml-kem-1024",
+      "name": "ECDH-P384-ML-KEM-1024",
+      "description": "Hybrid KEM combiner: ECDH P-384 + ML-KEM-1024 (high-security transition)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "combiner",
+          "algorithmFamily": "Hybrid-KEM",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "encapsulate", "decapsulate"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 5
+        },
+        "oid": "1.3.6.1.5.5.7.6.48"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/hybrid-ecdsa-ml-dsa",
+      "name": "ECDSA-P384-ML-DSA-65",
+      "description": "Hybrid signature combiner: ECDSA P-384 + ML-DSA-65 (signature transition)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "combiner",
+          "algorithmFamily": "Hybrid-Signature",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 3
+        },
+        "oid": "1.3.6.1.5.5.7.6.58"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/x25519",
+      "name": "X25519",
+      "description": "Classical key agreement (quantum-vulnerable, used in hybrid combiner)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "key-agree",
+          "algorithmFamily": "ECDH",
+          "ellipticCurve": "other/Curve25519",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keyderive"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.3.101.110"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ecdh-p384",
+      "name": "ECDH-P384",
+      "description": "Classical key agreement (quantum-vulnerable, used in hybrid combiner)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "key-agree",
+          "algorithmFamily": "ECDH",
+          "ellipticCurve": "secg/secp384r1",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keyderive"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.3.132.0.34"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ecdsa-p384",
+      "name": "ECDSA-P384",
+      "description": "Classical signature (quantum-vulnerable, used in hybrid combiner)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "algorithmFamily": "ECDSA",
+          "ellipticCurve": "secg/secp384r1",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.10045.4.3.3"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-kem-1024",
+      "name": "ML-KEM-1024",
+      "description": "Post-quantum KEM (FIPS 203, NIST Level 5)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "kem",
+          "algorithmFamily": "ML-KEM",
+          "parameterSetIdentifier": "1024",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "encapsulate", "decapsulate"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 5
+        },
+        "oid": "2.16.840.1.101.3.4.4.3"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-kem-768",
+      "name": "ML-KEM-768",
+      "description": "Post-quantum KEM (FIPS 203, NIST Level 3)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "kem",
+          "algorithmFamily": "ML-KEM",
+          "parameterSetIdentifier": "768",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "encapsulate", "decapsulate"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 3
+        },
+        "oid": "2.16.840.1.101.3.4.4.2"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-dsa-65",
+      "name": "ML-DSA-65",
+      "description": "Post-quantum signature (FIPS 204, NIST Level 3)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "algorithmFamily": "ML-DSA",
+          "parameterSetIdentifier": "65",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 3
+        },
+        "oid": "2.16.840.1.101.3.4.3.18"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-256-gcm",
+      "name": "AES-256-GCM",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "ae",
+          "algorithmFamily": "AES",
+          "parameterSetIdentifier": "256",
+          "mode": "gcm",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "tag"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.1.46"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha-384",
+      "name": "SHA-384",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "algorithmFamily": "SHA-2",
+          "parameterSetIdentifier": "384",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 384,
+          "nistQuantumSecurityLevel": 2
+        },
+        "oid": "2.16.840.1.101.3.4.2.2"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rsa-3072",
+      "name": "RSA-3072",
+      "description": "Classical RSA with acceptable key size during transition (deprecated by 2030, disallowed by 2035)",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "algorithmFamily": "RSA",
+          "parameterSetIdentifier": "3072",
+          "certificationLevel": ["fips140-2-l1"],
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "sign", "verify"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/hybrid-cert",
+      "name": "transition-app.example.com",
+      "description": "Certificate using hybrid signature (ECDSA + ML-DSA composite)",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN = transition-app.example.com, O = Transition Corp, C = US",
+          "issuerName": "CN = Transition PQC CA, O = Transition Corp, C = US",
+          "notValidBefore": "2026-01-01T00:00:00Z",
+          "notValidAfter": "2028-01-01T23:59:59Z",
+          "signatureAlgorithmRef": "crypto/algorithm/hybrid-ecdsa-ml-dsa",
+          "subjectPublicKeyRef": "crypto/key/hybrid-pubkey",
+          "certificateFormat": "X.509",
+          "certificateExtension": "pem"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/legacy-compat-cert",
+      "name": "legacy.transition-app.example.com",
+      "description": "Legacy compatibility certificate (classical only, for clients without PQC support)",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN = legacy.transition-app.example.com, O = Transition Corp, C = US",
+          "issuerName": "CN = DigiCert RSA CA, O = DigiCert, C = US",
+          "notValidBefore": "2025-06-01T00:00:00Z",
+          "notValidAfter": "2027-06-01T23:59:59Z",
+          "signatureAlgorithmRef": "crypto/algorithm/rsa-3072",
+          "subjectPublicKeyRef": "crypto/key/rsa-3072-pub",
+          "certificateFormat": "X.509",
+          "certificateExtension": "pem"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/hybrid-pubkey",
+      "name": "hybrid-kem-public-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "11223344-5566-7788-99aa-bbccddeeff00",
+          "state": "active",
+          "size": 1568,
+          "algorithmRef": "crypto/algorithm/ml-kem-1024",
+          "securedBy": {
+            "mechanism": "HSM",
+            "algorithmRef": "crypto/algorithm/aes-256-gcm"
+          },
+          "format": "DER",
+          "creationDate": "2026-01-01T00:00:00Z",
+          "activationDate": "2026-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/rsa-3072-pub",
+      "name": "rsa-3072-legacy-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "aabbccdd-eeff-0011-2233-445566778899",
+          "state": "active",
+          "size": 3072,
+          "algorithmRef": "crypto/algorithm/rsa-3072",
+          "securedBy": {
+            "mechanism": "Software"
+          },
+          "format": "PEM",
+          "creationDate": "2025-06-01T00:00:00Z",
+          "activationDate": "2025-06-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/deactivated-rsa",
+      "name": "rsa-2048-retired-key",
+      "description": "Previously used RSA-2048 key, now deactivated as part of PQC migration",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "key-pair",
+          "id": "deadbeef-cafe-babe-dead-beefcafebabe",
+          "state": "deactivated",
+          "size": 2048,
+          "algorithmRef": "crypto/algorithm/rsa-3072",
+          "creationDate": "2020-01-01T00:00:00Z",
+          "activationDate": "2020-01-01T00:00:00Z",
+          "updateDate": "2026-03-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/tls13-hybrid",
+      "name": "TLS 1.3 (Hybrid PQC Transition)",
+      "description": "TLS 1.3 with both hybrid PQC and classical-only cipher suites for backward compatibility",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "tls",
+          "version": "1.3",
+          "cipherSuites": [
+            {
+              "name": "TLS_AES_256_GCM_SHA384_X25519_ML_KEM_768",
+              "algorithms": [
+                "crypto/algorithm/hybrid-x25519-ml-kem-768",
+                "crypto/algorithm/aes-256-gcm",
+                "crypto/algorithm/sha-384"
+              ],
+              "identifiers": ["0x13", "0x02"]
+            },
+            {
+              "name": "TLS_AES_256_GCM_SHA384_ECDH_P384_ML_KEM_1024",
+              "algorithms": [
+                "crypto/algorithm/hybrid-ecdh-ml-kem-1024",
+                "crypto/algorithm/aes-256-gcm",
+                "crypto/algorithm/sha-384"
+              ],
+              "identifiers": ["0x13", "0x02"]
+            },
+            {
+              "name": "TLS_AES_256_GCM_SHA384 (classical fallback)",
+              "algorithms": [
+                "crypto/algorithm/ecdh-p384",
+                "crypto/algorithm/aes-256-gcm",
+                "crypto/algorithm/sha-384"
+              ],
+              "identifiers": ["0x13", "0x02"]
+            }
+          ],
+          "cryptoRefArray": [
+            "crypto/certificate/hybrid-cert",
+            "crypto/certificate/legacy-compat-cert"
+          ]
+        }
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "transition-app",
+      "dependsOn": [
+        "hybrid-crypto-lib",
+        "legacy-compat-lib",
+        "crypto/protocol/tls13-hybrid"
+      ]
+    },
+    {
+      "ref": "hybrid-crypto-lib",
+      "provides": [
+        "crypto/algorithm/hybrid-x25519-ml-kem-768",
+        "crypto/algorithm/hybrid-ecdh-ml-kem-1024",
+        "crypto/algorithm/hybrid-ecdsa-ml-dsa",
+        "crypto/algorithm/ml-kem-1024",
+        "crypto/algorithm/ml-kem-768",
+        "crypto/algorithm/ml-dsa-65",
+        "crypto/algorithm/aes-256-gcm",
+        "crypto/algorithm/sha-384"
+      ],
+      "dependsOn": []
+    },
+    {
+      "ref": "legacy-compat-lib",
+      "provides": [
+        "crypto/algorithm/x25519",
+        "crypto/algorithm/ecdh-p384",
+        "crypto/algorithm/ecdsa-p384",
+        "crypto/algorithm/rsa-3072"
+      ],
+      "dependsOn": []
+    },
+    {
+      "ref": "crypto/algorithm/hybrid-x25519-ml-kem-768",
+      "dependsOn": [
+        "crypto/algorithm/x25519",
+        "crypto/algorithm/ml-kem-768"
+      ]
+    },
+    {
+      "ref": "crypto/algorithm/hybrid-ecdh-ml-kem-1024",
+      "dependsOn": [
+        "crypto/algorithm/ecdh-p384",
+        "crypto/algorithm/ml-kem-1024"
+      ]
+    },
+    {
+      "ref": "crypto/algorithm/hybrid-ecdsa-ml-dsa",
+      "dependsOn": [
+        "crypto/algorithm/ecdsa-p384",
+        "crypto/algorithm/ml-dsa-65"
+      ]
+    },
+    {
+      "ref": "crypto/protocol/tls13-hybrid",
+      "dependsOn": [
+        "crypto/certificate/hybrid-cert",
+        "crypto/certificate/legacy-compat-cert",
+        "crypto/algorithm/hybrid-x25519-ml-kem-768",
+        "crypto/algorithm/hybrid-ecdh-ml-kem-1024",
+        "crypto/algorithm/ecdh-p384",
+        "crypto/algorithm/aes-256-gcm",
+        "crypto/algorithm/sha-384"
+      ]
+    },
+    {
+      "ref": "crypto/certificate/hybrid-cert",
+      "dependsOn": [
+        "crypto/key/hybrid-pubkey",
+        "crypto/algorithm/hybrid-ecdsa-ml-dsa"
+      ]
+    },
+    {
+      "ref": "crypto/certificate/legacy-compat-cert",
+      "dependsOn": [
+        "crypto/key/rsa-3072-pub",
+        "crypto/algorithm/rsa-3072"
+      ]
+    }
+  ],
+  "compositions": [
+    {
+      "aggregate": "complete",
+      "assemblies": [
+        "transition-app",
+        "hybrid-crypto-lib",
+        "legacy-compat-lib"
+      ]
+    }
+  ]
+}

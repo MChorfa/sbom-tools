@@ -7,6 +7,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 
+use super::ValueExt;
+
+/// Errors that can occur during SBOM merging
+#[derive(Debug, thiserror::Error)]
+pub enum MergeError {
+    /// The two SBOMs are different formats (e.g., CycloneDX and SPDX)
+    #[error("cannot merge CycloneDX and SPDX SBOMs — both must be the same format")]
+    FormatMismatch,
+    /// The two SBOMs are incompatible SPDX versions
+    #[error("cannot merge SPDX 3.0 and SPDX 2.x SBOMs")]
+    SpdxVersionMismatch,
+    /// JSON serialization/deserialization error
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
 /// Configuration for SBOM merging
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeConfig {
@@ -47,7 +63,7 @@ pub fn merge_sbom_json(
     primary_json: &str,
     secondary_json: &str,
     config: &MergeConfig,
-) -> anyhow::Result<String> {
+) -> Result<String, MergeError> {
     let mut primary: Value = serde_json::from_str(primary_json)?;
     let secondary: Value = serde_json::from_str(secondary_json)?;
 
@@ -58,14 +74,14 @@ pub fn merge_sbom_json(
 
     // Verify same format family
     if primary_is_cdx != secondary_is_cdx {
-        anyhow::bail!("cannot merge CycloneDX and SPDX SBOMs — both must be the same format");
+        return Err(MergeError::FormatMismatch);
     }
 
     if primary_is_cdx {
         merge_cyclonedx(&mut primary, &secondary, config)?;
     } else if primary_is_spdx3 {
         if !secondary_is_spdx3 {
-            anyhow::bail!("cannot merge SPDX 3.0 and SPDX 2.x SBOMs");
+            return Err(MergeError::SpdxVersionMismatch);
         }
         merge_spdx3(&mut primary, &secondary, config)?;
     } else {
@@ -79,7 +95,7 @@ fn merge_cyclonedx(
     primary: &mut Value,
     secondary: &Value,
     config: &MergeConfig,
-) -> anyhow::Result<()> {
+) -> Result<(), MergeError> {
     let primary_components = primary.get_mut("components").and_then(Value::as_array_mut);
 
     let secondary_components = secondary.get("components").and_then(Value::as_array);
@@ -118,7 +134,7 @@ fn merge_cyclonedx(
             .collect();
 
         for dep in s_deps {
-            let dep_ref = dep.get("ref").and_then(Value::as_str).unwrap_or("");
+            let dep_ref = dep.str_field("ref");
             if !existing_refs.contains(dep_ref) {
                 p_deps.push(dep.clone());
             }
@@ -131,7 +147,11 @@ fn merge_cyclonedx(
     Ok(())
 }
 
-fn merge_spdx3(primary: &mut Value, secondary: &Value, config: &MergeConfig) -> anyhow::Result<()> {
+fn merge_spdx3(
+    primary: &mut Value,
+    secondary: &Value,
+    config: &MergeConfig,
+) -> Result<(), MergeError> {
     let primary_key = if primary.get("element").is_some() {
         "element"
     } else {
@@ -153,10 +173,10 @@ fn merge_spdx3(primary: &mut Value, secondary: &Value, config: &MergeConfig) -> 
             .collect();
 
         for elem in s_elems {
-            let spdx_id = elem.get("spdxId").and_then(Value::as_str).unwrap_or("");
+            let spdx_id = elem.str_field("spdxId");
 
             // For packages, apply dedup logic
-            let elem_type = elem.get("type").and_then(Value::as_str).unwrap_or("");
+            let elem_type = elem.str_field("type");
             if elem_type.contains("Package") || elem_type.contains("package") {
                 let key = component_key(elem, config);
                 if !seen.insert(key) {
@@ -173,7 +193,11 @@ fn merge_spdx3(primary: &mut Value, secondary: &Value, config: &MergeConfig) -> 
     Ok(())
 }
 
-fn merge_spdx2(primary: &mut Value, secondary: &Value, config: &MergeConfig) -> anyhow::Result<()> {
+fn merge_spdx2(
+    primary: &mut Value,
+    secondary: &Value,
+    config: &MergeConfig,
+) -> Result<(), MergeError> {
     // Merge packages
     if let (Some(p_pkgs), Some(s_pkgs)) = (
         primary.get_mut("packages").and_then(Value::as_array_mut),
@@ -234,7 +258,17 @@ fn component_key(comp: &Value, config: &MergeConfig) -> String {
 }
 
 fn name_version_key(comp: &Value) -> String {
-    let name = comp.get("name").and_then(Value::as_str).unwrap_or("");
+    // For cryptographic components, use OID as the dedup key if available
+    if let Some(cp) = comp.get("cryptoProperties")
+        && let Some(oid) = cp.get("oid").and_then(Value::as_str)
+    {
+        let asset_type = cp
+            .get("assetType")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        return format!("crypto:{asset_type}:{oid}");
+    }
+    let name = comp.str_field("name");
     let version = comp
         .get("version")
         .or_else(|| comp.get("versionInfo"))
@@ -306,6 +340,24 @@ mod tests {
         let doc: Value = serde_json::from_str(&result).unwrap();
         let components = doc["components"].as_array().unwrap();
         // None strategy keeps all components, including duplicates
+        assert_eq!(components.len(), 2);
+    }
+
+    #[test]
+    fn merge_crypto_oid_dedup() {
+        let primary = r#"{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+            {"name":"AES-256-GCM","type":"cryptographic-asset","cryptoProperties":{"assetType":"algorithm","oid":"2.16.840.1.101.3.4.1.46"}}
+        ]}"#;
+
+        let secondary = r#"{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+            {"name":"AES-256-GCM-v2","type":"cryptographic-asset","cryptoProperties":{"assetType":"algorithm","oid":"2.16.840.1.101.3.4.1.46"}},
+            {"name":"SHA-384","type":"cryptographic-asset","cryptoProperties":{"assetType":"algorithm","oid":"2.16.840.1.101.3.4.2.2"}}
+        ]}"#;
+
+        let result = merge_sbom_json(primary, secondary, &MergeConfig::default()).unwrap();
+        let doc: Value = serde_json::from_str(&result).unwrap();
+        let components = doc["components"].as_array().unwrap();
+        // AES-256-GCM-v2 deduped by OID, SHA-384 added → 2 total
         assert_eq!(components.len(), 2);
     }
 }

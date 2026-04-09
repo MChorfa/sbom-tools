@@ -1,0 +1,355 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:c3d4e5f6-a7b8-9012-cdef-345678901234",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-01T08:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "name": "legacy-scanner",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "legacy-app",
+      "name": "legacy-insecure-app",
+      "version": "1.0.0",
+      "purl": "pkg:npm/legacy-insecure-app@1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "old-crypto-lib",
+      "name": "old-crypto",
+      "version": "0.2.0",
+      "purl": "pkg:npm/old-crypto@0.2.0"
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/md5",
+      "name": "MD5",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "128",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 64,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.2.5"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha1",
+      "name": "SHA-1",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "160",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 80,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.3.14.3.2.26"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/des",
+      "name": "DES",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "parameterSetIdentifier": "56",
+          "mode": "cbc",
+          "padding": "pkcs5",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 56,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.3.14.3.2.7"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/3des",
+      "name": "3DES-EDE",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "parameterSetIdentifier": "168",
+          "mode": "cbc",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 112,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.3.7"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rc4",
+      "name": "RC4",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "stream-cipher",
+          "parameterSetIdentifier": "128",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 0,
+          "nistQuantumSecurityLevel": 0
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rsa-1024",
+      "name": "RSA-1024",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "parameterSetIdentifier": "1024",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "sign", "verify"],
+          "classicalSecurityLevel": 80,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/dsa-1024",
+      "name": "DSA-1024",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "1024",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 80,
+          "nistQuantumSecurityLevel": 0
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/blowfish",
+      "name": "Blowfish",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "parameterSetIdentifier": "128",
+          "mode": "cbc",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 0
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-ecb",
+      "name": "AES-128-ECB",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "parameterSetIdentifier": "128",
+          "mode": "ecb",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.1.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/expired-cert",
+      "name": "expired.legacy-app.example.com",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN = expired.legacy-app.example.com, O = Legacy Corp",
+          "issuerName": "CN = Legacy CA, O = Legacy Corp",
+          "notValidBefore": "2020-01-01T00:00:00Z",
+          "notValidAfter": "2023-01-01T23:59:59Z",
+          "signatureAlgorithmRef": "crypto/algorithm/rsa-1024",
+          "subjectPublicKeyRef": "crypto/key/expired-pubkey",
+          "certificateFormat": "X.509",
+          "certificateExtension": "pem"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/sha1-signed",
+      "name": "sha1-signed.legacy-app.example.com",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN = sha1-signed.legacy-app.example.com",
+          "issuerName": "CN = Old CA",
+          "notValidBefore": "2025-01-01T00:00:00Z",
+          "notValidAfter": "2027-01-01T23:59:59Z",
+          "signatureAlgorithmRef": "crypto/algorithm/sha1",
+          "subjectPublicKeyRef": "crypto/key/sha1-pubkey",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/expired-pubkey",
+      "name": "rsa-1024-expired-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "state": "deactivated",
+          "size": 1024,
+          "algorithmRef": "crypto/algorithm/rsa-1024"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/sha1-pubkey",
+      "name": "rsa-2048-sha1-signed-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "11111111-2222-3333-4444-555555555555",
+          "state": "active",
+          "size": 2048,
+          "algorithmRef": "crypto/algorithm/rsa-1024"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/compromised-key",
+      "name": "compromised-symmetric-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "symmetric-key",
+          "id": "66666666-7777-8888-9999-aaaaaaaaaaaa",
+          "state": "compromised",
+          "size": 56,
+          "algorithmRef": "crypto/algorithm/des",
+          "creationDate": "2018-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/tls10",
+      "name": "TLS 1.0",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "tls",
+          "version": "1.0",
+          "cipherSuites": [
+            {
+              "name": "TLS_RSA_WITH_RC4_128_SHA",
+              "algorithms": [
+                "crypto/algorithm/rsa-1024",
+                "crypto/algorithm/rc4",
+                "crypto/algorithm/sha1"
+              ],
+              "identifiers": ["0x00", "0x05"]
+            },
+            {
+              "name": "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+              "algorithms": [
+                "crypto/algorithm/rsa-1024",
+                "crypto/algorithm/3des",
+                "crypto/algorithm/sha1"
+              ],
+              "identifiers": ["0x00", "0x0A"]
+            },
+            {
+              "name": "TLS_RSA_WITH_DES_CBC_SHA",
+              "algorithms": [
+                "crypto/algorithm/rsa-1024",
+                "crypto/algorithm/des",
+                "crypto/algorithm/sha1"
+              ],
+              "identifiers": ["0x00", "0x09"]
+            }
+          ],
+          "cryptoRefArray": [
+            "crypto/certificate/expired-cert"
+          ]
+        }
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "legacy-app",
+      "dependsOn": [
+        "old-crypto-lib",
+        "crypto/protocol/tls10"
+      ]
+    },
+    {
+      "ref": "old-crypto-lib",
+      "dependsOn": [
+        "crypto/algorithm/md5",
+        "crypto/algorithm/sha1",
+        "crypto/algorithm/des",
+        "crypto/algorithm/3des",
+        "crypto/algorithm/rc4",
+        "crypto/algorithm/rsa-1024",
+        "crypto/algorithm/dsa-1024",
+        "crypto/algorithm/blowfish",
+        "crypto/algorithm/aes-ecb"
+      ]
+    },
+    {
+      "ref": "crypto/protocol/tls10",
+      "dependsOn": [
+        "crypto/certificate/expired-cert",
+        "crypto/algorithm/rsa-1024",
+        "crypto/algorithm/rc4",
+        "crypto/algorithm/3des",
+        "crypto/algorithm/des",
+        "crypto/algorithm/sha1"
+      ]
+    },
+    {
+      "ref": "crypto/certificate/expired-cert",
+      "dependsOn": [
+        "crypto/key/expired-pubkey",
+        "crypto/algorithm/rsa-1024"
+      ]
+    }
+  ]
+}

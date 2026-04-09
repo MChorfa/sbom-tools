@@ -3,11 +3,16 @@
 //! Supports `CycloneDX` versions 1.4, 1.5, 1.6, and 1.7 in JSON and XML formats.
 
 use crate::model::{
-    CanonicalId, CompletenessDeclaration, Component, ComponentType, Creator, CreatorType,
-    CvssScore, CvssVersion, DependencyEdge, DependencyScope, DependencyType, DocumentMetadata,
-    ExternalRefType, ExternalReference, Hash, HashAlgorithm, LicenseExpression, NormalizedSbom,
-    Organization, Property, Remediation, RemediationType, SbomFormat, Severity, SignatureInfo,
-    VexJustification, VexResponse, VexState, VexStatus, VulnerabilityRef, VulnerabilitySource,
+    AlgorithmProperties, CanonicalId, CertificateProperties, CertificationLevel, CipherSuite,
+    CompletenessDeclaration, Component, ComponentType, Creator, CreatorType, CryptoAssetType,
+    CryptoFunction, CryptoMaterialState, CryptoMaterialType, CryptoMode, CryptoPadding,
+    CryptoPrimitive, CryptoProperties, CvssScore, CvssVersion, DependencyEdge, DependencyScope,
+    DependencyType, DocumentMetadata, ExecutionEnvironment, ExternalRefType, ExternalReference,
+    Hash, HashAlgorithm, Ikev2TransformTypes, ImplementationPlatform, LicenseExpression,
+    NormalizedSbom, Organization, Property, ProtocolProperties, ProtocolType,
+    RelatedCryptoMaterialProperties, Remediation, RemediationType, SbomFormat, SecuredBy, Severity,
+    SignatureInfo, VexJustification, VexResponse, VexState, VexStatus, VulnerabilityRef,
+    VulnerabilitySource,
 };
 use crate::parsers::traits::{ParseError, SbomParser};
 use chrono::{DateTime, Utc};
@@ -191,6 +196,16 @@ impl CycloneDxParser {
                                 edge = edge.with_scope(scope.clone());
                             }
                             sbom.add_edge(edge);
+                        }
+                    }
+                    // CycloneDX 1.7: "provides" — library implements/contains crypto assets
+                    for provided in dep.provides.unwrap_or_default() {
+                        if let Some(to_id) = id_map.get(&provided) {
+                            sbom.add_edge(DependencyEdge::new(
+                                from_id.clone(),
+                                to_id.clone(),
+                                DependencyType::Provides,
+                            ));
                         }
                     }
                 }
@@ -459,8 +474,311 @@ impl CycloneDxParser {
         comp.is_external = cdx.is_external;
         comp.version_range.clone_from(&cdx.version_range);
 
+        // Set cryptographic properties (1.6+)
+        if let Some(cdx_crypto) = &cdx.crypto_properties {
+            comp.crypto_properties = Some(Self::convert_crypto_properties(cdx_crypto));
+        }
+
         comp.calculate_content_hash();
         comp
+    }
+
+    /// Convert CycloneDX crypto properties to canonical model.
+    fn convert_crypto_properties(cdx: &CdxCryptoProperties) -> CryptoProperties {
+        let asset_type =
+            cdx.asset_type
+                .as_deref()
+                .map_or(CryptoAssetType::Other("unknown".to_string()), |s| match s {
+                    "algorithm" => CryptoAssetType::Algorithm,
+                    "certificate" => CryptoAssetType::Certificate,
+                    "related-crypto-material" => CryptoAssetType::RelatedCryptoMaterial,
+                    "protocol" => CryptoAssetType::Protocol,
+                    other => CryptoAssetType::Other(other.to_string()),
+                });
+
+        let mut props = CryptoProperties::new(asset_type);
+        props.oid.clone_from(&cdx.oid);
+
+        if let Some(algo) = &cdx.algorithm_properties {
+            props.algorithm_properties = Some(Self::convert_algorithm_properties(algo));
+        }
+        if let Some(cert) = &cdx.certificate_properties {
+            props.certificate_properties = Some(Self::convert_certificate_properties(cert));
+        }
+        if let Some(mat) = &cdx.related_crypto_material_properties {
+            props.related_crypto_material_properties =
+                Some(Self::convert_related_crypto_material_properties(mat));
+        }
+        if let Some(proto) = &cdx.protocol_properties {
+            props.protocol_properties = Some(Self::convert_protocol_properties(proto));
+        }
+
+        props
+    }
+
+    fn convert_algorithm_properties(cdx: &CdxAlgorithmProperties) -> AlgorithmProperties {
+        let primitive = cdx
+            .primitive
+            .as_deref()
+            .map_or(CryptoPrimitive::Unknown, |s| match s {
+                "ae" => CryptoPrimitive::Ae,
+                "block-cipher" => CryptoPrimitive::BlockCipher,
+                "stream-cipher" => CryptoPrimitive::StreamCipher,
+                "hash" => CryptoPrimitive::Hash,
+                "mac" => CryptoPrimitive::Mac,
+                "signature" => CryptoPrimitive::Signature,
+                "pke" => CryptoPrimitive::Pke,
+                "kem" => CryptoPrimitive::Kem,
+                "kdf" => CryptoPrimitive::Kdf,
+                "key-agree" => CryptoPrimitive::KeyAgree,
+                "xof" => CryptoPrimitive::Xof,
+                "drbg" => CryptoPrimitive::Drbg,
+                "combiner" => CryptoPrimitive::Combiner,
+                "unknown" => CryptoPrimitive::Unknown,
+                other => CryptoPrimitive::Other(other.to_string()),
+            });
+
+        let mut algo = AlgorithmProperties::new(primitive);
+        algo.algorithm_family.clone_from(&cdx.algorithm_family);
+        algo.parameter_set_identifier
+            .clone_from(&cdx.parameter_set_identifier);
+        algo.classical_security_level = cdx.classical_security_level;
+        algo.nist_quantum_security_level = cdx.nist_quantum_security_level;
+        algo.elliptic_curve.clone_from(&cdx.elliptic_curve);
+
+        if let Some(mode) = cdx.mode.as_deref() {
+            algo.mode = Some(match mode {
+                "ecb" => CryptoMode::Ecb,
+                "cbc" => CryptoMode::Cbc,
+                "ofb" => CryptoMode::Ofb,
+                "cfb" => CryptoMode::Cfb,
+                "ctr" => CryptoMode::Ctr,
+                "gcm" => CryptoMode::Gcm,
+                "ccm" => CryptoMode::Ccm,
+                "xts" => CryptoMode::Xts,
+                other => CryptoMode::Other(other.to_string()),
+            });
+        }
+
+        if let Some(padding) = cdx.padding.as_deref() {
+            algo.padding = Some(match padding {
+                "pkcs5" => CryptoPadding::Pkcs5,
+                "oaep" => CryptoPadding::Oaep,
+                "pss" => CryptoPadding::Pss,
+                other => CryptoPadding::Other(other.to_string()),
+            });
+        }
+
+        if let Some(funcs) = &cdx.crypto_functions {
+            algo.crypto_functions = funcs
+                .iter()
+                .map(|s| match s.as_str() {
+                    "keygen" => CryptoFunction::Keygen,
+                    "encrypt" => CryptoFunction::Encrypt,
+                    "decrypt" => CryptoFunction::Decrypt,
+                    "sign" => CryptoFunction::Sign,
+                    "verify" => CryptoFunction::Verify,
+                    "digest" => CryptoFunction::Digest,
+                    "tag" => CryptoFunction::Tag,
+                    "keyderive" => CryptoFunction::KeyDerive,
+                    "encapsulate" => CryptoFunction::Encapsulate,
+                    "decapsulate" => CryptoFunction::Decapsulate,
+                    "wrap" => CryptoFunction::Wrap,
+                    "unwrap" => CryptoFunction::Unwrap,
+                    other => CryptoFunction::Other(other.to_string()),
+                })
+                .collect();
+        }
+
+        if let Some(env) = cdx.execution_environment.as_deref() {
+            algo.execution_environment = Some(match env {
+                "software-plain-ram" => ExecutionEnvironment::SoftwarePlainRam,
+                "software-encrypted-ram" => ExecutionEnvironment::SoftwareEncryptedRam,
+                "software-tee" => ExecutionEnvironment::SoftwareTee,
+                "hardware" => ExecutionEnvironment::Hardware,
+                other => ExecutionEnvironment::Other(other.to_string()),
+            });
+        }
+
+        if let Some(platform) = cdx.implementation_platform.as_deref() {
+            algo.implementation_platform = Some(match platform {
+                "x86_32" => ImplementationPlatform::X86_32,
+                "x86_64" => ImplementationPlatform::X86_64,
+                "armv7-a" => ImplementationPlatform::Armv7A,
+                "armv7-m" => ImplementationPlatform::Armv7M,
+                "armv8-a" => ImplementationPlatform::Armv8A,
+                "s390x" => ImplementationPlatform::S390x,
+                "generic" => ImplementationPlatform::Generic,
+                other => ImplementationPlatform::Other(other.to_string()),
+            });
+        }
+
+        if let Some(levels) = &cdx.certification_level {
+            algo.certification_level = levels
+                .iter()
+                .map(|s| match s.as_str() {
+                    "none" => CertificationLevel::None,
+                    "fips140-1-l1" => CertificationLevel::Fips140_1L1,
+                    "fips140-1-l2" => CertificationLevel::Fips140_1L2,
+                    "fips140-1-l3" => CertificationLevel::Fips140_1L3,
+                    "fips140-1-l4" => CertificationLevel::Fips140_1L4,
+                    "fips140-2-l1" => CertificationLevel::Fips140_2L1,
+                    "fips140-2-l2" => CertificationLevel::Fips140_2L2,
+                    "fips140-2-l3" => CertificationLevel::Fips140_2L3,
+                    "fips140-2-l4" => CertificationLevel::Fips140_2L4,
+                    "fips140-3-l1" => CertificationLevel::Fips140_3L1,
+                    "fips140-3-l2" => CertificationLevel::Fips140_3L2,
+                    "fips140-3-l3" => CertificationLevel::Fips140_3L3,
+                    "fips140-3-l4" => CertificationLevel::Fips140_3L4,
+                    "cc-eal1" => CertificationLevel::CcEal1,
+                    "cc-eal2" => CertificationLevel::CcEal2,
+                    "cc-eal3" => CertificationLevel::CcEal3,
+                    "cc-eal4" => CertificationLevel::CcEal4,
+                    "cc-eal5" => CertificationLevel::CcEal5,
+                    "cc-eal6" => CertificationLevel::CcEal6,
+                    "cc-eal7" => CertificationLevel::CcEal7,
+                    other => CertificationLevel::Other(other.to_string()),
+                })
+                .collect();
+        }
+
+        algo
+    }
+
+    fn convert_certificate_properties(cdx: &CdxCertificateProperties) -> CertificateProperties {
+        let mut cert = CertificateProperties::new();
+        cert.subject_name.clone_from(&cdx.subject_name);
+        cert.issuer_name.clone_from(&cdx.issuer_name);
+        cert.not_valid_before = cdx
+            .not_valid_before
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        cert.not_valid_after = cdx
+            .not_valid_after
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        cert.signature_algorithm_ref
+            .clone_from(&cdx.signature_algorithm_ref);
+        cert.subject_public_key_ref
+            .clone_from(&cdx.subject_public_key_ref);
+        cert.certificate_format.clone_from(&cdx.certificate_format);
+        cert.certificate_extension
+            .clone_from(&cdx.certificate_extension);
+        cert
+    }
+
+    fn convert_related_crypto_material_properties(
+        cdx: &CdxRelatedCryptoMaterialProperties,
+    ) -> RelatedCryptoMaterialProperties {
+        let material_type = cdx
+            .material_type
+            .as_deref()
+            .map_or(CryptoMaterialType::Unknown, |s| match s {
+                "public-key" => CryptoMaterialType::PublicKey,
+                "private-key" => CryptoMaterialType::PrivateKey,
+                "symmetric-key" => CryptoMaterialType::SymmetricKey,
+                "secret-key" => CryptoMaterialType::SecretKey,
+                "key-pair" => CryptoMaterialType::KeyPair,
+                "ciphertext" => CryptoMaterialType::Ciphertext,
+                "signature" => CryptoMaterialType::Signature,
+                "digest" => CryptoMaterialType::Digest,
+                "initialization-vector" => CryptoMaterialType::Iv,
+                "nonce" => CryptoMaterialType::Nonce,
+                "seed" => CryptoMaterialType::Seed,
+                "salt" => CryptoMaterialType::Salt,
+                "shared-secret" => CryptoMaterialType::SharedSecret,
+                "tag" => CryptoMaterialType::Tag,
+                "password" => CryptoMaterialType::Password,
+                "credential" => CryptoMaterialType::Credential,
+                "token" => CryptoMaterialType::Token,
+                "unknown" => CryptoMaterialType::Unknown,
+                other => CryptoMaterialType::Other(other.to_string()),
+            });
+
+        let mut mat = RelatedCryptoMaterialProperties::new(material_type);
+        mat.id.clone_from(&cdx.id);
+        mat.size = cdx.size;
+        mat.algorithm_ref.clone_from(&cdx.algorithm_ref);
+        mat.format.clone_from(&cdx.format);
+
+        if let Some(state) = cdx.state.as_deref() {
+            mat.state = Some(match state {
+                "pre-activation" => CryptoMaterialState::PreActivation,
+                "active" => CryptoMaterialState::Active,
+                "suspended" => CryptoMaterialState::Suspended,
+                "deactivated" => CryptoMaterialState::Deactivated,
+                "compromised" => CryptoMaterialState::Compromised,
+                "destroyed" => CryptoMaterialState::Destroyed,
+                _ => CryptoMaterialState::Active,
+            });
+        }
+
+        if let Some(sb) = &cdx.secured_by {
+            mat.secured_by = Some(SecuredBy {
+                mechanism: sb.mechanism.clone().unwrap_or_default(),
+                algorithm_ref: sb.algorithm_ref.clone(),
+            });
+        }
+
+        let parse_dt = |s: &Option<String>| -> Option<DateTime<Utc>> {
+            s.as_deref()
+                .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+        };
+        mat.creation_date = parse_dt(&cdx.creation_date);
+        mat.activation_date = parse_dt(&cdx.activation_date);
+        mat.update_date = parse_dt(&cdx.update_date);
+        mat.expiration_date = parse_dt(&cdx.expiration_date);
+
+        mat
+    }
+
+    fn convert_protocol_properties(cdx: &CdxProtocolProperties) -> ProtocolProperties {
+        let protocol_type =
+            cdx.protocol_type
+                .as_deref()
+                .map_or(ProtocolType::Unknown, |s| match s {
+                    "tls" => ProtocolType::Tls,
+                    "dtls" => ProtocolType::Dtls,
+                    "ipsec" => ProtocolType::Ipsec,
+                    "ssh" => ProtocolType::Ssh,
+                    "srtp" => ProtocolType::Srtp,
+                    "wireguard" => ProtocolType::Wireguard,
+                    "ikev1" => ProtocolType::Ikev1,
+                    "ikev2" => ProtocolType::Ikev2,
+                    "zrtp" => ProtocolType::Zrtp,
+                    "mikey" => ProtocolType::Mikey,
+                    "unknown" => ProtocolType::Unknown,
+                    other => ProtocolType::Other(other.to_string()),
+                });
+
+        let mut proto = ProtocolProperties::new(protocol_type);
+        proto.version.clone_from(&cdx.version);
+
+        if let Some(suites) = &cdx.cipher_suites {
+            proto.cipher_suites = suites
+                .iter()
+                .map(|s| CipherSuite {
+                    name: s.name.clone(),
+                    algorithms: s.algorithms.clone().unwrap_or_default(),
+                    identifiers: s.identifiers.clone().unwrap_or_default(),
+                })
+                .collect();
+        }
+
+        if let Some(ike) = &cdx.ikev2_transform_types {
+            proto.ikev2_transform_types = Some(Ikev2TransformTypes {
+                encr: ike.encr.clone().unwrap_or_default(),
+                prf: ike.prf.clone().unwrap_or_default(),
+                integ: ike.integ.clone().unwrap_or_default(),
+                ke: ike.ke.clone().unwrap_or_default(),
+            });
+        }
+
+        proto.crypto_ref_array = cdx.crypto_ref_array.clone().unwrap_or_default();
+        proto
     }
 
     /// Apply vulnerability information to components
@@ -1012,6 +1330,8 @@ struct CdxComponent {
     is_external: bool,
     /// Package URL Version Range syntax (1.7+, mutually exclusive with version)
     version_range: Option<String>,
+    /// Cryptographic properties (1.6+)
+    crypto_properties: Option<CdxCryptoProperties>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1062,12 +1382,112 @@ struct CdxProperty {
     value: String,
 }
 
+// ── CycloneDX Crypto Deserialization Structs (1.6+) ─────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxCryptoProperties {
+    asset_type: Option<String>,
+    oid: Option<String>,
+    algorithm_properties: Option<CdxAlgorithmProperties>,
+    certificate_properties: Option<CdxCertificateProperties>,
+    related_crypto_material_properties: Option<CdxRelatedCryptoMaterialProperties>,
+    protocol_properties: Option<CdxProtocolProperties>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxAlgorithmProperties {
+    primitive: Option<String>,
+    algorithm_family: Option<String>,
+    parameter_set_identifier: Option<String>,
+    mode: Option<String>,
+    padding: Option<String>,
+    crypto_functions: Option<Vec<String>>,
+    execution_environment: Option<String>,
+    implementation_platform: Option<String>,
+    certification_level: Option<Vec<String>>,
+    classical_security_level: Option<u32>,
+    nist_quantum_security_level: Option<u8>,
+    elliptic_curve: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxCertificateProperties {
+    subject_name: Option<String>,
+    issuer_name: Option<String>,
+    not_valid_before: Option<String>,
+    not_valid_after: Option<String>,
+    signature_algorithm_ref: Option<String>,
+    subject_public_key_ref: Option<String>,
+    certificate_format: Option<String>,
+    certificate_extension: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxRelatedCryptoMaterialProperties {
+    #[serde(rename = "type")]
+    material_type: Option<String>,
+    id: Option<String>,
+    state: Option<String>,
+    size: Option<u32>,
+    algorithm_ref: Option<String>,
+    secured_by: Option<CdxSecuredBy>,
+    format: Option<String>,
+    creation_date: Option<String>,
+    activation_date: Option<String>,
+    update_date: Option<String>,
+    expiration_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxSecuredBy {
+    mechanism: Option<String>,
+    algorithm_ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxProtocolProperties {
+    #[serde(rename = "type")]
+    protocol_type: Option<String>,
+    version: Option<String>,
+    cipher_suites: Option<Vec<CdxCipherSuite>>,
+    ikev2_transform_types: Option<CdxIkev2TransformTypes>,
+    crypto_ref_array: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxCipherSuite {
+    name: Option<String>,
+    algorithms: Option<Vec<String>>,
+    identifiers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxIkev2TransformTypes {
+    encr: Option<Vec<String>>,
+    prf: Option<Vec<String>>,
+    integ: Option<Vec<String>>,
+    ke: Option<Vec<String>>,
+}
+
+// ── Dependencies ────────────────────────────────────────────────────────
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxDependency {
     #[serde(rename = "ref")]
     ref_field: String,
     depends_on: Option<Vec<String>>,
+    /// CycloneDX 1.7: components this ref provides/implements
+    provides: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1201,6 +1621,9 @@ struct CdxComponentXml {
     #[serde(rename = "externalReferences")]
     external_references: Option<CdxExternalReferencesXml>,
     properties: Option<CdxPropertiesXml>,
+    /// Cryptographic properties (1.6+, camelCase in XML)
+    #[serde(rename = "cryptoProperties")]
+    crypto_properties: Option<CdxCryptoProperties>,
 }
 
 /// Licenses wrapper element for XML format

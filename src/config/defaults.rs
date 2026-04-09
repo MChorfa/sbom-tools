@@ -109,7 +109,7 @@ impl AppConfig {
     pub fn security_preset() -> Self {
         Self {
             matching: MatchingConfig {
-                fuzzy_preset: "strict".to_string(),
+                fuzzy_preset: crate::config::FuzzyPreset::Strict,
                 threshold: Some(0.9),
                 include_unchanged: false,
             },
@@ -145,7 +145,7 @@ impl AppConfig {
 
         Self {
             matching: MatchingConfig {
-                fuzzy_preset: "balanced".to_string(),
+                fuzzy_preset: crate::config::FuzzyPreset::Balanced,
                 threshold: None,
                 include_unchanged: false,
             },
@@ -187,7 +187,7 @@ impl AppConfig {
     pub fn permissive_preset() -> Self {
         Self {
             matching: MatchingConfig {
-                fuzzy_preset: "permissive".to_string(),
+                fuzzy_preset: crate::config::FuzzyPreset::Permissive,
                 threshold: Some(0.6),
                 include_unchanged: true,
             },
@@ -211,7 +211,7 @@ impl AppConfig {
     pub fn strict_preset() -> Self {
         Self {
             matching: MatchingConfig {
-                fuzzy_preset: "strict".to_string(),
+                fuzzy_preset: crate::config::FuzzyPreset::Strict,
                 threshold: Some(0.95),
                 include_unchanged: false,
             },
@@ -289,7 +289,10 @@ mod tests {
     #[test]
     fn test_security_preset() {
         let config = AppConfig::security_preset();
-        assert_eq!(config.matching.fuzzy_preset, "strict");
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert!(config.behavior.fail_on_vuln);
         assert!(config.ecosystem_rules.detect_typosquats);
         assert!(config.enrichment.is_some());
@@ -307,7 +310,10 @@ mod tests {
     #[test]
     fn test_permissive_preset() {
         let config = AppConfig::permissive_preset();
-        assert_eq!(config.matching.fuzzy_preset, "permissive");
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Permissive
+        );
         assert_eq!(config.matching.threshold, Some(0.6));
         assert!(config.matching.include_unchanged);
     }
@@ -315,7 +321,10 @@ mod tests {
     #[test]
     fn test_strict_preset() {
         let config = AppConfig::strict_preset();
-        assert_eq!(config.matching.fuzzy_preset, "strict");
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert_eq!(config.matching.threshold, Some(0.95));
         assert!(config.graph_diff.enabled);
     }
@@ -325,8 +334,14 @@ mod tests {
         let default = AppConfig::from_preset(ConfigPreset::Default);
         let security = AppConfig::from_preset(ConfigPreset::Security);
 
-        assert_eq!(default.matching.fuzzy_preset, "balanced");
-        assert_eq!(security.matching.fuzzy_preset, "strict");
+        assert_eq!(
+            default.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Balanced
+        );
+        assert_eq!(
+            security.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
     }
 
     #[test]

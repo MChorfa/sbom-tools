@@ -6,9 +6,7 @@ use crate::tui::traits::{EventResult, ViewContext, ViewMode, ViewState};
 use crossterm::event::{KeyCode, KeyEvent};
 
 pub(super) fn handle_dependencies_keys(app: &mut App, key: KeyEvent) {
-    let Some(view) = app.dependencies_view.as_mut() else {
-        return;
-    };
+    let view = &mut app.dependencies_view;
 
     let mut ctx = ViewContext {
         mode: ViewMode::from_app_mode(app.mode),

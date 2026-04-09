@@ -67,6 +67,16 @@ impl AlertSink for StdoutAlertSink {
         if !snapshot.new_eol.is_empty() {
             parts.push(format!("+{} EOL", snapshot.new_eol.len()));
         }
+        if !snapshot.crypto_changes.is_empty() {
+            parts.push(format!("~{} crypto", snapshot.crypto_changes.len()));
+        }
+        if !snapshot.crypto_downgrades.is_empty() {
+            parts.push(format!(
+                "!{} crypto downgrades ({})",
+                snapshot.crypto_downgrades.len(),
+                snapshot.crypto_downgrades.join(", ")
+            ));
+        }
 
         let detail = if parts.is_empty() {
             "no significant changes".to_string()
@@ -152,6 +162,8 @@ impl AlertSink for NdjsonAlertSink {
             "new_vulns": snapshot.new_vulns,
             "resolved_vulns": snapshot.resolved_vulns,
             "new_eol": snapshot.new_eol,
+            "crypto_changes": snapshot.crypto_changes,
+            "crypto_downgrades": snapshot.crypto_downgrades,
         });
         self.write_event(&event)
     }
@@ -239,6 +251,8 @@ impl AlertSink for WebhookAlertSink {
             "new_vulns": snapshot.new_vulns,
             "resolved_vulns": snapshot.resolved_vulns,
             "new_eol": snapshot.new_eol,
+            "crypto_changes": snapshot.crypto_changes,
+            "crypto_downgrades": snapshot.crypto_downgrades,
         });
         self.post_json(&payload)
     }
@@ -337,6 +351,8 @@ mod tests {
             new_vulns: vec!["CVE-2026-1234".to_string()],
             resolved_vulns: vec![],
             new_eol: vec![],
+            crypto_changes: vec![],
+            crypto_downgrades: vec![],
         };
 
         sink.on_change(Path::new("/tmp/test.cdx.json"), &snapshot)
@@ -361,6 +377,8 @@ mod tests {
             new_vulns: vec![],
             resolved_vulns: vec![],
             new_eol: vec![],
+            crypto_changes: vec![],
+            crypto_downgrades: vec![],
         };
         // Just verify it doesn't panic
         sink.on_change(Path::new("test.cdx.json"), &snapshot)

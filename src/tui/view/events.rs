@@ -375,7 +375,7 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
             // Toggle theme (dark -> light -> high-contrast) and save preference
             let theme_name = toggle_theme();
             let mut prefs = TuiPreferences::load();
-            prefs.theme = theme_name.to_string();
+            prefs.theme = theme_name.parse().unwrap_or_default();
             let _ = prefs.save();
         }
         KeyCode::Char('b') | KeyCode::Backspace => {
@@ -390,13 +390,14 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
 
         // Tab navigation
         KeyCode::Char('1') => app.select_tab(ViewTab::Overview),
-        KeyCode::Char('2') => app.select_tab(ViewTab::Tree),
-        KeyCode::Char('3') => app.select_tab(ViewTab::Vulnerabilities),
-        KeyCode::Char('4') => app.select_tab(ViewTab::Licenses),
-        KeyCode::Char('5') => app.select_tab(ViewTab::Dependencies),
-        KeyCode::Char('6') => app.select_tab(ViewTab::Quality),
-        KeyCode::Char('7') => app.select_tab(ViewTab::Compliance),
-        KeyCode::Char('8') => app.select_tab(ViewTab::Source),
+        // Number keys 1-9: positional tab selection based on profile
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = (c as usize) - ('1' as usize);
+            let tabs = ViewTab::tabs_for_profile(app.bom_profile);
+            if let Some(&tab) = tabs.get(idx) {
+                app.select_tab(tab);
+            }
+        }
 
         KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
             app.prev_tab();
@@ -1218,8 +1219,18 @@ fn handle_list_click(app: &mut ViewApp, clicked_index: usize, _x: u16) {
                 app.source_state.selected = idx;
             }
         }
-        ViewTab::Overview => {
-            // Overview has no list navigation
+        ViewTab::Overview | ViewTab::PqcCompliance => {
+            // No list navigation
+        }
+        ViewTab::Crypto
+        | ViewTab::Algorithms
+        | ViewTab::Certificates
+        | ViewTab::Keys
+        | ViewTab::Protocols => {
+            let max = app.crypto_count_for_tab();
+            if clicked_index < max {
+                *app.active_crypto_selected_mut() = clicked_index;
+            }
         }
     }
 }
@@ -1316,6 +1327,23 @@ pub fn get_yank_text(app: &ViewApp) -> Option<String> {
                 .get(app.source_state.selected)
                 .map(|line| line.trim().to_string()),
         },
+        ViewTab::Crypto
+        | ViewTab::Algorithms
+        | ViewTab::Certificates
+        | ViewTab::Keys
+        | ViewTab::Protocols => {
+            let crypto_components: Vec<_> = app
+                .sbom
+                .components
+                .values()
+                .filter(|c| c.component_type == crate::model::ComponentType::Cryptographic)
+                .collect();
+            let selected = app
+                .active_crypto_selected()
+                .min(crypto_components.len().saturating_sub(1));
+            crypto_components.get(selected).map(|c| c.name.clone())
+        }
+        ViewTab::PqcCompliance => None,
     }
 }
 

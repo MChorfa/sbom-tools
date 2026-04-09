@@ -67,17 +67,7 @@ impl Validatable for AppConfig {
 impl Validatable for MatchingConfig {
     fn validate(&self) -> Vec<ConfigError> {
         let mut errors = Vec::new();
-        let valid_presets = ["strict", "balanced", "permissive", "security-focused"];
-        if !valid_presets.contains(&self.fuzzy_preset.as_str()) {
-            errors.push(ConfigError {
-                field: "matching.fuzzy_preset".to_string(),
-                message: format!(
-                    "Invalid preset '{}'. Valid options: {}",
-                    self.fuzzy_preset,
-                    valid_presets.join(", ")
-                ),
-            });
-        }
+        // fuzzy_preset: FuzzyPreset enum makes invalid values unrepresentable at parse time
 
         if let Some(threshold) = self.threshold
             && !(0.0..=1.0).contains(&threshold)
@@ -153,17 +143,7 @@ impl Validatable for TuiConfig {
     fn validate(&self) -> Vec<ConfigError> {
         let mut errors = Vec::new();
 
-        let valid_themes = ["dark", "light", "high-contrast"];
-        if !valid_themes.contains(&self.theme.as_str()) {
-            errors.push(ConfigError {
-                field: "tui.theme".to_string(),
-                message: format!(
-                    "Invalid theme '{}'. Valid options: {}",
-                    self.theme,
-                    valid_themes.join(", ")
-                ),
-            });
-        }
+        // theme: ThemeName enum makes invalid values unrepresentable at parse time
 
         if !(0.0..=1.0).contains(&self.initial_threshold) {
             errors.push(ConfigError {
@@ -367,32 +347,27 @@ mod tests {
 
     #[test]
     fn test_matching_config_validation() {
+        // FuzzyPreset enum makes invalid presets unrepresentable at compile time.
+        // Valid config should pass.
         let config = MatchingConfig {
-            fuzzy_preset: "balanced".to_string(),
+            fuzzy_preset: super::super::FuzzyPreset::Balanced,
             threshold: None,
             include_unchanged: false,
         };
         assert!(config.is_valid());
-
-        let invalid = MatchingConfig {
-            fuzzy_preset: "invalid".to_string(),
-            threshold: None,
-            include_unchanged: false,
-        };
-        assert!(!invalid.is_valid());
     }
 
     #[test]
     fn test_matching_config_threshold_validation() {
         let valid = MatchingConfig {
-            fuzzy_preset: "balanced".to_string(),
+            fuzzy_preset: super::super::FuzzyPreset::Balanced,
             threshold: Some(0.85),
             include_unchanged: false,
         };
         assert!(valid.is_valid());
 
         let invalid = MatchingConfig {
-            fuzzy_preset: "balanced".to_string(),
+            fuzzy_preset: super::super::FuzzyPreset::Balanced,
             threshold: Some(1.5),
             include_unchanged: false,
         };
@@ -423,8 +398,10 @@ mod tests {
         let valid = TuiConfig::default();
         assert!(valid.is_valid());
 
+        // Theme is now ThemeName enum — invalid values are unrepresentable.
+        // Only threshold validation remains testable.
         let invalid = TuiConfig {
-            theme: "neon".to_string(),
+            initial_threshold: 2.0,
             ..TuiConfig::default()
         };
         assert!(!invalid.is_valid());
@@ -456,8 +433,10 @@ mod tests {
         let valid = AppConfig::default();
         assert!(valid.is_valid());
 
+        // Enum fields make invalid presets unrepresentable.
+        // Test with invalid threshold instead.
         let mut invalid = AppConfig::default();
-        invalid.matching.fuzzy_preset = "invalid".to_string();
+        invalid.matching.threshold = Some(5.0);
         assert!(!invalid.is_valid());
     }
 }

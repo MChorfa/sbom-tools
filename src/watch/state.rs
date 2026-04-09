@@ -129,6 +129,10 @@ pub(crate) struct DiffSnapshot {
     pub new_vulns: Vec<String>,
     pub resolved_vulns: Vec<String>,
     pub new_eol: Vec<String>,
+    /// Crypto algorithms added or changed
+    pub crypto_changes: Vec<String>,
+    /// Crypto downgrades detected (security-critical)
+    pub crypto_downgrades: Vec<String>,
 }
 
 impl DiffSnapshot {
@@ -140,6 +144,8 @@ impl DiffSnapshot {
             || !self.new_vulns.is_empty()
             || !self.resolved_vulns.is_empty()
             || !self.new_eol.is_empty()
+            || !self.crypto_changes.is_empty()
+            || !self.crypto_downgrades.is_empty()
     }
 }
 
@@ -224,6 +230,8 @@ mod tests {
                     new_vulns: vec![],
                     resolved_vulns: vec![],
                     new_eol: vec![],
+                    crypto_changes: vec![],
+                    crypto_downgrades: vec![],
                 },
             );
         }
@@ -269,6 +277,8 @@ mod tests {
             new_vulns: vec![],
             resolved_vulns: vec![],
             new_eol: vec![],
+            crypto_changes: vec![],
+            crypto_downgrades: vec![],
         };
         assert!(!empty.has_changes());
 

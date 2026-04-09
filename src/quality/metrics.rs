@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{
-    CompletenessDeclaration, CreatorType, EolStatus, ExternalRefType, HashAlgorithm,
-    NormalizedSbom, StalenessLevel,
+    CompletenessDeclaration, ComponentType, CreatorType, CryptoAssetType, CryptoMaterialState,
+    EolStatus, ExternalRefType, HashAlgorithm, NormalizedSbom, StalenessLevel,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1405,6 +1405,164 @@ impl LifecycleMetrics {
         score -= ((self.deprecated_components + self.archived_components) as f32 * 3.0).min(20.0);
         // Outdated: mild penalty (1 point each, capped at 10)
         score -= (self.outdated_components as f32 * 1.0).min(10.0);
+
+        Some(score.clamp(0.0, 100.0))
+    }
+}
+
+// ============================================================================
+// Cryptography Metrics
+// ============================================================================
+
+/// Cryptographic asset metrics for quantum readiness and crypto hygiene assessment.
+///
+/// Computed from components with `component_type == Cryptographic` and
+/// populated `crypto_properties`. Returns `None` for quality score when
+/// no crypto components are present (N/A-aware).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CryptographyMetrics {
+    /// Total number of cryptographic-asset components
+    pub total_crypto_components: usize,
+    /// Number of algorithm assets
+    pub algorithms_count: usize,
+    /// Number of certificate assets
+    pub certificates_count: usize,
+    /// Number of key material assets
+    pub keys_count: usize,
+    /// Number of protocol assets
+    pub protocols_count: usize,
+    /// Algorithms with `nistQuantumSecurityLevel > 0`
+    pub quantum_safe_count: usize,
+    /// Algorithms with `nistQuantumSecurityLevel == 0`
+    pub quantum_vulnerable_count: usize,
+    /// Algorithms flagged as weak/broken (MD5, SHA-1, DES, etc.)
+    pub weak_algorithm_count: usize,
+    /// Hybrid PQC combiner algorithms
+    pub hybrid_pqc_count: usize,
+    /// Certificates past `notValidAfter`
+    pub expired_certificates: usize,
+    /// Certificates expiring within 90 days
+    pub expiring_soon_certificates: usize,
+    /// Key material in `compromised` state
+    pub compromised_keys: usize,
+    /// Symmetric keys < 128 bits or asymmetric keys below recommended minimum
+    pub inadequate_key_sizes: usize,
+    /// Names of weak/broken algorithms found
+    pub weak_algorithm_names: Vec<String>,
+}
+
+impl CryptographyMetrics {
+    /// Compute cryptography metrics from an SBOM.
+    #[must_use]
+    pub fn from_sbom(sbom: &NormalizedSbom) -> Self {
+        let mut m = Self::default();
+
+        for comp in sbom.components.values() {
+            if comp.component_type != ComponentType::Cryptographic {
+                continue;
+            }
+            m.total_crypto_components += 1;
+
+            let Some(cp) = &comp.crypto_properties else {
+                continue;
+            };
+
+            match cp.asset_type {
+                CryptoAssetType::Algorithm => {
+                    m.algorithms_count += 1;
+                    if let Some(algo) = &cp.algorithm_properties {
+                        if algo.is_quantum_safe() {
+                            m.quantum_safe_count += 1;
+                        } else if algo.nist_quantum_security_level == Some(0) {
+                            m.quantum_vulnerable_count += 1;
+                        }
+                        if algo.is_weak_by_name(&comp.name) {
+                            m.weak_algorithm_count += 1;
+                            m.weak_algorithm_names.push(comp.name.clone());
+                        }
+                        if algo.is_hybrid_pqc() {
+                            m.hybrid_pqc_count += 1;
+                        }
+                    }
+                }
+                CryptoAssetType::Certificate => {
+                    m.certificates_count += 1;
+                    if let Some(cert) = &cp.certificate_properties {
+                        if cert.is_expired() {
+                            m.expired_certificates += 1;
+                        } else if cert.is_expiring_soon(90) {
+                            m.expiring_soon_certificates += 1;
+                        }
+                    }
+                }
+                CryptoAssetType::RelatedCryptoMaterial => {
+                    m.keys_count += 1;
+                    if let Some(mat) = &cp.related_crypto_material_properties {
+                        if mat.state == Some(CryptoMaterialState::Compromised) {
+                            m.compromised_keys += 1;
+                        }
+                        // Flag inadequate key sizes
+                        if let Some(size) = mat.size {
+                            let is_symmetric = matches!(
+                                mat.material_type,
+                                crate::model::CryptoMaterialType::SymmetricKey
+                                    | crate::model::CryptoMaterialType::SecretKey
+                            );
+                            if (is_symmetric && size < 128) || (!is_symmetric && size < 2048) {
+                                m.inadequate_key_sizes += 1;
+                            }
+                        }
+                    }
+                }
+                CryptoAssetType::Protocol => {
+                    m.protocols_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        m
+    }
+
+    /// Whether any crypto components exist (i.e., CBOM data is present).
+    #[must_use]
+    pub fn has_data(&self) -> bool {
+        self.total_crypto_components > 0
+    }
+
+    /// Percentage of algorithms that are quantum-safe (0-100).
+    /// Returns 100 if no algorithms are present.
+    #[must_use]
+    pub fn quantum_readiness_score(&self) -> f32 {
+        if self.algorithms_count == 0 {
+            return 100.0;
+        }
+        (self.quantum_safe_count as f32 / self.algorithms_count as f32) * 100.0
+    }
+
+    /// Quality score (0-100) based on crypto hygiene. Returns `None` if no crypto data.
+    #[must_use]
+    pub fn quality_score(&self) -> Option<f32> {
+        if !self.has_data() {
+            return None;
+        }
+
+        let mut score = 100.0_f32;
+
+        // Weak algorithms: severe penalty (15 each, capped at 50)
+        score -= (self.weak_algorithm_count as f32 * 15.0).min(50.0);
+        // Quantum-vulnerable: moderate penalty (8 each, capped at 40)
+        score -= (self.quantum_vulnerable_count as f32 * 8.0).min(40.0);
+        // Expired certs: moderate penalty (10 each, capped at 30)
+        score -= (self.expired_certificates as f32 * 10.0).min(30.0);
+        // Compromised keys: severe penalty (20 each, capped at 40)
+        score -= (self.compromised_keys as f32 * 20.0).min(40.0);
+        // Inadequate key sizes: mild penalty (5 each, capped at 20)
+        score -= (self.inadequate_key_sizes as f32 * 5.0).min(20.0);
+        // Expiring-soon certs: mild penalty (3 each, capped at 15)
+        score -= (self.expiring_soon_certificates as f32 * 3.0).min(15.0);
+        // Hybrid PQC bonus: +2 each (capped at +10)
+        score += (self.hybrid_pqc_count as f32 * 2.0).min(10.0);
 
         Some(score.clamp(0.0, 100.0))
     }

@@ -2,7 +2,7 @@
 
 use crate::diff::traits::{ChangeComputer, ComponentChangeSet, ComponentMatches};
 use crate::diff::{ComponentChange, CostModel, FieldChange};
-use crate::model::{Component, NormalizedSbom};
+use crate::model::{Component, CryptoAssetType, CryptoProperties, NormalizedSbom};
 use std::collections::HashSet;
 
 /// Computes component-level changes between SBOMs.
@@ -104,7 +104,149 @@ impl ComponentChangeComputer {
             }
         }
 
+        // Cryptographic property changes
+        if old.crypto_properties != new.crypto_properties {
+            total_cost += Self::compute_crypto_changes(&self.cost_model, old, new, &mut changes);
+        }
+
         (changes, total_cost)
+    }
+
+    /// Compute crypto-specific field changes between two components.
+    fn compute_crypto_changes(
+        cost_model: &CostModel,
+        old: &Component,
+        new: &Component,
+        changes: &mut Vec<FieldChange>,
+    ) -> u32 {
+        let mut cost = 0u32;
+
+        match (&old.crypto_properties, &new.crypto_properties) {
+            (Some(old_cp), Some(new_cp)) => {
+                cost += Self::compute_crypto_sub_changes(cost_model, old_cp, new_cp, changes);
+            }
+            (None, Some(new_cp)) => {
+                changes.push(FieldChange {
+                    field: "crypto_properties".to_string(),
+                    old_value: None,
+                    new_value: Some(new_cp.asset_type.to_string()),
+                });
+                cost += cost_model.crypto_algorithm_changed;
+            }
+            (Some(old_cp), None) => {
+                changes.push(FieldChange {
+                    field: "crypto_properties".to_string(),
+                    old_value: Some(old_cp.asset_type.to_string()),
+                    new_value: None,
+                });
+                cost += cost_model.crypto_algorithm_changed;
+            }
+            (None, None) => {}
+        }
+
+        cost
+    }
+
+    fn compute_crypto_sub_changes(
+        cost_model: &CostModel,
+        old: &CryptoProperties,
+        new: &CryptoProperties,
+        changes: &mut Vec<FieldChange>,
+    ) -> u32 {
+        let mut cost = 0u32;
+
+        // Algorithm property changes
+        if let (Some(old_algo), Some(new_algo)) =
+            (&old.algorithm_properties, &new.algorithm_properties)
+        {
+            // Algorithm family change
+            if old_algo.algorithm_family != new_algo.algorithm_family {
+                changes.push(FieldChange {
+                    field: "crypto_algorithm".to_string(),
+                    old_value: old_algo.algorithm_family.clone(),
+                    new_value: new_algo.algorithm_family.clone(),
+                });
+                cost += cost_model.crypto_algorithm_changed;
+            }
+
+            // Quantum security level change
+            if old_algo.nist_quantum_security_level != new_algo.nist_quantum_security_level {
+                changes.push(FieldChange {
+                    field: "crypto_quantum_level".to_string(),
+                    old_value: old_algo.nist_quantum_security_level.map(|l| l.to_string()),
+                    new_value: new_algo.nist_quantum_security_level.map(|l| l.to_string()),
+                });
+                cost += cost_model.crypto_quantum_level_changed;
+            }
+
+            // Security downgrade detection: classical security level decreased
+            if let (Some(old_bits), Some(new_bits)) = (
+                old_algo.classical_security_level,
+                new_algo.classical_security_level,
+            ) && new_bits < old_bits
+            {
+                changes.push(FieldChange {
+                    field: "crypto_downgrade".to_string(),
+                    old_value: Some(format!("{old_bits} bits")),
+                    new_value: Some(format!("{new_bits} bits")),
+                });
+                cost += cost_model.crypto_downgrade;
+            }
+        }
+
+        // Key material state changes
+        if let (Some(old_mat), Some(new_mat)) = (
+            &old.related_crypto_material_properties,
+            &new.related_crypto_material_properties,
+        ) && old_mat.state != new_mat.state
+        {
+            changes.push(FieldChange {
+                field: "crypto_key_state".to_string(),
+                old_value: old_mat.state.as_ref().map(|s| s.to_string()),
+                new_value: new_mat.state.as_ref().map(|s| s.to_string()),
+            });
+            cost += cost_model.crypto_key_rotated;
+        }
+
+        // Certificate expiry changes
+        if let (Some(old_cert), Some(new_cert)) =
+            (&old.certificate_properties, &new.certificate_properties)
+            && old_cert.not_valid_after != new_cert.not_valid_after
+        {
+            changes.push(FieldChange {
+                field: "crypto_cert_expiry".to_string(),
+                old_value: old_cert.not_valid_after.map(|d| d.to_rfc3339()),
+                new_value: new_cert.not_valid_after.map(|d| d.to_rfc3339()),
+            });
+            cost += cost_model.crypto_cert_expiry_changed;
+        }
+
+        // Protocol version changes
+        if let (Some(old_proto), Some(new_proto)) =
+            (&old.protocol_properties, &new.protocol_properties)
+            && old_proto.version != new_proto.version
+        {
+            changes.push(FieldChange {
+                field: "crypto_protocol_version".to_string(),
+                old_value: old_proto.version.clone(),
+                new_value: new_proto.version.clone(),
+            });
+            cost += cost_model.crypto_protocol_changed;
+        }
+
+        // Asset type change (e.g., algorithm → protocol)
+        if old.asset_type != new.asset_type
+            && old.asset_type != CryptoAssetType::Other("unknown".to_string())
+        {
+            changes.push(FieldChange {
+                field: "crypto_asset_type".to_string(),
+                old_value: Some(old.asset_type.to_string()),
+                new_value: Some(new.asset_type.to_string()),
+            });
+            cost += cost_model.crypto_algorithm_changed;
+        }
+
+        cost
     }
 }
 

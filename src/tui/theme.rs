@@ -892,6 +892,25 @@ impl FooterHints {
                 hints.insert(2, ("H/L", "fold all"));
                 hints.insert(3, ("Enter", "select"));
             }
+            "algorithms" => {
+                hints.insert(0, ("↑↓", "select"));
+                hints.insert(1, ("Enter", "detail"));
+            }
+            "certificates" => {
+                hints.insert(0, ("↑↓", "select"));
+                hints.insert(1, ("Enter", "detail"));
+            }
+            "keys" => {
+                hints.insert(0, ("↑↓", "select"));
+                hints.insert(1, ("Enter", "detail"));
+            }
+            "protocols" => {
+                hints.insert(0, ("↑↓", "select"));
+                hints.insert(1, ("Enter", "detail"));
+            }
+            "pqc-compliance" => {
+                hints.insert(0, ("↑↓", "scroll"));
+            }
             _ => {}
         }
 

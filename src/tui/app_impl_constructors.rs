@@ -58,15 +58,15 @@ impl App {
             security_cache: crate::tui::security::SecurityAnalysisCache::new(),
             compliance_state: crate::tui::app_states::PolicyComplianceState::new(),
             export_template: None,
-            components_view: Some(crate::tui::view_states::ComponentsView::new()),
-            dependencies_view: Some(crate::tui::view_states::DependenciesView::new()),
-            licenses_view: Some(crate::tui::view_states::LicensesView::new()),
-            vulnerabilities_view: Some(crate::tui::view_states::VulnerabilitiesView::new()),
-            quality_view: Some(crate::tui::view_states::QualityView::new()),
-            compliance_view: Some(crate::tui::view_states::ComplianceView::new()),
-            sidebyside_view: Some(crate::tui::view_states::SideBySideView::new()),
-            graph_changes_view: Some(crate::tui::view_states::GraphChangesView::new()),
-            source_view: Some(crate::tui::view_states::SourceView::new()),
+            components_view: crate::tui::view_states::ComponentsView::new(),
+            dependencies_view: crate::tui::view_states::DependenciesView::new(),
+            licenses_view: crate::tui::view_states::LicensesView::new(),
+            vulnerabilities_view: crate::tui::view_states::VulnerabilitiesView::new(),
+            quality_view: crate::tui::view_states::QualityView::new(),
+            compliance_view: crate::tui::view_states::ComplianceView::new(),
+            sidebyside_view: crate::tui::view_states::SideBySideView::new(),
+            graph_changes_view: crate::tui::view_states::GraphChangesView::new(),
+            source_view: crate::tui::view_states::SourceView::new(),
         }
     }
 
@@ -97,7 +97,7 @@ impl App {
         let mut app = Self::base(AppMode::Diff);
         let mut source = SourceDiffState::new(old_raw, new_raw);
         source.populate_annotations(&diff_result);
-        app.source_view = Some(crate::tui::view_states::SourceView::with_state(source));
+        app.source_view = crate::tui::view_states::SourceView::with_state(source);
         app.data.diff_result = Some(diff_result);
         app.data.old_sbom = Some(old_sbom);
         app.data.new_sbom = Some(new_sbom);
@@ -166,7 +166,7 @@ impl App {
             .and_then(TabKind::from_str_opt)
             .unwrap_or(TabKind::Overview);
 
-        app.source_view = Some(crate::tui::view_states::SourceView::with_state(source));
+        app.source_view = crate::tui::view_states::SourceView::with_state(source);
         app.data.sbom = Some(sbom);
         app.data.sbom_index = sbom_index;
         app.data.quality_report = quality_report;

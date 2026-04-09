@@ -1,0 +1,356 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:f6a7b8c9-d0e1-2345-fa67-890123456789",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-04-01T20:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "name": "cnsa2-scanner",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "nss-app-noncompliant",
+      "name": "noncompliant-nss-app",
+      "version": "0.5.0",
+      "purl": "pkg:cargo/noncompliant-nss-app@0.5.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "mixed-crypto-lib",
+      "name": "mixed-crypto",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/mixed-crypto@1.0.0"
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-128-gcm",
+      "name": "AES-128-GCM",
+      "description": "CNSA 2.0 violation: AES-128 not allowed, must be AES-256",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "ae",
+          "algorithmFamily": "AES",
+          "parameterSetIdentifier": "128",
+          "mode": "gcm",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "tag"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.1.6"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-192-cbc",
+      "name": "AES-192-CBC",
+      "description": "CNSA 2.0 violation: AES-192 not allowed, must be AES-256",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "algorithmFamily": "AES",
+          "parameterSetIdentifier": "192",
+          "mode": "cbc",
+          "padding": "pkcs5",
+          "executionEnvironment": "software-plain-ram",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.1.22"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha-256",
+      "name": "SHA-256",
+      "description": "CNSA 2.0 violation: SHA-256 not allowed, minimum is SHA-384",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "algorithmFamily": "SHA-2",
+          "parameterSetIdentifier": "256",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 2
+        },
+        "oid": "2.16.840.1.101.3.4.2.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-kem-768",
+      "name": "ML-KEM-768",
+      "description": "CNSA 2.0 violation: only ML-KEM-1024 is allowed",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "kem",
+          "algorithmFamily": "ML-KEM",
+          "parameterSetIdentifier": "768",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "encapsulate", "decapsulate"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 3
+        },
+        "oid": "2.16.840.1.101.3.4.4.2"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-kem-512",
+      "name": "ML-KEM-512",
+      "description": "CNSA 2.0 violation: only ML-KEM-1024 is allowed",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "kem",
+          "algorithmFamily": "ML-KEM",
+          "parameterSetIdentifier": "512",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "encapsulate", "decapsulate"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.4.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-dsa-44",
+      "name": "ML-DSA-44",
+      "description": "CNSA 2.0 violation: only ML-DSA-87 is allowed",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "algorithmFamily": "ML-DSA",
+          "parameterSetIdentifier": "44",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.3.17"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-dsa-65",
+      "name": "ML-DSA-65",
+      "description": "CNSA 2.0 violation: only ML-DSA-87 is allowed",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "algorithmFamily": "ML-DSA",
+          "parameterSetIdentifier": "65",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 3
+        },
+        "oid": "2.16.840.1.101.3.4.3.18"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rsa-2048",
+      "name": "RSA-2048",
+      "description": "CNSA 2.0 violation: RSA is quantum-vulnerable, must migrate to ML-KEM/ML-DSA",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "algorithmFamily": "RSA",
+          "parameterSetIdentifier": "2048",
+          "certificationLevel": ["fips140-2-l1"],
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "sign", "verify"],
+          "classicalSecurityLevel": 112,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ecdsa-p256",
+      "name": "ECDSA-P256",
+      "description": "CNSA 2.0 violation: ECDSA is quantum-vulnerable",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "algorithmFamily": "ECDSA",
+          "ellipticCurve": "secg/secp256r1",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.10045.4.3.2"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ecdh-p256",
+      "name": "ECDH-P256",
+      "description": "CNSA 2.0 violation: ECDH is quantum-vulnerable",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "key-agree",
+          "algorithmFamily": "ECDH",
+          "ellipticCurve": "secg/secp256r1",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keyderive"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.10045.3.1.7"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/rsa-signed",
+      "name": "nss-app.gov.example.com",
+      "description": "CNSA 2.0 violation: certificate signed with quantum-vulnerable RSA",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN = nss-app.gov.example.com, O = Gov Agency, C = US",
+          "issuerName": "CN = Federal PKI CA G2, O = US Government, C = US",
+          "notValidBefore": "2025-01-01T00:00:00Z",
+          "notValidAfter": "2027-01-01T23:59:59Z",
+          "signatureAlgorithmRef": "crypto/algorithm/rsa-2048",
+          "subjectPublicKeyRef": "crypto/key/rsa-2048-pub",
+          "certificateFormat": "X.509",
+          "certificateExtension": "pem"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/rsa-2048-pub",
+      "name": "rsa-2048-public-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "aabb1122-3344-5566-7788-99aabbccddee",
+          "state": "active",
+          "size": 2048,
+          "algorithmRef": "crypto/algorithm/rsa-2048",
+          "securedBy": {
+            "mechanism": "Software"
+          },
+          "format": "PEM",
+          "creationDate": "2025-01-01T00:00:00Z",
+          "activationDate": "2025-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/tls12-legacy",
+      "name": "TLS 1.2 (Non-CNSA 2.0)",
+      "description": "CNSA 2.0 violation: uses non-CNSA 2.0 algorithms in cipher suites",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "tls",
+          "version": "1.2",
+          "cipherSuites": [
+            {
+              "name": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+              "algorithms": [
+                "crypto/algorithm/ecdh-p256",
+                "crypto/algorithm/rsa-2048",
+                "crypto/algorithm/aes-128-gcm",
+                "crypto/algorithm/sha-256"
+              ],
+              "identifiers": ["0xC0", "0x2F"]
+            }
+          ],
+          "cryptoRefArray": [
+            "crypto/certificate/rsa-signed"
+          ]
+        }
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "nss-app-noncompliant",
+      "dependsOn": [
+        "mixed-crypto-lib",
+        "crypto/protocol/tls12-legacy"
+      ]
+    },
+    {
+      "ref": "mixed-crypto-lib",
+      "provides": [
+        "crypto/algorithm/aes-128-gcm",
+        "crypto/algorithm/aes-192-cbc",
+        "crypto/algorithm/sha-256",
+        "crypto/algorithm/ml-kem-768",
+        "crypto/algorithm/ml-kem-512",
+        "crypto/algorithm/ml-dsa-44",
+        "crypto/algorithm/ml-dsa-65",
+        "crypto/algorithm/rsa-2048",
+        "crypto/algorithm/ecdsa-p256",
+        "crypto/algorithm/ecdh-p256"
+      ],
+      "dependsOn": []
+    },
+    {
+      "ref": "crypto/protocol/tls12-legacy",
+      "dependsOn": [
+        "crypto/certificate/rsa-signed",
+        "crypto/algorithm/ecdh-p256",
+        "crypto/algorithm/rsa-2048",
+        "crypto/algorithm/aes-128-gcm",
+        "crypto/algorithm/sha-256"
+      ]
+    },
+    {
+      "ref": "crypto/certificate/rsa-signed",
+      "dependsOn": [
+        "crypto/key/rsa-2048-pub",
+        "crypto/algorithm/rsa-2048"
+      ]
+    }
+  ],
+  "compositions": [
+    {
+      "aggregate": "complete",
+      "assemblies": [
+        "nss-app-noncompliant",
+        "mixed-crypto-lib"
+      ]
+    }
+  ]
+}

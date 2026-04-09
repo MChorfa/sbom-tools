@@ -1,0 +1,424 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-15T10:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "name": "cbom-scanner",
+          "version": "2.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "acme-webapp",
+      "name": "acme-webapp",
+      "version": "3.1.0",
+      "purl": "pkg:cargo/acme-webapp@3.1.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "openssl-lib",
+      "name": "openssl",
+      "version": "3.2.1",
+      "purl": "pkg:cargo/openssl@3.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        }
+      ]
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-256-gcm",
+      "name": "AES-256-GCM",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "ae",
+          "parameterSetIdentifier": "256",
+          "mode": "gcm",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "tag"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.1.46"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-128-cbc",
+      "name": "AES-128-CBC",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "parameterSetIdentifier": "128",
+          "mode": "cbc",
+          "padding": "pkcs5",
+          "executionEnvironment": "software-plain-ram",
+          "implementationPlatform": "x86_64",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["encrypt", "decrypt"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "2.16.840.1.101.3.4.1.2"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rsa-2048",
+      "name": "RSA-2048",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "parameterSetIdentifier": "2048",
+          "certificationLevel": ["fips140-2-l1"],
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "sign", "verify"],
+          "classicalSecurityLevel": 112,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha-256",
+      "name": "SHA-256",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "256",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 2
+        },
+        "oid": "2.16.840.1.101.3.4.2.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha-384",
+      "name": "SHA-384",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "parameterSetIdentifier": "384",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["digest"],
+          "classicalSecurityLevel": 384,
+          "nistQuantumSecurityLevel": 2
+        },
+        "oid": "2.16.840.1.101.3.4.2.2"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ecdh-p256",
+      "name": "ECDH-P256",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "key-agree",
+          "parameterSetIdentifier": "P-256",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keyderive"],
+          "classicalSecurityLevel": 128,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.10045.3.1.7"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ecdsa-p384",
+      "name": "ECDSA-P384",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "parameterSetIdentifier": "P-384",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["keygen", "sign", "verify"],
+          "classicalSecurityLevel": 192,
+          "nistQuantumSecurityLevel": 0
+        },
+        "oid": "1.2.840.10045.4.3.3"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/hmac-sha256",
+      "name": "HMAC-SHA-256",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "mac",
+          "parameterSetIdentifier": "256",
+          "certificationLevel": ["fips140-3-l1"],
+          "cryptoFunctions": ["tag", "verify"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "1.2.840.113549.2.9"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/hkdf-sha256",
+      "name": "HKDF-SHA-256",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "kdf",
+          "parameterSetIdentifier": "256",
+          "certificationLevel": ["none"],
+          "cryptoFunctions": ["keyderive"],
+          "classicalSecurityLevel": 256,
+          "nistQuantumSecurityLevel": 1
+        },
+        "oid": "1.2.840.113549.2.9"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/webapp-tls",
+      "name": "acme-webapp.example.com",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN = acme-webapp.example.com, O = Acme Corp, C = US",
+          "issuerName": "CN = DigiCert TLS RSA SHA256 2020 CA1, O = DigiCert Inc, C = US",
+          "notValidBefore": "2025-06-01T00:00:00Z",
+          "notValidAfter": "2027-06-01T23:59:59Z",
+          "signatureAlgorithmRef": "crypto/algorithm/rsa-2048",
+          "subjectPublicKeyRef": "crypto/key/webapp-pubkey",
+          "certificateFormat": "X.509",
+          "certificateExtension": "pem"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/internal-ca",
+      "name": "Acme Internal CA",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN = Acme Internal CA, O = Acme Corp, C = US",
+          "issuerName": "CN = Acme Root CA, O = Acme Corp, C = US",
+          "notValidBefore": "2023-01-01T00:00:00Z",
+          "notValidAfter": "2033-01-01T23:59:59Z",
+          "signatureAlgorithmRef": "crypto/algorithm/ecdsa-p384",
+          "subjectPublicKeyRef": "crypto/key/ca-pubkey",
+          "certificateFormat": "X.509",
+          "certificateExtension": "crt"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/webapp-pubkey",
+      "name": "webapp-tls-public-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+          "state": "active",
+          "size": 2048,
+          "algorithmRef": "crypto/algorithm/rsa-2048",
+          "securedBy": {
+            "mechanism": "Software"
+          },
+          "format": "PEM",
+          "creationDate": "2025-06-01T00:00:00Z",
+          "activationDate": "2025-06-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/ca-pubkey",
+      "name": "ca-ecdsa-public-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "id": "8a3b7c9d-2e4f-1a5b-6c8d-0f1e2a3b4c5d",
+          "state": "active",
+          "size": 384,
+          "algorithmRef": "crypto/algorithm/ecdsa-p384",
+          "securedBy": {
+            "mechanism": "HSM",
+            "algorithmRef": "crypto/algorithm/aes-256-gcm"
+          },
+          "format": "DER",
+          "creationDate": "2023-01-01T00:00:00Z",
+          "activationDate": "2023-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/session-symmetric",
+      "name": "tls-session-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "symmetric-key",
+          "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90",
+          "state": "active",
+          "size": 256,
+          "algorithmRef": "crypto/algorithm/aes-256-gcm",
+          "securedBy": {
+            "mechanism": "Software",
+            "algorithmRef": "crypto/algorithm/hkdf-sha256"
+          },
+          "creationDate": "2026-03-15T09:00:00Z",
+          "activationDate": "2026-03-15T09:00:00Z",
+          "expirationDate": "2026-03-15T21:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/tls12",
+      "name": "TLS 1.2",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "tls",
+          "version": "1.2",
+          "cipherSuites": [
+            {
+              "name": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+              "algorithms": [
+                "crypto/algorithm/ecdh-p256",
+                "crypto/algorithm/rsa-2048",
+                "crypto/algorithm/aes-256-gcm",
+                "crypto/algorithm/sha-384"
+              ],
+              "identifiers": ["0xC0", "0x30"]
+            },
+            {
+              "name": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+              "algorithms": [
+                "crypto/algorithm/ecdh-p256",
+                "crypto/algorithm/rsa-2048",
+                "crypto/algorithm/aes-128-cbc",
+                "crypto/algorithm/sha-256"
+              ],
+              "identifiers": ["0xC0", "0x27"]
+            }
+          ],
+          "cryptoRefArray": [
+            "crypto/certificate/webapp-tls"
+          ]
+        },
+        "oid": "1.3.18.0.2.32.104"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ssh",
+      "name": "SSH 2.0",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "ssh",
+          "version": "2.0",
+          "cipherSuites": [
+            {
+              "name": "chacha20-poly1305@openssh.com",
+              "algorithms": [
+                "crypto/algorithm/aes-256-gcm"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "acme-webapp",
+      "dependsOn": [
+        "openssl-lib",
+        "crypto/protocol/tls12",
+        "crypto/protocol/ssh"
+      ]
+    },
+    {
+      "ref": "openssl-lib",
+      "dependsOn": [
+        "crypto/algorithm/aes-256-gcm",
+        "crypto/algorithm/aes-128-cbc",
+        "crypto/algorithm/rsa-2048",
+        "crypto/algorithm/sha-256",
+        "crypto/algorithm/sha-384",
+        "crypto/algorithm/ecdh-p256",
+        "crypto/algorithm/ecdsa-p384",
+        "crypto/algorithm/hmac-sha256",
+        "crypto/algorithm/hkdf-sha256"
+      ]
+    },
+    {
+      "ref": "crypto/protocol/tls12",
+      "dependsOn": [
+        "crypto/certificate/webapp-tls",
+        "crypto/algorithm/aes-256-gcm",
+        "crypto/algorithm/aes-128-cbc",
+        "crypto/algorithm/rsa-2048",
+        "crypto/algorithm/ecdh-p256",
+        "crypto/algorithm/sha-256",
+        "crypto/algorithm/sha-384"
+      ]
+    },
+    {
+      "ref": "crypto/certificate/webapp-tls",
+      "dependsOn": [
+        "crypto/key/webapp-pubkey",
+        "crypto/algorithm/rsa-2048"
+      ]
+    },
+    {
+      "ref": "crypto/certificate/internal-ca",
+      "dependsOn": [
+        "crypto/key/ca-pubkey",
+        "crypto/algorithm/ecdsa-p384"
+      ]
+    }
+  ],
+  "compositions": [
+    {
+      "aggregate": "complete",
+      "assemblies": [
+        "acme-webapp",
+        "openssl-lib"
+      ]
+    }
+  ]
+}

@@ -219,15 +219,15 @@ pub struct App {
     // ========================================================================
     // Each view handles its own key events via the ViewState trait.
     // State is synced back to `tabs.*` after each event for rendering.
-    pub(crate) components_view: Option<crate::tui::view_states::ComponentsView>,
-    pub(crate) dependencies_view: Option<crate::tui::view_states::DependenciesView>,
-    pub(crate) licenses_view: Option<crate::tui::view_states::LicensesView>,
-    pub(crate) vulnerabilities_view: Option<crate::tui::view_states::VulnerabilitiesView>,
-    pub(crate) quality_view: Option<crate::tui::view_states::QualityView>,
-    pub(crate) compliance_view: Option<crate::tui::view_states::ComplianceView>,
-    pub(crate) sidebyside_view: Option<crate::tui::view_states::SideBySideView>,
-    pub(crate) graph_changes_view: Option<crate::tui::view_states::GraphChangesView>,
-    pub(crate) source_view: Option<crate::tui::view_states::SourceView>,
+    pub(crate) components_view: crate::tui::view_states::ComponentsView,
+    pub(crate) dependencies_view: crate::tui::view_states::DependenciesView,
+    pub(crate) licenses_view: crate::tui::view_states::LicensesView,
+    pub(crate) vulnerabilities_view: crate::tui::view_states::VulnerabilitiesView,
+    pub(crate) quality_view: crate::tui::view_states::QualityView,
+    pub(crate) compliance_view: crate::tui::view_states::ComplianceView,
+    pub(crate) sidebyside_view: crate::tui::view_states::SideBySideView,
+    pub(crate) graph_changes_view: crate::tui::view_states::GraphChangesView,
+    pub(crate) source_view: crate::tui::view_states::SourceView,
 }
 
 impl App {
@@ -792,103 +792,64 @@ impl App {
     // ========================================================================
 
     pub(crate) fn quality_state(&self) -> &super::app_states::QualityState {
-        self.quality_view.as_ref().expect("quality_view").inner()
+        self.quality_view.inner()
     }
     pub(crate) fn quality_state_mut(&mut self) -> &mut super::app_states::QualityState {
-        self.quality_view
-            .as_mut()
-            .expect("quality_view")
-            .inner_mut()
+        self.quality_view.inner_mut()
     }
 
     pub(crate) fn graph_changes_state(&self) -> &super::app_states::GraphChangesState {
-        self.graph_changes_view
-            .as_ref()
-            .expect("graph_changes_view")
-            .inner()
+        self.graph_changes_view.inner()
     }
     pub(crate) fn graph_changes_state_mut(&mut self) -> &mut super::app_states::GraphChangesState {
-        self.graph_changes_view
-            .as_mut()
-            .expect("graph_changes_view")
-            .inner_mut()
+        self.graph_changes_view.inner_mut()
     }
 
     pub(crate) fn licenses_state(&self) -> &super::app_states::LicensesState {
-        self.licenses_view.as_ref().expect("licenses_view").inner()
+        self.licenses_view.inner()
     }
     pub(crate) fn licenses_state_mut(&mut self) -> &mut super::app_states::LicensesState {
-        self.licenses_view
-            .as_mut()
-            .expect("licenses_view")
-            .inner_mut()
+        self.licenses_view.inner_mut()
     }
 
     pub(crate) fn diff_compliance_state(&self) -> &super::app_states::DiffComplianceState {
-        self.compliance_view
-            .as_ref()
-            .expect("compliance_view")
-            .inner()
+        self.compliance_view.inner()
     }
     pub(crate) fn components_state(&self) -> &ComponentsState {
-        self.components_view
-            .as_ref()
-            .expect("components_view")
-            .inner()
+        self.components_view.inner()
     }
     pub(crate) fn components_state_mut(&mut self) -> &mut ComponentsState {
-        self.components_view
-            .as_mut()
-            .expect("components_view")
-            .inner_mut()
+        self.components_view.inner_mut()
     }
 
     pub(crate) fn vulnerabilities_state(&self) -> &super::app_states::VulnerabilitiesState {
-        self.vulnerabilities_view
-            .as_ref()
-            .expect("vulnerabilities_view")
-            .inner()
+        self.vulnerabilities_view.inner()
     }
     pub(crate) fn vulnerabilities_state_mut(
         &mut self,
     ) -> &mut super::app_states::VulnerabilitiesState {
-        self.vulnerabilities_view
-            .as_mut()
-            .expect("vulnerabilities_view")
-            .inner_mut()
+        self.vulnerabilities_view.inner_mut()
     }
 
     pub(crate) fn side_by_side_state(&self) -> &super::app_states::SideBySideState {
-        self.sidebyside_view
-            .as_ref()
-            .expect("sidebyside_view")
-            .inner()
+        self.sidebyside_view.inner()
     }
     pub(crate) fn side_by_side_state_mut(&mut self) -> &mut super::app_states::SideBySideState {
-        self.sidebyside_view
-            .as_mut()
-            .expect("sidebyside_view")
-            .inner_mut()
+        self.sidebyside_view.inner_mut()
     }
 
     pub(crate) fn dependencies_state(&self) -> &DependenciesState {
-        self.dependencies_view
-            .as_ref()
-            .expect("dependencies_view")
-            .inner()
+        self.dependencies_view.inner()
     }
     pub(crate) fn dependencies_state_mut(&mut self) -> &mut DependenciesState {
-        self.dependencies_view
-            .as_mut()
-            .expect("dependencies_view")
-            .inner_mut()
+        self.dependencies_view.inner_mut()
     }
 
     pub(crate) fn source_state(&self) -> &crate::tui::app_states::SourceDiffState {
-        self.source_view.as_ref().expect("source_view").inner()
+        self.source_view.inner()
     }
     pub(crate) fn source_state_mut(&mut self) -> &mut crate::tui::app_states::SourceDiffState {
-        self.source_view.as_mut().expect("source_view").inner_mut()
+        self.source_view.inner_mut()
     }
 
     // ========================================================================
@@ -904,14 +865,7 @@ impl App {
     /// [`RenderContext`]: super::render_context::RenderContext
     pub fn prepare_render(&mut self) {
         // 1. Graph cache for dependencies (was inline in render_dependencies)
-        super::views::update_graph_cache(
-            self.dependencies_view
-                .as_mut()
-                .expect("dependencies_view")
-                .inner_mut(),
-            &self.data,
-            self.mode,
-        );
+        super::views::update_graph_cache(self.dependencies_view.inner_mut(), &self.data, self.mode);
 
         // 2. Compliance results (was inline in render_diff_compliance)
         self.ensure_compliance_results();

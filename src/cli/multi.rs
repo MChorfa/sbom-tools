@@ -341,12 +341,9 @@ fn determine_matrix_exit_code(
 }
 
 /// Get fuzzy matching config from preset name
-fn get_fuzzy_config(preset: &str) -> FuzzyMatchConfig {
-    FuzzyMatchConfig::from_preset(preset).unwrap_or_else(|| {
-        tracing::warn!(
-            "Unknown fuzzy preset '{}', using 'balanced'. Valid options: strict, balanced, permissive",
-            preset
-        );
+fn get_fuzzy_config(preset: &crate::config::FuzzyPreset) -> FuzzyMatchConfig {
+    FuzzyMatchConfig::from_preset(preset.as_str()).unwrap_or_else(|| {
+        // Enum guarantees valid preset, but from_preset may not know all variants
         FuzzyMatchConfig::balanced()
     })
 }
@@ -381,22 +378,14 @@ mod tests {
 
     #[test]
     fn test_get_fuzzy_config_valid_presets() {
-        let config = get_fuzzy_config("strict");
+        let config = get_fuzzy_config(&crate::config::FuzzyPreset::Strict);
         assert!(config.threshold > 0.8);
 
-        let config = get_fuzzy_config("balanced");
+        let config = get_fuzzy_config(&crate::config::FuzzyPreset::Balanced);
         assert!(config.threshold >= 0.7 && config.threshold <= 0.85);
 
-        let config = get_fuzzy_config("permissive");
+        let config = get_fuzzy_config(&crate::config::FuzzyPreset::Permissive);
         assert!(config.threshold <= 0.70);
-    }
-
-    #[test]
-    fn test_get_fuzzy_config_invalid_preset() {
-        // Should fall back to balanced
-        let config = get_fuzzy_config("invalid");
-        let balanced = FuzzyMatchConfig::balanced();
-        assert_eq!(config.threshold, balanced.threshold);
     }
 
     #[test]

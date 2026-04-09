@@ -212,7 +212,11 @@ pub fn calculate_fix_urgency(severity_rank: u8, blast_radius: usize, cvss_score:
     let severity_score = u32::from(severity_rank) * 10;
 
     // CVSS contribution (0-30)
-    let cvss_contribution = (cvss_score * 3.0) as u32;
+    let cvss_contribution = if cvss_score.is_finite() {
+        (cvss_score * 3.0).clamp(0.0, 30.0) as u32
+    } else {
+        0
+    };
 
     // Blast radius contribution (0-30)
     let blast_score = match blast_radius {

@@ -24,7 +24,7 @@ use super::events::{Event, EventHandler, handle_key_event, handle_mouse_event};
 pub fn run_view_tui(app: &mut ViewApp) -> io::Result<()> {
     // Load theme preference
     let prefs = TuiPreferences::load();
-    set_theme(Theme::from_name(&prefs.theme));
+    set_theme(Theme::from_name(prefs.theme.as_str()));
 
     // Setup terminal
     enable_raw_mode()?;
@@ -107,7 +107,13 @@ fn render(frame: &mut Frame, app: &mut ViewApp) {
         ViewTab::Dependencies => views::render_dependencies(frame, chunks[2], app),
         ViewTab::Quality => views::render_quality(frame, chunks[2], app),
         ViewTab::Compliance => views::render_compliance(frame, chunks[2], app),
+        ViewTab::PqcCompliance => views::render_pqc_compliance(frame, chunks[2], &mut *app),
         ViewTab::Source => views::render_source(frame, chunks[2], app),
+        ViewTab::Crypto => views::render_crypto(frame, chunks[2], app),
+        ViewTab::Algorithms => views::render_algorithms(frame, chunks[2], app),
+        ViewTab::Certificates => views::render_certificates(frame, chunks[2], app),
+        ViewTab::Keys => views::render_keys(frame, chunks[2], app),
+        ViewTab::Protocols => views::render_protocols(frame, chunks[2], app),
     }
 
     // Render status bar
@@ -157,6 +163,12 @@ fn render_header(frame: &mut Frame, area: Rect, app: &ViewApp) {
         app.sbom.document.format, app.sbom.document.format_version
     );
 
+    let profile_color = if app.bom_profile == crate::model::BomProfile::Cbom {
+        Color::Cyan
+    } else {
+        colors().text_muted
+    };
+
     let header_line = Line::from(vec![
         Span::styled("sbom-tools", Style::default().fg(colors().primary).bold()),
         Span::styled(" ", Style::default()),
@@ -165,6 +177,11 @@ fn render_header(frame: &mut Frame, area: Rect, app: &ViewApp) {
         Span::styled(&name, Style::default().fg(colors().text).bold()),
         Span::styled(" │ ", Style::default().fg(colors().muted)),
         Span::styled(format_info, Style::default().fg(colors().text_muted)),
+        Span::styled(" │ ", Style::default().fg(colors().muted)),
+        Span::styled(
+            format!("[{}]", app.bom_profile.label()),
+            Style::default().fg(profile_color).bold(),
+        ),
     ]);
 
     let header = Paragraph::new(header_line);
@@ -172,21 +189,13 @@ fn render_header(frame: &mut Frame, area: Rect, app: &ViewApp) {
 }
 
 fn render_tabs(frame: &mut Frame, area: Rect, app: &ViewApp) {
-    let tabs_data = [
-        (ViewTab::Overview, "1", "Overview"),
-        (ViewTab::Tree, "2", "Components"),
-        (ViewTab::Vulnerabilities, "3", "Vulnerabilities"),
-        (ViewTab::Licenses, "4", "Licenses"),
-        (ViewTab::Dependencies, "5", "Dependencies"),
-        (ViewTab::Quality, "6", "Quality"),
-        (ViewTab::Compliance, "7", "Compliance"),
-        (ViewTab::Source, "8", "Source"),
-    ];
+    let available_tabs = ViewTab::tabs_for_profile(app.bom_profile);
 
-    let titles: Vec<Line> = tabs_data
+    let titles: Vec<Line> = available_tabs
         .iter()
-        .map(|(kind, key, title)| {
-            let is_active = *kind == app.active_tab;
+        .enumerate()
+        .map(|(i, tab)| {
+            let is_active = *tab == app.active_tab;
             let key_style = if is_active {
                 Style::default().fg(colors().accent).bold()
             } else {
@@ -199,22 +208,16 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &ViewApp) {
             };
 
             Line::from(vec![
-                Span::styled(format!("[{key}]"), key_style),
-                Span::styled(format!(" {title} "), title_style),
+                Span::styled(format!("[{}]", i + 1), key_style),
+                Span::styled(format!(" {} ", tab.title()), title_style),
             ])
         })
         .collect();
 
-    let selected_idx = match app.active_tab {
-        ViewTab::Overview => 0,
-        ViewTab::Tree => 1,
-        ViewTab::Vulnerabilities => 2,
-        ViewTab::Licenses => 3,
-        ViewTab::Dependencies => 4,
-        ViewTab::Quality => 5,
-        ViewTab::Compliance => 6,
-        ViewTab::Source => 7,
-    };
+    let selected_idx = available_tabs
+        .iter()
+        .position(|t| *t == app.active_tab)
+        .unwrap_or(0);
 
     let tabs = Tabs::new(titles)
         .block(
@@ -232,45 +235,93 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &ViewApp) {
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let stats = &app.stats;
 
-    let mut spans = vec![
-        Span::styled(" Components: ", Style::default().fg(colors().text_muted)),
-        Span::styled(
-            widgets::format_count(stats.component_count),
-            Style::default().fg(colors().primary).bold(),
-        ),
-        Span::styled(" │ ", Style::default().fg(colors().muted)),
-        Span::styled("Vulns: ", Style::default().fg(colors().text_muted)),
-    ];
-
-    if stats.vuln_count > 0 {
-        spans.push(Span::styled(
-            widgets::format_count(stats.vuln_count),
-            Style::default().fg(colors().error).bold(),
-        ));
-
-        if stats.critical_count > 0 {
-            spans.push(Span::styled(
-                format!(" ({}C", stats.critical_count),
-                Style::default().fg(colors().critical).bold(),
-            ));
-            spans.push(Span::styled(
-                format!("/{}H)", stats.high_count),
-                Style::default().fg(colors().high),
+    let mut spans = if app.bom_profile == crate::model::BomProfile::Cbom {
+        // CBOM status bar: crypto-focused stats
+        let metrics = crate::quality::CryptographyMetrics::from_sbom(&app.sbom);
+        let readiness = metrics.quantum_readiness_score();
+        let q_color = if readiness >= 80.0 {
+            Color::Green
+        } else if readiness >= 40.0 {
+            Color::Yellow
+        } else {
+            Color::Red
+        };
+        let mut s = vec![
+            Span::styled(" Algo: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                metrics.algorithms_count.to_string(),
+                Style::default().fg(colors().primary).bold(),
+            ),
+            Span::styled(" │ ", Style::default().fg(colors().muted)),
+            Span::styled("Certs: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                metrics.certificates_count.to_string(),
+                Style::default().fg(colors().primary),
+            ),
+            Span::styled(" │ ", Style::default().fg(colors().muted)),
+            Span::styled("Keys: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                metrics.keys_count.to_string(),
+                Style::default().fg(colors().primary),
+            ),
+            Span::styled(" │ ", Style::default().fg(colors().muted)),
+            Span::styled("Quantum: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                format!("{readiness:.0}%"),
+                Style::default().fg(q_color).bold(),
+            ),
+        ];
+        if metrics.weak_algorithm_count > 0 {
+            s.push(Span::styled(" │ ", Style::default().fg(colors().muted)));
+            s.push(Span::styled(
+                format!("Weak: {}", metrics.weak_algorithm_count),
+                Style::default().fg(Color::Red).bold(),
             ));
         }
+        s
     } else {
-        spans.push(Span::styled("0", Style::default().fg(colors().success)));
-    }
+        // SBOM status bar: software-focused stats
+        let mut s = vec![
+            Span::styled(" Components: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                widgets::format_count(stats.component_count),
+                Style::default().fg(colors().primary).bold(),
+            ),
+            Span::styled(" │ ", Style::default().fg(colors().muted)),
+            Span::styled("Vulns: ", Style::default().fg(colors().text_muted)),
+        ];
 
-    spans.push(Span::styled(" │ ", Style::default().fg(colors().muted)));
-    spans.push(Span::styled(
-        "Licenses: ",
-        Style::default().fg(colors().text_muted),
-    ));
-    spans.push(Span::styled(
-        stats.license_count.to_string(),
-        Style::default().fg(colors().primary),
-    ));
+        if stats.vuln_count > 0 {
+            s.push(Span::styled(
+                widgets::format_count(stats.vuln_count),
+                Style::default().fg(colors().error).bold(),
+            ));
+
+            if stats.critical_count > 0 {
+                s.push(Span::styled(
+                    format!(" ({}C", stats.critical_count),
+                    Style::default().fg(colors().critical).bold(),
+                ));
+                s.push(Span::styled(
+                    format!("/{}H)", stats.high_count),
+                    Style::default().fg(colors().high),
+                ));
+            }
+        } else {
+            s.push(Span::styled("0", Style::default().fg(colors().success)));
+        }
+
+        s.push(Span::styled(" │ ", Style::default().fg(colors().muted)));
+        s.push(Span::styled(
+            "Licenses: ",
+            Style::default().fg(colors().text_muted),
+        ));
+        s.push(Span::styled(
+            stats.license_count.to_string(),
+            Style::default().fg(colors().primary),
+        ));
+        s
+    };
 
     // Add grouping/filter info for tree tab
     if app.active_tab == ViewTab::Tree {
@@ -337,16 +388,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &ViewApp) {
     }
 
     // Get tab-specific hints
-    let tab_name = match app.active_tab {
-        ViewTab::Overview => "overview",
-        ViewTab::Tree => "tree",
-        ViewTab::Vulnerabilities => "vulnerabilities",
-        ViewTab::Licenses => "licenses",
-        ViewTab::Dependencies => "dependencies",
-        ViewTab::Quality => "quality",
-        ViewTab::Compliance => "compliance",
-        ViewTab::Source => "source",
-    };
+    let tab_name = app.active_tab.as_str();
 
     let hints = FooterHints::for_view_tab(tab_name);
     let mut footer_spans = render_footer_hints(&hints);

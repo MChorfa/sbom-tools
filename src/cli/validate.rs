@@ -39,10 +39,16 @@ pub fn run_validate(
             "eo14028" | "eo-14028" | "eo_14028" => {
                 ComplianceChecker::new(ComplianceLevel::Eo14028).check(parsed.sbom())
             }
+            "cnsa2" | "cnsa-2" | "cnsa_2" | "cnsa2.0" => {
+                ComplianceChecker::new(ComplianceLevel::Cnsa2).check(parsed.sbom())
+            }
+            "pqc" | "nist-pqc" | "nist_pqc" => {
+                ComplianceChecker::new(ComplianceLevel::NistPqc).check(parsed.sbom())
+            }
             _ => {
                 bail!(
                     "Unknown validation standard: {std_name}. \
-                    Valid options: ntia, fda, cra, ssdf, eo14028"
+                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc"
                 );
             }
         };

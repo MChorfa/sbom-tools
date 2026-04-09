@@ -3,7 +3,7 @@
 //! Implements the `view` subcommand for viewing a single SBOM.
 
 use crate::config::ViewConfig;
-use crate::model::{NormalizedSbom, Severity};
+use crate::model::{BomProfile, NormalizedSbom, Severity};
 use crate::pipeline::{
     OutputTarget, auto_detect_format, parse_sbom_with_context, should_use_color, write_output,
 };
@@ -92,9 +92,15 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         .map(|c| c.vulnerabilities.len())
         .sum();
 
+    // Resolve BOM profile (CLI override or auto-detect)
+    let bom_profile = config
+        .bom_profile
+        .unwrap_or_else(|| BomProfile::detect(parsed.sbom()));
+    tracing::info!("BOM profile: {bom_profile}");
+
     if effective_output == ReportFormat::Tui {
         let (sbom, raw_content) = parsed.into_parts();
-        let mut app = ViewApp::new(sbom, &raw_content);
+        let mut app = ViewApp::new(sbom, &raw_content, bom_profile);
         app.export_template = config.output.export_template.clone();
 
         // Show enrichment warnings in TUI footer
@@ -285,6 +291,7 @@ mod tests {
             vulnerable_only: false,
             ecosystem_filter: None,
             fail_on_vuln: false,
+            bom_profile: None,
             enrichment: crate::config::EnrichmentConfig::default(),
         };
 

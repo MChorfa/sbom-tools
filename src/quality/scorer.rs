@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use super::compliance::{ComplianceChecker, ComplianceLevel, ComplianceResult};
 use super::metrics::{
-    AuditabilityMetrics, CompletenessMetrics, CompletenessWeights, DependencyMetrics,
-    HashQualityMetrics, IdentifierMetrics, LicenseMetrics, LifecycleMetrics, ProvenanceMetrics,
-    VulnerabilityMetrics,
+    AuditabilityMetrics, CompletenessMetrics, CompletenessWeights, CryptographyMetrics,
+    DependencyMetrics, HashQualityMetrics, IdentifierMetrics, LicenseMetrics, LifecycleMetrics,
+    ProvenanceMetrics, VulnerabilityMetrics,
 };
 
 /// Quality scoring engine version
@@ -191,7 +191,15 @@ impl QualityGrade {
     /// Create grade from score
     #[must_use]
     pub const fn from_score(score: f32) -> Self {
-        match score as u32 {
+        // Guard against NaN (all comparisons return false) and out-of-range values
+        let clamped = if score > 100.0 {
+            100
+        } else if score >= 0.0 {
+            score as u32
+        } else {
+            0
+        };
+        match clamped {
             90..=100 => Self::A,
             80..=89 => Self::B,
             70..=79 => Self::C,
@@ -322,6 +330,10 @@ pub struct QualityReport {
     pub auditability_metrics: AuditabilityMetrics,
     /// Lifecycle metrics (enrichment-dependent)
     pub lifecycle_metrics: LifecycleMetrics,
+    /// Cryptography quality score (`None` if no crypto components)
+    pub cryptography_score: Option<f32>,
+    /// Cryptography metrics (CBOM)
+    pub cryptography_metrics: CryptographyMetrics,
 
     /// Compliance check result
     pub compliance: ComplianceResult,
@@ -370,6 +382,7 @@ impl QualityScorer {
         let provenance_metrics = ProvenanceMetrics::from_sbom(sbom);
         let auditability_metrics = AuditabilityMetrics::from_sbom(sbom);
         let lifecycle_metrics = LifecycleMetrics::from_sbom(sbom);
+        let cryptography_metrics = CryptographyMetrics::from_sbom(sbom);
 
         // Calculate individual category scores
         let completeness_score = completeness_metrics.overall_score(&self.completeness_weights);
@@ -383,6 +396,7 @@ impl QualityScorer {
         // Combine provenance and auditability (60/40 split)
         let provenance_score = provenance_raw * 0.6 + auditability_raw * 0.4;
         let lifecycle_score = lifecycle_metrics.quality_score();
+        let cryptography_score = cryptography_metrics.quality_score();
 
         // Determine which categories are available
         let vuln_available = vulnerability_score.is_some();
@@ -463,6 +477,8 @@ impl QualityScorer {
             provenance_metrics,
             auditability_metrics,
             lifecycle_metrics,
+            cryptography_score,
+            cryptography_metrics,
             compliance,
             recommendations,
         }

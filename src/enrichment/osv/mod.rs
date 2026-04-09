@@ -75,6 +75,12 @@ impl OsvEnricher {
 
     /// Build a cache key and OSV query for a component.
     fn build_query(&self, component: &Component) -> Option<(CacheKey, OsvQuery)> {
+        // Skip cryptographic assets — they are not software packages and would
+        // produce false positives when queried against vulnerability databases.
+        if component.component_type == crate::model::ComponentType::Cryptographic {
+            return None;
+        }
+
         let cache_key = CacheKey::new(
             component.identifiers.purl.clone(),
             component.name.clone(),

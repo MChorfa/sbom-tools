@@ -385,6 +385,7 @@ impl std::fmt::Display for ExternalRefType {
 
 /// Dependency relationship type
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DependencyType {
     /// Direct dependency
     DependsOn,
@@ -426,6 +427,8 @@ pub enum DependencyType {
     DynamicLink,
     /// Static link
     StaticLink,
+    /// Provides (CycloneDX 1.7: library provides/implements a crypto asset)
+    Provides,
     /// Other relationship
     Other(String),
 }
@@ -453,6 +456,7 @@ impl std::fmt::Display for DependencyType {
             Self::FileModified => write!(f, "file-modified"),
             Self::DynamicLink => write!(f, "dynamic-link"),
             Self::StaticLink => write!(f, "static-link"),
+            Self::Provides => write!(f, "provides"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }

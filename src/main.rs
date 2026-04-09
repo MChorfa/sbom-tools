@@ -333,6 +333,10 @@ struct ViewArgs {
     #[arg(long)]
     fail_on_vuln: bool,
 
+    /// BOM type override (sbom, cbom). Auto-detected from content if omitted
+    #[arg(long, value_name = "TYPE")]
+    bom_type: Option<String>,
+
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
 }
@@ -646,6 +650,22 @@ struct QueryArgs {
     /// Filter by vulnerability ID (e.g., CVE-2021-44228)
     #[arg(long)]
     affected_by: Option<String>,
+
+    /// Filter by crypto asset type (algorithm, certificate, key, protocol)
+    #[arg(long)]
+    crypto_type: Option<String>,
+
+    /// Filter by algorithm family (substring, e.g., "AES", "RSA", "ML-KEM")
+    #[arg(long)]
+    algorithm_family: Option<String>,
+
+    /// Show only quantum-safe cryptographic assets
+    #[arg(long, conflicts_with = "quantum_vulnerable")]
+    quantum_safe: bool,
+
+    /// Show only quantum-vulnerable cryptographic assets
+    #[arg(long, conflicts_with = "quantum_safe")]
+    quantum_vulnerable: bool,
 
     /// Output format (table, json, csv)
     #[arg(short, long, default_value = "auto")]
@@ -1067,7 +1087,7 @@ fn main() -> Result<()> {
                     export_template: cli.export_template.clone(),
                 },
                 matching: MatchingConfig {
-                    fuzzy_preset: args.fuzzy_preset,
+                    fuzzy_preset: args.fuzzy_preset.parse().unwrap_or_default(),
                     threshold: None,
                     include_unchanged: args.include_unchanged,
                 },
@@ -1135,6 +1155,10 @@ fn main() -> Result<()> {
                 vulnerable_only: args.vulnerable_only,
                 ecosystem_filter: args.ecosystem,
                 fail_on_vuln: args.fail_on_vuln,
+                bom_profile: args
+                    .bom_type
+                    .as_deref()
+                    .and_then(sbom_tools::BomProfile::from_str_opt),
                 enrichment,
             };
             let exit_code = cli::run_view(config)?;
@@ -1166,7 +1190,7 @@ fn main() -> Result<()> {
                     ..Default::default()
                 },
                 matching: MatchingConfig {
-                    fuzzy_preset: args.fuzzy_preset,
+                    fuzzy_preset: args.fuzzy_preset.parse().unwrap_or_default(),
                     include_unchanged: args.include_unchanged,
                     ..Default::default()
                 },
@@ -1222,7 +1246,7 @@ fn main() -> Result<()> {
                     ..Default::default()
                 },
                 matching: MatchingConfig {
-                    fuzzy_preset: args.fuzzy_preset,
+                    fuzzy_preset: args.fuzzy_preset.parse().unwrap_or_default(),
                     ..Default::default()
                 },
                 filtering: FilterConfig {
@@ -1277,7 +1301,7 @@ fn main() -> Result<()> {
                     ..Default::default()
                 },
                 matching: MatchingConfig {
-                    fuzzy_preset: args.fuzzy_preset,
+                    fuzzy_preset: args.fuzzy_preset.parse().unwrap_or_default(),
                     ..Default::default()
                 },
                 cluster_threshold: args.cluster_threshold,
@@ -1349,6 +1373,14 @@ fn main() -> Result<()> {
 
             let enrichment = args.enrichment.to_enrichment_config();
 
+            let quantum_safe_filter = if args.quantum_safe {
+                Some(true)
+            } else if args.quantum_vulnerable {
+                Some(false)
+            } else {
+                None
+            };
+
             let filter = cli::QueryFilter {
                 pattern,
                 name: args.name,
@@ -1358,6 +1390,9 @@ fn main() -> Result<()> {
                 ecosystem: args.ecosystem,
                 supplier: args.supplier,
                 affected_by: args.affected_by,
+                crypto_type: args.crypto_type,
+                algorithm_family: args.algorithm_family,
+                quantum_safe: quantum_safe_filter,
             };
 
             let config = QueryConfig {

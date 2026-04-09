@@ -67,8 +67,8 @@ pub struct AppConfigBuilder {
 
 impl AppConfigBuilder {
     /// Set the fuzzy matching preset.
-    pub fn fuzzy_preset(mut self, preset: impl Into<String>) -> Self {
-        self.config.matching.fuzzy_preset = preset.into();
+    pub fn fuzzy_preset(mut self, preset: FuzzyPreset) -> Self {
+        self.config.matching.fuzzy_preset = preset;
         self
     }
 
@@ -156,14 +156,118 @@ impl AppConfigBuilder {
 }
 
 // ============================================================================
+// Config Enums
+// ============================================================================
+
+/// TUI theme name
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeName {
+    /// Dark theme (default)
+    #[default]
+    Dark,
+    /// Light theme
+    Light,
+    /// High-contrast theme
+    HighContrast,
+}
+
+impl ThemeName {
+    /// Get the string representation of the theme name.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::HighContrast => "high-contrast",
+        }
+    }
+}
+
+impl std::fmt::Display for ThemeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ThemeName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "dark" => Ok(Self::Dark),
+            "light" => Ok(Self::Light),
+            "high-contrast" | "highcontrast" | "hc" => Ok(Self::HighContrast),
+            _ => Err(format!("unknown theme: {s}")),
+        }
+    }
+}
+
+/// Fuzzy matching preset
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum FuzzyPreset {
+    /// Strict matching (fewer false positives)
+    Strict,
+    /// Balanced matching (default)
+    #[default]
+    Balanced,
+    /// Permissive matching (fewer false negatives)
+    Permissive,
+    /// Strict matching optimized for multi-SBOM comparison
+    StrictMulti,
+    /// Balanced matching optimized for multi-SBOM comparison
+    BalancedMulti,
+    /// Security-focused matching
+    SecurityFocused,
+}
+
+impl FuzzyPreset {
+    /// Get the string representation of the preset.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Balanced => "balanced",
+            Self::Permissive => "permissive",
+            Self::StrictMulti => "strict-multi",
+            Self::BalancedMulti => "balanced-multi",
+            Self::SecurityFocused => "security-focused",
+        }
+    }
+}
+
+impl std::str::FromStr for FuzzyPreset {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('_', "-").as_str() {
+            "strict" => Ok(Self::Strict),
+            "balanced" => Ok(Self::Balanced),
+            "permissive" => Ok(Self::Permissive),
+            "strict-multi" => Ok(Self::StrictMulti),
+            "balanced-multi" => Ok(Self::BalancedMulti),
+            "security-focused" => Ok(Self::SecurityFocused),
+            _ => Err(format!("unknown fuzzy preset: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for FuzzyPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ============================================================================
 // TUI Preferences (persisted)
 // ============================================================================
 
 /// TUI preferences that persist across sessions.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TuiPreferences {
-    /// Theme name: "dark", "light", or "high-contrast"
-    pub theme: String,
+    /// Theme name
+    pub theme: ThemeName,
     /// Last active tab in diff mode (e.g., "summary", "components")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_tab: Option<String>,
@@ -175,7 +279,7 @@ pub struct TuiPreferences {
 impl Default for TuiPreferences {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
+            theme: ThemeName::Dark,
             last_tab: None,
             last_view_tab: None,
         }
@@ -220,8 +324,8 @@ impl TuiPreferences {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct TuiConfig {
-    /// Theme name: "dark", "light", or "high-contrast"
-    pub theme: String,
+    /// Theme name
+    pub theme: ThemeName,
     /// Show line numbers in code views
     pub show_line_numbers: bool,
     /// Enable mouse support
@@ -234,7 +338,7 @@ pub struct TuiConfig {
 impl Default for TuiConfig {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
+            theme: ThemeName::Dark,
             show_line_numbers: true,
             mouse_enabled: true,
             initial_threshold: 0.8,
@@ -295,6 +399,8 @@ pub struct ViewConfig {
     pub ecosystem_filter: Option<String>,
     /// Exit with code 2 if vulnerabilities are present
     pub fail_on_vuln: bool,
+    /// BOM profile override (auto-detected if None)
+    pub bom_profile: Option<crate::model::BomProfile>,
     /// Enrichment configuration
     pub enrichment: EnrichmentConfig,
 }
@@ -527,8 +633,8 @@ impl StreamingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct MatchingConfig {
-    /// Fuzzy matching preset name
-    pub fuzzy_preset: String,
+    /// Fuzzy matching preset
+    pub fuzzy_preset: FuzzyPreset,
     /// Custom matching threshold (overrides preset)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0, max = 1.0))]
@@ -540,7 +646,7 @@ pub struct MatchingConfig {
 impl Default for MatchingConfig {
     fn default() -> Self {
         Self {
-            fuzzy_preset: "balanced".to_string(),
+            fuzzy_preset: FuzzyPreset::Balanced,
             threshold: None,
             include_unchanged: false,
         }
@@ -551,13 +657,11 @@ impl MatchingConfig {
     /// Convert preset name to `FuzzyMatchConfig`
     #[must_use]
     pub fn to_fuzzy_config(&self) -> FuzzyMatchConfig {
-        let mut config = FuzzyMatchConfig::from_preset(&self.fuzzy_preset).unwrap_or_else(|| {
-            tracing::warn!(
-                "Unknown fuzzy preset '{}', using 'balanced'. Valid: strict, balanced, permissive",
-                self.fuzzy_preset
-            );
-            FuzzyMatchConfig::balanced()
-        });
+        let mut config =
+            FuzzyMatchConfig::from_preset(self.fuzzy_preset.as_str()).unwrap_or_else(|| {
+                // Enum guarantees valid preset, but from_preset may not know all variants
+                FuzzyMatchConfig::balanced()
+            });
 
         // Apply custom threshold if specified
         if let Some(threshold) = self.threshold {
@@ -814,7 +918,7 @@ impl DiffConfigBuilder {
     }
 
     #[must_use]
-    pub fn fuzzy_preset(mut self, preset: String) -> Self {
+    pub fn fuzzy_preset(mut self, preset: FuzzyPreset) -> Self {
         self.matching.fuzzy_preset = preset;
         self
     }
@@ -944,5 +1048,87 @@ impl DiffConfigBuilder {
             ecosystem_rules: self.ecosystem_rules,
             enrichment: self.enrichment,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_name_serde_roundtrip() {
+        // JSON deserialization (preferences.json format)
+        let dark: ThemeName = serde_json::from_str(r#""dark""#).unwrap();
+        assert_eq!(dark, ThemeName::Dark);
+
+        let light: ThemeName = serde_json::from_str(r#""light""#).unwrap();
+        assert_eq!(light, ThemeName::Light);
+
+        let hc: ThemeName = serde_json::from_str(r#""high-contrast""#).unwrap();
+        assert_eq!(hc, ThemeName::HighContrast);
+
+        // Roundtrip
+        let serialized = serde_json::to_string(&ThemeName::HighContrast).unwrap();
+        assert_eq!(serialized, r#""high-contrast""#);
+    }
+
+    #[test]
+    fn theme_name_from_str() {
+        assert_eq!("dark".parse::<ThemeName>().unwrap(), ThemeName::Dark);
+        assert_eq!("light".parse::<ThemeName>().unwrap(), ThemeName::Light);
+        assert_eq!(
+            "high-contrast".parse::<ThemeName>().unwrap(),
+            ThemeName::HighContrast
+        );
+        assert_eq!("hc".parse::<ThemeName>().unwrap(), ThemeName::HighContrast);
+        assert!("neon".parse::<ThemeName>().is_err());
+    }
+
+    #[test]
+    fn fuzzy_preset_serde_roundtrip() {
+        let presets = [
+            ("strict", FuzzyPreset::Strict),
+            ("balanced", FuzzyPreset::Balanced),
+            ("permissive", FuzzyPreset::Permissive),
+            ("strict-multi", FuzzyPreset::StrictMulti),
+            ("balanced-multi", FuzzyPreset::BalancedMulti),
+            ("security-focused", FuzzyPreset::SecurityFocused),
+        ];
+
+        for (json_str, expected) in presets {
+            let json = format!(r#""{json_str}""#);
+            let parsed: FuzzyPreset = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, expected, "failed to deserialize {json_str}");
+
+            let serialized = serde_json::to_string(&expected).unwrap();
+            assert_eq!(serialized, json, "failed to serialize {expected:?}");
+        }
+    }
+
+    #[test]
+    fn fuzzy_preset_from_str() {
+        assert_eq!(
+            "strict".parse::<FuzzyPreset>().unwrap(),
+            FuzzyPreset::Strict
+        );
+        assert_eq!(
+            "security-focused".parse::<FuzzyPreset>().unwrap(),
+            FuzzyPreset::SecurityFocused
+        );
+        // Underscore variant accepted
+        assert_eq!(
+            "strict_multi".parse::<FuzzyPreset>().unwrap(),
+            FuzzyPreset::StrictMulti
+        );
+        assert!("invalid".parse::<FuzzyPreset>().is_err());
+    }
+
+    #[test]
+    fn tui_preferences_json_backward_compat() {
+        // Simulates loading a preferences.json written by older version
+        let old_json = r#"{"theme":"high-contrast","last_tab":"components"}"#;
+        let prefs: TuiPreferences = serde_json::from_str(old_json).unwrap();
+        assert_eq!(prefs.theme, ThemeName::HighContrast);
+        assert_eq!(prefs.last_tab.as_deref(), Some("components"));
     }
 }

@@ -384,6 +384,11 @@ impl EolEnricher {
         let mut stats = EolEnrichmentStats::default();
 
         for component in components.iter_mut() {
+            // Skip cryptographic assets — not software products with EOL dates.
+            if component.component_type == crate::model::ComponentType::Cryptographic {
+                stats.skipped_count += 1;
+                continue;
+            }
             stats.components_checked += 1;
 
             let resolved = match self.mapper.resolve(component) {

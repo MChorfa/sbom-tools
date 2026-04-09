@@ -261,7 +261,7 @@ pub fn handle_key_event(app: &mut super::App, key: KeyEvent) {
             // Toggle theme (dark -> light -> high-contrast) and save preference
             let theme_name = toggle_theme();
             let mut prefs = TuiPreferences::load();
-            prefs.theme = theme_name.to_string();
+            prefs.theme = theme_name.parse().unwrap_or_default();
             let _ = prefs.save();
         }
         // View switcher (V key in multi-comparison modes)

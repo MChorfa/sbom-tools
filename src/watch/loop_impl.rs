@@ -264,6 +264,8 @@ fn process_sbom_change(
                         .filter(|c| c.eol.is_some())
                         .map(|c| c.name.clone())
                         .collect(),
+                    crypto_changes: vec![],
+                    crypto_downgrades: vec![],
                 }
             };
 
@@ -327,6 +329,24 @@ fn build_diff_snapshot(
                 .map(|c| c.name.clone())
                 .collect();
 
+            // Detect crypto-specific changes
+            let mut crypto_changes = Vec::new();
+            let mut crypto_downgrades = Vec::new();
+            for mc in &result.components.modified {
+                for fc in &mc.field_changes {
+                    if fc.field.starts_with("crypto_") {
+                        let old = fc.old_value.as_deref().unwrap_or("?");
+                        let new = fc.new_value.as_deref().unwrap_or("?");
+                        let label = format!("{}: {} ({old} → {new})", mc.name, fc.field);
+                        if fc.field == "crypto_downgrade" {
+                            crypto_downgrades.push(label);
+                        } else {
+                            crypto_changes.push(label);
+                        }
+                    }
+                }
+            }
+
             DiffSnapshot {
                 timestamp: chrono::Utc::now(),
                 components_added: result.components.added.len(),
@@ -335,6 +355,8 @@ fn build_diff_snapshot(
                 new_vulns,
                 resolved_vulns,
                 new_eol,
+                crypto_changes,
+                crypto_downgrades,
             }
         }
         Err(e) => {
@@ -347,6 +369,8 @@ fn build_diff_snapshot(
                 new_vulns: vec![],
                 resolved_vulns: vec![],
                 new_eol: vec![],
+                crypto_changes: vec![],
+                crypto_downgrades: vec![],
             }
         }
     }

@@ -178,10 +178,8 @@ impl AppConfig {
     /// This is useful for layering CLI args over file config.
     pub fn merge(&mut self, other: &Self) {
         // Matching config
-        if other.matching.fuzzy_preset != "balanced" {
-            self.matching
-                .fuzzy_preset
-                .clone_from(&other.matching.fuzzy_preset);
+        if other.matching.fuzzy_preset != crate::config::FuzzyPreset::Balanced {
+            self.matching.fuzzy_preset = other.matching.fuzzy_preset.clone();
         }
         if other.matching.threshold.is_some() {
             self.matching.threshold = other.matching.threshold;
@@ -260,8 +258,8 @@ impl AppConfig {
         }
 
         // TUI config
-        if other.tui.theme != "dark" {
-            self.tui.theme.clone_from(&other.tui.theme);
+        if other.tui.theme != crate::config::ThemeName::Dark {
+            self.tui.theme = other.tui.theme.clone();
         }
 
         // Enrichment config
@@ -429,7 +427,10 @@ behavior:
         std::fs::write(&config_path, yaml).unwrap();
 
         let config = load_config_file(&config_path).unwrap();
-        assert_eq!(config.matching.fuzzy_preset, "strict");
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert_eq!(config.matching.threshold, Some(0.9));
         assert!(config.behavior.fail_on_vuln);
     }
@@ -445,7 +446,7 @@ behavior:
         let mut base = AppConfig::default();
         let override_config = AppConfig {
             matching: super::super::types::MatchingConfig {
-                fuzzy_preset: "strict".to_string(),
+                fuzzy_preset: crate::config::FuzzyPreset::Strict,
                 threshold: Some(0.95),
                 include_unchanged: false,
             },
@@ -458,7 +459,10 @@ behavior:
 
         base.merge(&override_config);
 
-        assert_eq!(base.matching.fuzzy_preset, "strict");
+        assert_eq!(
+            base.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
         assert_eq!(base.matching.threshold, Some(0.95));
         assert!(base.behavior.fail_on_vuln);
     }

@@ -8,6 +8,23 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256, Sha512};
 
+/// Errors that can occur during hash verification
+#[derive(Debug, thiserror::Error)]
+pub enum HashError {
+    /// File I/O error
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// Hash format not recognized
+    #[error(
+        "unrecognized hash format (length {length}), expected sha256:<hex> or sha512:<hex>, \
+         or a 64-char (SHA-256) or 128-char (SHA-512) hex string"
+    )]
+    UnrecognizedFormat {
+        /// Length of the provided hash string
+        length: usize,
+    },
+}
+
 /// Result of a file hash verification
 #[derive(Debug, Clone)]
 pub struct HashVerifyResult {
@@ -45,7 +62,7 @@ impl fmt::Display for HashVerifyResult {
 /// # Errors
 ///
 /// Returns error if the file cannot be read or the hash format is unrecognized.
-pub fn verify_file_hash(path: &Path, expected: &str) -> anyhow::Result<HashVerifyResult> {
+pub fn verify_file_hash(path: &Path, expected: &str) -> Result<HashVerifyResult, HashError> {
     let content = fs::read(path)?;
     let expected = expected.trim();
 
@@ -66,11 +83,11 @@ pub fn verify_file_hash(path: &Path, expected: &str) -> anyhow::Result<HashVerif
         match expected.len() {
             64 => ("SHA-256", expected.to_string()),
             128 => ("SHA-512", expected.to_string()),
-            _ => anyhow::bail!(
-                "unrecognized hash format (length {}). Use sha256:<hex> or sha512:<hex>, \
-                 or provide a 64-char (SHA-256) or 128-char (SHA-512) hex string",
-                expected.len()
-            ),
+            _ => {
+                return Err(HashError::UnrecognizedFormat {
+                    length: expected.len(),
+                });
+            }
         }
     };
 
@@ -114,7 +131,7 @@ pub fn verify_file_hash(path: &Path, expected: &str) -> anyhow::Result<HashVerif
 /// # Errors
 ///
 /// Returns error if the file cannot be read.
-pub fn read_hash_file(path: &Path) -> anyhow::Result<String> {
+pub fn read_hash_file(path: &Path) -> Result<String, HashError> {
     let content = fs::read_to_string(path)?;
     let trimmed = content.trim();
     let hash = trimmed.split_whitespace().next().unwrap_or(trimmed);

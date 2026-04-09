@@ -92,6 +92,7 @@ pub struct AdaptiveThresholdResult {
 
 /// Method used for adaptive threshold computation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AdaptiveMethod {
     /// Binary search for target match ratio
     TargetRatio,
