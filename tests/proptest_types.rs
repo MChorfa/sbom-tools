@@ -3,6 +3,13 @@
 //! Ensures core types handle arbitrary input without panicking,
 //! and that key invariants hold across random inputs.
 
+#![allow(
+    clippy::manual_range_contains,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_map_or,
+    clippy::unwrap_used
+)]
+
 use proptest::prelude::*;
 use sbom_tools::model::{LicenseExpression, LicenseFamily};
 

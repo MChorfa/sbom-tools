@@ -99,9 +99,10 @@ fn parse_scoring_profile(profile_name: &str) -> Result<ScoringProfile> {
         "cra" | "cyber-resilience" => Ok(ScoringProfile::Cra),
         "comprehensive" | "full" => Ok(ScoringProfile::Comprehensive),
         "cbom" | "cryptographic" => Ok(ScoringProfile::Cbom),
+        "ai-readiness" | "ai_readiness" => Ok(ScoringProfile::AiReadiness),
         _ => {
             bail!(
-                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, comprehensive, cbom"
+                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, comprehensive, cbom, ai-readiness"
             );
         }
     }
@@ -385,6 +386,13 @@ fn format_quality_report(report: &QualityReport, config: &QualityConfig) -> Stri
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::manual_range_contains,
+        clippy::uninlined_format_args,
+        clippy::unnecessary_map_or,
+        clippy::unwrap_used
+    )]
+
     use super::*;
 
     #[test]

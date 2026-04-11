@@ -1053,6 +1053,13 @@ impl DiffConfigBuilder {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::manual_range_contains,
+        clippy::uninlined_format_args,
+        clippy::unnecessary_map_or,
+        clippy::unwrap_used
+    )]
+
     use super::*;
 
     #[test]

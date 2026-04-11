@@ -9,6 +9,24 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
+#[derive(Serialize)]
+struct ComponentHashInput<'a> {
+    name: &'a str,
+    version: &'a Option<String>,
+    purl: &'a Option<String>,
+    declared_licenses: Vec<&'a str>,
+    supplier: Option<&'a str>,
+    hashes: Vec<&'a str>,
+    vulnerabilities: Vec<&'a str>,
+    properties: &'a Vec<super::Property>,
+    external_refs: &'a Vec<super::ExternalReference>,
+    is_external: bool,
+    version_range: &'a Option<String>,
+    ml_model: &'a Option<super::MlModelInfo>,
+    dataset: &'a Option<super::DatasetInfo>,
+    raw_extensions: &'a Option<serde_json::Value>,
+}
+
 /// Normalized SBOM document - the canonical intermediate representation.
 ///
 /// This structure represents an SBOM in a format-agnostic way, allowing
@@ -693,54 +711,53 @@ impl Component {
         self
     }
 
-    fn extend_with_optional_str(hasher_input: &mut Vec<u8>, value: &Option<String>) {
-        if let Some(value) = value {
-            hasher_input.extend(value.as_bytes());
-        }
-    }
-
-    fn extend_with_string_list(hasher_input: &mut Vec<u8>, values: &[String]) {
-        for value in values {
-            hasher_input.extend(value.as_bytes());
-        }
-    }
-
-    fn extend_with_ml_model(hasher_input: &mut Vec<u8>, ml_model: &Option<super::MlModelInfo>) {
-        if let Some(ml_model) = ml_model {
-            Self::extend_with_optional_str(hasher_input, &ml_model.approach);
-            Self::extend_with_optional_str(hasher_input, &ml_model.architecture_family);
-            Self::extend_with_optional_str(hasher_input, &ml_model.architecture_name);
-            Self::extend_with_optional_str(hasher_input, &ml_model.task);
-            Self::extend_with_optional_str(hasher_input, &ml_model.quantization);
-            Self::extend_with_optional_str(hasher_input, &ml_model.limitations);
-            Self::extend_with_optional_str(hasher_input, &ml_model.model_card_url);
-
-            if let Some(energy) = ml_model.energy_kwh_training {
-                hasher_input.extend(energy.to_le_bytes());
-            }
-
-            for dataset in &ml_model.training_datasets {
-                Self::extend_with_optional_str(hasher_input, &dataset.name);
-                Self::extend_with_optional_str(hasher_input, &dataset.purl);
-            }
-        }
-    }
-
-    fn extend_with_dataset(hasher_input: &mut Vec<u8>, dataset: &Option<super::DatasetInfo>) {
-        if let Some(dataset) = dataset {
-            Self::extend_with_optional_str(hasher_input, &dataset.dataset_type);
-            Self::extend_with_string_list(hasher_input, &dataset.sensitivity_classifications);
-            Self::extend_with_string_list(hasher_input, &dataset.governance_owners);
+    fn hash_input(&self) -> ComponentHashInput<'_> {
+        ComponentHashInput {
+            name: &self.name,
+            version: &self.version,
+            purl: &self.identifiers.purl,
+            declared_licenses: self
+                .licenses
+                .declared
+                .iter()
+                .map(|license| license.expression.as_str())
+                .collect(),
+            supplier: self
+                .supplier
+                .as_ref()
+                .map(|supplier| supplier.name.as_str()),
+            hashes: self.hashes.iter().map(|hash| hash.value.as_str()).collect(),
+            vulnerabilities: self
+                .vulnerabilities
+                .iter()
+                .map(|vuln| vuln.id.as_str())
+                .collect(),
+            properties: &self.extensions.properties,
+            external_refs: &self.external_refs,
+            is_external: self.is_external,
+            version_range: &self.version_range,
+            ml_model: &self.ml_model,
+            dataset: &self.dataset,
+            raw_extensions: &self.extensions.raw,
         }
     }
 
     /// Calculate and update content hash
     pub fn calculate_content_hash(&mut self) {
+        if let Ok(hasher_input) = serde_json::to_vec(&self.hash_input()) {
+            self.content_hash = xxh3_64(&hasher_input);
+            return;
+        }
+
         let mut hasher_input = Vec::new();
 
         hasher_input.extend(self.name.as_bytes());
-        Self::extend_with_optional_str(&mut hasher_input, &self.version);
-        Self::extend_with_optional_str(&mut hasher_input, &self.identifiers.purl);
+        if let Some(version) = &self.version {
+            hasher_input.extend(version.as_bytes());
+        }
+        if let Some(purl) = &self.identifiers.purl {
+            hasher_input.extend(purl.as_bytes());
+        }
         for license in &self.licenses.declared {
             hasher_input.extend(license.expression.as_bytes());
         }
@@ -753,14 +770,31 @@ impl Component {
         for vuln in &self.vulnerabilities {
             hasher_input.extend(vuln.id.as_bytes());
         }
+        for property in &self.extensions.properties {
+            hasher_input.extend(property.name.as_bytes());
+            hasher_input.extend(property.value.as_bytes());
+        }
+        for ext_ref in &self.external_refs {
+            hasher_input.extend(ext_ref.ref_type.to_string().as_bytes());
+            hasher_input.extend(ext_ref.url.as_bytes());
+        }
+        if let Some(raw_extensions) = &self.extensions.raw
+            && let Ok(raw_json) = serde_json::to_vec(raw_extensions)
+        {
+            hasher_input.extend(raw_json);
+        }
         if self.is_external {
             hasher_input.push(b'E');
         }
         if let Some(vr) = &self.version_range {
             hasher_input.extend(vr.as_bytes());
         }
-        Self::extend_with_ml_model(&mut hasher_input, &self.ml_model);
-        Self::extend_with_dataset(&mut hasher_input, &self.dataset);
+        if let Ok(ml_model_json) = serde_json::to_vec(&self.ml_model) {
+            hasher_input.extend(ml_model_json);
+        }
+        if let Ok(dataset_json) = serde_json::to_vec(&self.dataset) {
+            hasher_input.extend(dataset_json);
+        }
 
         // Crypto properties: include fields that affect security semantics
         if let Some(cp) = &self.crypto_properties {

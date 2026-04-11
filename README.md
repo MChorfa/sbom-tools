@@ -306,6 +306,9 @@ sbom-tools validate sbom.json --standard ntia,cra,eo14028
 # Assess quality with CI gate
 sbom-tools quality sbom.json --profile security --min-score 70
 
+# Assess ML model documentation completeness
+sbom-tools quality model.cdx.json --profile ai-readiness
+
 # Track SBOM evolution over releases
 sbom-tools timeline v1.json v2.json v3.json --enrich-vulns
 
@@ -423,6 +426,7 @@ Checks an SBOM against a compliance standard and reports missing fields or faili
 
 ```sh
 sbom-tools quality sbom.json --profile security --recommendations
+sbom-tools quality model.cdx.json --profile ai-readiness
 ```
 
 Scores an SBOM from 0–100 using a weighted profile. Use `--min-score` to fail CI if quality drops below a threshold.
@@ -432,7 +436,7 @@ Scores an SBOM from 0–100 using a weighted profile. Use `--min-score` to fail 
 
 | Flag | Description |
 |------|-------------|
-| `--profile <name>` | Scoring profile: `minimal`, `standard` (default), `security`, `license-compliance`, `cra`, `comprehensive`, `cbom` |
+| `--profile <name>` | Scoring profile: `minimal`, `standard` (default), `security`, `license-compliance`, `cra`, `comprehensive`, `cbom`, `ai-readiness` |
 | `--min-score <n>` | Fail if quality score is below threshold (0–100) |
 | `--recommendations` | Show detailed improvement recommendations |
 | `--metrics` | Show detailed scoring metrics |

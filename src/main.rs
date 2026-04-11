@@ -578,13 +578,14 @@ struct MatrixArgs {
 #[command(after_help = "EXAMPLES:
     sbom-tools quality app.cdx.json                                # Score overview
     sbom-tools quality app.cdx.json --profile security --metrics   # Detailed metrics
+    sbom-tools quality model.cdx.json --profile ai-readiness       # ML doc quality
     sbom-tools quality app.cdx.json --min-score 70 -o json         # CI gate with export
     sbom-tools quality app.cdx.json --recommendations              # Improvement suggestions")]
 struct QualityArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
 
-    /// Scoring profile (minimal, standard, security, license-compliance, comprehensive)
+    /// Scoring profile (minimal, standard, security, license-compliance, cra, comprehensive, ai-readiness)
     #[arg(long, default_value = "standard")]
     profile: String,
 

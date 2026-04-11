@@ -4,6 +4,13 @@
 //! - spec → runtime: All declared ABI functions are callable and all enumerated values are valid
 //! - runtime → spec: Runtime behavior matches the ABI contract (required keys, header signatures, null pointers)
 
+#![allow(
+    clippy::manual_range_contains,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_map_or,
+    clippy::unwrap_used
+)]
+
 mod common;
 
 use common::ffi_helpers::{consume_result, into_c_string};

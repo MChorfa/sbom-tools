@@ -1,0 +1,36 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-27T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "sbom-tools",
+        "name": "sbom-tools",
+        "version": "0.1.17"
+      }
+    ],
+    "component": {
+      "bom-ref": "root",
+      "type": "application",
+      "name": "test-ml-no-docs",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "ml-model-undocumented",
+      "type": "machine-learning-model",
+      "name": "undocumented-model",
+      "version": "0.1.0",
+      "description": "A machine-learning model with no model card documentation"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "root",
+      "dependsOn": ["ml-model-undocumented"]
+    }
+  ]
+}
