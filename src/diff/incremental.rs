@@ -643,10 +643,8 @@ mod tests {
     fn make_sbom(name: &str, components: &[&str]) -> NormalizedSbom {
         let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
         for comp_name in components {
-            let comp = crate::model::Component::new(
-                comp_name.to_string(),
-                format!("{}-{}", name, comp_name),
-            );
+            let comp =
+                crate::model::Component::new(comp_name.to_string(), format!("{name}-{comp_name}"));
             sbom.add_component(comp);
         }
         // Ensure unique content hash

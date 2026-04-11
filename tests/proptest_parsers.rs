@@ -3,6 +3,13 @@
 //! Ensures parsers don't panic on arbitrary input, including random strings,
 //! JSON-like fragments, and XML-like fragments.
 
+#![allow(
+    clippy::manual_range_contains,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_map_or,
+    clippy::unwrap_used
+)]
+
 use proptest::prelude::*;
 use sbom_tools::parsers::{detect_format, parse_sbom_str};
 

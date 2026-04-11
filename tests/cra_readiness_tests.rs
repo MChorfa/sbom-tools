@@ -1,5 +1,12 @@
 //! CRA SBOM readiness tests.
 
+#![allow(
+    clippy::manual_range_contains,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_map_or,
+    clippy::unwrap_used
+)]
+
 use chrono::{TimeZone, Utc};
 use sbom_tools::diff::DiffEngine;
 use sbom_tools::model::{

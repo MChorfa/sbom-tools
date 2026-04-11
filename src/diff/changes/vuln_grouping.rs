@@ -268,7 +268,7 @@ mod tests {
             component_id: component_id.to_string(),
             component_canonical_id: None,
             component_ref: None,
-            component_name: format!("{}-pkg", component_id),
+            component_name: format!("{component_id}-pkg"),
             version: Some("1.0.0".to_string()),
             description: None,
             remediation: None,

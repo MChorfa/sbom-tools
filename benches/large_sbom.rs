@@ -6,6 +6,13 @@
 //! 1. Incremental diffing with caching
 //! 2. BatchCandidateGenerator with LSH for large SBOMs
 
+#![allow(
+    clippy::manual_range_contains,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_map_or,
+    clippy::unwrap_used
+)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use sbom_tools::diff::{DiffEngine, IncrementalDiffEngine, LargeSbomConfig};
 use sbom_tools::model::{Component, DocumentMetadata, Ecosystem, NormalizedSbom};

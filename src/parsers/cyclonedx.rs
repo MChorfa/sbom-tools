@@ -16,7 +16,8 @@ use crate::model::{
 };
 use crate::parsers::traits::{ParseError, SbomParser};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use regex::Regex;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
 /// Parser for `CycloneDX` SBOM format
@@ -66,7 +67,7 @@ impl CycloneDxParser {
         // Convert XML structure to common BOM structure
         let bom = CycloneDxBom {
             bom_format: Some("CycloneDX".to_string()),
-            spec_version: cdx.version.unwrap_or_else(|| "1.4".to_string()),
+            spec_version: Self::extract_xml_version(content).unwrap_or_else(|| "1.4".to_string()),
             serial_number: cdx.serial_number,
             version: cdx.bom_version,
             metadata: cdx.metadata.map(|m| CdxMetadata {
@@ -75,14 +76,24 @@ impl CycloneDxParser {
                 authors: None,
                 component: m.component,
                 lifecycles: None,
-                distribution_constraints: None,
+                distribution_constraints: m.distribution_constraints,
             }),
             components: cdx.components.map(|c| c.component),
             dependencies: cdx.dependencies.map(|d| d.dependency),
             vulnerabilities: cdx.vulnerabilities.map(|v| v.vulnerability),
             compositions: None,
             signature: None,
-            citations: None,
+            citations: cdx
+                .citations
+                .map(|citations| citations.citation.into_iter().map(Into::into).collect()),
+            annotations: Self::extract_xml_section(content, "annotations")
+                .map(serde_json::Value::String),
+            formulation: Self::extract_xml_section(content, "formulation")
+                .map(serde_json::Value::String),
+            declarations: Self::extract_xml_section(content, "declarations")
+                .map(serde_json::Value::String),
+            definitions: Self::extract_xml_section(content, "definitions")
+                .map(serde_json::Value::String),
         };
 
         Ok(self.convert_to_normalized(bom))
@@ -219,26 +230,28 @@ impl CycloneDxParser {
             }
         }
 
-        // Store citations in format extensions for lossless preservation (1.7+)
+        let mut cyclonedx_extensions = serde_json::Map::new();
+
         if let Some(citations) = &cdx.citations
             && !citations.is_empty()
-            && let Ok(citations_json) = serde_json::to_value(
-                citations
-                    .iter()
-                    .map(|c| {
-                        serde_json::json!({
-                            "timestamp": c.timestamp,
-                            "attributedTo": c.attributed_to,
-                            "process": c.process,
-                            "note": c.note,
-                            "pointers": c.pointers,
-                            "expressions": c.expressions,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
         {
-            sbom.extensions.cyclonedx = Some(serde_json::json!({ "citations": citations_json }));
+            insert_serialized_extension(&mut cyclonedx_extensions, "citations", citations);
+        }
+        if let Some(annotations) = &cdx.annotations {
+            cyclonedx_extensions.insert("annotations".to_string(), annotations.clone());
+        }
+        if let Some(formulation) = &cdx.formulation {
+            cyclonedx_extensions.insert("formulation".to_string(), formulation.clone());
+        }
+        if let Some(declarations) = &cdx.declarations {
+            cyclonedx_extensions.insert("declarations".to_string(), declarations.clone());
+        }
+        if let Some(definitions) = &cdx.definitions {
+            cyclonedx_extensions.insert("definitions".to_string(), definitions.clone());
+        }
+
+        if !cyclonedx_extensions.is_empty() {
+            sbom.extensions.cyclonedx = Some(serde_json::Value::Object(cyclonedx_extensions));
         }
 
         sbom.calculate_content_hash();
@@ -403,54 +416,20 @@ impl CycloneDxParser {
         // Set hashes
         if let Some(hashes) = &cdx.hashes {
             for h in hashes {
-                let algorithm = match h.alg.to_uppercase().as_str() {
-                    "MD5" => HashAlgorithm::Md5,
-                    "SHA-1" => HashAlgorithm::Sha1,
-                    "SHA-256" => HashAlgorithm::Sha256,
-                    "SHA-384" => HashAlgorithm::Sha384,
-                    "SHA-512" => HashAlgorithm::Sha512,
-                    "SHA3-256" => HashAlgorithm::Sha3_256,
-                    "SHA3-384" => HashAlgorithm::Sha3_384,
-                    "SHA3-512" => HashAlgorithm::Sha3_512,
-                    "BLAKE2B-256" => HashAlgorithm::Blake2b256,
-                    "BLAKE2B-384" => HashAlgorithm::Blake2b384,
-                    "BLAKE2B-512" => HashAlgorithm::Blake2b512,
-                    "BLAKE3" => HashAlgorithm::Blake3,
-                    "STREEBOG-256" => HashAlgorithm::Streebog256,
-                    "STREEBOG-512" => HashAlgorithm::Streebog512,
-                    other => HashAlgorithm::Other(other.to_string()),
-                };
-                comp.hashes.push(Hash::new(algorithm, h.content.clone()));
+                comp.hashes.push(to_model_hash(h));
             }
         }
 
         // Set external references
         if let Some(ext_refs) = &cdx.external_references {
             for ext_ref in ext_refs {
-                let ref_type = match ext_ref.ref_type.as_str() {
-                    "vcs" => ExternalRefType::Vcs,
-                    "issue-tracker" => ExternalRefType::IssueTracker,
-                    "website" => ExternalRefType::Website,
-                    "advisories" => ExternalRefType::Advisories,
-                    "bom" => ExternalRefType::Bom,
-                    "model-card" => ExternalRefType::ModelCard,
-                    "documentation" => ExternalRefType::Documentation,
-                    "support" => ExternalRefType::Support,
-                    "security-contact" => ExternalRefType::SecurityContact,
-                    "license" => ExternalRefType::License,
-                    "build-meta" => ExternalRefType::BuildMeta,
-                    "release-notes" => ExternalRefType::ReleaseNotes,
-                    "citation" => ExternalRefType::Citation,
-                    "patent" => ExternalRefType::Patent,
-                    "patent-assertion" => ExternalRefType::PatentAssertion,
-                    "patent-family" => ExternalRefType::PatentFamily,
-                    other => ExternalRefType::Other(other.to_string()),
-                };
                 comp.external_refs.push(ExternalReference {
-                    ref_type,
+                    ref_type: parse_external_ref_type(&ext_ref.ref_type),
                     url: ext_ref.url.clone(),
                     comment: ext_ref.comment.clone(),
-                    hashes: Vec::new(),
+                    hashes: ext_ref.hashes.as_ref().map_or_else(Vec::new, |hashes| {
+                        hashes.iter().map(to_model_hash).collect()
+                    }),
                 });
             }
         }
@@ -476,75 +455,113 @@ impl CycloneDxParser {
         comp.version_range.clone_from(&cdx.version_range);
 
         // Set ML model metadata (CycloneDX 1.5+)
-        if let Some(ml_model) = &cdx.ml_model {
+        if cdx.legacy_ml_model.is_some() || cdx.model_card.is_some() {
             let mut ml_info = crate::model::MlModelInfo::default();
-            let model_card = ml_model
-                .model_card
-                .as_ref()
-                .and_then(|value| serde_json::from_value::<CdxMlModelCard>(value.clone()).ok());
-
-            if let Some(approach) = &ml_model.approach {
-                ml_info.approach = approach.approach_type.clone();
-            }
-
-            if let Some(arch_family) = &ml_model.architecture_family {
-                ml_info.architecture_family = Some(arch_family.clone());
-            }
-
-            let model_parameters = ml_model.model_parameters.as_ref().or_else(|| {
-                model_card
+            let model_card = cdx.model_card.as_ref().or_else(|| {
+                cdx.legacy_ml_model
                     .as_ref()
-                    .and_then(|card| card.model_parameters.as_ref())
+                    .and_then(|value| value.model_card.as_ref())
             });
+            let model_parameters = cdx
+                .legacy_ml_model
+                .as_ref()
+                .and_then(|value| value.model_parameters.as_ref())
+                .or_else(|| model_card.and_then(|card| card.model_parameters.as_ref()));
+
+            ml_info.approach = cdx
+                .legacy_ml_model
+                .as_ref()
+                .and_then(|value| value.approach.as_ref())
+                .and_then(|value| value.approach_type.clone())
+                .or_else(|| {
+                    model_parameters
+                        .and_then(|value| value.approach.as_ref())
+                        .and_then(|value| value.approach_type.clone())
+                });
+
+            ml_info.architecture_family = model_parameters
+                .and_then(|value| value.architecture_family.clone())
+                .or_else(|| {
+                    cdx.legacy_ml_model
+                        .as_ref()
+                        .and_then(|value| value.architecture_family.clone())
+                });
 
             if let Some(model_params) = model_parameters {
                 ml_info.task = model_params.task.clone();
 
-                if let Some(arch) = &model_params.architecture {
-                    ml_info.architecture_name = arch.name.clone();
-                }
+                ml_info.architecture_name = model_params.model_architecture.clone().or_else(|| {
+                    model_params
+                        .architecture
+                        .as_ref()
+                        .and_then(|architecture| architecture.name.clone())
+                });
 
                 // Collect training datasets
                 for dataset_ref in &model_params.datasets {
-                    ml_info.training_datasets.push(crate::model::DatasetRef {
-                        name: dataset_ref.name.clone(),
-                        purl: dataset_ref.purl.clone(),
-                    });
+                    let dataset = match dataset_ref {
+                        CdxDatasetChoice::Reference(reference) => crate::model::DatasetRef {
+                            reference: reference.reference.clone(),
+                            name: None,
+                            purl: None,
+                        },
+                        CdxDatasetChoice::Inline(dataset) => crate::model::DatasetRef {
+                            reference: dataset.bom_ref.clone(),
+                            name: dataset.name.clone(),
+                            purl: None,
+                        },
+                        CdxDatasetChoice::Legacy(dataset) => crate::model::DatasetRef {
+                            reference: None,
+                            name: dataset.name.clone(),
+                            purl: dataset.purl.clone(),
+                        },
+                    };
+
+                    ml_info.training_datasets.push(dataset);
                 }
             }
 
-            let quantization = ml_model.quantization.as_ref().or_else(|| {
-                model_card
-                    .as_ref()
-                    .and_then(|card| card.quantization.as_ref())
-            });
+            let quantization = cdx
+                .legacy_ml_model
+                .as_ref()
+                .and_then(|value| value.quantization.as_ref())
+                .or_else(|| model_card.and_then(|card| card.quantization.as_ref()));
 
             if let Some(quantization) = quantization {
                 ml_info.quantization = quantization.mode.clone();
             }
 
-            let limitations = ml_model.limitations.as_ref().or_else(|| {
-                model_card
-                    .as_ref()
-                    .and_then(|card| card.limitations.as_ref())
-            });
+            let limitations = cdx
+                .legacy_ml_model
+                .as_ref()
+                .and_then(|value| value.limitations.as_ref())
+                .or_else(|| model_card.and_then(|card| card.limitations.as_ref()));
 
             if let Some(limitations) = limitations {
                 ml_info.limitations = Some(limitations.clone());
             }
 
             // Extract energy consumption from considerations
-            let considerations = ml_model.considerations.as_ref().or_else(|| {
-                model_card
-                    .as_ref()
-                    .and_then(|card| card.considerations.as_ref())
-            });
+            let considerations = cdx
+                .legacy_ml_model
+                .as_ref()
+                .and_then(|value| value.considerations.as_ref())
+                .or_else(|| model_card.and_then(|card| card.considerations.as_ref()));
 
             if let Some(considerations) = considerations {
+                if ml_info.limitations.is_none() && !considerations.technical_limitations.is_empty()
+                {
+                    ml_info.limitations = Some(considerations.technical_limitations.join("; "));
+                }
+
                 if let Some(env_considerations) = &considerations.environmental_considerations {
                     for energy in &env_considerations.energy_consumptions {
                         if energy.activity.as_deref() == Some("training") {
-                            ml_info.energy_kwh_training = energy.energy_kwh;
+                            ml_info.energy_kwh_training = energy
+                                .activity_energy_cost
+                                .as_ref()
+                                .map(|value| value.value)
+                                .or(energy.energy_kwh);
                         }
                     }
                 }
@@ -562,15 +579,28 @@ impl CycloneDxParser {
         }
 
         // Set dataset metadata (CycloneDX 1.5+)
-        if let Some(data_component) = &cdx.data_component {
-            let dataset_info = crate::model::DatasetInfo {
-                dataset_type: data_component.data_type.clone(),
-                sensitivity_classifications: data_component.sensitivity_data.clone(),
-                governance_owners: data_component
-                    .governance
-                    .as_ref()
-                    .map_or_else(Vec::new, |governance| governance.owners.clone()),
+        if !cdx.data_components.is_empty() {
+            let mut dataset_info = crate::model::DatasetInfo {
+                dataset_type: cdx
+                    .data_components
+                    .iter()
+                    .find_map(|data_component| data_component.data_type.clone()),
+                ..Default::default()
             };
+
+            for data_component in &cdx.data_components {
+                extend_unique(
+                    &mut dataset_info.sensitivity_classifications,
+                    data_component.sensitivity_data.iter().cloned(),
+                );
+
+                if let Some(governance) = &data_component.governance {
+                    extend_unique(
+                        &mut dataset_info.governance_owners,
+                        governance.owners.iter().flat_map(party_labels),
+                    );
+                }
+            }
 
             comp.dataset = Some(dataset_info);
         }
@@ -578,6 +608,31 @@ impl CycloneDxParser {
         // Set cryptographic properties (1.6+)
         if let Some(cdx_crypto) = &cdx.crypto_properties {
             comp.crypto_properties = Some(Self::convert_crypto_properties(cdx_crypto));
+        }
+
+        let mut raw_extensions = serde_json::Map::new();
+        if let Some(legacy_ml_model) = &cdx.legacy_ml_model {
+            insert_serialized_extension(&mut raw_extensions, "mlModel", legacy_ml_model);
+        }
+        if let Some(model_card) = &cdx.model_card {
+            insert_serialized_extension(&mut raw_extensions, "modelCard", model_card);
+        }
+        if !cdx.data_components.is_empty() {
+            insert_serialized_extension(&mut raw_extensions, "data", &cdx.data_components);
+        }
+        if let Some(patent_assertions) = &cdx.patent_assertions {
+            raw_extensions.insert("patentAssertions".to_string(), patent_assertions.clone());
+        }
+        if let Some(crypto_properties) = &cdx.crypto_properties {
+            insert_serialized_extension(&mut raw_extensions, "cryptoProperties", crypto_properties);
+        }
+        if let Some(ext_refs) = &cdx.external_references
+            && ext_refs.iter().any(|ext_ref| ext_ref.properties.is_some())
+        {
+            insert_serialized_extension(&mut raw_extensions, "externalReferences", ext_refs);
+        }
+        if !raw_extensions.is_empty() {
+            comp.extensions.raw = Some(serde_json::Value::Object(raw_extensions));
         }
 
         comp.calculate_content_hash();
@@ -1146,29 +1201,33 @@ impl CycloneDxParser {
         None
     }
 
-    /// Extract version from XML content (quick heuristic, not full parse)
+    /// Extract CycloneDX spec version from XML content (quick heuristic, not full parse)
     fn extract_xml_version(content: &str) -> Option<String> {
-        // Look for version="X.Y" in <bom> element
-        if let Some(bom_idx) = content.find("<bom") {
-            let bom_part = &content[bom_idx..];
-            // Find the end of the opening tag
-            if let Some(gt_idx) = bom_part.find('>') {
-                let attrs = &bom_part[..gt_idx];
-                // Look for version attribute
-                if let Some(ver_idx) = attrs.find("version=") {
-                    let after_ver = &attrs[ver_idx + 8..];
-                    // Handle both version="1.5" and version='1.5'
-                    let quote_char = after_ver.chars().next()?;
-                    if quote_char == '"' || quote_char == '\'' {
-                        let after_quote = &after_ver[1..];
-                        if let Some(end_idx) = after_quote.find(quote_char) {
-                            return Some(after_quote[..end_idx].to_string());
-                        }
-                    }
-                }
-            }
+        let namespace_regex = Regex::new(
+            r#"xmlns(?::[A-Za-z_][A-Za-z0-9_.-]*)?=["'][^"']*/bom/([0-9]+\.[0-9]+)["']"#,
+        )
+        .ok()?;
+        if let Some(captures) = namespace_regex.captures(content) {
+            return captures.get(1).map(|value| value.as_str().to_string());
         }
-        None
+
+        // Compatibility fallback for non-standard XML that encodes the spec version in the
+        // root version attribute instead of the namespace URI.
+        let fallback_regex = Regex::new(r#"<bom\b[^>]*\bversion=["']([0-9]+\.[0-9]+)["']"#).ok()?;
+        fallback_regex
+            .captures(content)
+            .and_then(|captures| captures.get(1).map(|value| value.as_str().to_string()))
+    }
+
+    fn extract_xml_section(content: &str, tag: &str) -> Option<String> {
+        let pattern = format!(
+            r#"(?s)<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?{tag}\b[^>]*>.*?</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?{tag}>"#,
+            tag = regex::escape(tag)
+        );
+        Regex::new(&pattern)
+            .ok()?
+            .find(content)
+            .map(|value| value.as_str().to_string())
     }
 }
 
@@ -1192,6 +1251,10 @@ struct CycloneDxBom {
     signature: Option<CdxSignature>,
     /// Data provenance citations (1.7+)
     citations: Option<Vec<CdxCitation>>,
+    annotations: Option<serde_json::Value>,
+    formulation: Option<serde_json::Value>,
+    declarations: Option<serde_json::Value>,
+    definitions: Option<serde_json::Value>,
 }
 
 /// CycloneDX composition entry (1.4+)
@@ -1207,12 +1270,12 @@ struct CdxComposition {
 }
 
 /// CycloneDX citation for data provenance (1.7+)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxCitation {
     /// BOM reference
-    #[serde(alias = "bom-ref")]
+    #[serde(rename = "bom-ref", alias = "bom-ref")]
     bom_ref: Option<String>,
     /// JSON Pointers (RFC 6901) identifying attributed BOM fields
     pointers: Option<Vec<String>>,
@@ -1226,6 +1289,8 @@ struct CdxCitation {
     process: Option<String>,
     /// Freeform description
     note: Option<String>,
+    /// Optional JSF signature for the citation
+    signature: Option<CdxSignature>,
 }
 
 /// CycloneDX distribution constraints (1.7+)
@@ -1238,7 +1303,7 @@ struct CdxDistributionConstraints {
 }
 
 /// CycloneDX JSF signature (JSON Signature Format)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxSignature {
@@ -1405,6 +1470,188 @@ where
     deserializer.deserialize_any(ToolsVisitor)
 }
 
+fn deserialize_component_data<'de, D>(deserializer: D) -> Result<Vec<CdxDataComponent>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct DataVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for DataVisitor {
+        type Value = Vec<CdxDataComponent>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a CycloneDX component data object or array")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Vec::new())
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Vec::new())
+        }
+
+        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            serde::Deserialize::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
+        }
+
+        fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let value =
+                CdxDataComponent::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+            Ok(vec![value])
+        }
+    }
+
+    deserializer.deserialize_any(DataVisitor)
+}
+
+fn parse_hash_algorithm(algorithm: &str) -> HashAlgorithm {
+    match algorithm.to_uppercase().as_str() {
+        "MD5" => HashAlgorithm::Md5,
+        "SHA-1" => HashAlgorithm::Sha1,
+        "SHA-256" => HashAlgorithm::Sha256,
+        "SHA-384" => HashAlgorithm::Sha384,
+        "SHA-512" => HashAlgorithm::Sha512,
+        "SHA3-256" => HashAlgorithm::Sha3_256,
+        "SHA3-384" => HashAlgorithm::Sha3_384,
+        "SHA3-512" => HashAlgorithm::Sha3_512,
+        "BLAKE2B-256" => HashAlgorithm::Blake2b256,
+        "BLAKE2B-384" => HashAlgorithm::Blake2b384,
+        "BLAKE2B-512" => HashAlgorithm::Blake2b512,
+        "BLAKE3" => HashAlgorithm::Blake3,
+        "STREEBOG-256" => HashAlgorithm::Streebog256,
+        "STREEBOG-512" => HashAlgorithm::Streebog512,
+        other => HashAlgorithm::Other(other.to_string()),
+    }
+}
+
+fn to_model_hash(hash: &CdxHash) -> Hash {
+    Hash::new(parse_hash_algorithm(&hash.alg), hash.content.clone())
+}
+
+fn parse_external_ref_type(ref_type: &str) -> ExternalRefType {
+    match ref_type {
+        "vcs" => ExternalRefType::Vcs,
+        "issue-tracker" => ExternalRefType::IssueTracker,
+        "website" => ExternalRefType::Website,
+        "advisories" => ExternalRefType::Advisories,
+        "bom" => ExternalRefType::Bom,
+        "mailing-list" => ExternalRefType::MailingList,
+        "social" => ExternalRefType::Social,
+        "chat" => ExternalRefType::Chat,
+        "documentation" => ExternalRefType::Documentation,
+        "support" => ExternalRefType::Support,
+        "source-distribution" => ExternalRefType::SourceDistribution,
+        "distribution" => ExternalRefType::BinaryDistribution,
+        "license" => ExternalRefType::License,
+        "build-meta" => ExternalRefType::BuildMeta,
+        "build-system" => ExternalRefType::BuildSystem,
+        "release-notes" => ExternalRefType::ReleaseNotes,
+        "security-contact" => ExternalRefType::SecurityContact,
+        "model-card" => ExternalRefType::ModelCard,
+        "log" => ExternalRefType::Log,
+        "configuration" => ExternalRefType::Configuration,
+        "evidence" => ExternalRefType::Evidence,
+        "formulation" => ExternalRefType::Formulation,
+        "attestation" => ExternalRefType::Attestation,
+        "threat-model" => ExternalRefType::ThreatModel,
+        "adversary-model" => ExternalRefType::AdversaryModel,
+        "risk-assessment" => ExternalRefType::RiskAssessment,
+        "vulnerability-assertion" => ExternalRefType::VulnerabilityAssertion,
+        "exploitability-statement" => ExternalRefType::ExploitabilityStatement,
+        "pentest-report" => ExternalRefType::Pentest,
+        "static-analysis-report" => ExternalRefType::StaticAnalysis,
+        "dynamic-analysis-report" => ExternalRefType::DynamicAnalysis,
+        "runtime-analysis-report" => ExternalRefType::RuntimeAnalysis,
+        "component-analysis-report" => ExternalRefType::ComponentAnalysis,
+        "maturity-report" => ExternalRefType::Maturity,
+        "certification-report" => ExternalRefType::Certification,
+        "codified-infrastructure" => ExternalRefType::Codified,
+        "quality-metrics" => ExternalRefType::QualityMetrics,
+        "citation" => ExternalRefType::Citation,
+        "patent" => ExternalRefType::Patent,
+        "patent-assertion" => ExternalRefType::PatentAssertion,
+        "patent-family" => ExternalRefType::PatentFamily,
+        other => ExternalRefType::Other(other.to_string()),
+    }
+}
+
+fn insert_serialized_extension<T: Serialize>(
+    target: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: &T,
+) {
+    if let Ok(value) = serde_json::to_value(value) {
+        target.insert(key.to_string(), value);
+    }
+}
+
+fn push_unique(target: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    if !value.is_empty() && !target.iter().any(|existing| existing == &value) {
+        target.push(value);
+    }
+}
+
+fn extend_unique(target: &mut Vec<String>, values: impl IntoIterator<Item = String>) {
+    for value in values {
+        push_unique(target, value);
+    }
+}
+
+fn party_labels(party: &CdxDataGovernanceParty) -> Vec<String> {
+    match party {
+        CdxDataGovernanceParty::Text(value) => vec![value.clone()],
+        CdxDataGovernanceParty::Structured(value) => {
+            let mut labels = Vec::new();
+
+            if let Some(organization) = &value.organization {
+                if let Some(name) = &organization.name {
+                    push_unique(&mut labels, name.clone());
+                }
+
+                for contact in &organization.contact {
+                    if let Some(name) = &contact.name {
+                        push_unique(&mut labels, name.clone());
+                    }
+                    if let Some(email) = &contact.email {
+                        push_unique(&mut labels, email.clone());
+                    }
+                    if let Some(phone) = &contact.phone {
+                        push_unique(&mut labels, phone.clone());
+                    }
+                }
+            }
+
+            if let Some(contact) = &value.contact {
+                if let Some(name) = &contact.name {
+                    push_unique(&mut labels, name.clone());
+                }
+                if let Some(email) = &contact.email {
+                    push_unique(&mut labels, email.clone());
+                }
+                if let Some(phone) = &contact.phone {
+                    push_unique(&mut labels, phone.clone());
+                }
+            }
+
+            labels
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxComponent {
@@ -1431,24 +1678,33 @@ struct CdxComponent {
     is_external: bool,
     /// Package URL Version Range syntax (1.7+, mutually exclusive with version)
     version_range: Option<String>,
-    /// ML Model metadata (CycloneDX 1.5+)
-    #[serde(rename = "modelCard", alias = "mlModel")]
-    ml_model: Option<CdxMlModel>,
-    /// Dataset metadata (CycloneDX 1.5+, used when component type is "data")
-    #[serde(rename = "data")]
-    data_component: Option<CdxDataComponent>,
-    /// Cryptographic properties (1.6+)
+    /// Legacy ML model wrapper used by older fixtures
+    #[serde(rename = "mlModel")]
+    legacy_ml_model: Option<CdxLegacyMlModel>,
+    /// Official CycloneDX model card (1.5+)
+    #[serde(rename = "modelCard")]
+    model_card: Option<CdxMlModelCard>,
+    /// Dataset metadata (supports both the official array and legacy object forms)
+    #[serde(
+        rename = "data",
+        default,
+        deserialize_with = "deserialize_component_data"
+    )]
+    data_components: Vec<CdxDataComponent>,
+    #[serde(rename = "patentAssertions")]
+    patent_assertions: Option<serde_json::Value>,
+    #[serde(rename = "cryptoProperties")]
     crypto_properties: Option<CdxCryptoProperties>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxLicenseChoice {
     license: Option<CdxLicense>,
     expression: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxLicense {
@@ -1457,7 +1713,7 @@ struct CdxLicense {
     url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxSupplier {
@@ -1465,14 +1721,14 @@ struct CdxSupplier {
     url: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxHash {
     alg: String,
     content: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxExternalReference {
@@ -1480,9 +1736,11 @@ struct CdxExternalReference {
     ref_type: String,
     url: String,
     comment: Option<String>,
+    hashes: Option<Vec<CdxHash>>,
+    properties: Option<Vec<CdxProperty>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxProperty {
     name: String,
@@ -1490,30 +1748,31 @@ struct CdxProperty {
 }
 
 // ML Model and Dataset structures (CycloneDX 1.5+ AI/ML BOM support)
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-struct CdxMlModel {
+struct CdxLegacyMlModel {
     approach: Option<CdxMlApproach>,
     architecture_family: Option<String>,
-    model_card: Option<serde_json::Value>, // Preserve as raw JSON for now
+    model_card: Option<CdxMlModelCard>,
     model_parameters: Option<CdxModelParameters>,
     quantization: Option<CdxQuantization>,
     limitations: Option<String>,
     considerations: Option<CdxConsiderations>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxMlModelCard {
     model_parameters: Option<CdxModelParameters>,
+    quantitative_analysis: Option<serde_json::Value>,
     quantization: Option<CdxQuantization>,
     limitations: Option<String>,
     considerations: Option<CdxConsiderations>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxMlApproach {
@@ -1521,44 +1780,64 @@ struct CdxMlApproach {
     approach_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxModelParameters {
+    approach: Option<CdxMlApproach>,
     task: Option<String>,
+    architecture_family: Option<String>,
+    model_architecture: Option<String>,
     architecture: Option<CdxModelArchitecture>,
     #[serde(default)]
-    datasets: Vec<CdxDatasetRef>,
+    datasets: Vec<CdxDatasetChoice>,
     objective_function: Option<Vec<serde_json::Value>>,
     evaluation_metrics: Option<Vec<serde_json::Value>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxModelArchitecture {
     name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
 #[allow(dead_code)]
-struct CdxDatasetRef {
+enum CdxDatasetChoice {
+    Reference(CdxDatasetReference),
+    Legacy(CdxLegacyDatasetRef),
+    Inline(CdxDataComponent),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct CdxDatasetReference {
     #[serde(rename = "ref")]
-    ref_field: Option<String>,
+    reference: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct CdxLegacyDatasetRef {
     name: Option<String>,
     #[serde(default)]
     purl: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxQuantization {
     mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxConsiderations {
@@ -1566,9 +1845,17 @@ struct CdxConsiderations {
     #[serde(default)]
     #[serde(rename = "fairnessConsiderations")]
     fairness_considerations: Vec<String>,
+    #[serde(default)]
+    #[serde(rename = "useCases")]
+    use_cases: Vec<String>,
+    #[serde(default)]
+    #[serde(rename = "ethicalConsiderations")]
+    ethical_considerations: Vec<String>,
+    #[serde(default)]
+    technical_limitations: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxEnvironmentalConsiderations {
@@ -1576,33 +1863,51 @@ struct CdxEnvironmentalConsiderations {
     energy_consumptions: Vec<CdxEnergyConsumption>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxEnergyConsumption {
     #[serde(alias = "type")]
     activity: Option<String>,
+    #[serde(default)]
+    energy_providers: Vec<serde_json::Value>,
     energy_provider: Option<String>,
     energy_source: Option<String>,
+    activity_energy_cost: Option<CdxEnergyMeasure>,
     #[serde(rename = "energyKwh", alias = "value")]
     energy_kwh: Option<f64>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxEnergyMeasure {
+    value: f64,
+    unit: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxDataComponent {
     #[serde(rename = "type")]
     data_type: Option<String>,
+    #[serde(rename = "bom-ref", alias = "bom-ref")]
+    bom_ref: Option<String>,
     name: Option<String>,
     contents: Option<CdxDataContents>,
     classification: Option<String>,
-    #[serde(default)]
+    #[serde(
+        rename = "sensitiveData",
+        default,
+        alias = "sensitiveData",
+        alias = "sensitivityData"
+    )]
     sensitivity_data: Vec<String>,
     governance: Option<CdxDataGovernance>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxDataContents {
@@ -1610,17 +1915,47 @@ struct CdxDataContents {
     properties: Vec<CdxProperty>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxDataGovernance {
     #[serde(default)]
-    owners: Vec<String>,
+    owners: Vec<CdxDataGovernanceParty>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum CdxDataGovernanceParty {
+    Text(String),
+    Structured(CdxDataGovernanceResponsibleParty),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxDataGovernanceResponsibleParty {
+    organization: Option<CdxOrganization>,
+    contact: Option<CdxOrganizationalContact>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxOrganization {
+    name: Option<String>,
+    #[serde(default)]
+    contact: Vec<CdxOrganizationalContact>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxOrganizationalContact {
+    name: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
 }
 
 // ── CycloneDX Crypto Deserialization Structs (1.6+) ─────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxCryptoProperties {
     asset_type: Option<String>,
@@ -1631,7 +1966,7 @@ struct CdxCryptoProperties {
     protocol_properties: Option<CdxProtocolProperties>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxAlgorithmProperties {
     primitive: Option<String>,
@@ -1648,7 +1983,7 @@ struct CdxAlgorithmProperties {
     elliptic_curve: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxCertificateProperties {
     subject_name: Option<String>,
@@ -1661,7 +1996,7 @@ struct CdxCertificateProperties {
     certificate_extension: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxRelatedCryptoMaterialProperties {
     #[serde(rename = "type")]
@@ -1678,14 +2013,14 @@ struct CdxRelatedCryptoMaterialProperties {
     expiration_date: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxSecuredBy {
     mechanism: Option<String>,
     algorithm_ref: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxProtocolProperties {
     #[serde(rename = "type")]
@@ -1696,7 +2031,7 @@ struct CdxProtocolProperties {
     crypto_ref_array: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxCipherSuite {
     name: Option<String>,
@@ -1704,7 +2039,7 @@ struct CdxCipherSuite {
     identifiers: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxIkev2TransformTypes {
     encr: Option<Vec<String>>,
@@ -1790,15 +2125,12 @@ struct CdxAnalysis {
 #[derive(Debug, Deserialize)]
 #[serde(rename = "bom")]
 struct CycloneDxBomXml {
-    /// Version attribute on bom element (e.g., version="1.5")
+    /// BOM revision attribute on bom element.
     #[serde(rename = "@version")]
-    version: Option<String>,
+    bom_version: Option<u32>,
     /// Serial number attribute
     #[serde(rename = "@serialNumber")]
     serial_number: Option<String>,
-    /// BOM version (integer)
-    #[serde(rename = "@bomVersion")]
-    bom_version: Option<u32>,
     /// Metadata element
     metadata: Option<CdxMetadataXml>,
     /// Components wrapper element
@@ -1807,6 +2139,8 @@ struct CycloneDxBomXml {
     dependencies: Option<CdxDependenciesXml>,
     /// Vulnerabilities wrapper element
     vulnerabilities: Option<CdxVulnerabilitiesXml>,
+    /// Citations wrapper element (1.7+)
+    citations: Option<CdxCitationsXml>,
 }
 
 /// Metadata element for XML format
@@ -1815,6 +2149,58 @@ struct CdxMetadataXml {
     timestamp: Option<String>,
     tools: Option<CdxToolsXml>,
     component: Option<CdxComponent>,
+    #[serde(rename = "distributionConstraints")]
+    distribution_constraints: Option<CdxDistributionConstraints>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CdxCitationsXml {
+    #[serde(rename = "citation", default)]
+    citation: Vec<CdxCitationXml>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxCitationXml {
+    #[serde(rename = "@bom-ref")]
+    bom_ref: Option<String>,
+    pointers: Option<CdxCitationPointersXml>,
+    expressions: Option<CdxCitationExpressionsXml>,
+    timestamp: Option<String>,
+    attributed_to: Option<String>,
+    process: Option<String>,
+    note: Option<String>,
+}
+
+impl From<CdxCitationXml> for CdxCitation {
+    fn from(value: CdxCitationXml) -> Self {
+        Self {
+            bom_ref: value.bom_ref,
+            pointers: value
+                .pointers
+                .and_then(|pointers| (!pointers.pointer.is_empty()).then_some(pointers.pointer)),
+            expressions: value.expressions.and_then(|expressions| {
+                (!expressions.expression.is_empty()).then_some(expressions.expression)
+            }),
+            timestamp: value.timestamp,
+            attributed_to: value.attributed_to,
+            process: value.process,
+            note: value.note,
+            signature: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CdxCitationPointersXml {
+    #[serde(rename = "pointer", default)]
+    pointer: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CdxCitationExpressionsXml {
+    #[serde(rename = "expression", default)]
+    expression: Vec<String>,
 }
 
 /// Tools wrapper element for XML format
