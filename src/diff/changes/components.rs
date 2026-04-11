@@ -17,6 +17,34 @@ impl ComponentChangeComputer {
         Self { cost_model }
     }
 
+    fn serialize_optional<T: serde::Serialize>(value: &Option<T>) -> Option<String> {
+        value.as_ref().map(|value| {
+            serde_json::to_string(value)
+                .unwrap_or_else(|_| String::from("\"<serialization-error>\""))
+        })
+    }
+
+    fn push_serialized_change<T: serde::Serialize>(
+        changes: &mut Vec<FieldChange>,
+        field: &str,
+        old: &Option<T>,
+        new: &Option<T>,
+        total_cost: &mut u32,
+        field_cost: u32,
+    ) {
+        let old_value = Self::serialize_optional(old);
+        let new_value = Self::serialize_optional(new);
+
+        if old_value != new_value {
+            changes.push(FieldChange {
+                field: field.to_string(),
+                old_value,
+                new_value,
+            });
+            *total_cost += field_cost;
+        }
+    }
+
     /// Compute individual field changes between two components.
     fn compute_field_changes(&self, old: &Component, new: &Component) -> (Vec<FieldChange>, u32) {
         let mut changes = Vec::new();
@@ -103,6 +131,23 @@ impl ComponentChangeComputer {
                 total_cost += self.cost_model.hash_mismatch;
             }
         }
+
+        Self::push_serialized_change(
+            &mut changes,
+            "ml_model",
+            &old.ml_model,
+            &new.ml_model,
+            &mut total_cost,
+            self.cost_model.supplier_changed,
+        );
+        Self::push_serialized_change(
+            &mut changes,
+            "dataset",
+            &old.dataset,
+            &new.dataset,
+            &mut total_cost,
+            self.cost_model.supplier_changed,
+        );
 
         // Cryptographic property changes
         if old.crypto_properties != new.crypto_properties {

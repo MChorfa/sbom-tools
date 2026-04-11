@@ -516,3 +516,52 @@ pub struct Annotation {
     pub annotation_type: String,
     pub comment: String,
 }
+
+/// Machine learning model metadata (CycloneDX 1.5+)
+///
+/// Structured information about trained ML models, including architecture,
+/// approach, quantization, and environmental impact.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MlModelInfo {
+    /// ML approach type: "supervised", "unsupervised", "reinforcement-learning", "semi-supervised"
+    pub approach: Option<String>,
+    /// Architecture family: "transformer", "cnn", "rnn", "llm", "gan", etc.
+    pub architecture_family: Option<String>,
+    /// Architecture name: "bert", "gpt", "resnet", etc.
+    pub architecture_name: Option<String>,
+    /// ML task: "nlp", "computer-vision", "audio", "tabular", etc.
+    pub task: Option<String>,
+    /// Quantization mode: "int4", "int8", "fp16", "bf16", "fp32", "mixed", etc.
+    pub quantization: Option<String>,
+    /// Limitations or known constraints of the model
+    pub limitations: Option<String>,
+    /// Training datasets used for this model
+    pub training_datasets: Vec<DatasetRef>,
+    /// Energy consumed during training in kWh (approximate)
+    pub energy_kwh_training: Option<f64>,
+    /// URL to detailed model card (from ExternalRefType::ModelCard)
+    pub model_card_url: Option<String>,
+}
+
+/// Reference to a dataset used for training or evaluation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatasetRef {
+    /// Dataset name
+    pub name: Option<String>,
+    /// Package URL (PURL) if the dataset is packaged
+    pub purl: Option<String>,
+}
+
+/// Dataset component metadata (CycloneDX 1.5+ data type)
+///
+/// Structured information about datasets, including type, sensitivity,
+/// governance, and content properties.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DatasetInfo {
+    /// Dataset type: "training", "testing", "validation", "evaluation"
+    pub dataset_type: Option<String>,
+    /// Sensitivity classifications: "sensitive", "confidential", "pii", etc.
+    pub sensitivity_classifications: Vec<String>,
+    /// Data governance owners/custodians
+    pub governance_owners: Vec<String>,
+}

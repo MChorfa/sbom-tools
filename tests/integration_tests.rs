@@ -336,6 +336,66 @@ mod parser_tests {
         }
     }
 
+    #[test]
+    fn test_parse_cyclonedx_mlbom_fixture() {
+        let path = fixture_path("cyclonedx/minimal-mlbom.cdx.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX ML BOM fixture");
+
+        assert_eq!(sbom.component_count(), 3);
+
+        let bert = sbom
+            .components
+            .values()
+            .find(|c| c.name == "bert-base")
+            .expect("bert-base not found");
+        assert_eq!(
+            bert.component_type,
+            sbom_tools::model::ComponentType::MachineLearningModel
+        );
+
+        let ml_info = bert.ml_model.as_ref().expect("ML metadata missing");
+        assert_eq!(ml_info.approach.as_deref(), Some("supervised"));
+        assert_eq!(ml_info.architecture_family.as_deref(), Some("transformer"));
+        assert_eq!(ml_info.architecture_name.as_deref(), Some("bert"));
+        assert_eq!(ml_info.task.as_deref(), Some("nlp"));
+        assert_eq!(ml_info.quantization.as_deref(), Some("fp32"));
+        assert_eq!(ml_info.energy_kwh_training, Some(1500.0));
+        assert_eq!(ml_info.training_datasets.len(), 2);
+        assert_eq!(
+            ml_info.model_card_url.as_deref(),
+            Some("https://huggingface.co/google-bert/bert-base-uncased")
+        );
+    }
+
+    #[test]
+    fn test_parse_cyclonedx_dataset_fixture() {
+        let path = fixture_path("cyclonedx/minimal-dataset.cdx.json");
+        let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX dataset fixture");
+
+        assert_eq!(sbom.component_count(), 4);
+
+        let training_dataset = sbom
+            .components
+            .values()
+            .find(|c| c.name == "training-dataset-v1")
+            .expect("training dataset not found");
+        assert_eq!(
+            training_dataset.component_type,
+            sbom_tools::model::ComponentType::Data
+        );
+
+        let dataset = training_dataset
+            .dataset
+            .as_ref()
+            .expect("dataset metadata missing");
+        assert_eq!(dataset.dataset_type.as_deref(), Some("training"));
+        assert_eq!(dataset.sensitivity_classifications, vec!["pii", "phi"]);
+        assert_eq!(
+            dataset.governance_owners,
+            vec!["data-team@example.com", "ml-ops@example.com"]
+        );
+    }
+
     // ========================================================================
     // SPDX 3.0 Parser Tests
     // ========================================================================
@@ -747,6 +807,42 @@ mod diff_engine_tests {
                 "After filtering, only critical vulns should remain"
             );
         }
+    }
+
+    #[test]
+    fn test_diff_detects_ml_model_metadata_changes() {
+        let path = fixture_path("cyclonedx/minimal-mlbom.cdx.json");
+        let old = parse_sbom(&path).expect("Failed to parse ML BOM fixture");
+        let mut new = old.clone();
+
+        let model = new
+            .components
+            .values_mut()
+            .find(|c| c.name == "bert-base")
+            .expect("bert-base not found");
+        let ml_info = model.ml_model.as_mut().expect("ML metadata missing");
+        ml_info.quantization = Some("int4".to_string());
+        model.calculate_content_hash();
+        new.calculate_content_hash();
+
+        let engine = DiffEngine::new();
+        let result = engine.diff(&old, &new).expect("diff should succeed");
+
+        assert_eq!(result.summary.components_modified, 1);
+        let change = result
+            .components
+            .modified
+            .iter()
+            .find(|change| change.name == "bert-base")
+            .expect("bert-base change not found");
+        assert!(
+            change
+                .field_changes
+                .iter()
+                .any(|field| field.field == "ml_model"),
+            "Expected ml_model field change, got {:?}",
+            change.field_changes
+        );
     }
 
     #[test]
