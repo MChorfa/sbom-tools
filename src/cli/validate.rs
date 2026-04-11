@@ -33,6 +33,9 @@ pub fn run_validate(
             "ntia" => check_ntia_compliance(parsed.sbom()),
             "fda" => check_fda_compliance(parsed.sbom()),
             "cra" => ComplianceChecker::new(ComplianceLevel::CraPhase2).check(parsed.sbom()),
+            "eu-ai-act" | "eu_ai_act" | "euaiact" => {
+                ComplianceChecker::new(ComplianceLevel::EuAiAct).check(parsed.sbom())
+            }
             "ssdf" | "nist-ssdf" | "nist_ssdf" => {
                 ComplianceChecker::new(ComplianceLevel::NistSsdf).check(parsed.sbom())
             }
@@ -48,7 +51,7 @@ pub fn run_validate(
             _ => {
                 bail!(
                     "Unknown validation standard: {std_name}. \
-                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc"
+                    Valid options: ntia, fda, cra, eu-ai-act, ssdf, eo14028, cnsa2, pqc"
                 );
             }
         };

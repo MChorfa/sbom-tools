@@ -1,0 +1,125 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-04-01T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "sbom-tools",
+        "name": "sbom-tools",
+        "version": "0.1.18"
+      }
+    ],
+    "component": {
+      "bom-ref": "root",
+      "type": "application",
+      "name": "eu-ai-act-demo",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "dataset-1",
+      "type": "data",
+      "name": "training-dataset",
+      "version": "2026.04"
+    },
+    {
+      "bom-ref": "ml-model-1",
+      "type": "machine-learning-model",
+      "name": "documented-model",
+      "version": "1.0.0",
+      "description": "Classification model for high-risk workflow triage.",
+      "properties": [
+        {
+          "name": "ai:risk-management",
+          "value": "Risk controls and mitigation measures are documented."
+        },
+        {
+          "name": "ai:human-oversight",
+          "value": "Human review is required before high-risk actions."
+        },
+        {
+          "name": "ai:security-robustness",
+          "value": "Accuracy, robustness, and security evaluations completed."
+        },
+        {
+          "name": "ai:change-history",
+          "value": "Revision history maintained in release process."
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "model-card",
+          "url": "https://example.test/model-card"
+        },
+        {
+          "type": "risk-assessment",
+          "url": "https://example.test/risk"
+        },
+        {
+          "type": "documentation",
+          "url": "https://example.test/human-oversight"
+        },
+        {
+          "type": "quality-metrics",
+          "url": "https://example.test/quality"
+        },
+        {
+          "type": "log",
+          "url": "https://example.test/change-log"
+        }
+      ],
+      "mlModel": {
+        "approach": {
+          "type": "supervised"
+        },
+        "architectureFamily": "transformer",
+        "modelCard": {
+          "modelParameters": {
+            "task": "classification",
+            "datasets": [
+              {
+                "ref": "dataset-1"
+              }
+            ]
+          },
+          "quantitativeAnalysis": {
+            "performanceMetrics": [
+              {
+                "type": "accuracy",
+                "value": 0.97
+              }
+            ]
+          },
+          "considerations": {
+            "useCases": [
+              "Fraud triage"
+            ],
+            "fairnessConsiderations": [
+              "Reviewed for demographic parity"
+            ],
+            "ethicalConsiderations": [
+              "Escalate edge cases to human review"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "root",
+      "dependsOn": [
+        "ml-model-1"
+      ]
+    },
+    {
+      "ref": "ml-model-1",
+      "dependsOn": [
+        "dataset-1"
+      ]
+    }
+  ]
+}
