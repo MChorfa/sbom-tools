@@ -25,41 +25,39 @@
       "name": "bert-base",
       "version": "1.0.0",
       "description": "BERT base model for NLP tasks",
-      "mlModel": {
+      "modelCard": {
         "approach": {
           "type": "supervised"
         },
         "architectureFamily": "transformer",
-        "modelCard": {
-          "modelParameters": {
-            "task": "nlp",
-            "architecture": {
-              "name": "bert"
+        "modelParameters": {
+          "task": "nlp",
+          "architecture": {
+            "name": "bert"
+          },
+          "datasets": [
+            {
+              "name": "wikipedia-2.5B",
+              "purl": "pkg:generic/wikipedia/2.5B"
             },
-            "datasets": [
+            {
+              "name": "bookscorpus-800M",
+              "purl": "pkg:generic/bookscorpus/800M"
+            }
+          ]
+        },
+        "quantization": {
+          "mode": "fp32"
+        },
+        "limitations": "Optimized for English text; may not generalize to non-English languages.",
+        "considerations": {
+          "environmentalConsiderations": {
+            "energyConsumptions": [
               {
-                "name": "wikipedia-2.5B",
-                "purl": "pkg:generic/wikipedia/2.5B"
-              },
-              {
-                "name": "bookscorpus-800M",
-                "purl": "pkg:generic/bookscorpus/800M"
+                "type": "training",
+                "value": 1500.0
               }
             ]
-          },
-          "quantization": {
-            "mode": "fp32"
-          },
-          "limitations": "Optimized for English text; may not generalize to non-English languages.",
-          "considerations": {
-            "environmentalConsiderations": {
-              "energyConsumptions": [
-                {
-                  "type": "training",
-                  "value": 1500.0
-                }
-              ]
-            }
           }
         }
       },
@@ -76,23 +74,21 @@
       "name": "gpt-2",
       "version": "2.0.0",
       "description": "GPT-2 language model",
-      "mlModel": {
+      "modelCard": {
         "approach": {
           "type": "unsupervised"
         },
         "architectureFamily": "transformer",
-        "modelCard": {
-          "modelParameters": {
-            "task": "nlp",
-            "architecture": {
-              "name": "gpt"
-            }
-          },
-          "quantization": {
-            "mode": "int8"
-          },
-          "limitations": "May generate biased or harmful content."
-        }
+        "modelParameters": {
+          "task": "nlp",
+          "architecture": {
+            "name": "gpt"
+          }
+        },
+        "quantization": {
+          "mode": "int8"
+        },
+        "limitations": "May generate biased or harmful content."
       }
     }
   ]

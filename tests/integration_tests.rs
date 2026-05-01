@@ -368,6 +368,45 @@ mod parser_tests {
     }
 
     #[test]
+    fn test_parse_cyclonedx_model_card_sums_training_energy() {
+        let content = r#"{
+                    "bomFormat": "CycloneDX",
+                    "specVersion": "1.6",
+                    "version": 1,
+                    "components": [
+                        {
+                            "bom-ref": "ml-model-1",
+                            "type": "machine-learning-model",
+                            "name": "bert-base",
+                            "modelCard": {
+                                "approach": { "type": "supervised" },
+                                "architectureFamily": "transformer",
+                                "considerations": {
+                                    "environmentalConsiderations": {
+                                        "energyConsumptions": [
+                                            { "type": "training", "value": 100.0 },
+                                            { "type": "inference", "value": 5.0 },
+                                            { "type": "training", "value": 25.0 }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }"#;
+
+        let sbom = parse_sbom_str(content).expect("Failed to parse CycloneDX model card");
+        let model = sbom
+            .components
+            .values()
+            .find(|c| c.name == "bert-base")
+            .expect("bert-base not found");
+        let ml_info = model.ml_model.as_ref().expect("ML metadata missing");
+
+        assert_eq!(ml_info.energy_kwh_training, Some(125.0));
+    }
+
+    #[test]
     fn test_parse_cyclonedx_dataset_fixture() {
         let path = fixture_path("cyclonedx/minimal-dataset.cdx.json");
         let sbom = parse_sbom(&path).expect("Failed to parse CycloneDX dataset fixture");

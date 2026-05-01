@@ -22,6 +22,10 @@ pub struct CostModel {
     pub license_changed: u32,
     /// Cost for supplier change
     pub supplier_changed: u32,
+    /// Cost for ML model metadata change
+    pub ml_model_changed: u32,
+    /// Cost for dataset metadata change
+    pub dataset_changed: u32,
     /// Cost for introducing a vulnerability
     pub vulnerability_introduced: u32,
     /// Reward (negative cost) for resolving a vulnerability
@@ -56,6 +60,8 @@ impl Default for CostModel {
             version_major: 7,
             license_changed: 6,
             supplier_changed: 4,
+            ml_model_changed: 6,
+            dataset_changed: 5,
             vulnerability_introduced: 15,
             vulnerability_resolved: -3,
             dependency_added: 5,
@@ -162,6 +168,9 @@ mod tests {
         assert_eq!(model.version_minor, 4);
         assert_eq!(model.version_major, 7);
         assert_eq!(model.license_changed, 6);
+        assert_eq!(model.supplier_changed, 4);
+        assert_eq!(model.ml_model_changed, 6);
+        assert_eq!(model.dataset_changed, 5);
         assert_eq!(model.vulnerability_introduced, 15);
         assert_eq!(model.vulnerability_resolved, -3);
         assert_eq!(model.hash_mismatch, 8);

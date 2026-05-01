@@ -521,7 +521,8 @@ pub struct Annotation {
 ///
 /// Structured information about trained ML models, including architecture,
 /// approach, quantization, and environmental impact.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MlModelInfo {
     /// ML approach type: "supervised", "unsupervised", "reinforcement-learning", "semi-supervised"
     pub approach: Option<String>,
@@ -544,7 +545,8 @@ pub struct MlModelInfo {
 }
 
 /// Reference to a dataset used for training or evaluation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DatasetRef {
     /// Dataset name
     pub name: Option<String>,
@@ -556,7 +558,8 @@ pub struct DatasetRef {
 ///
 /// Structured information about datasets, including type, sensitivity,
 /// governance, and content properties.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DatasetInfo {
     /// Dataset type: "training", "testing", "validation", "evaluation"
     pub dataset_type: Option<String>,

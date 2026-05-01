@@ -9,6 +9,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
+const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
+
 /// Normalized SBOM document - the canonical intermediate representation.
 ///
 /// This structure represents an SBOM in a format-agnostic way, allowing
@@ -622,9 +624,9 @@ pub struct Component {
     /// End-of-life information (populated by enrichment)
     pub eol: Option<EolInfo>,
     /// ML model metadata (populated for MachineLearningModel components)
-    pub ml_model: Option<super::MlModelInfo>,
+    pub ml_model: Option<crate::model::MlModelInfo>,
     /// Dataset metadata (populated for Data components)
-    pub dataset: Option<super::DatasetInfo>,
+    pub dataset: Option<crate::model::DatasetInfo>,
     /// Cryptographic properties (CycloneDX 1.6+ cryptoProperties)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crypto_properties: Option<CryptoProperties>,
@@ -705,7 +707,23 @@ impl Component {
         }
     }
 
-    fn extend_with_ml_model(hasher_input: &mut Vec<u8>, ml_model: &Option<super::MlModelInfo>) {
+    fn extend_with_optional_f64(hasher_input: &mut Vec<u8>, value: Option<f64>) {
+        if let Some(value) = value {
+            let normalized = if value == 0.0 {
+                0.0
+            } else if value.is_nan() {
+                f64::from_bits(CANONICAL_NAN_BITS)
+            } else {
+                value
+            };
+            hasher_input.extend(normalized.to_bits().to_le_bytes());
+        }
+    }
+
+    fn extend_with_ml_model(
+        hasher_input: &mut Vec<u8>,
+        ml_model: &Option<crate::model::MlModelInfo>,
+    ) {
         if let Some(ml_model) = ml_model {
             Self::extend_with_optional_str(hasher_input, &ml_model.approach);
             Self::extend_with_optional_str(hasher_input, &ml_model.architecture_family);
@@ -714,10 +732,7 @@ impl Component {
             Self::extend_with_optional_str(hasher_input, &ml_model.quantization);
             Self::extend_with_optional_str(hasher_input, &ml_model.limitations);
             Self::extend_with_optional_str(hasher_input, &ml_model.model_card_url);
-
-            if let Some(energy) = ml_model.energy_kwh_training {
-                hasher_input.extend(energy.to_le_bytes());
-            }
+            Self::extend_with_optional_f64(hasher_input, ml_model.energy_kwh_training);
 
             for dataset in &ml_model.training_datasets {
                 Self::extend_with_optional_str(hasher_input, &dataset.name);
@@ -726,7 +741,10 @@ impl Component {
         }
     }
 
-    fn extend_with_dataset(hasher_input: &mut Vec<u8>, dataset: &Option<super::DatasetInfo>) {
+    fn extend_with_dataset(
+        hasher_input: &mut Vec<u8>,
+        dataset: &Option<crate::model::DatasetInfo>,
+    ) {
         if let Some(dataset) = dataset {
             Self::extend_with_optional_str(hasher_input, &dataset.dataset_type);
             Self::extend_with_string_list(hasher_input, &dataset.sensitivity_classifications);
@@ -850,5 +868,45 @@ impl DependencyEdge {
                 | DependencyType::TestDependsOn
                 | DependencyType::RuntimeDependsOn
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::MlModelInfo;
+
+    #[test]
+    fn test_content_hash_normalizes_ml_energy_zero_and_nan() {
+        let mut positive_zero = Component::new("model".to_string(), "model@1".to_string());
+        positive_zero.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(0.0),
+            ..MlModelInfo::default()
+        });
+        positive_zero.calculate_content_hash();
+
+        let mut negative_zero = Component::new("model".to_string(), "model@1".to_string());
+        negative_zero.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(-0.0),
+            ..MlModelInfo::default()
+        });
+        negative_zero.calculate_content_hash();
+
+        let mut nan_a = Component::new("model".to_string(), "model@1".to_string());
+        nan_a.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(f64::NAN),
+            ..MlModelInfo::default()
+        });
+        nan_a.calculate_content_hash();
+
+        let mut nan_b = Component::new("model".to_string(), "model@1".to_string());
+        nan_b.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(f64::from_bits(CANONICAL_NAN_BITS + 1)),
+            ..MlModelInfo::default()
+        });
+        nan_b.calculate_content_hash();
+
+        assert_eq!(positive_zero.content_hash, negative_zero.content_hash);
+        assert_eq!(nan_a.content_hash, nan_b.content_hash);
     }
 }
