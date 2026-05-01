@@ -4,6 +4,68 @@
 
 use crate::model::{NormalizedSbom, SbomFormat};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+fn has_non_empty_pointer(raw: Option<&Value>, pointers: &[&str]) -> bool {
+    pointers
+        .iter()
+        .filter_map(|pointer| raw.and_then(|value| value.pointer(pointer)))
+        .any(|value| match value {
+            Value::Null => false,
+            Value::Array(items) => !items.is_empty(),
+            Value::Object(entries) => !entries.is_empty(),
+            Value::String(text) => !text.trim().is_empty(),
+            _ => true,
+        })
+}
+
+fn has_non_empty_text(text: Option<&str>) -> bool {
+    text.is_some_and(|value| !value.trim().is_empty())
+}
+
+fn text_contains_keywords(text: &str, keywords: &[&str]) -> bool {
+    let lower = text.to_lowercase();
+    keywords.iter().any(|keyword| lower.contains(keyword))
+}
+
+fn property_contains_keywords(component: &crate::model::Component, keywords: &[&str]) -> bool {
+    component.extensions.properties.iter().any(|property| {
+        text_contains_keywords(&property.name, keywords)
+            || text_contains_keywords(&property.value, keywords)
+    })
+}
+
+fn external_ref_contains_keywords(component: &crate::model::Component, keywords: &[&str]) -> bool {
+    component.external_refs.iter().any(|reference| {
+        text_contains_keywords(&reference.url, keywords)
+            || reference
+                .comment
+                .as_deref()
+                .is_some_and(|comment| text_contains_keywords(comment, keywords))
+            || matches!(
+                &reference.ref_type,
+                crate::model::ExternalRefType::Other(value)
+                    if text_contains_keywords(value, keywords)
+            )
+    })
+}
+
+fn push_component_violation(
+    violations: &mut Vec<Violation>,
+    severity: ViolationSeverity,
+    category: ViolationCategory,
+    component_name: &str,
+    requirement: &str,
+    message: String,
+) {
+    violations.push(Violation {
+        severity,
+        category,
+        message,
+        element: Some(component_name.to_string()),
+        requirement: requirement.to_string(),
+    });
+}
 
 /// CRA enforcement phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +114,8 @@ pub enum ComplianceLevel {
     NistSsdf,
     /// Executive Order 14028 Section 4 — Enhancing Software Supply Chain Security
     Eo14028,
+    /// EU AI Act Article 11 technical documentation for AI systems
+    EuAiAct,
     /// NSA CNSA 2.0 — Commercial National Security Algorithm Suite 2.0
     Cnsa2,
     /// NIST PQC Readiness — Post-Quantum Cryptography migration (IR 8547 + FIPS 203/204/205)
@@ -73,6 +137,7 @@ impl ComplianceLevel {
             Self::FdaMedicalDevice => "FDA Medical Device",
             Self::NistSsdf => "NIST SSDF (SP 800-218)",
             Self::Eo14028 => "EO 14028 Section 4",
+            Self::EuAiAct => "EU AI Act Article 11",
             Self::Cnsa2 => "CNSA 2.0",
             Self::NistPqc => "NIST PQC Readiness",
             Self::Comprehensive => "Comprehensive",
@@ -91,6 +156,7 @@ impl ComplianceLevel {
             Self::FdaMedicalDevice => "FDA",
             Self::NistSsdf => "SSDF",
             Self::Eo14028 => "EO14028",
+            Self::EuAiAct => "EU-AI",
             Self::Cnsa2 => "CNSA2",
             Self::NistPqc => "PQC",
             Self::Comprehensive => "Full",
@@ -117,6 +183,9 @@ impl ComplianceLevel {
             Self::Eo14028 => {
                 "Executive Order 14028 — machine-readable SBOM, auto-generation, supply chain security"
             }
+            Self::EuAiAct => {
+                "EU AI Act Article 11 — technical documentation checks for AI/ML components"
+            }
             Self::Cnsa2 => {
                 "CNSA 2.0 — AES-256, SHA-384+, ML-KEM-1024, ML-DSA-87, quantum security level 5"
             }
@@ -139,6 +208,7 @@ impl ComplianceLevel {
             Self::FdaMedicalDevice,
             Self::NistSsdf,
             Self::Eo14028,
+            Self::EuAiAct,
             Self::Cnsa2,
             Self::NistPqc,
             Self::Comprehensive,
@@ -406,6 +476,9 @@ impl ComplianceChecker {
             ComplianceLevel::Eo14028 => {
                 self.check_eo14028(sbom, &mut violations);
             }
+            ComplianceLevel::EuAiAct => {
+                self.check_eu_ai_act(sbom, &mut violations);
+            }
             ComplianceLevel::Cnsa2 => {
                 self.check_cnsa2(sbom, &mut violations);
             }
@@ -436,6 +509,316 @@ impl ComplianceChecker {
         }
 
         ComplianceResult::new(self.level, violations)
+    }
+
+    fn check_eu_ai_act(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+        let ml_components: Vec<_> = sbom
+            .components
+            .values()
+            .filter(|component| {
+                component.component_type == crate::model::ComponentType::MachineLearningModel
+            })
+            .collect();
+
+        if ml_components.is_empty() {
+            violations.push(Violation {
+                severity: ViolationSeverity::Info,
+                category: ViolationCategory::DocumentMetadata,
+                message: "No machine-learning-model components found; EU AI Act Article 11 checks are not applicable".to_string(),
+                element: None,
+                requirement: "EU AI Act applicability".to_string(),
+            });
+            return;
+        }
+
+        for component in ml_components {
+            self.check_eu_ai_act_description(component, violations);
+            self.check_eu_ai_act_intended_purpose(component, violations);
+            self.check_eu_ai_act_training_data(component, violations);
+            self.check_eu_ai_act_performance_metrics(component, violations);
+            self.check_eu_ai_act_risk_management(component, violations);
+            self.check_eu_ai_act_human_oversight(component, violations);
+            self.check_eu_ai_act_accuracy_security(component, violations);
+            self.check_eu_ai_act_change_logging(component, violations);
+        }
+    }
+
+    fn check_eu_ai_act_description(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        if has_non_empty_text(component.description.as_deref()) {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Error,
+            ViolationCategory::DocumentMetadata,
+            &component.name,
+            "EU AI Act Art. 11(1)(a): AI system description",
+            format!(
+                "ML component '{}' is missing the AI system description required by Article 11",
+                component.name
+            ),
+        );
+    }
+
+    fn check_eu_ai_act_intended_purpose(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        let raw = component.extensions.raw.as_ref();
+        if has_non_empty_pointer(
+            raw,
+            &[
+                "/modelCard/considerations/useCases",
+                "/mlModel/modelCard/considerations/useCases",
+                "/mlModel/considerations/useCases",
+            ],
+        ) {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Error,
+            ViolationCategory::DocumentMetadata,
+            &component.name,
+            "EU AI Act Art. 11(1)(a): Intended purpose documentation",
+            format!(
+                "ML component '{}' is missing intended-use or use-case documentation in its model card",
+                component.name
+            ),
+        );
+    }
+
+    fn check_eu_ai_act_training_data(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        if component
+            .ml_model
+            .as_ref()
+            .is_some_and(|model| !model.training_datasets.is_empty())
+        {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Error,
+            ViolationCategory::DependencyInfo,
+            &component.name,
+            "EU AI Act Art. 10: Training data documentation",
+            format!(
+                "ML component '{}' is missing documented training dataset references",
+                component.name
+            ),
+        );
+    }
+
+    fn check_eu_ai_act_performance_metrics(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        if has_non_empty_pointer(
+            component.extensions.raw.as_ref(),
+            &[
+                "/modelCard/quantitativeAnalysis",
+                "/mlModel/modelCard/quantitativeAnalysis",
+            ],
+        ) {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Error,
+            ViolationCategory::DocumentMetadata,
+            &component.name,
+            "EU AI Act Art. 15: Performance metrics",
+            format!(
+                "ML component '{}' is missing quantitative performance documentation in its model card",
+                component.name
+            ),
+        );
+    }
+
+    fn check_eu_ai_act_risk_management(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        let has_risk_documentation =
+            property_contains_keywords(component, &["risk", "hazard", "mitigation", "control"])
+                || external_ref_contains_keywords(
+                    component,
+                    &["risk", "hazard", "mitigation", "control"],
+                )
+                || component.external_refs.iter().any(|reference| {
+                    matches!(
+                        reference.ref_type,
+                        crate::model::ExternalRefType::RiskAssessment
+                            | crate::model::ExternalRefType::ThreatModel
+                            | crate::model::ExternalRefType::AdversaryModel
+                            | crate::model::ExternalRefType::Evidence
+                    )
+                });
+
+        if has_risk_documentation {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Error,
+            ViolationCategory::SecurityInfo,
+            &component.name,
+            "EU AI Act Art. 9: Risk management measures",
+            format!(
+                "ML component '{}' is missing documented risk management measures",
+                component.name
+            ),
+        );
+    }
+
+    fn check_eu_ai_act_human_oversight(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        let has_human_oversight = property_contains_keywords(
+            component,
+            &[
+                "human oversight",
+                "oversight",
+                "human review",
+                "supervision",
+            ],
+        ) || external_ref_contains_keywords(
+            component,
+            &[
+                "human oversight",
+                "oversight",
+                "human review",
+                "supervision",
+            ],
+        ) || component.external_refs.iter().any(|reference| {
+            matches!(
+                reference.ref_type,
+                crate::model::ExternalRefType::Documentation
+                    | crate::model::ExternalRefType::Support
+                    | crate::model::ExternalRefType::Evidence
+            )
+        });
+
+        if has_human_oversight {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Error,
+            ViolationCategory::SecurityInfo,
+            &component.name,
+            "EU AI Act Art. 14: Human oversight measures",
+            format!(
+                "ML component '{}' is missing documented human oversight measures",
+                component.name
+            ),
+        );
+    }
+
+    fn check_eu_ai_act_accuracy_security(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        let has_metrics = has_non_empty_pointer(
+            component.extensions.raw.as_ref(),
+            &[
+                "/modelCard/quantitativeAnalysis",
+                "/mlModel/modelCard/quantitativeAnalysis",
+            ],
+        );
+        let has_security_evidence = property_contains_keywords(
+            component,
+            &["accuracy", "robust", "security", "adversarial"],
+        ) || external_ref_contains_keywords(
+            component,
+            &["accuracy", "robust", "security", "adversarial"],
+        ) || component.external_refs.iter().any(|reference| {
+            matches!(
+                reference.ref_type,
+                crate::model::ExternalRefType::QualityMetrics
+                    | crate::model::ExternalRefType::StaticAnalysis
+                    | crate::model::ExternalRefType::DynamicAnalysis
+                    | crate::model::ExternalRefType::RuntimeAnalysis
+                    | crate::model::ExternalRefType::ComponentAnalysis
+                    | crate::model::ExternalRefType::Certification
+                    | crate::model::ExternalRefType::Pentest
+            )
+        });
+
+        if has_metrics && has_security_evidence {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Error,
+            ViolationCategory::SecurityInfo,
+            &component.name,
+            "EU AI Act Art. 15: Accuracy, robustness, and security documentation",
+            format!(
+                "ML component '{}' is missing documented accuracy, robustness, or security evidence",
+                component.name
+            ),
+        );
+    }
+
+    fn check_eu_ai_act_change_logging(
+        &self,
+        component: &crate::model::Component,
+        violations: &mut Vec<Violation>,
+    ) {
+        let has_change_logging_proxy = component.version.is_some()
+            || property_contains_keywords(
+                component,
+                &["change log", "changelog", "change history"],
+            )
+            || external_ref_contains_keywords(
+                component,
+                &["change log", "changelog", "change history"],
+            )
+            || component.external_refs.iter().any(|reference| {
+                matches!(
+                    reference.ref_type,
+                    crate::model::ExternalRefType::Log
+                        | crate::model::ExternalRefType::ReleaseNotes
+                )
+            });
+
+        if has_change_logging_proxy {
+            return;
+        }
+
+        push_component_violation(
+            violations,
+            ViolationSeverity::Warning,
+            ViolationCategory::DocumentMetadata,
+            &component.name,
+            "EU AI Act Art. 12: Changes logging",
+            format!(
+                "ML component '{}' is missing a documented version or change-log reference; BOM-only validation cannot prove tamper-evident runtime logs",
+                component.name
+            ),
+        );
     }
 
     fn check_document_metadata(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
@@ -2090,6 +2473,7 @@ fn is_valid_email_format(email: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsers::parse_sbom_str;
 
     #[test]
     fn test_compliance_level_names() {
@@ -2099,6 +2483,7 @@ mod tests {
         assert_eq!(ComplianceLevel::CraPhase2.name(), "EU CRA Phase 2 (2029)");
         assert_eq!(ComplianceLevel::NistSsdf.name(), "NIST SSDF (SP 800-218)");
         assert_eq!(ComplianceLevel::Eo14028.name(), "EO 14028 Section 4");
+        assert_eq!(ComplianceLevel::EuAiAct.name(), "EU AI Act Article 11");
     }
 
     #[test]
@@ -2241,6 +2626,119 @@ mod tests {
                 .iter()
                 .any(|v| v.severity == ViolationSeverity::Info && v.message.contains("approved")),
             "PQC should report ML-DSA-65 as approved"
+        );
+    }
+
+    #[test]
+    fn test_eu_ai_act_accepts_documented_ml_bom() {
+        let content = r#"{
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "metadata": {
+                "timestamp": "2026-04-01T00:00:00Z",
+                "tools": [{ "vendor": "sbom-tools", "name": "sbom-tools", "version": "0.1.18" }]
+            },
+            "components": [
+                {
+                    "bom-ref": "dataset-1",
+                    "type": "data",
+                    "name": "training-data",
+                    "version": "2026.04"
+                },
+                {
+                    "bom-ref": "ml-model-1",
+                    "type": "machine-learning-model",
+                    "name": "documented-model",
+                    "version": "1.0.0",
+                    "description": "Classification model for high-risk request triage.",
+                    "properties": [
+                        { "name": "ai:risk-management", "value": "Risk controls and mitigations are documented." },
+                        { "name": "ai:human-oversight", "value": "Human review is required before high-risk actions." },
+                        { "name": "ai:security-robustness", "value": "Accuracy, robustness, and security evaluations completed." },
+                        { "name": "ai:change-history", "value": "Revision history maintained in release process." }
+                    ],
+                    "externalReferences": [
+                        { "type": "model-card", "url": "https://example.test/model-card" },
+                        { "type": "risk-assessment", "url": "https://example.test/risk" },
+                        { "type": "documentation", "url": "https://example.test/human-oversight" },
+                        { "type": "quality-metrics", "url": "https://example.test/quality" },
+                        { "type": "log", "url": "https://example.test/change-log" }
+                    ],
+                    "mlModel": {
+                        "approach": { "type": "supervised" },
+                        "architectureFamily": "transformer",
+                        "modelCard": {
+                            "modelParameters": {
+                                "task": "classification",
+                                "datasets": [{ "ref": "dataset-1" }]
+                            },
+                            "quantitativeAnalysis": {
+                                "performanceMetrics": [{ "type": "accuracy", "value": 0.97 }]
+                            },
+                            "considerations": {
+                                "useCases": ["Fraud triage"],
+                                "fairnessConsiderations": ["Reviewed for demographic parity"],
+                                "ethicalConsiderations": ["Escalate edge cases to human review"]
+                            }
+                        }
+                    }
+                }
+            ]
+        }"#;
+
+        let sbom = parse_sbom_str(content).expect("documented ML BOM should parse");
+        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+        assert!(result.is_compliant, "{result:?}");
+        assert_eq!(result.error_count, 0, "{result:?}");
+        assert_eq!(result.warning_count, 0, "{result:?}");
+    }
+
+    #[test]
+    fn test_eu_ai_act_reports_missing_ml_documentation() {
+        let content = r#"{
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "metadata": {
+                "timestamp": "2026-04-01T00:00:00Z",
+                "tools": [{ "vendor": "sbom-tools", "name": "sbom-tools", "version": "0.1.18" }]
+            },
+            "components": [
+                {
+                    "bom-ref": "ml-model-1",
+                    "type": "machine-learning-model",
+                    "name": "undocumented-model",
+                    "description": "Model without sufficient Article 11 documentation."
+                }
+            ]
+        }"#;
+
+        let sbom = parse_sbom_str(content).expect("undocumented ML BOM should parse");
+        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+        assert!(!result.is_compliant, "{result:?}");
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|violation| violation.requirement.contains("Intended purpose")),
+            "{result:?}"
+        );
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|violation| violation.requirement.contains("Training data")),
+            "{result:?}"
+        );
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|violation| violation.requirement.contains("Human oversight")),
+            "{result:?}"
         );
     }
 }

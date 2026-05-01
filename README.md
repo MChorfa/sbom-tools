@@ -32,7 +32,7 @@ Semantic SBOM/CBOM diff, quality scoring, and analysis tool. Compare, validate, 
 - **Fuzzy Matching** — Multi-tier matching engine using exact PURL match, alias lookup, ecosystem-specific normalization, and string similarity with adaptive thresholds and LSH indexing
 - **Vulnerability Enrichment** — Integration with OSV and KEV databases to track new and resolved vulnerabilities, with VEX (Vulnerability Exploitability eXchange) overlay support (feature-gated)
 - **EOL Detection** — End-of-life status for components via endoflife.date API with TUI visualization and compliance integration (feature-gated)
-- **Quality Assessment** — Score SBOMs against compliance standards including NTIA, FDA, CRA (Cyber Resilience Act), NIST SSDF, and EO 14028, with quality delta tracking across versions
+- **Quality Assessment** — Score SBOMs against compliance standards including NTIA, FDA, CRA (Cyber Resilience Act), EU AI Act Article 11, NIST SSDF, EO 14028, CNSA 2.0, and NIST PQC, with quality delta tracking across versions
 - **CBOM Quality Scoring** — Grade cryptographic inventory health across 8 categories: algorithm strength, PQC readiness, OID coverage, crypto completeness, key/certificate lifecycle, and cross-reference resolution, with hard caps for broken cryptography and compromised keys
 - **PQC Compliance** — CNSA 2.0 (NSA) and NIST IR 8547 post-quantum cryptography compliance checking with per-algorithm PASS/FAIL assessment
 - **Cryptographic Inventory** — Parse CycloneDX 1.6/1.7 `cryptoProperties` (algorithms, certificates, keys, protocols) with auto-detection of CBOM vs SBOM profiles
@@ -303,6 +303,9 @@ sbom-tools query "log4j" --version "<2.17.0" fleet/*.json
 # Validate against multiple compliance standards
 sbom-tools validate sbom.json --standard ntia,cra,eo14028
 
+# Validate AI technical documentation for ML BOMs
+sbom-tools validate model.cdx.json --standard eu-ai-act
+
 # Assess quality with CI gate
 sbom-tools quality sbom.json --profile security --min-score 70
 
@@ -408,6 +411,7 @@ Launches an interactive TUI with component tree, vulnerability details, license 
 ```sh
 sbom-tools validate sbom.json --standard ntia
 sbom-tools validate sbom.json --standard cra -o sarif -O results.sarif
+sbom-tools validate model.cdx.json --standard eu-ai-act
 ```
 
 Checks an SBOM against a compliance standard and reports missing fields or failing requirements.
@@ -417,7 +421,7 @@ Checks an SBOM against a compliance standard and reports missing fields or faili
 
 | Flag | Description |
 |------|-------------|
-| `--standard <std>` | Standard to validate: `ntia` (default), `fda`, `cra`, `ssdf`, `eo14028` (comma-separated for multiple) |
+| `--standard <std>` | Standard to validate: `ntia` (default), `fda`, `cra`, `eu-ai-act`, `ssdf`, `eo14028` (comma-separated for multiple) |
 | `-o, --output <fmt>` | Output format (default: `json`; supports `sarif` for CI integration) |
 
 </details>
@@ -805,7 +809,7 @@ src/
 ├── matching/     Multi-tier fuzzy matching (PURL, alias, ecosystem, adaptive, LSH)
 ├── diff/         Semantic diffing engine with graph support + incremental section-selective diff
 ├── enrichment/   OSV/KEV vulnerability data + EOL detection + VEX (feature-gated)
-├── quality/      8-category scoring engine + CBOM crypto scoring profile + 11 compliance standards (NTIA/FDA/CRA/SSDF/EO 14028/CNSA 2.0/NIST PQC)
+├── quality/      8-category scoring engine + AI/CBOM profiles + compliance checks (NTIA/FDA/CRA/EU AI Act/SSDF/EO 14028/CNSA 2.0/NIST PQC)
 ├── pipeline/     parse → enrich → diff → report orchestration + shared enrichment pipeline
 ├── reports/      9 output format generators + streaming reporter
 ├── verification/ File hash verification + component hash auditing

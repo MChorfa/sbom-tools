@@ -346,13 +346,14 @@ struct ViewArgs {
 #[command(after_help = "EXAMPLES:
     sbom-tools validate app.cdx.json                              # NTIA minimum
     sbom-tools validate app.cdx.json --standard cra,eo14028       # Multi-standard
+    sbom-tools validate model.cdx.json --standard eu-ai-act       # AI technical docs
     sbom-tools validate app.cdx.json --standard ntia -o sarif     # SARIF for CI
     sbom-tools validate app.cdx.json --fail-on-warning            # Strict CI gate")]
 struct ValidateArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
 
-    /// Compliance standard(s) to validate against (comma-separated: ntia, fda, cra, ssdf, eo14028)
+    /// Compliance standard(s) to validate against (comma-separated: ntia, fda, cra, eu-ai-act, ssdf, eo14028)
     #[arg(long, default_value = "ntia")]
     standard: String,
 

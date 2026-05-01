@@ -1,3 +1,10 @@
+#![allow(
+    clippy::manual_range_contains,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_map_or,
+    clippy::unwrap_used
+)]
+
 use sbom_tools::config::DiffConfigBuilder;
 use sbom_tools::diff::DependencyChangeType;
 use sbom_tools::parsers::parse_sbom;
@@ -323,6 +330,22 @@ fn cli_validate_summary_outputs_multi_standard_json() {
             .iter()
             .any(|s| s["standard"] == "EU CRA Phase 2 (2029)")
     );
+}
+
+#[test]
+fn cli_validate_summary_outputs_eu_ai_act_json() {
+    let output = base_command()
+        .arg("validate")
+        .arg(fixture_path("cyclonedx/mlbom-no-modelcard.cdx.json"))
+        .args(["--standard", "eu-ai-act", "--summary"])
+        .output()
+        .expect("validate command should run");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let json = json_stdout(&output);
+    assert_eq!(json["standard"], "EU AI Act Article 11");
+    assert_eq!(json["compliant"], false);
+    assert!(json["errors"].as_u64().unwrap_or(0) > 0);
 }
 
 #[test]
