@@ -74,7 +74,7 @@ jobs:
 
       - name: cargo-deny
         # v2
-        uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979
+        uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb
         with:
           arguments: --all-features
 
@@ -90,7 +90,7 @@ jobs:
           echo "hashes=$(sha256sum target/package/sbom-tools-*.crate | base64 -w0)" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to crates.io
-        uses: rust-lang/crates-io-auth-action@bbed7d2c189ab94089df7c9ac0aee2f82f72d2ee # v1
+        uses: rust-lang/crates-io-auth-action@4c854e89b5a69306bb9a1abf09660d9cdb3a1e16 # v1
         id: auth
 
       - name: Publish crate
@@ -249,7 +249,7 @@ jobs:
 
       - name: Upload binary artifact
         # v4
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: binary-${{ matrix.archive_name }}
           path: |
