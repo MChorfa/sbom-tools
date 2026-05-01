@@ -695,6 +695,20 @@ impl Component {
         self
     }
 
+    /// Attach ML model metadata (CycloneDX modelCard)
+    #[must_use]
+    pub fn with_ml_model(mut self, ml_model: crate::model::MlModelInfo) -> Self {
+        self.ml_model = Some(ml_model);
+        self
+    }
+
+    /// Attach dataset metadata (CycloneDX ML BOM dataset component)
+    #[must_use]
+    pub fn with_dataset(mut self, dataset: crate::model::DatasetInfo) -> Self {
+        self.dataset = Some(dataset);
+        self
+    }
+
     fn extend_with_optional_str(hasher_input: &mut Vec<u8>, value: &Option<String>) {
         if let Some(value) = value {
             hasher_input.extend(value.as_bytes());
