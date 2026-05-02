@@ -87,10 +87,17 @@ pub fn run_validate(
             "bsi" | "tr-03183" | "tr03183" | "bsi-tr-03183-2" => {
                 ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(parsed.sbom())
             }
+            "oss-steward" | "cra-oss-steward" | "cra-oss" | "cra-art24" | "art24" => {
+                let mut checker = ComplianceChecker::new(ComplianceLevel::CraOssSteward);
+                if let Some(sc) = cra_sidecar.clone() {
+                    checker = checker.with_sidecar(sc);
+                }
+                checker.check(parsed.sbom())
+            }
             _ => {
                 bail!(
                     "Unknown validation standard: {std_name}. \
-                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc, bsi"
+                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc, bsi, oss-steward"
                 );
             }
         };

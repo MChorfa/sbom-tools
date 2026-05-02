@@ -59,6 +59,11 @@ pub enum ComplianceLevel {
     /// BSI TR-03183-2 (German national CRA-aligned SBOM technical guideline).
     /// Free, ENISA-cited; stricter than NTIA on hashes and identifiers.
     BsiTr03183_2,
+    /// CRA Article 24 — Open-source software steward profile (lighter
+    /// obligations than CraPhase1/2). SBOM, vulnerability handling process,
+    /// and CVD policy are still required; manufacturer email, EU DoC, and
+    /// conformity-assessment-module gating are NOT.
+    CraOssSteward,
     /// Comprehensive compliance (all recommended fields)
     Comprehensive,
 }
@@ -79,6 +84,7 @@ impl ComplianceLevel {
             Self::Cnsa2 => "CNSA 2.0",
             Self::NistPqc => "NIST PQC Readiness",
             Self::BsiTr03183_2 => "BSI TR-03183-2",
+            Self::CraOssSteward => "CRA OSS Steward (Art. 24)",
             Self::Comprehensive => "Comprehensive",
         }
     }
@@ -98,6 +104,7 @@ impl ComplianceLevel {
             Self::Cnsa2 => "CNSA2",
             Self::NistPqc => "PQC",
             Self::BsiTr03183_2 => "BSI",
+            Self::CraOssSteward => "OSS",
             Self::Comprehensive => "Full",
         }
     }
@@ -131,6 +138,9 @@ impl ComplianceLevel {
             Self::BsiTr03183_2 => {
                 "BSI TR-03183-2 — German national SBOM guideline (free, ENISA-cited): mandatory hashes, identifiers, ISO-8601 timestamps"
             }
+            Self::CraOssSteward => {
+                "CRA Article 24 — Open-source software steward (lighter than full manufacturer obligations): SBOM + CVD policy + vuln-handling required, no DoC/module/manufacturer-email enforcement"
+            }
             Self::Comprehensive => "All recommended fields and best practices",
         }
     }
@@ -150,14 +160,20 @@ impl ComplianceLevel {
             Self::Cnsa2,
             Self::NistPqc,
             Self::BsiTr03183_2,
+            Self::CraOssSteward,
             Self::Comprehensive,
         ]
     }
 
-    /// Whether this level is a CRA check (either phase)
+    /// Whether this level is a CRA check. Includes the lighter Article 24
+    /// open-source steward profile, since stewards still operate under the
+    /// regulation (just with reduced obligations).
     #[must_use]
     pub const fn is_cra(&self) -> bool {
-        matches!(self, Self::CraPhase1 | Self::CraPhase2)
+        matches!(
+            self,
+            Self::CraPhase1 | Self::CraPhase2 | Self::CraOssSteward
+        )
     }
 
     /// Get CRA phase, if applicable
@@ -869,6 +885,9 @@ impl ComplianceChecker {
             }
             ComplianceLevel::BsiTr03183_2 => {
                 self.check_bsi_tr_03183_2(sbom, &mut violations);
+            }
+            ComplianceLevel::CraOssSteward => {
+                self.check_cra_oss_steward(sbom, &mut violations);
             }
             _ => {
                 // Check document-level requirements
@@ -3152,6 +3171,99 @@ impl ComplianceChecker {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // CRA Article 24 — Open-source software steward profile
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // Stewards (e.g., Eclipse Foundation, Apache, Linux Foundation) supply
+    // software under the CRA but with reduced obligations:
+    //
+    // | Obligation                        | Manufacturer (Phase1/2) | Steward (Art. 24) |
+    // |-----------------------------------|-------------------------|-------------------|
+    // | SBOM                              | Required                | Required          |
+    // | Vulnerability handling process    | Required (Annex I II)   | Required          |
+    // | Coordinated disclosure policy     | Required (Art. 13(7))   | Required          |
+    // | Manufacturer email contact        | Required (Art. 13(15))  | NOT required      |
+    // | EU Declaration of Conformity      | Required                | NOT required      |
+    // | Conformity-assessment module      | Required                | NOT applied       |
+    // | Article 14 reporting channels     | Required                | NOT applied       |
+    // | Vendor-hash carry-through         | Required (Phase 2)      | Recommended only  |
+    //
+    // The check below runs the must-have subset and skips the rest.
+
+    fn check_cra_oss_steward(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+        // -- Must-haves (Article 24 floor) ----------------------------------
+
+        // SBOM completeness — basic structural requirements (re-uses the
+        // standard component check; manufacturer-only sub-checks are gated
+        // off because we don't run check_cra_gaps for stewards).
+        self.check_components(sbom, violations);
+        self.check_dependencies(sbom, violations);
+
+        // Vulnerability-handling process (Annex I Part II): require either
+        // a vulnerability-disclosure URL on the document or a SecurityContact
+        // / Advisories external reference on at least one component, OR
+        // sidecar-supplied PSIRT URL.
+        let has_vuln_handling = sbom.components.values().any(|c| {
+            c.external_refs.iter().any(|r| {
+                matches!(
+                    r.ref_type,
+                    crate::model::ExternalRefType::SecurityContact
+                        | crate::model::ExternalRefType::Advisories
+                        | crate::model::ExternalRefType::VulnerabilityAssertion
+                )
+            })
+        }) || self
+            .sidecar
+            .as_ref()
+            .is_some_and(|s| s.psirt_url.is_some() || s.vulnerability_disclosure_url.is_some());
+        if !has_vuln_handling {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::SecurityInfo,
+                message: "[CRA Art. 24 / Annex I Part II] OSS steward must operate a vulnerability-handling process — declare a SecurityContact / Advisories external reference, or set psirt_url / vulnerability_disclosure_url in the sidecar".to_string(),
+                element: None,
+                requirement: "CRA Art. 24: Vulnerability-handling process (steward floor)"
+                    .to_string(),
+                standard_refs: Vec::new(),
+            });
+        }
+
+        // Coordinated vulnerability disclosure policy (Art. 13(7)): require
+        // either an Advisories reference or sidecar-supplied
+        // coordinated_disclosure_policy_url.
+        let has_cvd_policy = sbom.components.values().any(|c| {
+            c.external_refs
+                .iter()
+                .any(|r| matches!(r.ref_type, crate::model::ExternalRefType::Advisories))
+        }) || self
+            .sidecar
+            .as_ref()
+            .is_some_and(|s| s.coordinated_disclosure_policy_url.is_some());
+        if !has_cvd_policy {
+            violations.push(Violation {
+                severity: ViolationSeverity::Warning,
+                category: ViolationCategory::SecurityInfo,
+                message: "[CRA Art. 13(7)] OSS steward should publish a coordinated vulnerability disclosure (CVD) policy — add an Advisories external reference or set coordinated_disclosure_policy_url in the sidecar".to_string(),
+                element: None,
+                requirement: "CRA Art. 13(7): Coordinated vulnerability disclosure policy"
+                    .to_string(),
+                standard_refs: Vec::new(),
+            });
+        }
+
+        // Format-specific (CycloneDX/SPDX integrity, e.g., bomFormat field)
+        self.check_format_specific(sbom, violations);
+
+        // -- Explicitly NOT enforced ----------------------------------------
+        // - Manufacturer email contact (Art. 13(15))
+        // - EU Declaration of Conformity reference (Annex VII)
+        // - Conformity-assessment module attestation
+        // - Article 14 reporting channels (24h / 72h / ENISA)
+        // - Hardware component requirements
+        // - Vendor-hash carry-through threshold
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // NIST PQC Readiness checks
     // ════════════════════════════════════════════════════════════════════
 
@@ -4279,8 +4391,9 @@ mod tests {
 
     #[test]
     fn bsi_tr_03183_2_in_compliance_level_all() {
-        assert_eq!(ComplianceLevel::all().len(), 12);
+        assert_eq!(ComplianceLevel::all().len(), 13);
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::BsiTr03183_2));
+        assert!(ComplianceLevel::all().contains(&ComplianceLevel::CraOssSteward));
     }
 
     #[test]

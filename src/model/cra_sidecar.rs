@@ -107,6 +107,14 @@ pub struct CraSidecarMetadata {
     /// any CLI-provided default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conformity_assessment_route: Option<ConformityRoute>,
+
+    // -------- CRA Article 24 — open-source steward profile --------
+    /// Whether this product is supplied by an open-source software steward
+    /// (CRA Art. 24). When `true`, manufacturer-only obligations (DoC,
+    /// notified-body attestation, manufacturer email) are not enforced;
+    /// SBOM, vulnerability-handling, and CVD policy are still required.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub is_oss_steward: bool,
 }
 
 /// CRA product class per Regulation (EU) 2024/2847 Annex III/IV.
@@ -309,6 +317,7 @@ impl CraSidecarMetadata {
             || self.risk_assessment_methodology.is_some()
             || self.product_class.is_some()
             || self.conformity_assessment_route.is_some()
+            || self.is_oss_steward
     }
 
     /// Generate an example sidecar file content
@@ -337,6 +346,7 @@ impl CraSidecarMetadata {
             risk_assessment_methodology: Some("ISO/IEC 27005:2022".to_string()),
             product_class: Some(CraProductClass::ImportantClass1),
             conformity_assessment_route: Some(ConformityRoute::ModuleA),
+            is_oss_steward: false,
         };
         serde_json::to_string_pretty(&example).unwrap_or_default()
     }
