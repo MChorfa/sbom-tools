@@ -1,0 +1,65 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:1d2c3b4a-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-04-26T08:30:00Z",
+    "tools": [
+      {
+        "vendor": "Acme",
+        "name": "sbom-tools",
+        "version": "0.1.19"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "bom-ref": "demo-app",
+      "name": "demo-app",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/demo-app@1.0.0",
+      "supplier": { "name": "Demo Corp" },
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0000000000000000000000000000000000000000000000000000000000000fff"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "serde",
+      "name": "serde",
+      "version": "1.0.197",
+      "purl": "pkg:cargo/serde@1.0.197",
+      "supplier": { "name": "serde-rs maintainers" },
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0000000000000000000000000000000000000000000000000000000000000001"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tokio",
+      "name": "tokio",
+      "version": "1.40.0",
+      "purl": "pkg:cargo/tokio@1.40.0",
+      "supplier": { "name": "Tokio Contributors" },
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0000000000000000000000000000000000000000000000000000000000000002"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    { "ref": "demo-app", "dependsOn": ["serde", "tokio"] }
+  ]
+}

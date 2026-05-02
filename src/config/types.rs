@@ -403,6 +403,10 @@ pub struct ViewConfig {
     pub bom_profile: Option<crate::model::BomProfile>,
     /// Enrichment configuration
     pub enrichment: EnrichmentConfig,
+    /// Optional CRA sidecar metadata path (auto-discovered next to the SBOM
+    /// when None). Supplements CRA compliance checks with manufacturer /
+    /// disclosure / lifecycle fields the SBOM doesn't carry.
+    pub cra_sidecar_path: Option<PathBuf>,
 }
 
 /// Configuration for multi-diff operations

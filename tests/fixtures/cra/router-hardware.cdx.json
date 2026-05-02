@@ -1,0 +1,68 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:5d3f1d62-5a4f-4b0a-9d5d-f0d85c9c1a01",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-04-26T12:00:00Z",
+    "tools": [
+      {
+        "vendor": "Acme",
+        "name": "sbom-tools",
+        "version": "0.1.19"
+      }
+    ],
+    "manufacturer": {
+      "name": "Acme Network Hardware GmbH",
+      "contact": [
+        { "email": "security@acme.example" }
+      ]
+    },
+    "component": {
+      "type": "device",
+      "bom-ref": "router-1",
+      "name": "Acme Edge Router",
+      "version": "2.4.0",
+      "purl": "pkg:generic/acme/edge-router@2.4.0",
+      "supplier": { "name": "Acme Network Hardware GmbH" }
+    }
+  },
+  "components": [
+    {
+      "type": "firmware",
+      "bom-ref": "router-1-fw",
+      "name": "Edge Router Firmware",
+      "version": "2.4.0-build312",
+      "purl": "pkg:generic/acme/edge-router-firmware@2.4.0-build312",
+      "supplier": { "name": "Acme Network Hardware GmbH" },
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "abc123def4567890abc123def4567890abc123def4567890abc123def4567890"
+        }
+      ]
+    },
+    {
+      "type": "device",
+      "bom-ref": "wifi-radio",
+      "name": "Wi-Fi Radio Module",
+      "version": "rev-3",
+      "purl": "pkg:generic/acme/wifi-radio@rev-3",
+      "supplier": { "name": "Acme Radio Subsidiary" }
+    },
+    {
+      "type": "device-driver",
+      "bom-ref": "wifi-driver",
+      "name": "Wi-Fi Driver",
+      "version": "1.2.0",
+      "purl": "pkg:generic/acme/wifi-driver@1.2.0",
+      "supplier": { "name": "Acme Network Hardware GmbH" }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "router-1",
+      "dependsOn": ["router-1-fw", "wifi-radio", "wifi-driver"]
+    }
+  ]
+}

@@ -337,6 +337,11 @@ struct ViewArgs {
     #[arg(long, value_name = "TYPE")]
     bom_type: Option<String>,
 
+    /// Path to a CRA sidecar metadata file (JSON or YAML).
+    /// If omitted, auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
+
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
 }
@@ -371,6 +376,13 @@ struct ValidateArgs {
     /// Output only a compact JSON summary (overrides --output)
     #[arg(long)]
     summary: bool,
+
+    /// Path to a CRA sidecar metadata file (JSON or YAML) supplying
+    /// security_contact, manufacturer, support_end_date, ce_marking_reference,
+    /// and similar CRA fields the SBOM itself doesn't carry.
+    /// If omitted, sbom-tools auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
 }
 
 /// Arguments for the `diff-multi` subcommand
@@ -607,6 +619,12 @@ struct QualityArgs {
     /// Fail if quality score is below threshold (0-100)
     #[arg(long)]
     min_score: Option<f32>,
+
+    /// Path to a CRA sidecar metadata file (JSON or YAML).
+    /// Consulted by the embedded CRA compliance check when running
+    /// `--profile cra`. Auto-discovered next to the SBOM if omitted.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
 }
 
 /// Arguments for the `query` subcommand
@@ -1160,6 +1178,7 @@ fn main() -> Result<()> {
                     .as_deref()
                     .and_then(sbom_tools::BomProfile::from_str_opt),
                 enrichment,
+                cra_sidecar_path: args.cra_sidecar.clone(),
             };
             let exit_code = cli::run_view(config)?;
             if exit_code != 0 {
@@ -1175,6 +1194,7 @@ fn main() -> Result<()> {
             args.output_file,
             args.fail_on_warning,
             args.summary,
+            args.cra_sidecar,
         ),
 
         Commands::DiffMulti(args) => {
@@ -1355,6 +1375,7 @@ fn main() -> Result<()> {
                 args.metrics,
                 args.min_score,
                 cli.no_color,
+                args.cra_sidecar,
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);

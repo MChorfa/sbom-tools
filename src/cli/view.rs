@@ -215,10 +215,18 @@ fn output_view_report(
 ) -> Result<()> {
     let effective_output = auto_detect_format(config.output.format, output_target);
 
-    // Pre-compute CRA compliance once for reporters
-    let cra_result =
-        crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2)
-            .check(sbom);
+    // Pre-compute CRA compliance once for reporters.
+    // Honour explicit --cra-sidecar; otherwise auto-discover next to the SBOM.
+    let sidecar = match &config.cra_sidecar_path {
+        Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
+        None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
+    };
+    let mut checker =
+        crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2);
+    if let Some(sc) = sidecar {
+        checker = checker.with_sidecar(sc);
+    }
+    let cra_result = checker.check(sbom);
 
     let report_config = ReportConfig {
         report_types: vec![config.output.report_types],
@@ -293,6 +301,7 @@ mod tests {
             fail_on_vuln: false,
             bom_profile: None,
             enrichment: crate::config::EnrichmentConfig::default(),
+            cra_sidecar_path: None,
         };
 
         let removed = apply_view_filters(&mut sbom, &config);

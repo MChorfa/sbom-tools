@@ -58,6 +58,7 @@ impl ReportGenerator for SarifReporter {
                             ),
                         },
                         locations: vec![],
+                        properties: None,
                     });
                 }
             }
@@ -74,6 +75,7 @@ impl ReportGenerator for SarifReporter {
                         ),
                     },
                     locations: vec![],
+                    properties: None,
                 });
             }
 
@@ -91,6 +93,7 @@ impl ReportGenerator for SarifReporter {
                             ),
                         },
                         locations: vec![],
+                        properties: None,
                     });
                 }
             }
@@ -122,6 +125,7 @@ impl ReportGenerator for SarifReporter {
                         ),
                     },
                     locations: vec![],
+                    properties: None,
                 });
             }
 
@@ -149,6 +153,7 @@ impl ReportGenerator for SarifReporter {
                             ),
                         },
                         locations: vec![],
+                        properties: None,
                     });
                 }
             }
@@ -168,6 +173,7 @@ impl ReportGenerator for SarifReporter {
                         ),
                     },
                     locations: vec![],
+                    properties: None,
                 });
             }
         }
@@ -193,6 +199,7 @@ impl ReportGenerator for SarifReporter {
                                 ),
                             },
                             locations: vec![],
+                            properties: None,
                         });
                     }
                     crate::model::EolStatus::ApproachingEol => {
@@ -212,6 +219,7 @@ impl ReportGenerator for SarifReporter {
                                 ),
                             },
                             locations: vec![],
+                            properties: None,
                         });
                     }
                     _ => {}
@@ -284,6 +292,7 @@ impl ReportGenerator for SarifReporter {
                     ),
                 },
                 locations: vec![],
+                properties: None,
             });
         }
 
@@ -507,8 +516,32 @@ fn violation_to_rule_id(requirement: &str) -> &'static str {
         return "SBOM-EO14028-GENERAL";
     }
 
+    // BSI TR-03183-2 rules (matched before generic CRA logic)
+    if req.contains("bsi tr-03183-2") || req.contains("tr-03183-2") {
+        if req.contains("§5.1") {
+            return "SBOM-BSI-TR-03183-2-5-1";
+        } else if req.contains("§5.2") {
+            return "SBOM-BSI-TR-03183-2-5-2";
+        } else if req.contains("§5.3") {
+            return "SBOM-BSI-TR-03183-2-5-3";
+        } else if req.contains("§5.4") {
+            return "SBOM-BSI-TR-03183-2-5-4";
+        } else if req.contains("§5.5") {
+            return "SBOM-BSI-TR-03183-2-5-5";
+        } else if req.contains("§6") {
+            return "SBOM-BSI-TR-03183-2-6";
+        }
+        return "SBOM-BSI-TR-03183-2-GENERAL";
+    }
+
+    // CRA prEN 40000-1-3 normative requirement IDs (most-specific first)
+    if req.contains("[pre-8-rq-02]") || req.contains("pre-8-rq-02") {
+        "SBOM-CRA-PRE-8-RQ-02"
+    } else if req.contains("[pre-7-rq-07-re]") || req.contains("pre-7-rq-07-re") {
+        "SBOM-CRA-PRE-7-RQ-07-RE"
+    }
     // CRA-specific rules (original logic)
-    if req.contains("art. 13(3)") || req.contains("art.13(3)") {
+    else if req.contains("art. 13(3)") || req.contains("art.13(3)") {
         "SBOM-CRA-ART-13-3"
     } else if req.contains("art. 13(4)") || req.contains("art.13(4)") {
         "SBOM-CRA-ART-13-4"
@@ -582,6 +615,16 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
         .iter()
         .map(|v| {
             let element = v.element.as_deref().unwrap_or("unknown");
+            let standard_ids: Vec<String> = v
+                .standard_refs
+                .iter()
+                .map(|sr| format!("{}:{}", sarif_standard_label(sr.standard), sr.id))
+                .collect();
+            let properties = if standard_ids.is_empty() {
+                None
+            } else {
+                Some(SarifResultProperties { standard_ids })
+            };
             SarifResult {
                 rule_id: violation_to_rule_id(&v.requirement).to_string(),
                 level: violation_severity_to_level(v.severity),
@@ -596,9 +639,30 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
                     ),
                 },
                 locations: vec![],
+                properties,
             }
         })
         .collect()
+}
+
+/// Compact, hyphen-safe label for a `StandardKind` used in SARIF
+/// `properties.standardIds` strings.
+fn sarif_standard_label(kind: crate::quality::StandardKind) -> &'static str {
+    use crate::quality::StandardKind;
+    match kind {
+        StandardKind::CraArticle => "CRA",
+        StandardKind::CraAnnex => "CRA-Annex",
+        StandardKind::Pren40000_1_3 => "prEN-40000-1-3",
+        StandardKind::BsiTr03183_2 => "BSI-TR-03183-2",
+        StandardKind::NistSsdf => "NIST-SSDF",
+        StandardKind::Eo14028 => "EO-14028",
+        StandardKind::FdaPremarket => "FDA",
+        StandardKind::NtiaMinimum => "NTIA",
+        StandardKind::Csaf2 => "CSAF",
+        StandardKind::Cnsa2 => "CNSA-2.0",
+        StandardKind::NistPqc => "NIST-PQC",
+        StandardKind::Other => "Other",
+    }
 }
 
 fn get_sarif_rules() -> Vec<SarifRule> {
@@ -1230,6 +1294,80 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
+        SarifRule {
+            id: "SBOM-CRA-PRE-8-RQ-02".to_string(),
+            name: "CraHardwareInventory".to_string(),
+            short_description: SarifMessage {
+                text: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware components must be inventoried with producer, name, identifier, and firmware version"
+                    .to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-CRA-PRE-7-RQ-07-RE".to_string(),
+            name: "CraVendorHashCarryThrough".to_string(),
+            short_description: SarifMessage {
+                text: "CRA prEN 40000-1-3 [PRE-7-RQ-07-RE]: Upstream vendor-supplied component hashes must be carried through into the SBOM"
+                    .to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-1".to_string(),
+            name: "BsiTr03183AuthorTool".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.1: SBOM author/tool identification".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-2".to_string(),
+            name: "BsiTr03183Timestamp".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2: ISO-8601 timestamp".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-3".to_string(),
+            name: "BsiTr03183ComponentIdentifier".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.3: Component name and unique identifier".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-4".to_string(),
+            name: "BsiTr03183ComponentHash".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.4: Component cryptographic hash (SHA-256+)".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-5".to_string(),
+            name: "BsiTr03183Dependencies".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.5: Dependency relationships".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-6".to_string(),
+            name: "BsiTr03183Recommended".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §6: Recommended fields (license, supplier, lifecycle)".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-GENERAL".to_string(),
+            name: "BsiTr03183General".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 general SBOM requirement".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
     ]
 }
 
@@ -1288,6 +1426,21 @@ struct SarifResult {
     level: SarifLevel,
     message: SarifMessage,
     locations: Vec<SarifLocation>,
+    /// Standard references (CRA Article, prEN 40000-1-3 ID, BSI section, …)
+    /// Surfaced in `properties.standardIds` so downstream GRC/CI tooling can
+    /// map a finding to the exact harmonised-standard clause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<SarifResultProperties>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SarifResultProperties {
+    /// Standard reference IDs in the form `<standard>:<id>`
+    /// (e.g., `prEN-40000-1-3:PRE-7-RQ-07`, `CRA:Art. 13(4)`).
+    /// Plural to match SARIF `properties` extensibility convention.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    standard_ids: Vec<String>,
 }
 
 #[derive(Serialize)]

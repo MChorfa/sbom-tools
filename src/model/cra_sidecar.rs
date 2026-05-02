@@ -52,6 +52,48 @@ pub struct CraSidecarMetadata {
     /// Security update delivery mechanism description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_mechanism: Option<String>,
+
+    // -------- CRA Article 14 reporting-readiness fields (apply 2026-09-11) --------
+    /// PSIRT (Product Security Incident Response Team) public URL.
+    /// Required to handle external vulnerability reports under Annex I Part II
+    /// and Art. 14 incident reporting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub psirt_url: Option<String>,
+
+    /// Channel (email, URL, phone) for the 24-hour early-warning notification
+    /// to ENISA / CSIRT under CRA Art. 14(1) when an actively-exploited
+    /// vulnerability is identified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub early_warning_contact: Option<String>,
+
+    /// Channel for the 72-hour incident report under CRA Art. 14(2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incident_report_contact: Option<String>,
+
+    /// Manufacturer-side identifier for the ENISA single reporting platform
+    /// (Art. 14(7)). Until ENISA publishes the technical interface this is a
+    /// placeholder string — typically a manufacturer registration ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enisa_reporting_platform_id: Option<String>,
+
+    /// Coordinated vulnerability disclosure policy URL.
+    /// Distinct from `vulnerability_disclosure_url` (which may point at a
+    /// portal) — this is the published *policy* that meets CRA Art. 13(7)
+    /// and ISO/IEC 29147 expectations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coordinated_disclosure_policy_url: Option<String>,
+
+    // -------- CRA Article 13(2) risk-assessment fields --------
+    /// URL or document reference for the documented risk assessment
+    /// required by CRA Art. 13(2). Annex V technical documentation must
+    /// include or reference this assessment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_assessment_url: Option<String>,
+
+    /// Methodology used for the risk assessment (e.g.,
+    /// "ISO/IEC 27005:2022", "NIST SP 800-30 r1", "ETSI TS 102 165-1 TVRA").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_assessment_methodology: Option<String>,
 }
 
 impl CraSidecarMetadata {
@@ -120,6 +162,13 @@ impl CraSidecarMetadata {
             || self.support_end_date.is_some()
             || self.manufacturer_name.is_some()
             || self.ce_marking_reference.is_some()
+            || self.psirt_url.is_some()
+            || self.early_warning_contact.is_some()
+            || self.incident_report_contact.is_some()
+            || self.enisa_reporting_platform_id.is_some()
+            || self.coordinated_disclosure_policy_url.is_some()
+            || self.risk_assessment_url.is_some()
+            || self.risk_assessment_methodology.is_some()
     }
 
     /// Generate an example sidecar file content
@@ -135,6 +184,17 @@ impl CraSidecarMetadata {
             product_version: Some("1.0.0".to_string()),
             ce_marking_reference: Some("EU-DoC-2024-001".to_string()),
             update_mechanism: Some("Automatic OTA updates via secure channel".to_string()),
+            psirt_url: Some("https://example.com/psirt".to_string()),
+            early_warning_contact: Some("psirt@example.com".to_string()),
+            incident_report_contact: Some("incidents@example.com".to_string()),
+            enisa_reporting_platform_id: Some("EU-MFR-12345".to_string()),
+            coordinated_disclosure_policy_url: Some(
+                "https://example.com/security/cvd-policy".to_string(),
+            ),
+            risk_assessment_url: Some(
+                "https://example.com/docs/risk-assessment-2026.pdf".to_string(),
+            ),
+            risk_assessment_methodology: Some("ISO/IEC 27005:2022".to_string()),
         };
         serde_json::to_string_pretty(&example).unwrap_or_default()
     }

@@ -5,9 +5,13 @@
 //!
 //! 1. **PURL** (Package URL) - Most reliable, globally unique
 //! 2. **CPE** (Common Platform Enumeration) - Industry standard for vulnerability matching
-//! 3. **SWID** (Software Identification) - ISO standard tag
-//! 4. **Synthetic** - Generated from group:name@version (stable across regenerations)
-//! 5. **`FormatSpecific`** - Original format ID (least stable, may be UUIDs)
+//! 3. **SWHID** (Software Heritage persistent ID) - Content-addressed, ISO/IEC 18670
+//! 4. **SWID** (Software Identification) - ISO standard tag
+//! 5. **Synthetic** - Generated from group:name@version (stable across regenerations)
+//! 6. **`FormatSpecific`** - Original format ID (least stable, may be UUIDs)
+//!
+//! SWHID is one of the three identifier types named by CRA prEN 40000-1-3
+//! `[PRE-7-RQ-07]` (alongside PURL and CPE).
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -31,11 +35,14 @@ pub struct CanonicalId {
 
 /// Source of the canonical identifier, ordered by reliability
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum IdSource {
     /// Derived from Package URL (most reliable)
     Purl,
     /// Derived from CPE
     Cpe,
+    /// Derived from Software Heritage persistent identifier (content-addressed)
+    Swhid,
     /// Derived from SWID tag
     Swid,
     /// Derived from name and version (stable)
@@ -52,7 +59,7 @@ impl IdSource {
     pub const fn is_stable(&self) -> bool {
         matches!(
             self,
-            Self::Purl | Self::Cpe | Self::Swid | Self::NameVersion | Self::Synthetic
+            Self::Purl | Self::Cpe | Self::Swhid | Self::Swid | Self::NameVersion | Self::Synthetic
         )
     }
 
@@ -62,10 +69,11 @@ impl IdSource {
         match self {
             Self::Purl => 0,
             Self::Cpe => 1,
-            Self::Swid => 2,
-            Self::NameVersion => 3,
-            Self::Synthetic => 4,
-            Self::FormatSpecific => 5,
+            Self::Swhid => 2,
+            Self::Swid => 3,
+            Self::NameVersion => 4,
+            Self::Synthetic => 5,
+            Self::FormatSpecific => 6,
         }
     }
 }
@@ -152,6 +160,41 @@ impl CanonicalId {
         }
     }
 
+    /// Create from a Software Heritage persistent identifier (SWHID).
+    ///
+    /// SWHIDs are content-addressed identifiers of the form
+    /// `swh:1:<kind>:<sha1-hex>[;<qualifier>=<value>...]`.
+    /// Named explicitly by CRA prEN 40000-1-3 `[PRE-7-RQ-07]` alongside PURL/CPE.
+    ///
+    /// Falls back to a `FormatSpecific` identifier (marked unstable) if the
+    /// input does not look like a valid SWHID.
+    #[must_use]
+    pub fn from_swhid(swhid: &str) -> Self {
+        match SwhidObject::parse(swhid) {
+            Ok(obj) => Self {
+                // Display reconstitutes the canonical lowercase form with qualifiers
+                value: obj.to_string(),
+                source: IdSource::Swhid,
+                stable: true,
+            },
+            Err(_) => Self {
+                value: swhid.to_string(),
+                source: IdSource::FormatSpecific,
+                stable: false,
+            },
+        }
+    }
+
+    /// Create from a structured `SwhidObject` (preferred internal path).
+    #[must_use]
+    pub fn from_swhid_object(obj: &SwhidObject) -> Self {
+        Self {
+            value: obj.to_string(),
+            source: IdSource::Swhid,
+            stable: true,
+        }
+    }
+
     /// Get the canonical ID value
     #[must_use]
     pub fn value(&self) -> &str {
@@ -188,6 +231,206 @@ impl CanonicalId {
     }
 }
 
+/// Software Heritage persistent identifier kind.
+///
+/// Per the SWHID spec (<https://www.swhid.org/>), every SWHID identifies one of
+/// five object kinds in the Software Heritage archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SwhidKind {
+    /// File content (blob)
+    Cnt,
+    /// Directory (tree)
+    Dir,
+    /// Revision (commit)
+    Rev,
+    /// Release (tag)
+    Rel,
+    /// Snapshot (repository state)
+    Snp,
+}
+
+impl SwhidKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Cnt => "cnt",
+            Self::Dir => "dir",
+            Self::Rev => "rev",
+            Self::Rel => "rel",
+            Self::Snp => "snp",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "cnt" => Some(Self::Cnt),
+            "dir" => Some(Self::Dir),
+            "rev" => Some(Self::Rev),
+            "rel" => Some(Self::Rel),
+            "snp" => Some(Self::Snp),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for SwhidKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A structured Software Heritage persistent identifier.
+///
+/// Format: `swh:1:<kind>:<sha1-hex-40>[;<qualifier>=<value>...]`. Recognised
+/// by CRA prEN 40000-1-3 `[PRE-7-RQ-07]` as one of the three named identifier
+/// types (alongside PURL and CPE).
+///
+/// Serialised as a plain string in JSON to match CycloneDX/SPDX wire formats
+/// (`["swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2", ...]`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SwhidObject {
+    /// Object kind (cnt/dir/rev/rel/snp)
+    pub kind: SwhidKind,
+    /// 20-byte SHA-1 of the canonical object representation
+    pub hash: [u8; 20],
+    /// Optional contextual qualifiers (origin, visit, anchor, path, lines)
+    pub qualifiers: Vec<(String, String)>,
+}
+
+/// Errors returned when parsing a SWHID string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwhidParseError {
+    /// String didn't have the four-part `swh:1:<kind>:<hash>` shape
+    BadShape,
+    /// Prefix wasn't `swh:1:`
+    BadPrefix,
+    /// Kind wasn't one of cnt/dir/rev/rel/snp
+    BadKind,
+    /// Hash wasn't 40 hex characters
+    BadHash,
+    /// Qualifier didn't have the `key=value` shape
+    BadQualifier,
+}
+
+impl fmt::Display for SwhidParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BadShape => f.write_str("SWHID does not have shape swh:1:<kind>:<hash>"),
+            Self::BadPrefix => f.write_str("SWHID prefix is not 'swh:1:'"),
+            Self::BadKind => f.write_str("SWHID kind must be one of cnt/dir/rev/rel/snp"),
+            Self::BadHash => f.write_str("SWHID hash must be 40 hexadecimal characters"),
+            Self::BadQualifier => f.write_str("SWHID qualifier missing '=' separator"),
+        }
+    }
+}
+
+impl std::error::Error for SwhidParseError {}
+
+impl SwhidObject {
+    /// Parse a SWHID string into structured form.
+    ///
+    /// Validation is case-insensitive on the prefix, kind, and hash; the
+    /// canonical form (returned by `Display`) is lowercase. Qualifier values
+    /// are preserved verbatim — the SWHID spec does not mandate a case
+    /// convention for qualifier values (e.g., URLs in `origin=`).
+    pub fn parse(s: &str) -> Result<Self, SwhidParseError> {
+        let (core, qualifier_str) = s.split_once(';').unwrap_or((s, ""));
+        let parts: Vec<&str> = core.split(':').collect();
+        if parts.len() != 4 {
+            return Err(SwhidParseError::BadShape);
+        }
+        if !parts[0].eq_ignore_ascii_case("swh") || parts[1] != "1" {
+            return Err(SwhidParseError::BadPrefix);
+        }
+        let kind = SwhidKind::parse(parts[2]).ok_or(SwhidParseError::BadKind)?;
+
+        if parts[3].len() != 40 || !parts[3].chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(SwhidParseError::BadHash);
+        }
+        let mut hash = [0u8; 20];
+        let bytes = parts[3].as_bytes();
+        for (i, byte) in hash.iter_mut().enumerate() {
+            let high = hex_digit(bytes[i * 2]).ok_or(SwhidParseError::BadHash)?;
+            let low = hex_digit(bytes[i * 2 + 1]).ok_or(SwhidParseError::BadHash)?;
+            *byte = (high << 4) | low;
+        }
+
+        let mut qualifiers = Vec::new();
+        if !qualifier_str.is_empty() {
+            for q in qualifier_str.split(';') {
+                if q.is_empty() {
+                    continue;
+                }
+                let (k, v) = q.split_once('=').ok_or(SwhidParseError::BadQualifier)?;
+                qualifiers.push((k.to_string(), v.to_string()));
+            }
+        }
+
+        Ok(Self {
+            kind,
+            hash,
+            qualifiers,
+        })
+    }
+
+    /// Canonical lowercase hex representation of the SHA-1 hash.
+    #[must_use]
+    pub fn hash_hex(&self) -> String {
+        let mut s = String::with_capacity(40);
+        for b in &self.hash {
+            s.push(hex_char(b >> 4));
+            s.push(hex_char(b & 0xf));
+        }
+        s
+    }
+}
+
+const fn hex_char(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'a' + n - 10) as char,
+        _ => '?',
+    }
+}
+
+const fn hex_digit(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
+impl fmt::Display for SwhidObject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "swh:1:{}:{}", self.kind, self.hash_hex())?;
+        for (k, v) in &self.qualifiers {
+            write!(f, ";{k}={v}")?;
+        }
+        Ok(())
+    }
+}
+
+// Keep the wire format as a plain string so CycloneDX/SPDX I/O stays unchanged.
+impl Serialize for SwhidObject {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for SwhidObject {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Self::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Validate a SWHID string (convenience predicate over `SwhidObject::parse`).
+#[must_use]
+pub fn is_valid_swhid(s: &str) -> bool {
+    SwhidObject::parse(s).is_ok()
+}
+
 impl PartialEq for CanonicalId {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
@@ -213,6 +456,18 @@ pub struct ComponentIdentifiers {
     pub purl: Option<String>,
     /// Common Platform Enumeration identifiers
     pub cpe: Vec<String>,
+    /// Software Heritage persistent identifiers (SWHIDs).
+    ///
+    /// Multiple values supported because a component may be expressible by
+    /// several SWHID kinds (e.g., one `cnt` per archive entry plus a `dir`
+    /// for the unpacked tree). CRA prEN 40000-1-3 `[PRE-7-RQ-07]` accepts
+    /// SWHIDs as one of three named identifier types.
+    ///
+    /// Stored as structured `SwhidObject` for downstream consumers; on the
+    /// wire (JSON), each element serialises as a plain string to match the
+    /// CycloneDX / SPDX 3.0 `swhid` array shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub swhid: Vec<SwhidObject>,
     /// Software Identification tag
     pub swid: Option<String>,
     /// Original format-specific identifier
@@ -246,21 +501,20 @@ impl ComponentIdentifiers {
     /// generate synthetic IDs from component metadata.
     #[must_use]
     pub fn canonical_id(&self) -> CanonicalId {
-        // Tiered fallback: PURL → CPE → SWID → format_id
-        self.purl.as_ref().map_or_else(
-            || {
-                self.cpe.first().map_or_else(
-                    || {
-                        self.swid.as_ref().map_or_else(
-                            || CanonicalId::from_format_id(&self.format_id),
-                            |swid| CanonicalId::from_swid(swid),
-                        )
-                    },
-                    |cpe| CanonicalId::from_cpe(cpe),
-                )
-            },
-            |purl| CanonicalId::from_purl(purl),
-        )
+        // Tiered fallback: PURL → CPE → SWHID → SWID → format_id
+        if let Some(purl) = &self.purl {
+            return CanonicalId::from_purl(purl);
+        }
+        if let Some(cpe) = self.cpe.first() {
+            return CanonicalId::from_cpe(cpe);
+        }
+        if let Some(swhid) = self.swhid.first() {
+            return CanonicalId::from_swhid_object(swhid);
+        }
+        if let Some(swid) = &self.swid {
+            return CanonicalId::from_swid(swid);
+        }
+        CanonicalId::from_format_id(&self.format_id)
     }
 
     /// Get the best available canonical ID with component context for stable fallback
@@ -268,9 +522,10 @@ impl ComponentIdentifiers {
     /// This method uses a tiered fallback strategy:
     /// 1. PURL (most reliable)
     /// 2. CPE
-    /// 3. SWID
-    /// 4. Synthetic (group:name@version) - stable across regenerations
-    /// 5. Format-specific ID (least stable)
+    /// 3. SWHID (content-addressed, CRA prEN 40000-1-3 named)
+    /// 4. SWID
+    /// 5. Synthetic (group:name@version) - stable across regenerations
+    /// 6. Format-specific ID (least stable)
     ///
     /// Returns both the ID and any warnings about stability.
     #[must_use]
@@ -296,7 +551,15 @@ impl ComponentIdentifiers {
             };
         }
 
-        // Tier 3: SWID
+        // Tier 3: SWHID (content-addressed)
+        if let Some(swhid) = self.swhid.first() {
+            return CanonicalIdResult {
+                id: CanonicalId::from_swhid_object(swhid),
+                warning: None,
+            };
+        }
+
+        // Tier 4: SWID
         if let Some(swid) = &self.swid {
             return CanonicalIdResult {
                 id: CanonicalId::from_swid(swid),
@@ -304,19 +567,19 @@ impl ComponentIdentifiers {
             };
         }
 
-        // Tier 4: Synthetic from name/version/group (stable)
+        // Tier 5: Synthetic from name/version/group (stable)
         // Only use if we have at least a name
         if !name.is_empty() {
             return CanonicalIdResult {
                 id: CanonicalId::synthetic(group, name, version),
                 warning: Some(format!(
-                    "Component '{name}' lacks PURL/CPE/SWID identifiers; using synthetic ID. \
+                    "Component '{name}' lacks PURL/CPE/SWHID/SWID identifiers; using synthetic ID. \
                      Consider enriching SBOM with package URLs for accurate diffing."
                 )),
             };
         }
 
-        // Tier 5: Format-specific (least stable - may be UUID)
+        // Tier 6: Format-specific (least stable - may be UUID)
         let id = CanonicalId::from_format_id(&self.format_id);
         let warning = if id.is_stable() {
             Some(format!(
@@ -337,7 +600,7 @@ impl ComponentIdentifiers {
     /// Check if this component has any stable identifiers
     #[must_use]
     pub fn has_stable_id(&self) -> bool {
-        self.purl.is_some() || !self.cpe.is_empty() || self.swid.is_some()
+        self.purl.is_some() || !self.cpe.is_empty() || !self.swhid.is_empty() || self.swid.is_some()
     }
 
     /// Get the reliability level of available identifiers
@@ -345,11 +608,19 @@ impl ComponentIdentifiers {
     pub fn id_reliability(&self) -> IdReliability {
         if self.purl.is_some() {
             IdReliability::High
-        } else if !self.cpe.is_empty() || self.swid.is_some() {
+        } else if !self.cpe.is_empty() || !self.swhid.is_empty() || self.swid.is_some() {
             IdReliability::Medium
         } else {
             IdReliability::Low
         }
+    }
+
+    /// Returns true if this component has any of the CRA-named identifier
+    /// types (PURL, CPE, SWHID, or SWID), satisfying CRA Annex I Part II
+    /// identifier-traceability and prEN 40000-1-3 `[PRE-7-RQ-07]`.
+    #[must_use]
+    pub fn has_cra_identifier(&self) -> bool {
+        self.purl.is_some() || !self.cpe.is_empty() || !self.swhid.is_empty() || self.swid.is_some()
     }
 }
 
@@ -603,5 +874,210 @@ impl VulnerabilityRef2 {
     #[must_use]
     pub fn component_name(&self) -> &str {
         self.component.name()
+    }
+}
+
+#[cfg(test)]
+mod swhid_tests {
+    use super::*;
+
+    #[test]
+    fn valid_swhid_content() {
+        assert!(is_valid_swhid(
+            "swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2"
+        ));
+    }
+
+    #[test]
+    fn valid_swhid_all_kinds() {
+        for kind in ["cnt", "dir", "rev", "rel", "snp"] {
+            let s = format!("swh:1:{kind}:94a9ed024d3859793618152ea559a168bbcbb5e2");
+            assert!(is_valid_swhid(&s), "kind {kind} should be valid");
+        }
+    }
+
+    #[test]
+    fn valid_swhid_with_qualifier() {
+        let swhid =
+            "swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d;origin=https://github.com/x/y";
+        assert!(is_valid_swhid(swhid));
+    }
+
+    #[test]
+    fn invalid_swhid_wrong_prefix() {
+        assert!(!is_valid_swhid(
+            "swhid:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2"
+        ));
+    }
+
+    #[test]
+    fn invalid_swhid_unknown_kind() {
+        assert!(!is_valid_swhid(
+            "swh:1:foo:94a9ed024d3859793618152ea559a168bbcbb5e2"
+        ));
+    }
+
+    #[test]
+    fn invalid_swhid_short_hash() {
+        assert!(!is_valid_swhid("swh:1:cnt:94a9ed024d"));
+    }
+
+    #[test]
+    fn invalid_swhid_non_hex() {
+        assert!(!is_valid_swhid(
+            "swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbZZZZ"
+        ));
+    }
+
+    #[test]
+    fn invalid_swhid_falls_back_to_format_specific() {
+        let id = CanonicalId::from_swhid("swh:1:foo:bad");
+        assert_eq!(id.source(), &IdSource::FormatSpecific);
+        assert!(!id.is_stable());
+    }
+
+    #[test]
+    fn valid_swhid_construction_and_round_trip() {
+        let raw = "swh:1:cnt:94A9ED024D3859793618152EA559A168BBCBB5E2";
+        let id = CanonicalId::from_swhid(raw);
+        assert_eq!(id.source(), &IdSource::Swhid);
+        assert!(id.is_stable());
+        assert_eq!(
+            id.value(),
+            "swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2"
+        );
+    }
+
+    #[test]
+    fn swhid_qualifier_preserved_after_normalization() {
+        let raw = "swh:1:REV:309CF2674EE7A0749978CF8265AB91A60AEA0F7D;origin=Https://X.Y";
+        let id = CanonicalId::from_swhid(raw);
+        assert_eq!(
+            id.value(),
+            "swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d;origin=Https://X.Y"
+        );
+    }
+
+    #[test]
+    fn component_identifiers_canonical_id_prefers_purl() {
+        let mut ids = ComponentIdentifiers::new("synthetic-1".to_string());
+        ids.purl = Some("pkg:cargo/serde@1.0.0".to_string());
+        ids.swhid.push(
+            SwhidObject::parse("swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap(),
+        );
+        assert_eq!(ids.canonical_id().source(), &IdSource::Purl);
+    }
+
+    #[test]
+    fn component_identifiers_canonical_id_uses_swhid_when_purl_absent() {
+        let mut ids = ComponentIdentifiers::new("synthetic-1".to_string());
+        ids.swhid.push(
+            SwhidObject::parse("swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap(),
+        );
+        let id = ids.canonical_id();
+        assert_eq!(id.source(), &IdSource::Swhid);
+    }
+
+    #[test]
+    fn has_cra_identifier_recognizes_swhid_only() {
+        let mut ids = ComponentIdentifiers::new("synthetic-1".to_string());
+        assert!(!ids.has_cra_identifier());
+        ids.swhid.push(
+            SwhidObject::parse("swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap(),
+        );
+        assert!(ids.has_cra_identifier());
+    }
+
+    #[test]
+    fn swhid_object_round_trip_via_display() {
+        let raw = "swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2";
+        let obj = SwhidObject::parse(raw).unwrap();
+        assert_eq!(obj.kind, SwhidKind::Cnt);
+        assert_eq!(obj.qualifiers.len(), 0);
+        assert_eq!(obj.to_string(), raw);
+    }
+
+    #[test]
+    fn swhid_object_preserves_qualifiers_in_order() {
+        let raw = "swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d;origin=https://github.com/x/y;path=/src";
+        let obj = SwhidObject::parse(raw).unwrap();
+        assert_eq!(obj.kind, SwhidKind::Rev);
+        assert_eq!(obj.qualifiers.len(), 2);
+        assert_eq!(
+            obj.qualifiers[0],
+            ("origin".to_string(), "https://github.com/x/y".to_string())
+        );
+        assert_eq!(obj.qualifiers[1], ("path".to_string(), "/src".to_string()));
+        assert_eq!(obj.to_string(), raw);
+    }
+
+    #[test]
+    fn swhid_object_lowercases_uppercase_input() {
+        let raw = "SWH:1:CNT:94A9ED024D3859793618152EA559A168BBCBB5E2";
+        let obj = SwhidObject::parse(raw).unwrap();
+        assert_eq!(
+            obj.to_string(),
+            "swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2"
+        );
+    }
+
+    #[test]
+    fn swhid_object_serde_round_trip_as_string() {
+        let obj = SwhidObject::parse("swh:1:dir:309cf2674ee7a0749978cf8265ab91a60aea0f7d").unwrap();
+        let json = serde_json::to_string(&obj).unwrap();
+        assert_eq!(
+            json,
+            "\"swh:1:dir:309cf2674ee7a0749978cf8265ab91a60aea0f7d\""
+        );
+        let back: SwhidObject = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, obj);
+    }
+
+    #[test]
+    fn swhid_object_parse_errors() {
+        assert_eq!(
+            SwhidObject::parse("not-a-swhid").unwrap_err(),
+            SwhidParseError::BadShape
+        );
+        assert_eq!(
+            SwhidObject::parse("swh:2:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap_err(),
+            SwhidParseError::BadPrefix
+        );
+        assert_eq!(
+            SwhidObject::parse("swh:1:foo:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap_err(),
+            SwhidParseError::BadKind
+        );
+        assert_eq!(
+            SwhidObject::parse("swh:1:cnt:not-hex").unwrap_err(),
+            SwhidParseError::BadHash
+        );
+        assert_eq!(
+            SwhidObject::parse("swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2;malformed",)
+                .unwrap_err(),
+            SwhidParseError::BadQualifier
+        );
+    }
+
+    #[test]
+    fn swhid_object_serializes_within_component_identifiers_as_array_of_strings() {
+        let mut ids = ComponentIdentifiers::new("synthetic-1".to_string());
+        ids.swhid.push(
+            SwhidObject::parse("swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap(),
+        );
+        ids.swhid.push(
+            SwhidObject::parse("swh:1:dir:309cf2674ee7a0749978cf8265ab91a60aea0f7d").unwrap(),
+        );
+        let json = serde_json::to_value(&ids).unwrap();
+        let arr = json
+            .get("swhid")
+            .and_then(|v| v.as_array())
+            .expect("swhid serialises as array");
+        assert_eq!(arr.len(), 2);
+        assert!(arr.iter().all(serde_json::Value::is_string));
+        // Round-trip via deserialize keeps structure intact
+        let parsed: ComponentIdentifiers = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.swhid.len(), 2);
+        assert_eq!(parsed.swhid[0].kind, SwhidKind::Cnt);
+        assert_eq!(parsed.swhid[1].kind, SwhidKind::Dir);
     }
 }

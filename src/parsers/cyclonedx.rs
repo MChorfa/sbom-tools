@@ -377,6 +377,11 @@ impl CycloneDxParser {
             comp.identifiers.cpe.push(cpe.clone());
         }
 
+        // Set SWHIDs (CycloneDX 1.6+, CRA [PRE-7-RQ-07])
+        for swhid in &cdx.swhid {
+            comp = comp.with_swhid(swhid.clone());
+        }
+
         // Set licenses
         if let Some(licenses) = &cdx.licenses {
             for lic in licenses {
@@ -1317,6 +1322,10 @@ struct CdxComponent {
     scope: Option<String>,
     purl: Option<String>,
     cpe: Option<String>,
+    /// Software Heritage persistent identifiers (1.6+).
+    /// CRA prEN 40000-1-3 `[PRE-7-RQ-07]` names SWHID alongside PURL/CPE.
+    #[serde(default)]
+    swhid: Vec<String>,
     description: Option<String>,
     author: Option<String>,
     copyright: Option<String>,

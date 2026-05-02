@@ -414,6 +414,11 @@ impl Spdx3Parser {
                     Some("swid") => {
                         comp.identifiers.swid = Some(ext_id.identifier.clone());
                     }
+                    // SPDX 3.0 names this externalIdentifierType "swhid"
+                    // (CRA prEN 40000-1-3 [PRE-7-RQ-07])
+                    Some("swhid") => {
+                        comp = comp.with_swhid(ext_id.identifier.clone());
+                    }
                     Some("packageUrl") if comp.identifiers.purl.is_none() => {
                         comp = comp.with_purl(ext_id.identifier.clone());
                     }

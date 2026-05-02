@@ -944,6 +944,14 @@ impl SpdxParser {
         // Set external references
         if let Some(ext_refs) = &pkg.external_refs {
             for ext_ref in ext_refs {
+                // Promote PERSISTENT-ID/swh refs to first-class SWHID identifiers
+                // (CRA prEN 40000-1-3 [PRE-7-RQ-07] recognises SWHIDs)
+                if ext_ref.reference_category == "PERSISTENT-ID"
+                    && ext_ref.reference_type.eq_ignore_ascii_case("swh")
+                {
+                    comp = comp.with_swhid(ext_ref.reference_locator.clone());
+                    continue;
+                }
                 let ref_type = match ext_ref.reference_category.as_str() {
                     "SECURITY" => ExternalRefType::Advisories,
                     "PACKAGE-MANAGER" => ExternalRefType::Website,

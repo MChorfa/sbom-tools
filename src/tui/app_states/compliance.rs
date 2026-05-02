@@ -21,6 +21,8 @@ pub enum PolicyPreset {
     Cnsa2,
     /// NIST PQC Readiness — IR 8547 + FIPS 203/204/205
     NistPqc,
+    /// BSI TR-03183-2 — German national CRA-aligned SBOM guideline
+    BsiTr03183_2,
 }
 
 impl PolicyPreset {
@@ -35,7 +37,8 @@ impl PolicyPreset {
             Self::NistSsdf => Self::Eo14028,
             Self::Eo14028 => Self::Cnsa2,
             Self::Cnsa2 => Self::NistPqc,
-            Self::NistPqc => Self::Enterprise,
+            Self::NistPqc => Self::BsiTr03183_2,
+            Self::BsiTr03183_2 => Self::Enterprise,
         }
     }
 
@@ -51,6 +54,7 @@ impl PolicyPreset {
             Self::Eo14028 => "EO 14028",
             Self::Cnsa2 => "CNSA 2.0",
             Self::NistPqc => "NIST PQC",
+            Self::BsiTr03183_2 => "BSI TR-03183-2",
         }
     }
 
@@ -65,6 +69,7 @@ impl PolicyPreset {
                 | Self::Eo14028
                 | Self::Cnsa2
                 | Self::NistPqc
+                | Self::BsiTr03183_2
         )
     }
 
@@ -78,6 +83,7 @@ impl PolicyPreset {
             Self::Eo14028 => Some(crate::quality::ComplianceLevel::Eo14028),
             Self::Cnsa2 => Some(crate::quality::ComplianceLevel::Cnsa2),
             Self::NistPqc => Some(crate::quality::ComplianceLevel::NistPqc),
+            Self::BsiTr03183_2 => Some(crate::quality::ComplianceLevel::BsiTr03183_2),
             _ => None,
         }
     }

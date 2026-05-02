@@ -30,6 +30,9 @@ pub enum ScoringProfile {
     LicenseCompliance,
     /// EU Cyber Resilience Act - emphasizes supply chain transparency and security disclosure
     Cra,
+    /// BSI TR-03183-2 (German national CRA-aligned SBOM technical guideline).
+    /// Stricter than CRA on hashes and identifiers; uses CRA-style weights.
+    BsiTr03183_2,
     /// Comprehensive - all aspects equally weighted
     Comprehensive,
     /// CBOM - cryptographic BOM focus (algorithm strength, PQC readiness, key/cert lifecycle)
@@ -45,6 +48,7 @@ impl ScoringProfile {
             Self::Standard | Self::LicenseCompliance => ComplianceLevel::Standard,
             Self::Security => ComplianceLevel::NtiaMinimum,
             Self::Cra => ComplianceLevel::CraPhase2,
+            Self::BsiTr03183_2 => ComplianceLevel::BsiTr03183_2,
             Self::Comprehensive => ComplianceLevel::Comprehensive,
             Self::Cbom => ComplianceLevel::Comprehensive,
         }
@@ -104,6 +108,18 @@ impl ScoringProfile {
                 dependencies: 0.12,
                 integrity: 0.12,
                 provenance: 0.15,
+                lifecycle: 0.08,
+            },
+            // BSI TR-03183-2 emphasises identifiers and integrity (mandatory hashes)
+            // even more than CRA, while still tracking provenance/dependencies.
+            Self::BsiTr03183_2 => ScoringWeights {
+                completeness: 0.10,
+                identifiers: 0.22,
+                licenses: 0.08,
+                vulnerabilities: 0.10,
+                dependencies: 0.12,
+                integrity: 0.18,
+                provenance: 0.12,
                 lifecycle: 0.08,
             },
             Self::Comprehensive => ScoringWeights {
@@ -365,6 +381,10 @@ pub struct QualityScorer {
     profile: ScoringProfile,
     /// Completeness weights
     completeness_weights: CompletenessWeights,
+    /// Optional CRA sidecar metadata; when set, the embedded compliance check
+    /// (used to drive recommendations under `ScoringProfile::Cra`) consults
+    /// the sidecar for fields the SBOM doesn't carry.
+    cra_sidecar: Option<crate::model::CraSidecarMetadata>,
 }
 
 impl QualityScorer {
@@ -374,6 +394,7 @@ impl QualityScorer {
         Self {
             profile,
             completeness_weights: CompletenessWeights::default(),
+            cra_sidecar: None,
         }
     }
 
@@ -381,6 +402,13 @@ impl QualityScorer {
     #[must_use]
     pub const fn with_completeness_weights(mut self, weights: CompletenessWeights) -> Self {
         self.completeness_weights = weights;
+        self
+    }
+
+    /// Attach CRA sidecar metadata for the embedded compliance check.
+    #[must_use]
+    pub fn with_cra_sidecar(mut self, sidecar: crate::model::CraSidecarMetadata) -> Self {
+        self.cra_sidecar = Some(sidecar);
         self
     }
 
@@ -477,8 +505,11 @@ impl QualityScorer {
             total_components,
         );
 
-        // Run compliance check
-        let compliance_checker = ComplianceChecker::new(self.profile.compliance_level());
+        // Run compliance check (with sidecar if configured)
+        let compliance_checker = match self.cra_sidecar.clone() {
+            Some(sc) => ComplianceChecker::new(self.profile.compliance_level()).with_sidecar(sc),
+            None => ComplianceChecker::new(self.profile.compliance_level()),
+        };
         let compliance = compliance_checker.check(sbom);
 
         // Generate recommendations
