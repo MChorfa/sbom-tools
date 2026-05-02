@@ -1,0 +1,87 @@
+{
+  "document": {
+    "category": "csaf_security_advisory",
+    "csaf_version": "2.0",
+    "publisher": {
+      "category": "vendor",
+      "name": "Example Corp",
+      "namespace": "https://example.com"
+    },
+    "title": "Example security advisory for example-app",
+    "tracking": {
+      "id": "EX-2024-0001",
+      "initial_release_date": "2024-06-01T00:00:00Z",
+      "current_release_date": "2024-06-15T00:00:00Z",
+      "version": "1",
+      "status": "final",
+      "revision_history": [
+        {
+          "date": "2024-06-01T00:00:00Z",
+          "number": "1",
+          "summary": "Initial publication"
+        }
+      ],
+      "generator": {
+        "engine": {
+          "name": "csaf-test-fixture",
+          "version": "0.1"
+        }
+      }
+    }
+  },
+  "product_tree": {
+    "full_product_names": [
+      {
+        "product_id": "EXAMPLE-APP-1.0",
+        "name": "example-app 1.0",
+        "product_identification_helper": {
+          "purl": "pkg:cargo/example-app@1.0.0",
+          "cpe": "cpe:2.3:a:example:example-app:1.0.0:*:*:*:*:*:*:*"
+        }
+      },
+      {
+        "product_id": "EXAMPLE-APP-1.1",
+        "name": "example-app 1.1",
+        "product_identification_helper": {
+          "purl": "pkg:cargo/example-app@1.1.0"
+        }
+      },
+      {
+        "product_id": "EXAMPLE-APP-2.0",
+        "name": "example-app 2.0",
+        "product_identification_helper": {
+          "purl": "pkg:cargo/example-app@2.0.0"
+        }
+      }
+    ]
+  },
+  "vulnerabilities": [
+    {
+      "cve": "CVE-2024-99001",
+      "title": "Buffer overflow in example-app < 1.1",
+      "scores": [
+        {
+          "cvss_v3": {
+            "version": "3.1",
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "baseScore": 9.8,
+            "baseSeverity": "CRITICAL"
+          },
+          "products": ["EXAMPLE-APP-1.0"]
+        }
+      ],
+      "product_status": {
+        "known_affected": ["EXAMPLE-APP-1.0"],
+        "fixed": ["EXAMPLE-APP-1.1", "EXAMPLE-APP-2.0"]
+      }
+    },
+    {
+      "cve": "CVE-2024-99002",
+      "title": "Missing input validation",
+      "product_status": {
+        "known_not_affected": ["EXAMPLE-APP-2.0"],
+        "under_investigation": ["EXAMPLE-APP-1.1"]
+      }
+    }
+  ]
+}

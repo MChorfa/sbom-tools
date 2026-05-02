@@ -1,0 +1,44 @@
+{
+  "document": {
+    "category": "csaf_security_advisory",
+    "csaf_version": "2.0",
+    "publisher": {"category": "vendor", "name": "Branchy"},
+    "title": "Branched product tree fixture",
+    "tracking": {"id": "BR-2024-0001"}
+  },
+  "product_tree": {
+    "branches": [
+      {
+        "category": "vendor",
+        "name": "BranchyCorp",
+        "branches": [
+          {
+            "category": "product_name",
+            "name": "Branchy",
+            "branches": [
+              {
+                "category": "product_version",
+                "name": "1.0",
+                "product": {
+                  "product_id": "BRANCHY-1.0",
+                  "name": "Branchy 1.0",
+                  "product_identification_helper": {
+                    "purl": "pkg:cargo/branchy@1.0.0"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "vulnerabilities": [
+    {
+      "cve": "CVE-2024-88001",
+      "product_status": {
+        "known_affected": ["BRANCHY-1.0"]
+      }
+    }
+  ]
+}
