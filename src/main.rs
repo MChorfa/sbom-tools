@@ -342,6 +342,12 @@ struct ViewArgs {
     #[arg(long, value_name = "PATH")]
     cra_sidecar: Option<PathBuf>,
 
+    /// CRA Annex III/IV product class (drives severity calibration).
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins over this flag.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
+
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
 }
@@ -383,6 +389,12 @@ struct ValidateArgs {
     /// If omitted, sbom-tools auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
     #[arg(long, value_name = "PATH")]
     cra_sidecar: Option<PathBuf>,
+
+    /// CRA Annex III/IV product class (drives severity calibration).
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins over this flag.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
 }
 
 /// Arguments for the `diff-multi` subcommand
@@ -625,6 +637,12 @@ struct QualityArgs {
     /// `--profile cra`. Auto-discovered next to the SBOM if omitted.
     #[arg(long, value_name = "PATH")]
     cra_sidecar: Option<PathBuf>,
+
+    /// CRA Annex III/IV product class (drives severity calibration).
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins over this flag.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
 }
 
 /// Arguments for the `query` subcommand
@@ -1179,6 +1197,7 @@ fn main() -> Result<()> {
                     .and_then(sbom_tools::BomProfile::from_str_opt),
                 enrichment,
                 cra_sidecar_path: args.cra_sidecar.clone(),
+                cra_product_class: args.cra_product_class.clone(),
             };
             let exit_code = cli::run_view(config)?;
             if exit_code != 0 {
@@ -1195,6 +1214,7 @@ fn main() -> Result<()> {
             args.fail_on_warning,
             args.summary,
             args.cra_sidecar,
+            args.cra_product_class,
         ),
 
         Commands::DiffMulti(args) => {
@@ -1376,6 +1396,7 @@ fn main() -> Result<()> {
                 args.min_score,
                 cli.no_color,
                 args.cra_sidecar,
+                args.cra_product_class,
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);

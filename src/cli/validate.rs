@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Run the validate command
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub fn run_validate(
     sbom_path: PathBuf,
     standard: String,
@@ -23,6 +23,7 @@ pub fn run_validate(
     fail_on_warning: bool,
     summary: bool,
     cra_sidecar_path: Option<PathBuf>,
+    cra_product_class: Option<String>,
 ) -> Result<()> {
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
 
@@ -36,6 +37,24 @@ pub fn run_validate(
         None => crate::model::CraSidecarMetadata::find_for_sbom(&sbom_path),
     };
 
+    // Resolve effective product class: sidecar wins; otherwise CLI flag.
+    // Mismatch between explicit CLI flag and sidecar is reported as a Warning
+    // on stderr (not turned into a Violation — sidecar is authoritative).
+    let cli_class = cra_product_class
+        .as_deref()
+        .and_then(crate::model::CraProductClass::parse_cli);
+    let sidecar_class = cra_sidecar.as_ref().and_then(|s| s.product_class);
+    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
+        && cli != side
+    {
+        tracing::warn!(
+            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
+            cli.label(),
+            side.label()
+        );
+    }
+    let effective_class = sidecar_class.or(cli_class);
+
     let standards: Vec<&str> = standard.split(',').map(str::trim).collect();
     let mut results = Vec::new();
 
@@ -47,6 +66,9 @@ pub fn run_validate(
                 let mut checker = ComplianceChecker::new(ComplianceLevel::CraPhase2);
                 if let Some(sc) = cra_sidecar.clone() {
                     checker = checker.with_sidecar(sc);
+                }
+                if let Some(c) = effective_class {
+                    checker = checker.with_product_class(c);
                 }
                 checker.check(parsed.sbom())
             }

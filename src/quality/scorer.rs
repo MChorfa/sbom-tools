@@ -385,6 +385,9 @@ pub struct QualityScorer {
     /// (used to drive recommendations under `ScoringProfile::Cra`) consults
     /// the sidecar for fields the SBOM doesn't carry.
     cra_sidecar: Option<crate::model::CraSidecarMetadata>,
+    /// Optional CRA Annex III/IV product class. Sidecar `productClass` (when
+    /// present on `cra_sidecar`) wins over this value at check time.
+    cra_product_class: Option<crate::model::CraProductClass>,
 }
 
 impl QualityScorer {
@@ -395,6 +398,7 @@ impl QualityScorer {
             profile,
             completeness_weights: CompletenessWeights::default(),
             cra_sidecar: None,
+            cra_product_class: None,
         }
     }
 
@@ -409,6 +413,18 @@ impl QualityScorer {
     #[must_use]
     pub fn with_cra_sidecar(mut self, sidecar: crate::model::CraSidecarMetadata) -> Self {
         self.cra_sidecar = Some(sidecar);
+        self
+    }
+
+    /// Set the CRA Annex III/IV product class explicitly (for severity
+    /// calibration when the embedded compliance check runs under
+    /// `ScoringProfile::Cra`). Sidecar `productClass` overrides this.
+    #[must_use]
+    pub const fn with_cra_product_class(
+        mut self,
+        class: crate::model::CraProductClass,
+    ) -> Self {
+        self.cra_product_class = Some(class);
         self
     }
 
@@ -505,11 +521,14 @@ impl QualityScorer {
             total_components,
         );
 
-        // Run compliance check (with sidecar if configured)
-        let compliance_checker = match self.cra_sidecar.clone() {
-            Some(sc) => ComplianceChecker::new(self.profile.compliance_level()).with_sidecar(sc),
-            None => ComplianceChecker::new(self.profile.compliance_level()),
-        };
+        // Run compliance check (with sidecar + product class if configured)
+        let mut compliance_checker = ComplianceChecker::new(self.profile.compliance_level());
+        if let Some(sc) = self.cra_sidecar.clone() {
+            compliance_checker = compliance_checker.with_sidecar(sc);
+        }
+        if let Some(c) = self.cra_product_class {
+            compliance_checker = compliance_checker.with_product_class(c);
+        }
         let compliance = compliance_checker.check(sbom);
 
         // Generate recommendations

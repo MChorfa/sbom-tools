@@ -221,10 +221,29 @@ fn output_view_report(
         Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
         None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
     };
+    let cli_class = config
+        .cra_product_class
+        .as_deref()
+        .and_then(crate::model::CraProductClass::parse_cli);
+    let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
+    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
+        && cli != side
+    {
+        tracing::warn!(
+            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
+            cli.label(),
+            side.label()
+        );
+    }
+    let effective_class = sidecar_class.or(cli_class);
+
     let mut checker =
         crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2);
     if let Some(sc) = sidecar {
         checker = checker.with_sidecar(sc);
+    }
+    if let Some(c) = effective_class {
+        checker = checker.with_product_class(c);
     }
     let cra_result = checker.check(sbom);
 
@@ -302,6 +321,7 @@ mod tests {
             bom_profile: None,
             enrichment: crate::config::EnrichmentConfig::default(),
             cra_sidecar_path: None,
+            cra_product_class: None,
         };
 
         let removed = apply_view_filters(&mut sbom, &config);

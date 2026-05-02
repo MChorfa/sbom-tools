@@ -25,6 +25,8 @@ pub struct QualityConfig {
     /// when None). Supplements the embedded compliance check used by the
     /// `cra` scoring profile.
     pub cra_sidecar_path: Option<PathBuf>,
+    /// CRA Annex III/IV product class (CLI string form). Sidecar value wins.
+    pub cra_product_class: Option<String>,
 }
 
 /// Run the quality command, returning the desired exit code.
@@ -42,6 +44,7 @@ pub fn run_quality(
     min_score: Option<f32>,
     no_color: bool,
     cra_sidecar_path: Option<PathBuf>,
+    cra_product_class: Option<String>,
 ) -> Result<i32> {
     let config = QualityConfig {
         sbom_path,
@@ -53,6 +56,7 @@ pub fn run_quality(
         min_score,
         no_color,
         cra_sidecar_path,
+        cra_product_class,
     };
 
     run_quality_impl(config)
@@ -71,10 +75,29 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
         Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
         None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
     };
-    let scorer = match sidecar {
-        Some(sc) => QualityScorer::new(profile).with_cra_sidecar(sc),
-        None => QualityScorer::new(profile),
-    };
+    let cli_class = config
+        .cra_product_class
+        .as_deref()
+        .and_then(crate::model::CraProductClass::parse_cli);
+    let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
+    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
+        && cli != side
+    {
+        tracing::warn!(
+            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
+            cli.label(),
+            side.label()
+        );
+    }
+    let effective_class = sidecar_class.or(cli_class);
+
+    let mut scorer = QualityScorer::new(profile);
+    if let Some(sc) = sidecar {
+        scorer = scorer.with_cra_sidecar(sc);
+    }
+    if let Some(c) = effective_class {
+        scorer = scorer.with_cra_product_class(c);
+    }
     let report = scorer.score(parsed.sbom());
 
     // Build output based on format

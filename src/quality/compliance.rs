@@ -669,6 +669,33 @@ impl ComplianceResult {
     }
 }
 
+/// Calibration check identifiers for `ComplianceChecker::class_severity()`.
+///
+/// Each variant corresponds to a row in the CRA-P3.2 calibration table —
+/// the severity that a given finding should produce *given* the product
+/// class (Default → Critical) and conformity-assessment route. `None`
+/// from `class_severity()` means "this check is not applicable for the
+/// given class" (typically Default doesn't carry EUCC/attestation
+/// expectations).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClassCheck {
+    /// Vendor-supplied hash coverage below threshold ([PRE-7-RQ-07-RE]).
+    VendorHashCoverage,
+    /// EOL component present in SBOM.
+    EolComponents,
+    /// Dependency cycles detected.
+    Cycles,
+    /// Annex VII Declaration-of-Conformity reference missing.
+    DocReference,
+    /// EUCC (Common Criteria) reference missing.
+    EuccReference,
+    /// PSIRT URL / 24h / 72h / ENISA channel missing (Art. 14).
+    Psirt,
+    /// Conformity-assessment-module attestation reference missing
+    /// (only meaningful on Module B+C / H / EUCC routes).
+    ModuleAttestation,
+}
+
 /// Compliance checker for SBOMs
 #[derive(Debug, Clone)]
 pub struct ComplianceChecker {
@@ -679,6 +706,10 @@ pub struct ComplianceChecker {
     /// carry. When set, document-metadata checks consult the sidecar before
     /// emitting "missing" violations.
     sidecar: Option<crate::model::CraSidecarMetadata>,
+    /// Optional CRA Annex III/IV product class. Drives severity calibration
+    /// for `class_severity()` (vendor-hash, EOL, cycles, DoC, EUCC, PSIRT,
+    /// attestation). When `None`, behaves as `CraProductClass::Default`.
+    product_class: Option<crate::model::CraProductClass>,
 }
 
 impl ComplianceChecker {
@@ -688,6 +719,7 @@ impl ComplianceChecker {
         Self {
             level,
             sidecar: None,
+            product_class: None,
         }
     }
 
@@ -701,6 +733,120 @@ impl ComplianceChecker {
     pub fn with_sidecar(mut self, sidecar: crate::model::CraSidecarMetadata) -> Self {
         self.sidecar = Some(sidecar);
         self
+    }
+
+    /// Set the CRA Annex III/IV product class explicitly.
+    ///
+    /// Sidecar `productClass` (when set on the attached sidecar) wins over
+    /// this; resolve via [`Self::effective_product_class`].
+    #[must_use]
+    pub const fn with_product_class(mut self, class: crate::model::CraProductClass) -> Self {
+        self.product_class = Some(class);
+        self
+    }
+
+    /// Resolve the effective product class:
+    /// 1. sidecar `productClass` if present,
+    /// 2. otherwise `with_product_class` value,
+    /// 3. otherwise `CraProductClass::Default`.
+    #[must_use]
+    pub fn effective_product_class(&self) -> crate::model::CraProductClass {
+        self.sidecar
+            .as_ref()
+            .and_then(|s| s.product_class)
+            .or(self.product_class)
+            .unwrap_or(crate::model::CraProductClass::Default)
+    }
+
+    /// Resolve the effective conformity-assessment route. Falls back to
+    /// `CraProductClass::default_route()` when the sidecar doesn't pin one.
+    #[must_use]
+    pub fn effective_route(&self) -> crate::model::ConformityRoute {
+        self.sidecar
+            .as_ref()
+            .and_then(|s| s.conformity_assessment_route)
+            .unwrap_or_else(|| self.effective_product_class().default_route())
+    }
+
+    /// CRA-P3.2 calibration table — severity for a given check at the
+    /// effective product class. Returns `None` when the check does not
+    /// apply for that class (e.g., EUCC reference at `Default`).
+    #[must_use]
+    pub fn class_severity(&self, check: ClassCheck) -> Option<ViolationSeverity> {
+        use crate::model::CraProductClass as C;
+        let class = self.effective_product_class();
+        match (check, class) {
+            // Vendor-hash coverage threshold escalation handled by
+            // `vendor_hash_thresholds()`; this row reflects the *severity*
+            // emitted when the threshold is breached.
+            (ClassCheck::VendorHashCoverage, C::Default | C::ImportantClass1) => {
+                Some(ViolationSeverity::Warning)
+            }
+            (ClassCheck::VendorHashCoverage, C::ImportantClass2 | C::Critical) => {
+                Some(ViolationSeverity::Error)
+            }
+
+            (ClassCheck::EolComponents, C::Default | C::ImportantClass1) => {
+                Some(ViolationSeverity::Warning)
+            }
+            (ClassCheck::EolComponents, C::ImportantClass2 | C::Critical) => {
+                Some(ViolationSeverity::Error)
+            }
+
+            (ClassCheck::Cycles, C::Default | C::ImportantClass1) => {
+                Some(ViolationSeverity::Warning)
+            }
+            (ClassCheck::Cycles, C::ImportantClass2 | C::Critical) => {
+                Some(ViolationSeverity::Error)
+            }
+
+            (ClassCheck::DocReference, C::Default) => Some(ViolationSeverity::Info),
+            (ClassCheck::DocReference, C::ImportantClass1) => Some(ViolationSeverity::Warning),
+            (ClassCheck::DocReference, C::ImportantClass2 | C::Critical) => {
+                Some(ViolationSeverity::Error)
+            }
+
+            (ClassCheck::EuccReference, C::Default | C::ImportantClass1) => None,
+            (ClassCheck::EuccReference, C::ImportantClass2) => Some(ViolationSeverity::Info),
+            (ClassCheck::EuccReference, C::Critical) => Some(ViolationSeverity::Error),
+
+            (ClassCheck::Psirt, C::Default | C::ImportantClass1) => Some(ViolationSeverity::Warning),
+            (ClassCheck::Psirt, C::ImportantClass2 | C::Critical) => Some(ViolationSeverity::Error),
+
+            (ClassCheck::ModuleAttestation, C::Default) => None,
+            (ClassCheck::ModuleAttestation, C::ImportantClass1) => Some(ViolationSeverity::Warning),
+            (ClassCheck::ModuleAttestation, C::ImportantClass2 | C::Critical) => {
+                Some(ViolationSeverity::Error)
+            }
+        }
+    }
+
+    /// Vendor-hash coverage threshold (single-stage) below which a violation
+    /// fires. The severity is `class_severity(VendorHashCoverage)`. Values:
+    /// Default 50%, Important-1 80%, Important-2 80%, Critical 100%.
+    #[must_use]
+    pub fn vendor_hash_threshold(&self) -> f64 {
+        use crate::model::CraProductClass as C;
+        match self.effective_product_class() {
+            C::Default => 0.50,
+            C::ImportantClass1 | C::ImportantClass2 => 0.80,
+            C::Critical => 1.00,
+        }
+    }
+
+    /// Whether a CRA product class has been explicitly configured (either
+    /// via `with_product_class()` or the attached sidecar). Used by the
+    /// per-check calibration to decide whether to override phase-based
+    /// defaults — when no class is set, existing phase-driven behavior is
+    /// preserved verbatim for backwards compatibility.
+    #[must_use]
+    pub fn has_explicit_product_class(&self) -> bool {
+        self.product_class.is_some()
+            || self
+                .sidecar
+                .as_ref()
+                .and_then(|s| s.product_class)
+                .is_some()
     }
 
     /// Check an SBOM for compliance
@@ -1054,10 +1200,16 @@ impl ComplianceChecker {
                 .as_ref()
                 .is_some_and(|s| s.ce_marking_reference.is_some());
             if !has_conformity_ref && !sidecar_has_doc_ref {
+                let severity = self
+                    .class_severity(ClassCheck::DocReference)
+                    .unwrap_or(ViolationSeverity::Info);
                 violations.push(Violation {
-                    severity: ViolationSeverity::Info,
+                    severity,
                     category: ViolationCategory::DocumentMetadata,
-                    message: "[CRA Annex VII] Consider including a reference to the EU Declaration of Conformity (attestation or certification external reference)".to_string(),
+                    message: format!(
+                        "[CRA Annex VII] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class {}",
+                        self.effective_product_class().label()
+                    ),
                     element: None,
                     requirement: "CRA Annex VII: EU Declaration of Conformity reference".to_string(),
                     standard_refs: Vec::new(),
@@ -1642,17 +1794,42 @@ impl ComplianceChecker {
             if let Some(coverage) = metrics.vendor_hash_coverage() {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let pct = (coverage * 100.0).round() as usize;
-                let (severity, threshold_msg) = match self.level {
-                    ComplianceLevel::CraPhase2 if coverage < 0.50 => {
-                        (ViolationSeverity::Error, "below 50% threshold")
+
+                // Class-driven calibration overrides phase-based defaults
+                // when the operator pinned a CRA product class. Otherwise,
+                // fall through to the original Phase1/Phase2 thresholds for
+                // backwards compatibility.
+                let (severity, threshold_msg) = if self.has_explicit_product_class() {
+                    let threshold = self.vendor_hash_threshold();
+                    if coverage < threshold {
+                        let sev = self
+                            .class_severity(ClassCheck::VendorHashCoverage)
+                            .unwrap_or(ViolationSeverity::Warning);
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let thr_pct = (threshold * 100.0).round() as usize;
+                        (
+                            sev,
+                            format!(
+                                "below {thr_pct}% threshold for product class {}",
+                                self.effective_product_class().label()
+                            ),
+                        )
+                    } else {
+                        (ViolationSeverity::Info, String::new())
                     }
-                    ComplianceLevel::CraPhase2 if coverage < 0.80 => {
-                        (ViolationSeverity::Warning, "below 80% threshold")
+                } else {
+                    match self.level {
+                        ComplianceLevel::CraPhase2 if coverage < 0.50 => {
+                            (ViolationSeverity::Error, "below 50% threshold".to_string())
+                        }
+                        ComplianceLevel::CraPhase2 if coverage < 0.80 => {
+                            (ViolationSeverity::Warning, "below 80% threshold".to_string())
+                        }
+                        ComplianceLevel::CraPhase1 if coverage < 0.50 => {
+                            (ViolationSeverity::Warning, "below 50% threshold".to_string())
+                        }
+                        _ => (ViolationSeverity::Info, String::new()),
                     }
-                    ComplianceLevel::CraPhase1 if coverage < 0.50 => {
-                        (ViolationSeverity::Warning, "below 50% threshold")
-                    }
-                    _ => (ViolationSeverity::Info, ""),
                 };
                 if !threshold_msg.is_empty() {
                     violations.push(Violation {
@@ -1747,8 +1924,14 @@ impl ComplianceChecker {
             })
             .count();
         if eol_count > 0 {
+            let severity = if self.has_explicit_product_class() {
+                self.class_severity(ClassCheck::EolComponents)
+                    .unwrap_or(ViolationSeverity::Warning)
+            } else {
+                ViolationSeverity::Warning
+            };
             violations.push(Violation {
-                severity: ViolationSeverity::Warning,
+                severity,
                 category: ViolationCategory::SecurityInfo,
                 message: format!(
                     "[CRA Art. 13(8)] {eol_count} component(s) have reached end-of-life and no longer receive security updates"
@@ -1838,6 +2021,96 @@ impl ComplianceChecker {
                 });
             }
         }
+
+        // CRA-P3.2: Class-conditional EUCC and Module-attestation references
+        // (only fire when the operator pinned a product class — preserves
+        // pre-P3.2 behavior for callers that didn't opt in).
+        if self.has_explicit_product_class() {
+            self.check_class_eucc_reference(sbom, violations);
+            self.check_class_module_attestation(sbom, violations);
+        }
+    }
+
+    /// EUCC (Common Criteria) certificate / Target-of-Evaluation reference.
+    ///
+    /// `ImportantClass2` → Info if missing (recommended); `Critical` → Error
+    /// if missing (Annex IV mandates EUCC). Lower classes: skipped.
+    fn check_class_eucc_reference(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+        let Some(severity) = self.class_severity(ClassCheck::EuccReference) else {
+            return;
+        };
+        let has_eucc_ref = sbom.components.values().any(|comp| {
+            comp.external_refs.iter().any(|r| {
+                let url_lower = r.url.to_lowercase();
+                matches!(
+                    r.ref_type,
+                    crate::model::ExternalRefType::Certification
+                        | crate::model::ExternalRefType::Attestation
+                ) && (url_lower.contains("eucc")
+                    || url_lower.contains("common-criteria")
+                    || url_lower.contains("commoncriteria"))
+            })
+        });
+        if !has_eucc_ref {
+            violations.push(Violation {
+                severity,
+                category: ViolationCategory::DocumentMetadata,
+                message: format!(
+                    "[CRA Annex IV / EUCC] Product class {} requires (or strongly recommends) a reference to a Common Criteria / EUCC certificate or Target of Evaluation",
+                    self.effective_product_class().label()
+                ),
+                element: None,
+                requirement: "CRA Annex IV: EUCC reference (Common Criteria certificate)"
+                    .to_string(),
+                standard_refs: Vec::new(),
+            });
+        }
+    }
+
+    /// Conformity-assessment-module attestation reference.
+    ///
+    /// Module B+C / H / EUCC routes require an attestation external reference
+    /// (notified-body certificate, QA-system certification, EUCC certificate).
+    /// Module A (self-assessment) is skipped. Severity scales with class.
+    fn check_class_module_attestation(
+        &self,
+        sbom: &NormalizedSbom,
+        violations: &mut Vec<Violation>,
+    ) {
+        use crate::model::ConformityRoute as R;
+        let Some(severity) = self.class_severity(ClassCheck::ModuleAttestation) else {
+            return;
+        };
+        let route = self.effective_route();
+        if matches!(route, R::ModuleA) {
+            return; // Module A self-assessment doesn't require external attestation
+        }
+        let has_attestation = sbom.components.values().any(|comp| {
+            comp.external_refs.iter().any(|r| {
+                matches!(
+                    r.ref_type,
+                    crate::model::ExternalRefType::Attestation
+                        | crate::model::ExternalRefType::Certification
+                )
+            })
+        });
+        if !has_attestation {
+            violations.push(Violation {
+                severity,
+                category: ViolationCategory::DocumentMetadata,
+                message: format!(
+                    "[CRA Annex VIII / {}] No attestation or certification external reference found — required for the {} conformity route",
+                    route.label(),
+                    route.label()
+                ),
+                element: None,
+                requirement: format!(
+                    "CRA Annex VIII: {} attestation reference",
+                    route.label()
+                ),
+                standard_refs: Vec::new(),
+            });
+        }
     }
 
     /// CRA Article 14 reporting-readiness check.
@@ -1866,8 +2139,16 @@ impl ComplianceChecker {
                 .expect("hard-coded deadline literal is RFC-3339")
                 .into();
         let art_14_active = now >= deadline;
+        // Severity escalation by product class: when class is explicitly set
+        // and ≥ ImportantClass2, post-deadline missing channels become Errors
+        // rather than Warnings ([CRA-P3.2 calibration]).
         let post_deadline_severity = if art_14_active {
-            ViolationSeverity::Warning
+            if self.has_explicit_product_class() {
+                self.class_severity(ClassCheck::Psirt)
+                    .unwrap_or(ViolationSeverity::Warning)
+            } else {
+                ViolationSeverity::Warning
+            }
         } else {
             ViolationSeverity::Info
         };

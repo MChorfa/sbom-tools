@@ -94,6 +94,144 @@ pub struct CraSidecarMetadata {
     /// "ISO/IEC 27005:2022", "NIST SP 800-30 r1", "ETSI TS 102 165-1 TVRA").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk_assessment_methodology: Option<String>,
+
+    // -------- CRA Annex III/IV product class & conformity-assessment route --------
+    /// CRA product class drives the conformity-assessment route and the
+    /// severity calibration of compliance checks (vendor-hash coverage,
+    /// PSIRT, EUCC reference, attestation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_class: Option<CraProductClass>,
+
+    /// Conformity-assessment route per CRA Annex VIII (Module A self-assessment,
+    /// B+C EU-type examination, H full QA, or EUCC). Sidecar value wins over
+    /// any CLI-provided default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conformity_assessment_route: Option<ConformityRoute>,
+}
+
+/// CRA product class per Regulation (EU) 2024/2847 Annex III/IV.
+///
+/// The class drives the conformity-assessment route and the severity
+/// calibration of compliance checks (per CRA-P3.2 calibration table):
+/// stricter classes upgrade Warning→Error and add EUCC / attestation
+/// expectations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum CraProductClass {
+    /// Default — neither Annex III nor Annex IV. Module A self-assessment.
+    #[serde(rename = "default")]
+    Default,
+    /// Annex III items 1–11 (Important Class I). Module A or B+C.
+    #[serde(rename = "important-class-1", alias = "important1", alias = "ImportantClass1")]
+    ImportantClass1,
+    /// Annex III items 12–17 (Important Class II). Module B+C, H, or EUCC.
+    #[serde(rename = "important-class-2", alias = "important2", alias = "ImportantClass2")]
+    ImportantClass2,
+    /// Annex IV (Critical). EUCC mandatory.
+    #[serde(rename = "critical")]
+    Critical,
+}
+
+impl CraProductClass {
+    /// Short label for compact display.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::ImportantClass1 => "Important-1",
+            Self::ImportantClass2 => "Important-2",
+            Self::Critical => "Critical",
+        }
+    }
+
+    /// Long human-readable name including Annex reference.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Default => "Default (no Annex)",
+            Self::ImportantClass1 => "Important Class I (Annex III items 1–11)",
+            Self::ImportantClass2 => "Important Class II (Annex III items 12–17)",
+            Self::Critical => "Critical (Annex IV)",
+        }
+    }
+
+    /// Parse from the CLI-friendly kebab-case form. Accepts a few aliases.
+    #[must_use]
+    pub fn parse_cli(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "default" | "none" => Some(Self::Default),
+            "important-class-1" | "important-1" | "important1" | "annex-iii-1" => {
+                Some(Self::ImportantClass1)
+            }
+            "important-class-2" | "important-2" | "important2" | "annex-iii-2" => {
+                Some(Self::ImportantClass2)
+            }
+            "critical" | "annex-iv" => Some(Self::Critical),
+            _ => None,
+        }
+    }
+
+    /// The conformity-assessment route the regulation expects (or strictly
+    /// requires) for this class. Manufacturers may choose a stricter route.
+    #[must_use]
+    pub const fn default_route(self) -> ConformityRoute {
+        match self {
+            Self::Default | Self::ImportantClass1 => ConformityRoute::ModuleA,
+            Self::ImportantClass2 => ConformityRoute::ModuleBC,
+            Self::Critical => ConformityRoute::Eucc,
+        }
+    }
+}
+
+/// Conformity-assessment module per CRA Annex VIII.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum ConformityRoute {
+    /// Module A — internal control / self-assessment.
+    ModuleA,
+    /// Module B+C — EU-type examination plus production conformity.
+    ModuleBC,
+    /// Module H — full quality assurance.
+    ModuleH,
+    /// EUCC — Common Criteria via European Cybersecurity Certification scheme.
+    Eucc,
+}
+
+impl ConformityRoute {
+    /// Short label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ModuleA => "Module A",
+            Self::ModuleBC => "Module B+C",
+            Self::ModuleH => "Module H",
+            Self::Eucc => "EUCC",
+        }
+    }
+
+    /// Long descriptive name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ModuleA => "Module A — internal control (self-assessment)",
+            Self::ModuleBC => "Module B+C — EU-type examination + production conformity",
+            Self::ModuleH => "Module H — full quality assurance",
+            Self::Eucc => "EUCC — Common Criteria via EU certification scheme",
+        }
+    }
+
+    /// Parse from the CLI-friendly kebab-case form.
+    #[must_use]
+    pub fn parse_cli(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "module-a" | "a" | "self-assessment" => Some(Self::ModuleA),
+            "module-bc" | "module-b+c" | "module-b-c" | "bc" | "b+c" => Some(Self::ModuleBC),
+            "module-h" | "h" => Some(Self::ModuleH),
+            "eucc" | "common-criteria" => Some(Self::Eucc),
+            _ => None,
+        }
+    }
 }
 
 impl CraSidecarMetadata {
@@ -169,6 +307,8 @@ impl CraSidecarMetadata {
             || self.coordinated_disclosure_policy_url.is_some()
             || self.risk_assessment_url.is_some()
             || self.risk_assessment_methodology.is_some()
+            || self.product_class.is_some()
+            || self.conformity_assessment_route.is_some()
     }
 
     /// Generate an example sidecar file content
@@ -195,6 +335,8 @@ impl CraSidecarMetadata {
                 "https://example.com/docs/risk-assessment-2026.pdf".to_string(),
             ),
             risk_assessment_methodology: Some("ISO/IEC 27005:2022".to_string()),
+            product_class: Some(CraProductClass::ImportantClass1),
+            conformity_assessment_route: Some(ConformityRoute::ModuleA),
         };
         serde_json::to_string_pretty(&example).unwrap_or_default()
     }
@@ -258,5 +400,75 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         let parsed: CraSidecarMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(original.security_contact, parsed.security_contact);
+    }
+
+    #[test]
+    fn product_class_parse_cli_accepts_aliases() {
+        assert_eq!(
+            CraProductClass::parse_cli("default"),
+            Some(CraProductClass::Default)
+        );
+        assert_eq!(
+            CraProductClass::parse_cli("important-class-1"),
+            Some(CraProductClass::ImportantClass1)
+        );
+        assert_eq!(
+            CraProductClass::parse_cli("important-2"),
+            Some(CraProductClass::ImportantClass2)
+        );
+        assert_eq!(
+            CraProductClass::parse_cli("CRITICAL"),
+            Some(CraProductClass::Critical)
+        );
+        assert_eq!(CraProductClass::parse_cli("nonsense"), None);
+    }
+
+    #[test]
+    fn product_class_default_route_matches_regulation() {
+        assert_eq!(
+            CraProductClass::Default.default_route(),
+            ConformityRoute::ModuleA
+        );
+        assert_eq!(
+            CraProductClass::ImportantClass1.default_route(),
+            ConformityRoute::ModuleA
+        );
+        assert_eq!(
+            CraProductClass::ImportantClass2.default_route(),
+            ConformityRoute::ModuleBC
+        );
+        assert_eq!(
+            CraProductClass::Critical.default_route(),
+            ConformityRoute::Eucc
+        );
+    }
+
+    #[test]
+    fn product_class_serde_kebab_case() {
+        let json = serde_json::to_string(&CraProductClass::ImportantClass1).unwrap();
+        assert_eq!(json, "\"important-class-1\"");
+        let parsed: CraProductClass = serde_json::from_str("\"critical\"").unwrap();
+        assert_eq!(parsed, CraProductClass::Critical);
+    }
+
+    #[test]
+    fn conformity_route_parse_cli_accepts_aliases() {
+        assert_eq!(
+            ConformityRoute::parse_cli("module-a"),
+            Some(ConformityRoute::ModuleA)
+        );
+        assert_eq!(
+            ConformityRoute::parse_cli("B+C"),
+            Some(ConformityRoute::ModuleBC)
+        );
+        assert_eq!(
+            ConformityRoute::parse_cli("Module-H"),
+            Some(ConformityRoute::ModuleH)
+        );
+        assert_eq!(
+            ConformityRoute::parse_cli("EUCC"),
+            Some(ConformityRoute::Eucc)
+        );
+        assert_eq!(ConformityRoute::parse_cli("module-z"), None);
     }
 }
