@@ -849,6 +849,9 @@ enum Commands {
     /// Merge two SBOMs into one
     Merge(MergeArgs),
 
+    /// Generate CRA technical-documentation dossier (Annex V templates)
+    CraDocs(CraDocsArgs),
+
     /// Generate a man page and print it to stdout
     Man,
 }
@@ -1066,6 +1069,34 @@ struct MergeArgs {
     /// Deduplication strategy (name, purl, none)
     #[arg(long, default_value = "name")]
     dedup: String,
+}
+
+/// Arguments for the `cra-docs` subcommand — generates a CRA technical
+/// documentation dossier (Annex V templates) prefilled from the SBOM and
+/// optional CRA sidecar metadata.
+#[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools cra-docs app.cdx.json --output dossier/                # Markdown dossier
+    sbom-tools cra-docs app.cdx.json --output dossier/ --cra-sidecar app.cra.yaml
+    sbom-tools cra-docs app.cdx.json --output dossier/ --cra-product-class important-class-1")]
+struct CraDocsArgs {
+    /// Path to the SBOM file
+    sbom: PathBuf,
+
+    /// Output directory (will be created if it doesn't exist)
+    #[arg(short, long, default_value = "cra-dossier")]
+    output: PathBuf,
+
+    /// Path to a CRA sidecar metadata file (JSON or YAML).
+    /// If omitted, auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
+
+    /// CRA Annex III/IV product class.
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
 }
 
 /// Validate VEX state filter values at the CLI boundary.
@@ -1695,6 +1726,13 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+
+        Commands::CraDocs(args) => cli::run_cra_docs(
+            args.sbom,
+            args.output,
+            args.cra_sidecar,
+            args.cra_product_class,
+        ),
 
         Commands::Man => {
             let cmd = Cli::command();

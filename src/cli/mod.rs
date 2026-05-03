@@ -3,6 +3,7 @@
 //! This module provides testable command handlers that are invoked by main.rs.
 //! Each handler implements the business logic for a specific CLI subcommand.
 
+mod cra_docs;
 mod diff;
 #[cfg(feature = "enrichment")]
 mod enrich;
@@ -18,6 +19,7 @@ mod vex;
 mod view;
 mod watch;
 
+pub use cra_docs::run_cra_docs;
 pub use diff::run_diff;
 #[cfg(feature = "enrichment")]
 pub use enrich::run_enrich;

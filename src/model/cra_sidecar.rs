@@ -272,28 +272,45 @@ impl CraSidecarMetadata {
         }
     }
 
-    /// Try to find a sidecar file for the given SBOM path
-    /// Looks for .cra.json or .cra.yaml files alongside the SBOM
+    /// Try to find a sidecar file for the given SBOM path.
+    ///
+    /// Looks for `<stem>.cra.{json,yaml,yml}` and `<stem>-cra.{json,yaml}`
+    /// alongside the SBOM. Multi-extension stems (`app.cdx.json`,
+    /// `app.spdx.json`, `app.spdx3.json`) also try the inner stem
+    /// (`app.cra.json`) so the common SBOM naming conventions work
+    /// without forcing operators to repeat the format suffix.
     #[must_use]
     pub fn find_for_sbom(sbom_path: &Path) -> Option<Self> {
         let parent = sbom_path.parent()?;
         let stem = sbom_path.file_stem()?.to_str()?;
 
-        // Try common sidecar naming patterns
-        let patterns = [
-            format!("{stem}.cra.json"),
-            format!("{stem}.cra.yaml"),
-            format!("{stem}.cra.yml"),
-            format!("{stem}-cra.json"),
-            format!("{stem}-cra.yaml"),
-        ];
-
-        for pattern in &patterns {
-            let sidecar_path = parent.join(pattern);
-            if sidecar_path.exists()
-                && let Ok(metadata) = Self::from_file(&sidecar_path)
+        // Build the list of stems to try. Strip well-known SBOM format
+        // suffixes (`.cdx`, `.spdx`, `.spdx3`, `.cyclonedx`) so e.g.
+        // `app.cdx.json` looks for `app.cra.json` as well as
+        // `app.cdx.cra.json`.
+        let mut stems: Vec<&str> = vec![stem];
+        for suffix in [".cdx", ".cyclonedx", ".spdx", ".spdx3"] {
+            if let Some(inner) = stem.strip_suffix(suffix)
+                && !inner.is_empty()
             {
-                return Some(metadata);
+                stems.push(inner);
+            }
+        }
+
+        for s in &stems {
+            for pattern in [
+                format!("{s}.cra.json"),
+                format!("{s}.cra.yaml"),
+                format!("{s}.cra.yml"),
+                format!("{s}-cra.json"),
+                format!("{s}-cra.yaml"),
+            ] {
+                let sidecar_path = parent.join(&pattern);
+                if sidecar_path.exists()
+                    && let Ok(metadata) = Self::from_file(&sidecar_path)
+                {
+                    return Some(metadata);
+                }
             }
         }
 
