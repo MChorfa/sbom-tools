@@ -199,6 +199,8 @@ fn render_tech_doc(
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "_TBD: support end date (CRA Art. 13(8))_".to_string());
 
+    let adjacent_regulation_md = render_adjacent_regulation_section(sidecar);
+
     let mut violations_md = String::new();
     if compliance.violations.is_empty() {
         violations_md.push_str("_No CRA compliance issues detected by sbom-tools._\n");
@@ -260,7 +262,8 @@ fn render_tech_doc(
          - DAST / fuzzing report: _TBD_\n\
          - Third-party attestation (Module B+C / H / EUCC): _TBD_\n\n\
          ## 7. Cybersecurity-relevant changes since previous version\n\
-         - _TBD: changelog of security-relevant changes_\n",
+         - _TBD: changelog of security-relevant changes_\n\
+         {adjacent_regulation_md}",
         format_label = format_label,
         component_count = component_count,
         dependency_count = dependency_count,
@@ -277,7 +280,101 @@ fn render_tech_doc(
             .as_deref()
             .unwrap_or("_TBD: assign a unique serial / namespace_"),
         violations_md = violations_md,
+        adjacent_regulation_md = adjacent_regulation_md,
     )
+}
+
+/// Render the "Adjacent regulation" section (CRA-P4.4). Only fires for
+/// the regulatory overlap flags actually set on the sidecar, so an
+/// SBOM-only dossier (no sidecar) skips the section entirely.
+fn render_adjacent_regulation_section(sidecar: Option<&CraSidecarMetadata>) -> String {
+    let Some(sc) = sidecar else {
+        return String::new();
+    };
+    let any = sc.is_nis2_essential_entity
+        || sc.is_nis2_important_entity
+        || sc.processes_personal_data
+        || sc.is_high_risk_ai
+        || sc.red_repealed_until.is_some();
+    if !any {
+        return String::new();
+    }
+
+    let mut s = String::from("\n## 8. Adjacent regulation\n\n");
+    s.push_str(
+        "The CRA does not operate in isolation. The following adjacent EU \
+         legal acts apply to this product based on the sidecar declarations \
+         and must be coordinated with CRA conformity assessment.\n\n",
+    );
+
+    if sc.is_nis2_essential_entity || sc.is_nis2_important_entity {
+        let entity_kind = if sc.is_nis2_essential_entity {
+            "essential entity (NIS2 Annex I)"
+        } else {
+            "important entity (NIS2 Annex II)"
+        };
+        s.push_str(&format!(
+            "### NIS2 — Directive (EU) 2022/2555\n\n\
+             - Manufacturer is registered as an **{entity_kind}**.\n\
+             - **Art. 23 incident reporting** runs in parallel with CRA \
+             Art. 14: a 24-hour early warning to the national CSIRT *and* \
+             ENISA, followed by a 72-hour incident notification, and a \
+             1-month final report.\n\
+             - **Art. 21 risk-management measures** overlap with CRA \
+             Annex I Part I and the documented risk assessment in §2 \
+             above.\n\
+             - National competent authority registration (NIS2 Art. 27) \
+             is a precondition for the Art. 23 reporting channels listed \
+             in `vulnerability-handling-policy.md`.\n\n",
+        ));
+    }
+
+    if sc.processes_personal_data {
+        s.push_str(
+            "### GDPR — Regulation (EU) 2016/679\n\n\
+             - The product processes personal data, so **GDPR Art. 32 \
+             (security of processing)** applies alongside CRA Annex I \
+             Part I (1) cybersecurity properties.\n\
+             - Personal-data breaches must additionally be reported to \
+             the supervisory authority under **Art. 33** (within 72 h) \
+             and to data subjects under **Art. 34** when the breach is \
+             likely to result in a high risk.\n\
+             - The CRA technical-documentation set (this dossier) should \
+             cross-reference the Data Protection Impact Assessment \
+             (DPIA) when one has been performed under Art. 35.\n\n",
+        );
+    }
+
+    if sc.is_high_risk_ai {
+        s.push_str(
+            "### AI Act — Regulation (EU) 2024/1689\n\n\
+             - The product is a **high-risk AI system** within the meaning \
+             of the AI Act.\n\
+             - AI-Act conformity assessment runs **in addition to** CRA \
+             Annex VIII; the CE marking covers both regulations \
+             simultaneously and the EU Declaration of Conformity must \
+             list both legal bases.\n\
+             - The post-market monitoring plan (AI Act Art. 72) and \
+             serious-incident reporting (Art. 73) are coordinated with \
+             CRA Art. 14 reporting; use the same channels listed in \
+             `vulnerability-handling-policy.md`.\n\n",
+        );
+    }
+
+    if let Some(until) = sc.red_repealed_until {
+        s.push_str(&format!(
+            "### Radio Equipment Directive (RED) — Directive 2014/53/EU\n\n\
+             - The cybersecurity provisions in **RED Art. 3(3)(d/e/f)** \
+             apply to this product until **{}** (sidecar field \
+             `red_repealed_until`).\n\
+             - Once superseded by the CRA, RED references in the SBOM / \
+             technical documentation should be retired and replaced with \
+             the matching CRA Annex I requirement.\n\n",
+            until.format("%Y-%m-%d"),
+        ));
+    }
+
+    s
 }
 
 /// Render the Annex I Part II vulnerability-handling policy stub.

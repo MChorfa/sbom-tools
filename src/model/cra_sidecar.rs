@@ -115,6 +115,37 @@ pub struct CraSidecarMetadata {
     /// SBOM, vulnerability-handling, and CVD policy are still required.
     #[serde(default, skip_serializing_if = "core::ops::Not::not")]
     pub is_oss_steward: bool,
+
+    // -------- Adjacent regulation overlap (CRA-P4.4) --------
+    /// True if the manufacturer is a NIS2 essential entity (Annex I of
+    /// Directive (EU) 2022/2555). Triggers Art. 23 incident-reporting
+    /// guidance in the cra-docs dossier.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub is_nis2_essential_entity: bool,
+
+    /// True if the manufacturer is a NIS2 important entity (Annex II of
+    /// Directive (EU) 2022/2555).
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub is_nis2_important_entity: bool,
+
+    /// True when the product processes personal data (GDPR Art. 32
+    /// security-of-processing applies in parallel to CRA Annex I).
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub processes_personal_data: bool,
+
+    /// True when the product is a high-risk AI system per the AI Act
+    /// (Regulation (EU) 2024/1689). AI-Act conformity coordination must
+    /// be handled alongside CRA Module assessment.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub is_high_risk_ai: bool,
+
+    /// Date until which the Radio Equipment Directive (RED, Directive
+    /// 2014/53/EU) cybersecurity provisions still apply for this product.
+    /// CRA repeals RED Art. 3(3)(d/e/f) on 2025-08-01; older device
+    /// inventories may carry RED references through their support
+    /// horizon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub red_repealed_until: Option<DateTime<Utc>>,
 }
 
 /// CRA product class per Regulation (EU) 2024/2847 Annex III/IV.
@@ -335,6 +366,11 @@ impl CraSidecarMetadata {
             || self.product_class.is_some()
             || self.conformity_assessment_route.is_some()
             || self.is_oss_steward
+            || self.is_nis2_essential_entity
+            || self.is_nis2_important_entity
+            || self.processes_personal_data
+            || self.is_high_risk_ai
+            || self.red_repealed_until.is_some()
     }
 
     /// Generate an example sidecar file content
@@ -364,6 +400,11 @@ impl CraSidecarMetadata {
             product_class: Some(CraProductClass::ImportantClass1),
             conformity_assessment_route: Some(ConformityRoute::ModuleA),
             is_oss_steward: false,
+            is_nis2_essential_entity: false,
+            is_nis2_important_entity: false,
+            processes_personal_data: false,
+            is_high_risk_ai: false,
+            red_repealed_until: None,
         };
         serde_json::to_string_pretty(&example).unwrap_or_default()
     }
