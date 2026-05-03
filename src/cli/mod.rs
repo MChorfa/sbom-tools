@@ -31,7 +31,7 @@ pub use query::{QueryFilter, run_query};
 pub use tailor::run_tailor;
 pub use validate::run_validate;
 pub use verify::{VerifyAction, run_verify};
-pub use vex::{VexAction, run_vex};
+pub use vex::{VexAction, VexExportFormat, run_vex};
 pub use view::run_view;
 pub use watch::run_watch;
 

@@ -876,6 +876,27 @@ enum VexAction {
     Status(VexArgs),
     /// Filter vulnerabilities by VEX state (for CI pipelines)
     Filter(VexArgs),
+    /// Export the SBOM's VEX state as a CSAF v2.0 advisory document
+    Export(VexExportArgs),
+}
+
+/// Arguments for `vex export`. Output format defaults to CSAF v2.0.
+#[derive(Parser)]
+struct VexExportArgs {
+    /// Path to the SBOM file
+    sbom: PathBuf,
+
+    /// Apply external VEX document(s) before exporting (OpenVEX / CycloneDX VEX / CSAF).
+    #[arg(long = "vex", value_name = "PATH")]
+    vex: Vec<PathBuf>,
+
+    /// Output advisory format. Currently: csaf (CSAF v2.0).
+    #[arg(short, long, default_value = "csaf")]
+    format: String,
+
+    /// Output file path (stdout if not specified)
+    #[arg(short = 'O', long)]
+    output_file: Option<PathBuf>,
 }
 
 /// Shared arguments for all VEX subcommands
@@ -1491,6 +1512,29 @@ fn main() -> Result<()> {
                 VexAction::Apply(args) => (args, cli::VexAction::Apply),
                 VexAction::Status(args) => (args, cli::VexAction::Status),
                 VexAction::Filter(args) => (args, cli::VexAction::Filter),
+                VexAction::Export(export_args) => {
+                    let fmt = match export_args.format.to_lowercase().as_str() {
+                        "csaf" | "csaf-v2.0" | "csaf2" => cli::VexExportFormat::Csaf,
+                        other => anyhow::bail!(
+                            "Unsupported VEX export format '{other}'. Valid: csaf"
+                        ),
+                    };
+                    let synth_args = VexArgs {
+                        sbom: export_args.sbom,
+                        vex: export_args.vex,
+                        output: ReportFormat::Json,
+                        output_file: export_args.output_file,
+                        actionable_only: false,
+                        state: None,
+                        enrich_vulns: false,
+                        enrich_eol: false,
+                        vuln_cache_ttl: 24,
+                        vuln_cache_dir: None,
+                        refresh_vulns: false,
+                        api_timeout: 10,
+                    };
+                    (synth_args, cli::VexAction::Export(fmt))
+                }
             };
 
             let enrichment = EnrichmentConfig {
