@@ -691,6 +691,38 @@ pub struct ComplianceResult {
     pub warning_count: usize,
     /// Info count
     pub info_count: usize,
+    /// CRA Annex VIII conformity-assessment summary (CRA-P4.3). Populated
+    /// only when the level is a CRA profile *and* a product class has been
+    /// pinned (explicitly or via sidecar). `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformity_summary: Option<ConformityAssessmentSummary>,
+}
+
+/// Per-route checklist of evidence the CRA Annex VIII conformity-assessment
+/// procedure expects. Surfaced in markdown / HTML / SARIF / TUI reports so
+/// notified bodies and auditors see the route + the missing evidence in
+/// one glance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConformityAssessmentSummary {
+    /// CRA Annex III/IV product class
+    pub product_class: crate::model::CraProductClass,
+    /// Resolved Annex VIII conformity route
+    pub route: crate::model::ConformityRoute,
+    /// Per-evidence checklist entries (≥1 element)
+    pub evidence: Vec<ConformityEvidence>,
+}
+
+/// One row of the conformity-evidence checklist. `satisfied = true` means
+/// the SBOM (or sidecar) carries the expected reference; `false` means it
+/// is missing and the manufacturer should attach it before submitting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConformityEvidence {
+    /// Short label (e.g., "EU Declaration of Conformity")
+    pub label: String,
+    /// Longer description of the evidence
+    pub detail: String,
+    /// Whether the SBOM/sidecar already provides this evidence
+    pub satisfied: bool,
 }
 
 impl ComplianceResult {
@@ -714,6 +746,7 @@ impl ComplianceResult {
             is_compliant: error_count == 0,
             level,
             violations,
+            conformity_summary: None,
             error_count,
             warning_count,
             info_count,
@@ -974,7 +1007,142 @@ impl ComplianceChecker {
             }
         }
 
-        ComplianceResult::new(self.level, violations)
+        let mut result = ComplianceResult::new(self.level, violations);
+        // Attach the CRA Annex VIII conformity summary when a product class
+        // has been pinned and the level is a CRA profile.
+        if self.level.is_cra() && self.has_explicit_product_class() {
+            result.conformity_summary = Some(self.build_conformity_summary(sbom));
+        }
+        result
+    }
+
+    /// Build the per-route evidence checklist (CRA-P4.3). Each route lists
+    /// the external references manufacturers are expected to attach to
+    /// satisfy Annex VIII; the `satisfied` flag is computed by scanning the
+    /// SBOM's `external_refs` and the attached sidecar.
+    fn build_conformity_summary(
+        &self,
+        sbom: &NormalizedSbom,
+    ) -> ConformityAssessmentSummary {
+        use crate::model::{ConformityRoute, ExternalRefType};
+        let class = self.effective_product_class();
+        let route = self.effective_route();
+
+        let any_ext = |needles: &[ExternalRefType]| -> bool {
+            sbom.components.values().any(|c| {
+                c.external_refs
+                    .iter()
+                    .any(|r| needles.iter().any(|n| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(n)))
+            })
+        };
+        let any_ext_url_contains = |types: &[ExternalRefType], substr: &str| -> bool {
+            sbom.components.values().any(|c| {
+                c.external_refs.iter().any(|r| {
+                    types.iter().any(|t| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(t))
+                        && r.url.to_lowercase().contains(substr)
+                })
+            })
+        };
+
+        let doc_or_ce = any_ext(&[
+            ExternalRefType::Attestation,
+            ExternalRefType::Certification,
+        ]) || self
+            .sidecar
+            .as_ref()
+            .is_some_and(|s| s.ce_marking_reference.is_some());
+
+        let attestation_present = any_ext(&[
+            ExternalRefType::Attestation,
+            ExternalRefType::Certification,
+        ]);
+
+        let eucc_present = any_ext_url_contains(
+            &[
+                ExternalRefType::Certification,
+                ExternalRefType::Attestation,
+            ],
+            "eucc",
+        ) || any_ext_url_contains(
+            &[
+                ExternalRefType::Certification,
+                ExternalRefType::Attestation,
+            ],
+            "common-criteria",
+        );
+
+        let mut evidence: Vec<ConformityEvidence> = Vec::new();
+        evidence.push(ConformityEvidence {
+            label: "EU Declaration of Conformity".to_string(),
+            detail: "Annex V — manufacturer's signed declaration. Provide via Attestation/Certification external ref or sidecar ceMarkingReference.".to_string(),
+            satisfied: doc_or_ce,
+        });
+
+        match route {
+            ConformityRoute::ModuleA => {
+                evidence.push(ConformityEvidence {
+                    label: "Internal-control technical file".to_string(),
+                    detail: "Module A — manufacturer holds the technical file at their premises. No external attestation required.".to_string(),
+                    satisfied: true,
+                });
+            }
+            ConformityRoute::ModuleBC => {
+                evidence.push(ConformityEvidence {
+                    label: "EU-type examination certificate (Module B)".to_string(),
+                    detail: "Notified-body certificate of EU-type examination — Attestation/Certification external ref.".to_string(),
+                    satisfied: attestation_present,
+                });
+                evidence.push(ConformityEvidence {
+                    label: "Production conformity statement (Module C)".to_string(),
+                    detail: "Manufacturer's declaration that production conforms to the type examined under Module B.".to_string(),
+                    satisfied: doc_or_ce,
+                });
+            }
+            ConformityRoute::ModuleH => {
+                evidence.push(ConformityEvidence {
+                    label: "Quality-management-system certification (Module H)".to_string(),
+                    detail: "Notified-body QMS certification (typically ISO 9001 / ISO/IEC 27001 family) — Certification external ref.".to_string(),
+                    satisfied: attestation_present,
+                });
+                evidence.push(ConformityEvidence {
+                    label: "QMS surveillance plan".to_string(),
+                    detail: "Notified-body surveillance / re-assessment record — referenced via Attestation external ref.".to_string(),
+                    satisfied: attestation_present,
+                });
+            }
+            ConformityRoute::Eucc => {
+                evidence.push(ConformityEvidence {
+                    label: "EUCC / Common Criteria certificate".to_string(),
+                    detail: "Common Criteria certificate from an EUCC-accredited ITSEF — Certification external ref whose URL references EUCC or common-criteria.".to_string(),
+                    satisfied: eucc_present,
+                });
+                evidence.push(ConformityEvidence {
+                    label: "Target of Evaluation reference".to_string(),
+                    detail: "Reference to the ToE (and Protection Profile, when applicable) that the EUCC certificate covers.".to_string(),
+                    satisfied: eucc_present,
+                });
+            }
+        }
+
+        // Article 14 channels are required at all conformity routes once the
+        // 2026-09-11 deadline applies; surface as evidence rows for
+        // notified-body checklists.
+        let psirt = self
+            .sidecar
+            .as_ref()
+            .is_some_and(|s| s.psirt_url.is_some());
+        evidence.push(ConformityEvidence {
+            label: "PSIRT contact (Art. 14)".to_string(),
+            detail: "Public PSIRT URL for receiving external vulnerability reports.".to_string(),
+            satisfied: psirt,
+        });
+
+        let _ = class; // already encoded into the route; keep on the summary
+        ConformityAssessmentSummary {
+            product_class: class,
+            route,
+            evidence,
+        }
     }
 
     fn check_document_metadata(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {

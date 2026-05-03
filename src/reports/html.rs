@@ -657,6 +657,7 @@ fn write_cra_compliance_diff_html(
     writeln!(html, "        </tbody>")?;
     writeln!(html, "    </table>")?;
 
+    write_conformity_assessment_html(html, new)?;
     write_reporting_channels_html(html, new)?;
 
     if !new.violations.is_empty() {
@@ -694,6 +695,7 @@ fn write_cra_compliance_view_html(
         result.error_count, result.warning_count
     )?;
 
+    write_conformity_assessment_html(html, result)?;
     write_reporting_channels_html(html, result)?;
 
     if !result.violations.is_empty() {
@@ -705,6 +707,48 @@ fn write_cra_compliance_view_html(
         html,
         "<a href=\"#top\" class=\"back-to-top\">Back to top</a>"
     )
+}
+
+/// Render a "Conformity assessment" subsection (CRA-P4.3) when a product
+/// class has been pinned. Surfaces the resolved Annex VIII route and a
+/// per-route evidence checklist. Mirrors the Markdown variant.
+fn write_conformity_assessment_html(
+    html: &mut String,
+    result: &ComplianceResult,
+) -> std::fmt::Result {
+    let Some(summary) = result.conformity_summary.as_ref() else {
+        return Ok(());
+    };
+    writeln!(html, "    <h3>Conformity Assessment (CRA Annex VIII)</h3>")?;
+    writeln!(
+        html,
+        "    <p><strong>Product class:</strong> {}<br><strong>Conformity route:</strong> {}</p>",
+        crate::reports::escape::escape_html(summary.product_class.name()),
+        crate::reports::escape::escape_html(summary.route.name())
+    )?;
+    writeln!(html, "    <table>")?;
+    writeln!(
+        html,
+        "        <thead><tr><th>Evidence</th><th>Status</th><th>Detail</th></tr></thead>"
+    )?;
+    writeln!(html, "        <tbody>")?;
+    for ev in &summary.evidence {
+        let status = if ev.satisfied {
+            "<span class=\"present\">Present</span>"
+        } else {
+            "<span class=\"missing\">Missing</span>"
+        };
+        writeln!(
+            html,
+            "            <tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+            crate::reports::escape::escape_html(&ev.label),
+            status,
+            crate::reports::escape::escape_html(&ev.detail)
+        )?;
+    }
+    writeln!(html, "        </tbody>")?;
+    writeln!(html, "    </table>")?;
+    Ok(())
 }
 
 /// Render a "Reporting channels" subsection (CRA Art. 14 readiness).

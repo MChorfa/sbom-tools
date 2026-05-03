@@ -336,6 +336,38 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
         Style::default().fg(status_color).bold(),
     )])];
 
+    // Conformity-assessment route (CRA-P4.3): only when product class pinned.
+    if let Some(summary) = result.conformity_summary.as_ref() {
+        let satisfied = summary
+            .evidence
+            .iter()
+            .filter(|e| e.satisfied)
+            .count();
+        let total = summary.evidence.len();
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  Annex VIII: ",
+                Style::default().fg(scheme.muted),
+            ),
+            Span::styled(
+                summary.route.label(),
+                Style::default().fg(scheme.text).bold(),
+            ),
+            Span::styled(
+                format!("  ({})", summary.product_class.label()),
+                Style::default().fg(scheme.muted),
+            ),
+            Span::styled(
+                format!("  {satisfied}/{total} evidence"),
+                Style::default().fg(if satisfied == total {
+                    scheme.success
+                } else {
+                    scheme.warning
+                }),
+            ),
+        ]));
+    }
+
     // Show up to 4 categories with proportional bars
     let bar_max = (h_chunks[0].width as usize).saturating_sub(30).clamp(8, 40);
     for (cat, errors, warnings, infos) in sorted_cats.iter().take(4) {

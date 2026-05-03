@@ -807,6 +807,8 @@ fn write_cra_compliance_diff(
     )?;
     writeln!(md)?;
 
+    // Conformity assessment (CRA Annex VIII) — only when product class pinned
+    write_conformity_assessment_md(md, new)?;
     // Reporting channels (CRA Art. 14) — derived from new SBOM violations
     write_reporting_channels_md(md, new)?;
 
@@ -838,12 +840,40 @@ fn write_cra_compliance_view(md: &mut String, result: &ComplianceResult) -> std:
         result.error_count, result.warning_count
     )?;
 
+    write_conformity_assessment_md(md, result)?;
     write_reporting_channels_md(md, result)?;
 
     if !result.violations.is_empty() {
         write_violation_table(md, &result.violations)?;
     }
 
+    Ok(())
+}
+
+/// Render a "Conformity assessment" subsection (CRA-P4.3) when a product
+/// class has been pinned. Surfaces the resolved Annex VIII route and a
+/// per-route evidence checklist.
+fn write_conformity_assessment_md(
+    md: &mut String,
+    result: &ComplianceResult,
+) -> std::fmt::Result {
+    let Some(summary) = result.conformity_summary.as_ref() else {
+        return Ok(());
+    };
+    writeln!(md, "### Conformity Assessment (CRA Annex VIII)\n")?;
+    writeln!(md, "- **Product class:** {}", summary.product_class.name())?;
+    writeln!(md, "- **Conformity route:** {}\n", summary.route.name())?;
+    writeln!(md, "| Evidence | Status | Detail |")?;
+    writeln!(md, "|----------|--------|--------|")?;
+    for ev in &summary.evidence {
+        let status = if ev.satisfied {
+            "✅ Present"
+        } else {
+            "❌ Missing"
+        };
+        writeln!(md, "| {} | {} | {} |", ev.label, status, ev.detail)?;
+    }
+    writeln!(md)?;
     Ok(())
 }
 
