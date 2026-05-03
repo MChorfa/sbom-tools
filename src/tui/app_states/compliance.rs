@@ -23,6 +23,10 @@ pub enum PolicyPreset {
     NistPqc,
     /// BSI TR-03183-2 — German national CRA-aligned SBOM guideline
     BsiTr03183_2,
+    /// CRA Article 24 — Open-source software steward (lighter manufacturer profile)
+    CraOssSteward,
+    /// EUCC Substantial — Reg. (EU) 2024/482 reference profile (Annex IV)
+    EuccSubstantial,
 }
 
 impl PolicyPreset {
@@ -38,7 +42,9 @@ impl PolicyPreset {
             Self::Eo14028 => Self::Cnsa2,
             Self::Cnsa2 => Self::NistPqc,
             Self::NistPqc => Self::BsiTr03183_2,
-            Self::BsiTr03183_2 => Self::Enterprise,
+            Self::BsiTr03183_2 => Self::CraOssSteward,
+            Self::CraOssSteward => Self::EuccSubstantial,
+            Self::EuccSubstantial => Self::Enterprise,
         }
     }
 
@@ -55,6 +61,8 @@ impl PolicyPreset {
             Self::Cnsa2 => "CNSA 2.0",
             Self::NistPqc => "NIST PQC",
             Self::BsiTr03183_2 => "BSI TR-03183-2",
+            Self::CraOssSteward => "CRA OSS Steward",
+            Self::EuccSubstantial => "EUCC",
         }
     }
 
@@ -70,6 +78,8 @@ impl PolicyPreset {
                 | Self::Cnsa2
                 | Self::NistPqc
                 | Self::BsiTr03183_2
+                | Self::CraOssSteward
+                | Self::EuccSubstantial
         )
     }
 
@@ -84,6 +94,8 @@ impl PolicyPreset {
             Self::Cnsa2 => Some(crate::quality::ComplianceLevel::Cnsa2),
             Self::NistPqc => Some(crate::quality::ComplianceLevel::NistPqc),
             Self::BsiTr03183_2 => Some(crate::quality::ComplianceLevel::BsiTr03183_2),
+            Self::CraOssSteward => Some(crate::quality::ComplianceLevel::CraOssSteward),
+            Self::EuccSubstantial => Some(crate::quality::ComplianceLevel::EuccSubstantial),
             _ => None,
         }
     }

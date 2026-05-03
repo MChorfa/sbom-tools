@@ -852,6 +852,9 @@ enum Commands {
     /// Generate CRA technical-documentation dossier (Annex V templates)
     CraDocs(CraDocsArgs),
 
+    /// Show curated CRA standards-watch catalogue (prEN, BSI, CSAF, EUCC, …)
+    CraStandardsWatch(CraStandardsWatchArgs),
+
     /// Generate a man page and print it to stdout
     Man,
 }
@@ -1090,6 +1093,27 @@ struct MergeArgs {
     /// Deduplication strategy (name, purl, none)
     #[arg(long, default_value = "name")]
     dedup: String,
+}
+
+/// Arguments for the `cra-standards-watch` subcommand. Curated, offline-first
+/// catalogue of CRA-related standards bodies and their tracked artefacts.
+#[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools cra-standards-watch                   # Print the curated catalogue
+    sbom-tools cra-standards-watch --format json     # Machine-readable output
+    sbom-tools cra-standards-watch --check-online    # HEAD-probe each URL")]
+struct CraStandardsWatchArgs {
+    /// Output format: table (default) or json
+    #[arg(short, long, default_value = "table")]
+    format: String,
+
+    /// Issue HEAD requests against each tracked URL and report HTTP status
+    #[arg(long)]
+    check_online: bool,
+
+    /// Online-probe timeout in seconds
+    #[arg(long, default_value = "10")]
+    timeout: u64,
 }
 
 /// Arguments for the `cra-docs` subcommand — generates a CRA technical
@@ -1776,6 +1800,12 @@ fn main() -> Result<()> {
             args.output,
             args.cra_sidecar,
             args.cra_product_class,
+        ),
+
+        Commands::CraStandardsWatch(args) => cli::run_cra_standards_watch(
+            cli::WatchOutputFormat::parse(&args.format)?,
+            args.check_online,
+            args.timeout,
         ),
 
         Commands::Man => {

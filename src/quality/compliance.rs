@@ -64,6 +64,12 @@ pub enum ComplianceLevel {
     /// and CVD policy are still required; manufacturer email, EU DoC, and
     /// conformity-assessment-module gating are NOT.
     CraOssSteward,
+    /// EUCC Substantial assurance level (Reg. (EU) 2024/482) — reference-only
+    /// profile for Annex IV products. Verifies that the SBOM/sidecar carries
+    /// a Common-Criteria Protection-Profile reference, Target-of-Evaluation
+    /// reference, ITSEF identifier, and a valid-until date. Does not perform
+    /// a Common-Criteria evaluation itself.
+    EuccSubstantial,
     /// Comprehensive compliance (all recommended fields)
     Comprehensive,
 }
@@ -85,6 +91,7 @@ impl ComplianceLevel {
             Self::NistPqc => "NIST PQC Readiness",
             Self::BsiTr03183_2 => "BSI TR-03183-2",
             Self::CraOssSteward => "CRA OSS Steward (Art. 24)",
+            Self::EuccSubstantial => "EUCC Substantial (Reg. 2024/482)",
             Self::Comprehensive => "Comprehensive",
         }
     }
@@ -105,6 +112,7 @@ impl ComplianceLevel {
             Self::NistPqc => "PQC",
             Self::BsiTr03183_2 => "BSI",
             Self::CraOssSteward => "OSS",
+            Self::EuccSubstantial => "EUCC",
             Self::Comprehensive => "Full",
         }
     }
@@ -141,6 +149,9 @@ impl ComplianceLevel {
             Self::CraOssSteward => {
                 "CRA Article 24 — Open-source software steward (lighter than full manufacturer obligations): SBOM + CVD policy + vuln-handling required, no DoC/module/manufacturer-email enforcement"
             }
+            Self::EuccSubstantial => {
+                "EUCC Substantial (Reg. (EU) 2024/482) — reference-only check for Common-Criteria Protection Profile, Target of Evaluation, ITSEF, and certificate valid-until date"
+            }
             Self::Comprehensive => "All recommended fields and best practices",
         }
     }
@@ -161,6 +172,7 @@ impl ComplianceLevel {
             Self::NistPqc,
             Self::BsiTr03183_2,
             Self::CraOssSteward,
+            Self::EuccSubstantial,
             Self::Comprehensive,
         ]
     }
@@ -975,6 +987,9 @@ impl ComplianceChecker {
             }
             ComplianceLevel::CraOssSteward => {
                 self.check_cra_oss_steward(sbom, &mut violations);
+            }
+            ComplianceLevel::EuccSubstantial => {
+                self.check_eucc_substantial(sbom, &mut violations);
             }
             _ => {
                 // Check document-level requirements
@@ -2270,6 +2285,40 @@ impl ComplianceChecker {
             self.check_class_eucc_reference(sbom, violations);
             self.check_class_module_attestation(sbom, violations);
         }
+
+        // CRA-P5.5: prEN 40000-1-2/1-4 controls-assertion sanity checks.
+        // Only fires when the sidecar provides an annex_i_part_i_controls
+        // block; otherwise the section is silently skipped.
+        self.check_controls_assertion(violations);
+    }
+
+    /// Cross-check the sidecar `annex_i_part_i_controls` block. A control
+    /// claimed `satisfied = true` without an `evidence_url` produces a
+    /// Warning (un-evidenced claim); claimed `satisfied = false` is fine
+    /// (manufacturer is being honest about a gap).
+    fn check_controls_assertion(&self, violations: &mut Vec<Violation>) {
+        let Some(sidecar) = self.sidecar.as_ref() else {
+            return;
+        };
+        if sidecar.annex_i_part_i_controls.is_empty() {
+            return;
+        }
+        for (id, claim) in &sidecar.annex_i_part_i_controls {
+            if claim.satisfied && claim.evidence_url.is_none() {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Warning,
+                    category: ViolationCategory::DocumentMetadata,
+                    message: format!(
+                        "[CRA Annex I Part I {id}] Sidecar claims control satisfied but provides no `evidence_url` — un-evidenced claims should be reviewed before submission"
+                    ),
+                    element: None,
+                    requirement: format!(
+                        "CRA Annex I Part I {id}: controls-assertion evidence (prEN 40000-1-2)"
+                    ),
+                    standard_refs: Vec::new(),
+                });
+            }
+        }
     }
 
     /// EUCC (Common Criteria) certificate / Target-of-Evaluation reference.
@@ -3486,6 +3535,130 @@ impl ComplianceChecker {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // EUCC Substantial (CRA-P5.4 reference profile)
+    // ════════════════════════════════════════════════════════════════════
+    //
+    // Reference-only profile for CRA Annex IV / EUCC products. Verifies
+    // that the SBOM (or sidecar) carries the four pieces of evidence
+    // notified-body auditors expect to see in a Common Criteria
+    // submission. Does NOT perform a Common Criteria evaluation —
+    // that's out of scope for SBOM tooling.
+
+    fn check_eucc_substantial(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+        let sidecar = self.sidecar.as_ref();
+
+        // 1. Common Criteria Protection Profile reference
+        let pp_present = sidecar
+            .and_then(|s| s.eucc_protection_profile_id.as_deref())
+            .is_some_and(|s| !s.is_empty());
+        if !pp_present {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::DocumentMetadata,
+                message: "[EUCC] Missing Common Criteria Protection Profile reference — set sidecar `eucc_protection_profile_id`".to_string(),
+                element: None,
+                requirement: "EUCC Substantial: Protection Profile reference".to_string(),
+                standard_refs: Vec::new(),
+            });
+        }
+
+        // 2. Target of Evaluation reference
+        let toe_present = sidecar
+            .and_then(|s| s.eucc_target_of_evaluation.as_deref())
+            .is_some_and(|s| !s.is_empty());
+        if !toe_present {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::DocumentMetadata,
+                message: "[EUCC] Missing Target of Evaluation reference — set sidecar `eucc_target_of_evaluation`".to_string(),
+                element: None,
+                requirement: "EUCC Substantial: Target of Evaluation reference".to_string(),
+                standard_refs: Vec::new(),
+            });
+        }
+
+        // 3. ITSEF (lab) identifier
+        let itsef_present = sidecar
+            .and_then(|s| s.eucc_itsef_identifier.as_deref())
+            .is_some_and(|s| !s.is_empty());
+        if !itsef_present {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::DocumentMetadata,
+                message: "[EUCC] Missing ITSEF (IT Security Evaluation Facility) identifier — set sidecar `eucc_itsef_identifier`".to_string(),
+                element: None,
+                requirement: "EUCC Substantial: ITSEF identifier".to_string(),
+                standard_refs: Vec::new(),
+            });
+        }
+
+        // 4. Valid-until date
+        match sidecar.and_then(|s| s.eucc_valid_until) {
+            None => {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Error,
+                    category: ViolationCategory::DocumentMetadata,
+                    message: "[EUCC] Missing certificate valid-until date — set sidecar `eucc_valid_until`".to_string(),
+                    element: None,
+                    requirement: "EUCC Substantial: certificate valid-until date".to_string(),
+                    standard_refs: Vec::new(),
+                });
+            }
+            Some(until) if until <= chrono::Utc::now() => {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Error,
+                    category: ViolationCategory::DocumentMetadata,
+                    message: format!(
+                        "[EUCC] EUCC certificate has expired (valid-until {})",
+                        until.format("%Y-%m-%d")
+                    ),
+                    element: None,
+                    requirement: "EUCC Substantial: certificate validity".to_string(),
+                    standard_refs: Vec::new(),
+                });
+            }
+            Some(until) if until <= chrono::Utc::now() + chrono::Duration::days(180) => {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Warning,
+                    category: ViolationCategory::DocumentMetadata,
+                    message: format!(
+                        "[EUCC] EUCC certificate expires within 180 days ({})",
+                        until.format("%Y-%m-%d")
+                    ),
+                    element: None,
+                    requirement: "EUCC Substantial: certificate validity".to_string(),
+                    standard_refs: Vec::new(),
+                });
+            }
+            Some(_) => {}
+        }
+
+        // 5. EUCC Certification external ref (recommended) — checked
+        // structurally; satisfied when any component carries a Certification
+        // ref whose URL contains "eucc" or "common-criteria".
+        let eucc_ref_present = sbom.components.values().any(|c| {
+            c.external_refs.iter().any(|r| {
+                let url = r.url.to_lowercase();
+                matches!(
+                    r.ref_type,
+                    crate::model::ExternalRefType::Certification
+                        | crate::model::ExternalRefType::Attestation
+                ) && (url.contains("eucc") || url.contains("common-criteria"))
+            })
+        });
+        if !eucc_ref_present {
+            violations.push(Violation {
+                severity: ViolationSeverity::Warning,
+                category: ViolationCategory::DocumentMetadata,
+                message: "[EUCC] No Certification/Attestation external reference points at an EUCC URL (recommended)".to_string(),
+                element: None,
+                requirement: "EUCC Substantial: Certification external reference".to_string(),
+                standard_refs: Vec::new(),
+            });
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // NIST PQC Readiness checks
     // ════════════════════════════════════════════════════════════════════
 
@@ -4613,9 +4786,10 @@ mod tests {
 
     #[test]
     fn bsi_tr_03183_2_in_compliance_level_all() {
-        assert_eq!(ComplianceLevel::all().len(), 13);
+        assert_eq!(ComplianceLevel::all().len(), 14);
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::BsiTr03183_2));
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::CraOssSteward));
+        assert!(ComplianceLevel::all().contains(&ComplianceLevel::EuccSubstantial));
     }
 
     #[test]

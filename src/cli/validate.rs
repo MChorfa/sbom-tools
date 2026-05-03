@@ -94,10 +94,17 @@ pub fn run_validate(
                 }
                 checker.check(parsed.sbom())
             }
+            "eucc" | "eucc-substantial" | "common-criteria" => {
+                let mut checker = ComplianceChecker::new(ComplianceLevel::EuccSubstantial);
+                if let Some(sc) = cra_sidecar.clone() {
+                    checker = checker.with_sidecar(sc);
+                }
+                checker.check(parsed.sbom())
+            }
             _ => {
                 bail!(
                     "Unknown validation standard: {std_name}. \
-                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc, bsi, oss-steward"
+                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc, bsi, oss-steward, eucc"
                 );
             }
         };

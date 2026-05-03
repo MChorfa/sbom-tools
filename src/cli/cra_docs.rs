@@ -200,6 +200,7 @@ fn render_tech_doc(
         .unwrap_or_else(|| "_TBD: support end date (CRA Art. 13(8))_".to_string());
 
     let adjacent_regulation_md = render_adjacent_regulation_section(sidecar);
+    let controls_assertion_md = render_controls_assertion_section(sidecar);
 
     let mut violations_md = String::new();
     if compliance.violations.is_empty() {
@@ -263,6 +264,7 @@ fn render_tech_doc(
          - Third-party attestation (Module B+C / H / EUCC): _TBD_\n\n\
          ## 7. Cybersecurity-relevant changes since previous version\n\
          - _TBD: changelog of security-relevant changes_\n\
+         {controls_assertion_md}\
          {adjacent_regulation_md}",
         format_label = format_label,
         component_count = component_count,
@@ -280,8 +282,46 @@ fn render_tech_doc(
             .as_deref()
             .unwrap_or("_TBD: assign a unique serial / namespace_"),
         violations_md = violations_md,
+        controls_assertion_md = controls_assertion_md,
         adjacent_regulation_md = adjacent_regulation_md,
     )
+}
+
+/// Render the prEN 40000-1-2/1-4 controls-assertion block (CRA-P5.5).
+/// Empty sidecars or sidecars without `annex_i_part_i_controls` skip the
+/// section entirely so the dossier stays clean for products that don't
+/// claim per-control assertions.
+fn render_controls_assertion_section(sidecar: Option<&CraSidecarMetadata>) -> String {
+    let Some(sc) = sidecar else {
+        return String::new();
+    };
+    if sc.annex_i_part_i_controls.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("\n## 8. Annex I Part I controls assertion (prEN 40000-1-2/1-4)\n\n");
+    s.push_str(
+        "Per-control assertions for CRA Annex I Part I, sourced from the \
+         sidecar `annex_i_part_i_controls` block. `Satisfied` rows must \
+         carry an evidence URL — un-evidenced claims are flagged by \
+         `sbom-tools validate --standard cra` as Warnings.\n\n",
+    );
+    s.push_str("| Control | Satisfied | Methodology | Evidence | Note |\n");
+    s.push_str("|---------|-----------|-------------|----------|------|\n");
+    for (id, claim) in &sc.annex_i_part_i_controls {
+        let satisfied = if claim.satisfied { "✅" } else { "❌" };
+        let methodology = claim.methodology.as_deref().unwrap_or("_TBD_");
+        let evidence = claim
+            .evidence_url
+            .as_deref()
+            .map(|u| format!("[link]({u})"))
+            .unwrap_or_else(|| "_TBD_".to_string());
+        let note = claim.note.as_deref().unwrap_or("");
+        s.push_str(&format!(
+            "| {id} | {satisfied} | {methodology} | {evidence} | {note} |\n"
+        ));
+    }
+    s.push('\n');
+    s
 }
 
 /// Render the "Adjacent regulation" section (CRA-P4.4). Only fires for

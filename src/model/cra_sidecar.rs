@@ -11,6 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// CRA sidecar metadata that supplements SBOM information
@@ -146,6 +147,59 @@ pub struct CraSidecarMetadata {
     /// horizon.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub red_repealed_until: Option<DateTime<Utc>>,
+
+    // -------- EUCC Substantial (CRA-P5.4 reference profile) --------
+    /// Common Criteria Protection Profile identifier (e.g., "PP-CC-MFR-2024-01").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eucc_protection_profile_id: Option<String>,
+
+    /// Common Criteria Target of Evaluation reference (URL or document ID).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eucc_target_of_evaluation: Option<String>,
+
+    /// IT Security Evaluation Facility (ITSEF) identifier — the accredited
+    /// laboratory that performed the EUCC evaluation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eucc_itsef_identifier: Option<String>,
+
+    /// EUCC certificate valid-until date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eucc_valid_until: Option<DateTime<Utc>>,
+
+    // -------- prEN 40000-1-2/1-4 controls-assertion (CRA-P5.5) --------
+    /// Per-control assertions for CRA Annex I Part I, keyed by control ID
+    /// (e.g., `"1.a"` through `"1.l"` for §1, `"2.a"` through `"2.m"` for
+    /// §2 vulnerability-handling). Each entry records whether the
+    /// manufacturer claims the control is satisfied, the evidence URL,
+    /// and the methodology used.
+    ///
+    /// `BTreeMap` for deterministic ordering in dossier output.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub annex_i_part_i_controls: BTreeMap<String, ControlAssertion>,
+}
+
+/// A manufacturer-supplied assertion that a specific Annex I Part I control
+/// is satisfied. Surfaced verbatim in the cra-docs technical-documentation
+/// dossier and cross-checked by `ComplianceChecker` (a control claimed
+/// `satisfied = true` without an `evidence_url` is flagged as a Warning).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlAssertion {
+    /// Whether the manufacturer claims this control is satisfied.
+    #[serde(default)]
+    pub satisfied: bool,
+    /// URL pointing at the evidence document (test report, design review,
+    /// SAST/DAST output, etc.). Required when `satisfied = true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_url: Option<String>,
+    /// Methodology / standard the assertion was made against
+    /// (e.g., `"prEN 40000-1-2 §5.3"`, `"OWASP ASVS L2"`,
+    /// `"NIST SP 800-53 SI-10"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub methodology: Option<String>,
+    /// Free-form notes from the manufacturer (rationale, caveats).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// CRA product class per Regulation (EU) 2024/2847 Annex III/IV.
@@ -350,7 +404,7 @@ impl CraSidecarMetadata {
 
     /// Check if any CRA-relevant fields are populated
     #[must_use]
-    pub const fn has_cra_data(&self) -> bool {
+    pub fn has_cra_data(&self) -> bool {
         self.security_contact.is_some()
             || self.vulnerability_disclosure_url.is_some()
             || self.support_end_date.is_some()
@@ -371,6 +425,11 @@ impl CraSidecarMetadata {
             || self.processes_personal_data
             || self.is_high_risk_ai
             || self.red_repealed_until.is_some()
+            || self.eucc_protection_profile_id.is_some()
+            || self.eucc_target_of_evaluation.is_some()
+            || self.eucc_itsef_identifier.is_some()
+            || self.eucc_valid_until.is_some()
+            || !self.annex_i_part_i_controls.is_empty()
     }
 
     /// Generate an example sidecar file content
@@ -405,6 +464,11 @@ impl CraSidecarMetadata {
             processes_personal_data: false,
             is_high_risk_ai: false,
             red_repealed_until: None,
+            eucc_protection_profile_id: None,
+            eucc_target_of_evaluation: None,
+            eucc_itsef_identifier: None,
+            eucc_valid_until: None,
+            annex_i_part_i_controls: BTreeMap::new(),
         };
         serde_json::to_string_pretty(&example).unwrap_or_default()
     }
