@@ -262,12 +262,17 @@ pub struct StandardRef {
 }
 
 impl StandardRef {
+    /// Construct a `StandardRef` and auto-populate `help_uri` with a stable
+    /// canonical URL for the standard, when one is known. Pass through
+    /// `with_uri()` to override.
     #[must_use]
     pub fn new(standard: StandardKind, id: impl Into<String>) -> Self {
+        let id = id.into();
+        let help_uri = standard.canonical_help_uri(&id);
         Self {
             standard,
-            id: id.into(),
-            help_uri: None,
+            id,
+            help_uri,
         }
     }
 
@@ -275,6 +280,55 @@ impl StandardRef {
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.help_uri = Some(uri.into());
         self
+    }
+}
+
+impl StandardKind {
+    /// Stable canonical URL for the standard / regulation that hosts the
+    /// referenced clause. Returns `None` for `Other` (no canonical home) and
+    /// for `Pren40000_1_3` because the draft EN is paywalled and CEN's URLs
+    /// are not stable; CRA-P5.1 will revisit once the standard is finalised.
+    ///
+    /// The returned URL is the *standard's* root, not a per-clause anchor —
+    /// EUR-Lex and most national standards bodies do not publish stable
+    /// per-article fragments. Per-article precision lives in the
+    /// `StandardRef::id` (e.g., "Art. 13(4)") rather than the URL.
+    #[must_use]
+    pub fn canonical_help_uri(self, _id: &str) -> Option<String> {
+        let url = match self {
+            // CRA Regulation (EU) 2024/2847 — EUR-Lex ELI is the canonical home.
+            Self::CraArticle | Self::CraAnnex => {
+                "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+            // prEN 40000-1-3 is in development; no stable public URL yet.
+            Self::Pren40000_1_3 => return None,
+            // BSI TR-03183-2 (English landing page).
+            Self::BsiTr03183_2 => {
+                "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+            }
+            // NIST SP 800-218 SSDF — DOI is the most stable handle.
+            Self::NistSsdf => "https://doi.org/10.6028/NIST.SP.800-218",
+            // EO 14028 — Federal Register short-form.
+            Self::Eo14028 => "https://www.federalregister.gov/d/2021-10460",
+            // FDA premarket cybersecurity guidance.
+            Self::FdaPremarket => {
+                "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions"
+            }
+            // NTIA SBOM Minimum Elements report.
+            Self::NtiaMinimum => {
+                "https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf"
+            }
+            // CSAF v2.0 OASIS standard.
+            Self::Csaf2 => "https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html",
+            // CNSA 2.0 fact sheet.
+            Self::Cnsa2 => {
+                "https://media.defense.gov/2022/Sep/07/2003071834/-1/-1/0/CSA_CNSA_2.0_ALGORITHMS_.PDF"
+            }
+            // NIST PQC project landing page.
+            Self::NistPqc => "https://csrc.nist.gov/projects/post-quantum-cryptography",
+            Self::Other => return None,
+        };
+        Some(url.to_string())
     }
 }
 

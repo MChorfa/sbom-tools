@@ -248,7 +248,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: get_sarif_rules(),
+                        rules: SarifRuleWithUri::wrap_all(get_sarif_rules()),
                     },
                 },
                 results,
@@ -312,7 +312,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: get_sarif_view_rules(),
+                        rules: SarifRuleWithUri::wrap_all(get_sarif_view_rules()),
                     },
                 },
                 results,
@@ -329,7 +329,7 @@ impl ReportGenerator for SarifReporter {
 }
 
 pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, ReportError> {
-    let rules = get_sarif_rules_for_standard(result.level);
+    let rules = SarifRuleWithUri::wrap_all(get_sarif_rules_for_standard(result.level));
     let sarif = SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
         version: "2.1.0".to_string(),
@@ -372,7 +372,7 @@ pub fn generate_multi_compliance_sarif(
                     name: "sbom-tools".to_string(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                    rules: all_rules,
+                    rules: SarifRuleWithUri::wrap_all(all_rules),
                 },
             },
             results: all_results,
@@ -620,10 +620,18 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
                 .iter()
                 .map(|sr| format!("{}:{}", sarif_standard_label(sr.standard), sr.id))
                 .collect();
-            let properties = if standard_ids.is_empty() {
+            let standard_help_uris: Vec<String> = v
+                .standard_refs
+                .iter()
+                .filter_map(|sr| sr.help_uri.clone())
+                .collect();
+            let properties = if standard_ids.is_empty() && standard_help_uris.is_empty() {
                 None
             } else {
-                Some(SarifResultProperties { standard_ids })
+                Some(SarifResultProperties {
+                    standard_ids,
+                    standard_help_uris,
+                })
             };
             SarifResult {
                 rule_id: violation_to_rule_id(&v.requirement).to_string(),
@@ -643,6 +651,39 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
             }
         })
         .collect()
+}
+
+/// Canonical URL for a SARIF rule, derived from its ID prefix. Returns
+/// `None` for rule families that do not map to a single regulation /
+/// specification (e.g., `SBOM-TOOLS-*` change-tracking rules).
+fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
+    if rule_id.starts_with("SBOM-CRA-") {
+        Some("https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng")
+    } else if rule_id.starts_with("SBOM-BSI-") {
+        Some(
+            "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html",
+        )
+    } else if rule_id.starts_with("SBOM-NIST-SSDF-") || rule_id.starts_with("SBOM-SSDF-") {
+        Some("https://doi.org/10.6028/NIST.SP.800-218")
+    } else if rule_id.starts_with("SBOM-EO14028-") || rule_id.starts_with("SBOM-EO-14028-") {
+        Some("https://www.federalregister.gov/d/2021-10460")
+    } else if rule_id.starts_with("SBOM-FDA-") {
+        Some(
+            "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions",
+        )
+    } else if rule_id.starts_with("SBOM-NTIA-") {
+        Some("https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf")
+    } else if rule_id.starts_with("SBOM-PQC-") || rule_id.starts_with("SBOM-NIST-PQC-") {
+        Some("https://csrc.nist.gov/projects/post-quantum-cryptography")
+    } else if rule_id.starts_with("SBOM-CNSA-") {
+        Some(
+            "https://media.defense.gov/2022/Sep/07/2003071834/-1/-1/0/CSA_CNSA_2.0_ALGORITHMS_.PDF",
+        )
+    } else if rule_id.starts_with("SBOM-CSAF-") {
+        Some("https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html")
+    } else {
+        None
+    }
 }
 
 /// Compact, hyphen-safe label for a `StandardKind` used in SARIF
@@ -1401,7 +1442,7 @@ struct SarifDriver {
     name: String,
     version: String,
     information_uri: String,
-    rules: Vec<SarifRule>,
+    rules: Vec<SarifRuleWithUri>,
 }
 
 #[derive(Serialize)]
@@ -1411,6 +1452,30 @@ struct SarifRule {
     name: String,
     short_description: SarifMessage,
     default_configuration: SarifConfiguration,
+}
+
+/// SarifRule plus a derived `helpUri` (CRA-P5.1). Wraps the existing rule
+/// definitions at serialization time so we don't need to thread the URL
+/// through every call site that constructs a `SarifRule`. Computed via
+/// `rule_help_uri()` based on the rule-ID prefix.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SarifRuleWithUri {
+    #[serde(flatten)]
+    inner: SarifRule,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help_uri: Option<&'static str>,
+}
+
+impl SarifRuleWithUri {
+    fn wrap(inner: SarifRule) -> Self {
+        let help_uri = rule_help_uri(&inner.id);
+        Self { inner, help_uri }
+    }
+
+    fn wrap_all(rules: Vec<SarifRule>) -> Vec<Self> {
+        rules.into_iter().map(Self::wrap).collect()
+    }
 }
 
 #[derive(Serialize)]
@@ -1441,6 +1506,11 @@ struct SarifResultProperties {
     /// Plural to match SARIF `properties` extensibility convention.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     standard_ids: Vec<String>,
+    /// Canonical URLs for each standard the violation references — lifted
+    /// from `StandardRef::help_uri`. Order parallels `standard_ids`. Empty
+    /// when none of the references have a canonical home.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    standard_help_uris: Vec<String>,
 }
 
 #[derive(Serialize)]
