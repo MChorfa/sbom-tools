@@ -340,7 +340,9 @@ fn render_adjacent_regulation_section(sidecar: Option<&CraSidecarMetadata>) -> S
         return String::new();
     }
 
-    let mut s = String::from("\n## 8. Adjacent regulation\n\n");
+    // Numbered after the controls-assertion block so the dossier reads
+    // 7 → 8 → 9 when both are present (controls = §8, adjacent = §9).
+    let mut s = String::from("\n## 9. Adjacent regulation\n\n");
     s.push_str(
         "The CRA does not operate in isolation. The following adjacent EU \
          legal acts apply to this product based on the sidecar declarations \

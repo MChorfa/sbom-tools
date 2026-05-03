@@ -131,6 +131,12 @@ pub struct ViewApp {
 
     /// Optional export filename template (from `--export-template` CLI arg).
     pub(crate) export_template: Option<String>,
+
+    /// Optional CRA sidecar metadata. When set, `compute_compliance_results`
+    /// passes it to `ComplianceChecker::with_sidecar()` so OSS-Steward,
+    /// EUCC, Article 14, and product-class checks render correctly in
+    /// the TUI compliance tab.
+    pub(crate) cra_sidecar: Option<crate::model::CraSidecarMetadata>,
 }
 
 impl ViewApp {
@@ -217,6 +223,7 @@ impl ViewApp {
             algorithm_sort_by: AlgorithmSortBy::default(),
             bookmarked: HashSet::new(),
             export_template: None,
+            cra_sidecar: None,
         };
 
         // Pre-compute vuln cache at startup to avoid freeze on first tab visit
@@ -226,10 +233,23 @@ impl ViewApp {
         app
     }
 
+    /// Set the CRA sidecar metadata on this `ViewApp`. Stored so the
+    /// compliance tab can render OSS-Steward / EUCC / Article 14 /
+    /// product-class checks against the same sidecar the CLI uses.
+    pub fn with_cra_sidecar(mut self, sidecar: crate::model::CraSidecarMetadata) -> Self {
+        // Invalidate cached results so the sidecar takes effect on next render.
+        self.compliance_results = None;
+        self.cra_sidecar = Some(sidecar);
+        self
+    }
+
     /// Lazily compute compliance results for all standards when first needed.
     pub fn ensure_compliance_results(&mut self) {
         if self.compliance_results.is_none() {
-            self.compliance_results = Some(compute_compliance_results(&self.sbom));
+            self.compliance_results = Some(compute_compliance_results(
+                &self.sbom,
+                self.cra_sidecar.as_ref(),
+            ));
         }
     }
 

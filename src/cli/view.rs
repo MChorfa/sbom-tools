@@ -99,8 +99,19 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
     tracing::info!("BOM profile: {bom_profile}");
 
     if effective_output == ReportFormat::Tui {
+        // Resolve sidecar so the compliance tab's OSS-Steward / EUCC /
+        // Article 14 / product-class checks render against the same
+        // metadata the CLI uses (auto-discovered next to the SBOM when
+        // `--cra-sidecar` is omitted).
+        let tui_sidecar = match &config.cra_sidecar_path {
+            Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
+            None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
+        };
         let (sbom, raw_content) = parsed.into_parts();
         let mut app = ViewApp::new(sbom, &raw_content, bom_profile);
+        if let Some(sc) = tui_sidecar {
+            app = app.with_cra_sidecar(sc);
+        }
         app.export_template = config.output.export_template.clone();
 
         // Show enrichment warnings in TUI footer

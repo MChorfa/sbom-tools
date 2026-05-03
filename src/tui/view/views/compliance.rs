@@ -1209,11 +1209,17 @@ impl StandardComplianceState {
 
 /// Compute compliance results for all standards
 #[must_use]
-pub fn compute_compliance_results(sbom: &crate::model::NormalizedSbom) -> Vec<ComplianceResult> {
+pub fn compute_compliance_results(
+    sbom: &crate::model::NormalizedSbom,
+    sidecar: Option<&crate::model::CraSidecarMetadata>,
+) -> Vec<ComplianceResult> {
     ComplianceLevel::all()
         .iter()
         .map(|level| {
-            let checker = ComplianceChecker::new(*level);
+            let mut checker = ComplianceChecker::new(*level);
+            if let Some(sc) = sidecar {
+                checker = checker.with_sidecar(sc.clone());
+            }
             checker.check(sbom)
         })
         .collect()
