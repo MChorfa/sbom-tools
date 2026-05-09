@@ -202,8 +202,7 @@ fn render_tech_doc(
         let warnings = compliance.warning_count;
         let infos = compliance.info_count;
         violations_md.push_str(&format!(
-            "**Compliance check summary** ({} errors, {} warnings, {} info):\n\n",
-            errors, warnings, infos
+            "**Compliance check summary** ({errors} errors, {warnings} warnings, {infos} info):\n\n"
         ));
         for v in compliance.violations.iter().take(10) {
             let sev = match v.severity {

@@ -28,7 +28,7 @@ use super::ReportError;
 /// Configuration for the CSAF emitter. Operators that don't supply a
 /// publisher / title fall back to sbom-tools defaults so the output is
 /// still a valid CSAF document.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CsafEmitOptions {
     pub document_id: Option<String>,
     pub publisher_name: Option<String>,
@@ -36,19 +36,6 @@ pub struct CsafEmitOptions {
     pub publisher_category: Option<String>,
     pub title: Option<String>,
     pub category: Option<String>,
-}
-
-impl Default for CsafEmitOptions {
-    fn default() -> Self {
-        Self {
-            document_id: None,
-            publisher_name: None,
-            publisher_namespace: None,
-            publisher_category: None,
-            title: None,
-            category: None,
-        }
-    }
 }
 
 /// Emit a CSAF v2.0 VEX document from `sbom` as pretty-printed JSON.
