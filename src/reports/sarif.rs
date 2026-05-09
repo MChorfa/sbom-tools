@@ -58,6 +58,7 @@ impl ReportGenerator for SarifReporter {
                             ),
                         },
                         locations: vec![],
+                        properties: None,
                     });
                 }
             }
@@ -74,6 +75,7 @@ impl ReportGenerator for SarifReporter {
                         ),
                     },
                     locations: vec![],
+                    properties: None,
                 });
             }
 
@@ -91,6 +93,7 @@ impl ReportGenerator for SarifReporter {
                             ),
                         },
                         locations: vec![],
+                        properties: None,
                     });
                 }
             }
@@ -122,6 +125,7 @@ impl ReportGenerator for SarifReporter {
                         ),
                     },
                     locations: vec![],
+                    properties: None,
                 });
             }
 
@@ -149,6 +153,7 @@ impl ReportGenerator for SarifReporter {
                             ),
                         },
                         locations: vec![],
+                        properties: None,
                     });
                 }
             }
@@ -168,6 +173,7 @@ impl ReportGenerator for SarifReporter {
                         ),
                     },
                     locations: vec![],
+                    properties: None,
                 });
             }
         }
@@ -193,6 +199,7 @@ impl ReportGenerator for SarifReporter {
                                 ),
                             },
                             locations: vec![],
+                            properties: None,
                         });
                     }
                     crate::model::EolStatus::ApproachingEol => {
@@ -212,6 +219,7 @@ impl ReportGenerator for SarifReporter {
                                 ),
                             },
                             locations: vec![],
+                            properties: None,
                         });
                     }
                     _ => {}
@@ -240,7 +248,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: get_sarif_rules(),
+                        rules: SarifRuleWithUri::wrap_all(get_sarif_rules()),
                     },
                 },
                 results,
@@ -284,6 +292,7 @@ impl ReportGenerator for SarifReporter {
                     ),
                 },
                 locations: vec![],
+                properties: None,
             });
         }
 
@@ -303,7 +312,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: get_sarif_view_rules(),
+                        rules: SarifRuleWithUri::wrap_all(get_sarif_view_rules()),
                     },
                 },
                 results,
@@ -320,7 +329,7 @@ impl ReportGenerator for SarifReporter {
 }
 
 pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, ReportError> {
-    let rules = get_sarif_rules_for_standard(result.level);
+    let rules = SarifRuleWithUri::wrap_all(get_sarif_rules_for_standard(result.level));
     let sarif = SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
         version: "2.1.0".to_string(),
@@ -363,7 +372,7 @@ pub fn generate_multi_compliance_sarif(
                     name: "sbom-tools".to_string(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                    rules: all_rules,
+                    rules: SarifRuleWithUri::wrap_all(all_rules),
                 },
             },
             results: all_results,
@@ -507,8 +516,32 @@ fn violation_to_rule_id(requirement: &str) -> &'static str {
         return "SBOM-EO14028-GENERAL";
     }
 
+    // BSI TR-03183-2 rules (matched before generic CRA logic)
+    if req.contains("bsi tr-03183-2") || req.contains("tr-03183-2") {
+        if req.contains("§5.1") {
+            return "SBOM-BSI-TR-03183-2-5-1";
+        } else if req.contains("§5.2") {
+            return "SBOM-BSI-TR-03183-2-5-2";
+        } else if req.contains("§5.3") {
+            return "SBOM-BSI-TR-03183-2-5-3";
+        } else if req.contains("§5.4") {
+            return "SBOM-BSI-TR-03183-2-5-4";
+        } else if req.contains("§5.5") {
+            return "SBOM-BSI-TR-03183-2-5-5";
+        } else if req.contains("§6") {
+            return "SBOM-BSI-TR-03183-2-6";
+        }
+        return "SBOM-BSI-TR-03183-2-GENERAL";
+    }
+
+    // CRA prEN 40000-1-3 normative requirement IDs (most-specific first)
+    if req.contains("[pre-8-rq-02]") || req.contains("pre-8-rq-02") {
+        "SBOM-CRA-PRE-8-RQ-02"
+    } else if req.contains("[pre-7-rq-07-re]") || req.contains("pre-7-rq-07-re") {
+        "SBOM-CRA-PRE-7-RQ-07-RE"
+    }
     // CRA-specific rules (original logic)
-    if req.contains("art. 13(3)") || req.contains("art.13(3)") {
+    else if req.contains("art. 13(3)") || req.contains("art.13(3)") {
         "SBOM-CRA-ART-13-3"
     } else if req.contains("art. 13(4)") || req.contains("art.13(4)") {
         "SBOM-CRA-ART-13-4"
@@ -582,6 +615,24 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
         .iter()
         .map(|v| {
             let element = v.element.as_deref().unwrap_or("unknown");
+            let standard_ids: Vec<String> = v
+                .standard_refs
+                .iter()
+                .map(|sr| format!("{}:{}", sarif_standard_label(sr.standard), sr.id))
+                .collect();
+            let standard_help_uris: Vec<String> = v
+                .standard_refs
+                .iter()
+                .filter_map(|sr| sr.help_uri.clone())
+                .collect();
+            let properties = if standard_ids.is_empty() && standard_help_uris.is_empty() {
+                None
+            } else {
+                Some(SarifResultProperties {
+                    standard_ids,
+                    standard_help_uris,
+                })
+            };
             SarifResult {
                 rule_id: violation_to_rule_id(&v.requirement).to_string(),
                 level: violation_severity_to_level(v.severity),
@@ -596,9 +647,63 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
                     ),
                 },
                 locations: vec![],
+                properties,
             }
         })
         .collect()
+}
+
+/// Canonical URL for a SARIF rule, derived from its ID prefix. Returns
+/// `None` for rule families that do not map to a single regulation /
+/// specification (e.g., `SBOM-TOOLS-*` change-tracking rules).
+fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
+    if rule_id.starts_with("SBOM-CRA-") {
+        Some("https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng")
+    } else if rule_id.starts_with("SBOM-BSI-") {
+        Some(
+            "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html",
+        )
+    } else if rule_id.starts_with("SBOM-NIST-SSDF-") || rule_id.starts_with("SBOM-SSDF-") {
+        Some("https://doi.org/10.6028/NIST.SP.800-218")
+    } else if rule_id.starts_with("SBOM-EO14028-") || rule_id.starts_with("SBOM-EO-14028-") {
+        Some("https://www.federalregister.gov/d/2021-10460")
+    } else if rule_id.starts_with("SBOM-FDA-") {
+        Some(
+            "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions",
+        )
+    } else if rule_id.starts_with("SBOM-NTIA-") {
+        Some("https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf")
+    } else if rule_id.starts_with("SBOM-PQC-") || rule_id.starts_with("SBOM-NIST-PQC-") {
+        Some("https://csrc.nist.gov/projects/post-quantum-cryptography")
+    } else if rule_id.starts_with("SBOM-CNSA-") {
+        Some(
+            "https://media.defense.gov/2022/Sep/07/2003071834/-1/-1/0/CSA_CNSA_2.0_ALGORITHMS_.PDF",
+        )
+    } else if rule_id.starts_with("SBOM-CSAF-") {
+        Some("https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html")
+    } else {
+        None
+    }
+}
+
+/// Compact, hyphen-safe label for a `StandardKind` used in SARIF
+/// `properties.standardIds` strings.
+fn sarif_standard_label(kind: crate::quality::StandardKind) -> &'static str {
+    use crate::quality::StandardKind;
+    match kind {
+        StandardKind::CraArticle => "CRA",
+        StandardKind::CraAnnex => "CRA-Annex",
+        StandardKind::Pren40000_1_3 => "prEN-40000-1-3",
+        StandardKind::BsiTr03183_2 => "BSI-TR-03183-2",
+        StandardKind::NistSsdf => "NIST-SSDF",
+        StandardKind::Eo14028 => "EO-14028",
+        StandardKind::FdaPremarket => "FDA",
+        StandardKind::NtiaMinimum => "NTIA",
+        StandardKind::Csaf2 => "CSAF",
+        StandardKind::Cnsa2 => "CNSA-2.0",
+        StandardKind::NistPqc => "NIST-PQC",
+        StandardKind::Other => "Other",
+    }
 }
 
 fn get_sarif_rules() -> Vec<SarifRule> {
@@ -1230,6 +1335,80 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
+        SarifRule {
+            id: "SBOM-CRA-PRE-8-RQ-02".to_string(),
+            name: "CraHardwareInventory".to_string(),
+            short_description: SarifMessage {
+                text: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware components must be inventoried with producer, name, identifier, and firmware version"
+                    .to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-CRA-PRE-7-RQ-07-RE".to_string(),
+            name: "CraVendorHashCarryThrough".to_string(),
+            short_description: SarifMessage {
+                text: "CRA prEN 40000-1-3 [PRE-7-RQ-07-RE]: Upstream vendor-supplied component hashes must be carried through into the SBOM"
+                    .to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-1".to_string(),
+            name: "BsiTr03183AuthorTool".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.1: SBOM author/tool identification".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-2".to_string(),
+            name: "BsiTr03183Timestamp".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2: ISO-8601 timestamp".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-3".to_string(),
+            name: "BsiTr03183ComponentIdentifier".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.3: Component name and unique identifier".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-4".to_string(),
+            name: "BsiTr03183ComponentHash".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.4: Component cryptographic hash (SHA-256+)".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-5".to_string(),
+            name: "BsiTr03183Dependencies".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.5: Dependency relationships".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-6".to_string(),
+            name: "BsiTr03183Recommended".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §6: Recommended fields (license, supplier, lifecycle)".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-GENERAL".to_string(),
+            name: "BsiTr03183General".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 general SBOM requirement".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
     ]
 }
 
@@ -1263,7 +1442,7 @@ struct SarifDriver {
     name: String,
     version: String,
     information_uri: String,
-    rules: Vec<SarifRule>,
+    rules: Vec<SarifRuleWithUri>,
 }
 
 #[derive(Serialize)]
@@ -1273,6 +1452,30 @@ struct SarifRule {
     name: String,
     short_description: SarifMessage,
     default_configuration: SarifConfiguration,
+}
+
+/// SarifRule plus a derived `helpUri` (CRA-P5.1). Wraps the existing rule
+/// definitions at serialization time so we don't need to thread the URL
+/// through every call site that constructs a `SarifRule`. Computed via
+/// `rule_help_uri()` based on the rule-ID prefix.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SarifRuleWithUri {
+    #[serde(flatten)]
+    inner: SarifRule,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help_uri: Option<&'static str>,
+}
+
+impl SarifRuleWithUri {
+    fn wrap(inner: SarifRule) -> Self {
+        let help_uri = rule_help_uri(&inner.id);
+        Self { inner, help_uri }
+    }
+
+    fn wrap_all(rules: Vec<SarifRule>) -> Vec<Self> {
+        rules.into_iter().map(Self::wrap).collect()
+    }
 }
 
 #[derive(Serialize)]
@@ -1288,6 +1491,26 @@ struct SarifResult {
     level: SarifLevel,
     message: SarifMessage,
     locations: Vec<SarifLocation>,
+    /// Standard references (CRA Article, prEN 40000-1-3 ID, BSI section, …)
+    /// Surfaced in `properties.standardIds` so downstream GRC/CI tooling can
+    /// map a finding to the exact harmonised-standard clause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<SarifResultProperties>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SarifResultProperties {
+    /// Standard reference IDs in the form `<standard>:<id>`
+    /// (e.g., `prEN-40000-1-3:PRE-7-RQ-07`, `CRA:Art. 13(4)`).
+    /// Plural to match SARIF `properties` extensibility convention.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    standard_ids: Vec<String>,
+    /// Canonical URLs for each standard the violation references — lifted
+    /// from `StandardRef::help_uri`. Order parallels `standard_ids`. Empty
+    /// when none of the references have a canonical home.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    standard_help_uris: Vec<String>,
 }
 
 #[derive(Serialize)]

@@ -337,6 +337,17 @@ struct ViewArgs {
     #[arg(long, value_name = "TYPE")]
     bom_type: Option<String>,
 
+    /// Path to a CRA sidecar metadata file (JSON or YAML).
+    /// If omitted, auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
+
+    /// CRA Annex III/IV product class (drives severity calibration).
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins over this flag.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
+
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
 }
@@ -371,6 +382,19 @@ struct ValidateArgs {
     /// Output only a compact JSON summary (overrides --output)
     #[arg(long)]
     summary: bool,
+
+    /// Path to a CRA sidecar metadata file (JSON or YAML) supplying
+    /// security_contact, manufacturer, support_end_date, ce_marking_reference,
+    /// and similar CRA fields the SBOM itself doesn't carry.
+    /// If omitted, sbom-tools auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
+
+    /// CRA Annex III/IV product class (drives severity calibration).
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins over this flag.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
 }
 
 /// Arguments for the `diff-multi` subcommand
@@ -607,6 +631,18 @@ struct QualityArgs {
     /// Fail if quality score is below threshold (0-100)
     #[arg(long)]
     min_score: Option<f32>,
+
+    /// Path to a CRA sidecar metadata file (JSON or YAML).
+    /// Consulted by the embedded CRA compliance check when running
+    /// `--profile cra`. Auto-discovered next to the SBOM if omitted.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
+
+    /// CRA Annex III/IV product class (drives severity calibration).
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins over this flag.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
 }
 
 /// Arguments for the `query` subcommand
@@ -813,6 +849,12 @@ enum Commands {
     /// Merge two SBOMs into one
     Merge(MergeArgs),
 
+    /// Generate CRA technical-documentation dossier (Annex V templates)
+    CraDocs(CraDocsArgs),
+
+    /// Show curated CRA standards-watch catalogue (prEN, BSI, CSAF, EUCC, …)
+    CraStandardsWatch(CraStandardsWatchArgs),
+
     /// Generate a man page and print it to stdout
     Man,
 }
@@ -837,6 +879,27 @@ enum VexAction {
     Status(VexArgs),
     /// Filter vulnerabilities by VEX state (for CI pipelines)
     Filter(VexArgs),
+    /// Export the SBOM's VEX state as a CSAF v2.0 advisory document
+    Export(VexExportArgs),
+}
+
+/// Arguments for `vex export`. Output format defaults to CSAF v2.0.
+#[derive(Parser)]
+struct VexExportArgs {
+    /// Path to the SBOM file
+    sbom: PathBuf,
+
+    /// Apply external VEX document(s) before exporting (OpenVEX / CycloneDX VEX / CSAF).
+    #[arg(long = "vex", value_name = "PATH")]
+    vex: Vec<PathBuf>,
+
+    /// Output advisory format. Currently: csaf (CSAF v2.0).
+    #[arg(short, long, default_value = "csaf")]
+    format: String,
+
+    /// Output file path (stdout if not specified)
+    #[arg(short = 'O', long)]
+    output_file: Option<PathBuf>,
 }
 
 /// Shared arguments for all VEX subcommands
@@ -1032,6 +1095,55 @@ struct MergeArgs {
     dedup: String,
 }
 
+/// Arguments for the `cra-standards-watch` subcommand. Curated, offline-first
+/// catalogue of CRA-related standards bodies and their tracked artefacts.
+#[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools cra-standards-watch                   # Print the curated catalogue
+    sbom-tools cra-standards-watch --format json     # Machine-readable output
+    sbom-tools cra-standards-watch --check-online    # HEAD-probe each URL")]
+struct CraStandardsWatchArgs {
+    /// Output format: table (default) or json
+    #[arg(short, long, default_value = "table")]
+    format: String,
+
+    /// Issue HEAD requests against each tracked URL and report HTTP status
+    #[arg(long)]
+    check_online: bool,
+
+    /// Online-probe timeout in seconds
+    #[arg(long, default_value = "10")]
+    timeout: u64,
+}
+
+/// Arguments for the `cra-docs` subcommand — generates a CRA technical
+/// documentation dossier (Annex V templates) prefilled from the SBOM and
+/// optional CRA sidecar metadata.
+#[derive(Parser)]
+#[command(after_help = "EXAMPLES:
+    sbom-tools cra-docs app.cdx.json --output dossier/                # Markdown dossier
+    sbom-tools cra-docs app.cdx.json --output dossier/ --cra-sidecar app.cra.yaml
+    sbom-tools cra-docs app.cdx.json --output dossier/ --cra-product-class important-class-1")]
+struct CraDocsArgs {
+    /// Path to the SBOM file
+    sbom: PathBuf,
+
+    /// Output directory (will be created if it doesn't exist)
+    #[arg(short, long, default_value = "cra-dossier")]
+    output: PathBuf,
+
+    /// Path to a CRA sidecar metadata file (JSON or YAML).
+    /// If omitted, auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
+
+    /// CRA Annex III/IV product class.
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Sidecar `productClass` wins.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
+}
+
 /// Validate VEX state filter values at the CLI boundary.
 fn validate_vex_state(s: &str) -> std::result::Result<String, String> {
     match s.to_lowercase().as_str() {
@@ -1160,6 +1272,8 @@ fn main() -> Result<()> {
                     .as_deref()
                     .and_then(sbom_tools::BomProfile::from_str_opt),
                 enrichment,
+                cra_sidecar_path: args.cra_sidecar.clone(),
+                cra_product_class: args.cra_product_class.clone(),
             };
             let exit_code = cli::run_view(config)?;
             if exit_code != 0 {
@@ -1175,6 +1289,8 @@ fn main() -> Result<()> {
             args.output_file,
             args.fail_on_warning,
             args.summary,
+            args.cra_sidecar,
+            args.cra_product_class,
         ),
 
         Commands::DiffMulti(args) => {
@@ -1355,6 +1471,8 @@ fn main() -> Result<()> {
                 args.metrics,
                 args.min_score,
                 cli.no_color,
+                args.cra_sidecar,
+                args.cra_product_class,
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
@@ -1418,6 +1536,29 @@ fn main() -> Result<()> {
                 VexAction::Apply(args) => (args, cli::VexAction::Apply),
                 VexAction::Status(args) => (args, cli::VexAction::Status),
                 VexAction::Filter(args) => (args, cli::VexAction::Filter),
+                VexAction::Export(export_args) => {
+                    let fmt = match export_args.format.to_lowercase().as_str() {
+                        "csaf" | "csaf-v2.0" | "csaf2" => cli::VexExportFormat::Csaf,
+                        other => {
+                            anyhow::bail!("Unsupported VEX export format '{other}'. Valid: csaf")
+                        }
+                    };
+                    let synth_args = VexArgs {
+                        sbom: export_args.sbom,
+                        vex: export_args.vex,
+                        output: ReportFormat::Json,
+                        output_file: export_args.output_file,
+                        actionable_only: false,
+                        state: None,
+                        enrich_vulns: false,
+                        enrich_eol: false,
+                        vuln_cache_ttl: 24,
+                        vuln_cache_dir: None,
+                        refresh_vulns: false,
+                        api_timeout: 10,
+                    };
+                    (synth_args, cli::VexAction::Export(fmt))
+                }
             };
 
             let enrichment = EnrichmentConfig {
@@ -1653,6 +1794,19 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+
+        Commands::CraDocs(args) => cli::run_cra_docs(
+            args.sbom,
+            args.output,
+            args.cra_sidecar,
+            args.cra_product_class,
+        ),
+
+        Commands::CraStandardsWatch(args) => cli::run_cra_standards_watch(
+            cli::WatchOutputFormat::parse(&args.format)?,
+            args.check_online,
+            args.timeout,
+        ),
 
         Commands::Man => {
             let cmd = Cli::command();

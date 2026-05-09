@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Run the validate command
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub fn run_validate(
     sbom_path: PathBuf,
     standard: String,
@@ -22,8 +22,38 @@ pub fn run_validate(
     output_file: Option<PathBuf>,
     fail_on_warning: bool,
     summary: bool,
+    cra_sidecar_path: Option<PathBuf>,
+    cra_product_class: Option<String>,
 ) -> Result<()> {
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
+
+    // Load CRA sidecar — explicit flag wins, otherwise auto-discover next to the SBOM
+    let cra_sidecar = match cra_sidecar_path {
+        Some(p) => Some(
+            crate::model::CraSidecarMetadata::from_file(&p).map_err(|e| {
+                anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())
+            })?,
+        ),
+        None => crate::model::CraSidecarMetadata::find_for_sbom(&sbom_path),
+    };
+
+    // Resolve effective product class: sidecar wins; otherwise CLI flag.
+    // Mismatch between explicit CLI flag and sidecar is reported as a Warning
+    // on stderr (not turned into a Violation — sidecar is authoritative).
+    let cli_class = cra_product_class
+        .as_deref()
+        .and_then(crate::model::CraProductClass::parse_cli);
+    let sidecar_class = cra_sidecar.as_ref().and_then(|s| s.product_class);
+    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
+        && cli != side
+    {
+        tracing::warn!(
+            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
+            cli.label(),
+            side.label()
+        );
+    }
+    let effective_class = sidecar_class.or(cli_class);
 
     let standards: Vec<&str> = standard.split(',').map(str::trim).collect();
     let mut results = Vec::new();
@@ -32,7 +62,16 @@ pub fn run_validate(
         let result = match std_name.to_lowercase().as_str() {
             "ntia" => check_ntia_compliance(parsed.sbom()),
             "fda" => check_fda_compliance(parsed.sbom()),
-            "cra" => ComplianceChecker::new(ComplianceLevel::CraPhase2).check(parsed.sbom()),
+            "cra" => {
+                let mut checker = ComplianceChecker::new(ComplianceLevel::CraPhase2);
+                if let Some(sc) = cra_sidecar.clone() {
+                    checker = checker.with_sidecar(sc);
+                }
+                if let Some(c) = effective_class {
+                    checker = checker.with_product_class(c);
+                }
+                checker.check(parsed.sbom())
+            }
             "ssdf" | "nist-ssdf" | "nist_ssdf" => {
                 ComplianceChecker::new(ComplianceLevel::NistSsdf).check(parsed.sbom())
             }
@@ -45,10 +84,27 @@ pub fn run_validate(
             "pqc" | "nist-pqc" | "nist_pqc" => {
                 ComplianceChecker::new(ComplianceLevel::NistPqc).check(parsed.sbom())
             }
+            "bsi" | "tr-03183" | "tr03183" | "bsi-tr-03183-2" => {
+                ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(parsed.sbom())
+            }
+            "oss-steward" | "cra-oss-steward" | "cra-oss" | "cra-art24" | "art24" => {
+                let mut checker = ComplianceChecker::new(ComplianceLevel::CraOssSteward);
+                if let Some(sc) = cra_sidecar.clone() {
+                    checker = checker.with_sidecar(sc);
+                }
+                checker.check(parsed.sbom())
+            }
+            "eucc" | "eucc-substantial" | "common-criteria" => {
+                let mut checker = ComplianceChecker::new(ComplianceLevel::EuccSubstantial);
+                if let Some(sc) = cra_sidecar.clone() {
+                    checker = checker.with_sidecar(sc);
+                }
+                checker.check(parsed.sbom())
+            }
             _ => {
                 bail!(
                     "Unknown validation standard: {std_name}. \
-                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc"
+                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc, bsi, oss-steward, eucc"
                 );
             }
         };
@@ -254,6 +310,7 @@ fn check_ntia_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
             message: "Missing author/creator information".to_string(),
             element: None,
             requirement: "NTIA Minimum Elements: Author".to_string(),
+            standard_refs: Vec::new(),
         });
     }
 
@@ -265,6 +322,7 @@ fn check_ntia_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
                 message: "Component missing name".to_string(),
                 element: None,
                 requirement: "NTIA Minimum Elements: Component Name".to_string(),
+                standard_refs: Vec::new(),
             });
         }
         if comp.version.is_none() {
@@ -274,6 +332,7 @@ fn check_ntia_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
                 message: format!("Component '{}' missing version", comp.name),
                 element: Some(comp.name.clone()),
                 requirement: "NTIA Minimum Elements: Version".to_string(),
+                standard_refs: Vec::new(),
             });
         }
         if comp.supplier.is_none() {
@@ -283,6 +342,7 @@ fn check_ntia_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
                 message: format!("Component '{}' missing supplier", comp.name),
                 element: Some(comp.name.clone()),
                 requirement: "NTIA Minimum Elements: Supplier Name".to_string(),
+                standard_refs: Vec::new(),
             });
         }
         if comp.identifiers.purl.is_none()
@@ -298,6 +358,7 @@ fn check_ntia_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
                 ),
                 element: Some(comp.name.clone()),
                 requirement: "NTIA Minimum Elements: Unique Identifier".to_string(),
+                standard_refs: Vec::new(),
             });
         }
     }
@@ -309,6 +370,7 @@ fn check_ntia_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
             message: "Missing dependency relationships".to_string(),
             element: None,
             requirement: "NTIA Minimum Elements: Dependency Relationship".to_string(),
+            standard_refs: Vec::new(),
         });
     }
 
@@ -342,6 +404,7 @@ fn check_fda_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
             requirement: format!("FDA Medical Device: {}", issue.category),
             message: issue.message,
             element: None,
+            standard_refs: Vec::new(),
         })
         .collect();
 

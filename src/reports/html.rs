@@ -657,6 +657,9 @@ fn write_cra_compliance_diff_html(
     writeln!(html, "        </tbody>")?;
     writeln!(html, "    </table>")?;
 
+    write_conformity_assessment_html(html, new)?;
+    write_reporting_channels_html(html, new)?;
+
     if !new.violations.is_empty() {
         writeln!(html, "    <h3>Violations (New SBOM)</h3>")?;
         write_violation_table_html(html, &new.violations)?;
@@ -692,6 +695,9 @@ fn write_cra_compliance_view_html(
         result.error_count, result.warning_count
     )?;
 
+    write_conformity_assessment_html(html, result)?;
+    write_reporting_channels_html(html, result)?;
+
     if !result.violations.is_empty() {
         write_violation_table_html(html, &result.violations)?;
     }
@@ -701,6 +707,133 @@ fn write_cra_compliance_view_html(
         html,
         "<a href=\"#top\" class=\"back-to-top\">Back to top</a>"
     )
+}
+
+/// Render a "Conformity assessment" subsection (CRA-P4.3) when a product
+/// class has been pinned. Surfaces the resolved Annex VIII route and a
+/// per-route evidence checklist. Mirrors the Markdown variant.
+fn write_conformity_assessment_html(
+    html: &mut String,
+    result: &ComplianceResult,
+) -> std::fmt::Result {
+    let Some(summary) = result.conformity_summary.as_ref() else {
+        return Ok(());
+    };
+    writeln!(html, "    <h3>Conformity Assessment (CRA Annex VIII)</h3>")?;
+    writeln!(
+        html,
+        "    <p><strong>Product class:</strong> {}<br><strong>Conformity route:</strong> {}</p>",
+        crate::reports::escape::escape_html(summary.product_class.name()),
+        crate::reports::escape::escape_html(summary.route.name())
+    )?;
+    writeln!(html, "    <table>")?;
+    writeln!(
+        html,
+        "        <thead><tr><th>Evidence</th><th>Status</th><th>Detail</th></tr></thead>"
+    )?;
+    writeln!(html, "        <tbody>")?;
+    for ev in &summary.evidence {
+        let status = if ev.satisfied {
+            "<span class=\"present\">Present</span>"
+        } else {
+            "<span class=\"missing\">Missing</span>"
+        };
+        writeln!(
+            html,
+            "            <tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+            crate::reports::escape::escape_html(&ev.label),
+            status,
+            crate::reports::escape::escape_html(&ev.detail)
+        )?;
+    }
+    writeln!(html, "        </tbody>")?;
+    writeln!(html, "    </table>")?;
+    Ok(())
+}
+
+/// Render a "Reporting channels" subsection (CRA Art. 14 readiness).
+/// Same logic as the Markdown variant — see `markdown.rs::write_reporting_channels_md`.
+fn write_reporting_channels_html(html: &mut String, result: &ComplianceResult) -> std::fmt::Result {
+    if !result.level.is_cra() {
+        return Ok(());
+    }
+
+    let psirt = channel_status_html(result, "Art. 14: PSIRT");
+    let early = channel_status_html(result, "Art. 14(1)");
+    let incident = channel_status_html(result, "Art. 14(2)");
+    let enisa = channel_status_html(result, "Art. 14(7)");
+
+    writeln!(html, "    <h3>Reporting Channels (CRA Art. 14)</h3>")?;
+    writeln!(html, "    <table>")?;
+    writeln!(
+        html,
+        "        <thead><tr><th>Channel</th><th>Status</th></tr></thead>"
+    )?;
+    writeln!(html, "        <tbody>")?;
+    writeln!(
+        html,
+        "            <tr><td>PSIRT contact</td><td>{}</td></tr>",
+        psirt.html()
+    )?;
+    writeln!(
+        html,
+        "            <tr><td>24-hour early warning (Art. 14(1))</td><td>{}</td></tr>",
+        early.html()
+    )?;
+    writeln!(
+        html,
+        "            <tr><td>72-hour incident report (Art. 14(2))</td><td>{}</td></tr>",
+        incident.html()
+    )?;
+    writeln!(
+        html,
+        "            <tr><td>ENISA single reporting platform (Art. 14(7))</td><td>{}</td></tr>",
+        enisa.html()
+    )?;
+    writeln!(html, "        </tbody>")?;
+    writeln!(html, "    </table>")?;
+    writeln!(
+        html,
+        "    <p><em>Article 14 reporting obligations apply from 11 September 2026. \
+         Channels marked 'Missing (pre-deadline)' surface as Info; \
+         after the deadline they become Warnings.</em></p>"
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelStatusHtml {
+    Documented,
+    MissingPreDeadline,
+    MissingPostDeadline,
+}
+
+impl ChannelStatusHtml {
+    fn html(self) -> &'static str {
+        match self {
+            Self::Documented => "<span class=\"badge badge-low\">Documented</span>",
+            Self::MissingPreDeadline => {
+                "<span class=\"badge badge-medium\">Missing (pre-deadline 2026-09-11)</span>"
+            }
+            Self::MissingPostDeadline => "<span class=\"badge badge-critical\">Missing</span>",
+        }
+    }
+}
+
+fn channel_status_html(result: &ComplianceResult, needle: &str) -> ChannelStatusHtml {
+    match result
+        .violations
+        .iter()
+        .find(|v| v.requirement.contains(needle))
+    {
+        None => ChannelStatusHtml::Documented,
+        Some(v) => match v.severity {
+            ViolationSeverity::Warning | ViolationSeverity::Error => {
+                ChannelStatusHtml::MissingPostDeadline
+            }
+            ViolationSeverity::Info => ChannelStatusHtml::MissingPreDeadline,
+        },
+    }
 }
 
 /// Aggregate violations by (severity, category, requirement) to reduce noise.
@@ -747,6 +880,7 @@ fn aggregate_violations_html(
                     )
                 }
             };
+            let standard_refs = format_standard_refs_html(&group[0].standard_refs);
             AggregatedViolationHtml {
                 severity: group[0].severity,
                 category: group[0].category.name(),
@@ -754,9 +888,23 @@ fn aggregate_violations_html(
                 message,
                 remediation: group[0].remediation_guidance(),
                 count: group.len(),
+                standard_refs,
             }
         })
         .collect()
+}
+
+/// Render `standard_refs` as a comma-separated cell of `<kind>: <id>` tokens.
+fn format_standard_refs_html(refs: &[crate::quality::StandardRef]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (i, r) in refs.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let _ = write!(out, "{}: {}", r.standard.label(), r.id);
+    }
+    out
 }
 
 struct AggregatedViolationHtml<'a> {
@@ -766,6 +914,7 @@ struct AggregatedViolationHtml<'a> {
     message: String,
     remediation: &'static str,
     count: usize,
+    standard_refs: String,
 }
 
 /// Write an HTML table of compliance violations (aggregated, with collapsible remediation).
@@ -779,6 +928,7 @@ fn write_violation_table_html(
     writeln!(html, "            <tr>")?;
     writeln!(html, "                <th>Severity</th>")?;
     writeln!(html, "                <th>Category</th>")?;
+    writeln!(html, "                <th>Standard refs</th>")?;
     writeln!(html, "                <th>Requirement</th>")?;
     writeln!(html, "                <th>Message</th>")?;
     writeln!(html, "                <th>Remediation</th>")?;
@@ -806,6 +956,11 @@ fn write_violation_table_html(
             "                <td><span class=\"badge {badge_class}\">{label}</span>{count_suffix}</td>"
         )?;
         writeln!(html, "                <td>{}</td>", escape_html(v.category))?;
+        writeln!(
+            html,
+            "                <td>{}</td>",
+            escape_html(&v.standard_refs)
+        )?;
         writeln!(
             html,
             "                <td>{}</td>",

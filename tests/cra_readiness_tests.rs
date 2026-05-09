@@ -62,10 +62,13 @@ fn cra_missing_identifier_and_version_are_errors() {
             && v.requirement == "CRA Art. 13(12): Component version"
     }));
 
+    // Updated requirement string to reflect prEN 40000-1-3 [PRE-7-RQ-07] mapping
+    // and SWHID acceptance (CRA P1.2/P1.3).
     assert!(result.violations.iter().any(|v| {
         v.severity == ViolationSeverity::Error
             && v.category == ViolationCategory::ComponentIdentification
-            && v.requirement == "CRA Annex I: Unique component identifier (PURL/CPE/SWID)"
+            && v.requirement.contains("Annex I")
+            && v.requirement.contains("PRE-7-RQ-07")
     }));
 }
 

@@ -3,6 +3,8 @@
 //! This module provides testable command handlers that are invoked by main.rs.
 //! Each handler implements the business logic for a specific CLI subcommand.
 
+mod cra_docs;
+mod cra_standards_watch;
 mod diff;
 #[cfg(feature = "enrichment")]
 mod enrich;
@@ -18,6 +20,8 @@ mod vex;
 mod view;
 mod watch;
 
+pub use cra_docs::run_cra_docs;
+pub use cra_standards_watch::{WatchOutputFormat, run_cra_standards_watch};
 pub use diff::run_diff;
 #[cfg(feature = "enrichment")]
 pub use enrich::run_enrich;
@@ -29,7 +33,7 @@ pub use query::{QueryFilter, run_query};
 pub use tailor::run_tailor;
 pub use validate::run_validate;
 pub use verify::{VerifyAction, run_verify};
-pub use vex::{VexAction, run_vex};
+pub use vex::{VexAction, VexExportFormat, run_vex};
 pub use view::run_view;
 pub use watch::run_watch;
 

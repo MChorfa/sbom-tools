@@ -48,6 +48,40 @@ impl NormalizedSbom {
         }
     }
 
+    /// Return the canonical IDs of *direct* dependencies (1 hop from the
+    /// primary component along the dependency graph).
+    ///
+    /// When no `primary_component_id` is set, all components reachable from
+    /// any node with no incoming edges are treated as direct (best-effort
+    /// approximation for SBOMs that don't declare a root).
+    ///
+    /// Used by CRA prEN 40000-1-3 `[PRE-7-RQ-03]` enforcement, which makes
+    /// direct dependencies *mandatory* and transitive *recommended*.
+    #[must_use]
+    pub fn direct_dependency_ids(&self) -> std::collections::HashSet<CanonicalId> {
+        use std::collections::HashSet;
+        if let Some(root) = &self.primary_component_id {
+            return self
+                .edges
+                .iter()
+                .filter(|e| &e.from == root)
+                .map(|e| e.to.clone())
+                .collect();
+        }
+        // Fallback: find roots = nodes with no incoming edges, then take their direct children.
+        let incoming: HashSet<&CanonicalId> = self.edges.iter().map(|e| &e.to).collect();
+        let roots: HashSet<&CanonicalId> = self
+            .components
+            .keys()
+            .filter(|id| !incoming.contains(id))
+            .collect();
+        self.edges
+            .iter()
+            .filter(|e| roots.contains(&e.from))
+            .map(|e| e.to.clone())
+            .collect()
+    }
+
     /// Add a component to the SBOM.
     ///
     /// Returns `true` if a collision occurred (a component with the same canonical ID
@@ -684,6 +718,34 @@ impl Component {
     pub fn with_version(mut self, version: String) -> Self {
         self.semver = semver::Version::parse(&version).ok();
         self.version = Some(version);
+        self
+    }
+
+    /// Add a Software Heritage persistent identifier (SWHID) from a string.
+    ///
+    /// Invalid SWHIDs are silently dropped (matches the parser-tolerant
+    /// behaviour of `CanonicalId::from_swhid`). Use `with_swhid_object` when
+    /// you already have a `SwhidObject` in hand.
+    ///
+    /// Recognised by CRA prEN 40000-1-3 `[PRE-7-RQ-07]` as one of the three
+    /// named identifier types (alongside PURL and CPE). Multiple SWHIDs can
+    /// be attached to a single component (e.g., a `dir` SWHID for the
+    /// unpacked tree plus `cnt` SWHIDs for individual files).
+    #[must_use]
+    pub fn with_swhid(mut self, swhid: String) -> Self {
+        if let Ok(obj) = crate::model::SwhidObject::parse(&swhid) {
+            self.identifiers.swhid.push(obj);
+            // Recompute canonical ID — SWHID may now be the best fallback
+            self.canonical_id = self.identifiers.canonical_id();
+        }
+        self
+    }
+
+    /// Add a structured `SwhidObject` SWHID.
+    #[must_use]
+    pub fn with_swhid_object(mut self, swhid: crate::model::SwhidObject) -> Self {
+        self.identifiers.swhid.push(swhid);
+        self.canonical_id = self.identifiers.canonical_id();
         self
     }
 

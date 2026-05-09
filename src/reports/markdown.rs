@@ -807,6 +807,11 @@ fn write_cra_compliance_diff(
     )?;
     writeln!(md)?;
 
+    // Conformity assessment (CRA Annex VIII) — only when product class pinned
+    write_conformity_assessment_md(md, new)?;
+    // Reporting channels (CRA Art. 14) — derived from new SBOM violations
+    write_reporting_channels_md(md, new)?;
+
     // Show new SBOM violations if any
     if !new.violations.is_empty() {
         writeln!(md, "### Violations (New SBOM)\n")?;
@@ -835,11 +840,119 @@ fn write_cra_compliance_view(md: &mut String, result: &ComplianceResult) -> std:
         result.error_count, result.warning_count
     )?;
 
+    write_conformity_assessment_md(md, result)?;
+    write_reporting_channels_md(md, result)?;
+
     if !result.violations.is_empty() {
         write_violation_table(md, &result.violations)?;
     }
 
     Ok(())
+}
+
+/// Render a "Conformity assessment" subsection (CRA-P4.3) when a product
+/// class has been pinned. Surfaces the resolved Annex VIII route and a
+/// per-route evidence checklist.
+fn write_conformity_assessment_md(md: &mut String, result: &ComplianceResult) -> std::fmt::Result {
+    let Some(summary) = result.conformity_summary.as_ref() else {
+        return Ok(());
+    };
+    writeln!(md, "### Conformity Assessment (CRA Annex VIII)\n")?;
+    writeln!(md, "- **Product class:** {}", summary.product_class.name())?;
+    writeln!(md, "- **Conformity route:** {}\n", summary.route.name())?;
+    writeln!(md, "| Evidence | Status | Detail |")?;
+    writeln!(md, "|----------|--------|--------|")?;
+    for ev in &summary.evidence {
+        let status = if ev.satisfied {
+            "✅ Present"
+        } else {
+            "❌ Missing"
+        };
+        writeln!(md, "| {} | {} | {} |", ev.label, status, ev.detail)?;
+    }
+    writeln!(md)?;
+    Ok(())
+}
+
+/// Render a "Reporting channels" subsection (CRA Art. 14 readiness).
+///
+/// We can't see the raw sidecar from here, so the status of each channel is
+/// derived from the violation pattern produced by `check_article_14_readiness`:
+/// - violation absent → channel documented (only meaningful for CRA levels)
+/// - violation at Info → pre-deadline, channel still missing
+/// - violation at Warning → post-deadline, channel missing
+///
+/// Skipped entirely for non-CRA levels.
+fn write_reporting_channels_md(md: &mut String, result: &ComplianceResult) -> std::fmt::Result {
+    if !result.level.is_cra() {
+        return Ok(());
+    }
+
+    let psirt = channel_status(result, "Art. 14: PSIRT");
+    let early = channel_status(result, "Art. 14(1)");
+    let incident = channel_status(result, "Art. 14(2)");
+    let enisa = channel_status(result, "Art. 14(7)");
+
+    writeln!(md, "### Reporting Channels (CRA Art. 14)\n")?;
+    writeln!(md, "| Channel | Status |")?;
+    writeln!(md, "|---------|--------|")?;
+    writeln!(md, "| PSIRT contact | {} |", psirt.label())?;
+    writeln!(
+        md,
+        "| 24-hour early warning (Art. 14(1)) | {} |",
+        early.label()
+    )?;
+    writeln!(
+        md,
+        "| 72-hour incident report (Art. 14(2)) | {} |",
+        incident.label()
+    )?;
+    writeln!(
+        md,
+        "| ENISA single reporting platform (Art. 14(7)) | {} |",
+        enisa.label()
+    )?;
+    writeln!(md)?;
+    writeln!(
+        md,
+        "_Article 14 reporting obligations apply from 11 September 2026. \
+         Channels marked 'Missing (pre-deadline)' surface as Info; \
+         after the deadline they become Warnings._\n"
+    )?;
+    Ok(())
+}
+
+fn channel_status(result: &ComplianceResult, needle: &str) -> ChannelStatus {
+    match result
+        .violations
+        .iter()
+        .find(|v| v.requirement.contains(needle))
+    {
+        None => ChannelStatus::Documented,
+        Some(v) => match v.severity {
+            ViolationSeverity::Warning | ViolationSeverity::Error => {
+                ChannelStatus::MissingPostDeadline
+            }
+            ViolationSeverity::Info => ChannelStatus::MissingPreDeadline,
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelStatus {
+    Documented,
+    MissingPreDeadline,
+    MissingPostDeadline,
+}
+
+impl ChannelStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Documented => "Documented",
+            Self::MissingPreDeadline => "Missing (pre-deadline 2026-09-11)",
+            Self::MissingPostDeadline => "Missing",
+        }
+    }
 }
 
 /// Aggregate violations by (severity, category, requirement) to reduce noise.
@@ -865,6 +978,7 @@ fn aggregate_violations(violations: &[crate::quality::Violation]) -> Vec<Aggrega
     groups
         .into_values()
         .map(|group| {
+            let standard_refs = format_standard_refs(&group[0].standard_refs);
             if group.len() == 1 {
                 AggregatedViolation {
                     severity: group[0].severity,
@@ -873,6 +987,7 @@ fn aggregate_violations(violations: &[crate::quality::Violation]) -> Vec<Aggrega
                     message: group[0].message.clone(),
                     remediation: group[0].remediation_guidance(),
                     count: 1,
+                    standard_refs,
                 }
             } else {
                 let elements: Vec<&str> =
@@ -900,6 +1015,7 @@ fn aggregate_violations(violations: &[crate::quality::Violation]) -> Vec<Aggrega
                     message,
                     remediation: group[0].remediation_guidance(),
                     count: group.len(),
+                    standard_refs,
                 }
             }
         })
@@ -913,6 +1029,22 @@ struct AggregatedViolation<'a> {
     message: String,
     remediation: &'static str,
     count: usize,
+    /// Pre-rendered "Standard refs" cell — `<kind>:<id>` joined by `, `.
+    /// Empty when the violation has no derived refs.
+    standard_refs: String,
+}
+
+/// Render a `Vec<StandardRef>` as a compact, table-safe cell.
+fn format_standard_refs(refs: &[crate::quality::StandardRef]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (i, r) in refs.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let _ = write!(out, "{}: {}", r.standard.label(), r.id);
+    }
+    out
 }
 
 /// Write a markdown table of CRA compliance violations (aggregated)
@@ -923,11 +1055,11 @@ fn write_violation_table(
     let aggregated = aggregate_violations(violations);
     writeln!(
         md,
-        "| Severity | Category | Requirement | Message | Remediation |"
+        "| Severity | Category | Standard refs | Requirement | Message | Remediation |"
     )?;
     writeln!(
         md,
-        "|----------|----------|-------------|---------|-------------|"
+        "|----------|----------|---------------|-------------|---------|-------------|"
     )?;
     for v in &aggregated {
         let severity = match v.severity {
@@ -942,10 +1074,11 @@ fn write_violation_table(
         };
         writeln!(
             md,
-            "| {}{} | {} | {} | {} | {} |",
+            "| {}{} | {} | {} | {} | {} | {} |",
             severity,
             escape_markdown_table(&count_suffix),
             escape_markdown_table(v.category),
+            escape_markdown_table(&v.standard_refs),
             escape_markdown_table(v.requirement),
             escape_markdown_table(&v.message),
             escape_markdown_table(v.remediation),

@@ -202,6 +202,15 @@ pub struct HashQualityMetrics {
     pub algorithm_distribution: BTreeMap<String, usize>,
     /// Total hash entries across all components
     pub total_hashes: usize,
+    /// Vendor-supplied components — supplier or author set AND a non-synthetic
+    /// canonical identifier (PURL/CPE/SWHID/SWID).
+    /// Tracks how many such "upstream" components exist, used to verify
+    /// CRA prEN 40000-1-3 `[PRE-7-RQ-07-RE]` (carry-through of vendor hashes).
+    pub vendor_components_total: usize,
+    /// Vendor components that carry at least one hash entry.
+    pub vendor_components_with_hash: usize,
+    /// Vendor components that carry at least one strong hash (SHA-256+).
+    pub vendor_components_with_strong_hash: usize,
 }
 
 impl HashQualityMetrics {
@@ -213,8 +222,23 @@ impl HashQualityMetrics {
         let mut with_weak_only = 0;
         let mut distribution: BTreeMap<String, usize> = BTreeMap::new();
         let mut total_hashes = 0;
+        let mut vendor_total = 0;
+        let mut vendor_with_hash = 0;
+        let mut vendor_with_strong = 0;
 
         for comp in sbom.components.values() {
+            // Vendor-component classification (independent of hash presence)
+            let is_vendor = (comp.supplier.is_some() || comp.author.is_some())
+                && !matches!(
+                    comp.canonical_id.source(),
+                    crate::model::IdSource::Synthetic
+                        | crate::model::IdSource::FormatSpecific
+                        | crate::model::IdSource::NameVersion
+                );
+            if is_vendor {
+                vendor_total += 1;
+            }
+
             if comp.hashes.is_empty() {
                 continue;
             }
@@ -240,6 +264,13 @@ impl HashQualityMetrics {
             } else if has_weak {
                 with_weak_only += 1;
             }
+
+            if is_vendor {
+                vendor_with_hash += 1;
+                if has_strong {
+                    vendor_with_strong += 1;
+                }
+            }
         }
 
         Self {
@@ -248,6 +279,36 @@ impl HashQualityMetrics {
             components_with_weak_only: with_weak_only,
             algorithm_distribution: distribution,
             total_hashes,
+            vendor_components_total: vendor_total,
+            vendor_components_with_hash: vendor_with_hash,
+            vendor_components_with_strong_hash: vendor_with_strong,
+        }
+    }
+
+    /// Vendor-hash coverage (fraction of vendor-supplied components carrying
+    /// at least one hash). Returns `None` when there are no vendor components,
+    /// so the caller can suppress the violation rather than divide by zero.
+    #[must_use]
+    pub fn vendor_hash_coverage(&self) -> Option<f64> {
+        if self.vendor_components_total == 0 {
+            None
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            Some(self.vendor_components_with_hash as f64 / self.vendor_components_total as f64)
+        }
+    }
+
+    /// Vendor strong-hash coverage (fraction with at least one SHA-256+ hash).
+    #[must_use]
+    pub fn vendor_strong_hash_coverage(&self) -> Option<f64> {
+        if self.vendor_components_total == 0 {
+            None
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            Some(
+                self.vendor_components_with_strong_hash as f64
+                    / self.vendor_components_total as f64,
+            )
         }
     }
 
@@ -1929,6 +1990,9 @@ mod tests {
             components_with_weak_only: 0,
             algorithm_distribution: BTreeMap::new(),
             total_hashes: 0,
+            vendor_components_total: 0,
+            vendor_components_with_hash: 0,
+            vendor_components_with_strong_hash: 0,
         };
         assert_eq!(metrics.quality_score(0), 0.0);
     }
@@ -1941,6 +2005,9 @@ mod tests {
             components_with_weak_only: 0,
             algorithm_distribution: BTreeMap::new(),
             total_hashes: 10,
+            vendor_components_total: 0,
+            vendor_components_with_hash: 0,
+            vendor_components_with_strong_hash: 0,
         };
         assert_eq!(metrics.quality_score(10), 100.0);
     }
@@ -1953,6 +2020,9 @@ mod tests {
             components_with_weak_only: 10,
             algorithm_distribution: BTreeMap::new(),
             total_hashes: 10,
+            vendor_components_total: 0,
+            vendor_components_with_hash: 0,
+            vendor_components_with_strong_hash: 0,
         };
         // 60 (any) + 0 (strong) - 10 (weak penalty) = 50
         assert_eq!(metrics.quality_score(10), 50.0);
