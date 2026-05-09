@@ -9,9 +9,7 @@
 //!   when violations carry `StandardRef::help_uri`.
 
 use sbom_tools::model::{Component, NormalizedSbom};
-use sbom_tools::quality::{
-    ComplianceChecker, ComplianceLevel, StandardKind, StandardRef,
-};
+use sbom_tools::quality::{ComplianceChecker, ComplianceLevel, StandardKind, StandardRef};
 use sbom_tools::reports::generate_compliance_sarif;
 
 #[test]
@@ -27,7 +25,9 @@ fn standard_ref_new_auto_populates_help_uri_for_cra() {
 fn standard_ref_new_auto_populates_help_uri_for_bsi() {
     let r = StandardRef::new(StandardKind::BsiTr03183_2, "TR-03183-2 §5.4");
     assert!(
-        r.help_uri.as_deref().is_some_and(|u| u.contains("bsi.bund.de")),
+        r.help_uri
+            .as_deref()
+            .is_some_and(|u| u.contains("bsi.bund.de")),
         "BSI helpUri should point at bsi.bund.de, got: {:?}",
         r.help_uri
     );
@@ -36,10 +36,7 @@ fn standard_ref_new_auto_populates_help_uri_for_bsi() {
 #[test]
 fn standard_ref_new_pren_remains_none_until_published() {
     let r = StandardRef::new(StandardKind::Pren40000_1_3, "PRE-7-RQ-07");
-    assert!(
-        r.help_uri.is_none(),
-        "prEN 40000-1-3 has no public URL yet"
-    );
+    assert!(r.help_uri.is_none(), "prEN 40000-1-3 has no public URL yet");
 }
 
 #[test]
@@ -89,7 +86,9 @@ fn sarif_output_includes_help_uri_for_cra_rules() {
         .as_array()
         .expect("rules array");
     let cra_rule_with_uri = rules.iter().any(|r| {
-        r["id"].as_str().is_some_and(|id| id.starts_with("SBOM-CRA-"))
+        r["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("SBOM-CRA-"))
             && r["helpUri"]
                 .as_str()
                 .is_some_and(|u| u.contains("eur-lex.europa.eu"))

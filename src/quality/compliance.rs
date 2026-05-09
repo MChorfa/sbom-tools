@@ -925,7 +925,9 @@ impl ComplianceChecker {
             (ClassCheck::EuccReference, C::ImportantClass2) => Some(ViolationSeverity::Info),
             (ClassCheck::EuccReference, C::Critical) => Some(ViolationSeverity::Error),
 
-            (ClassCheck::Psirt, C::Default | C::ImportantClass1) => Some(ViolationSeverity::Warning),
+            (ClassCheck::Psirt, C::Default | C::ImportantClass1) => {
+                Some(ViolationSeverity::Warning)
+            }
             (ClassCheck::Psirt, C::ImportantClass2 | C::Critical) => Some(ViolationSeverity::Error),
 
             (ClassCheck::ModuleAttestation, C::Default) => None,
@@ -1035,54 +1037,45 @@ impl ComplianceChecker {
     /// the external references manufacturers are expected to attach to
     /// satisfy Annex VIII; the `satisfied` flag is computed by scanning the
     /// SBOM's `external_refs` and the attached sidecar.
-    fn build_conformity_summary(
-        &self,
-        sbom: &NormalizedSbom,
-    ) -> ConformityAssessmentSummary {
+    fn build_conformity_summary(&self, sbom: &NormalizedSbom) -> ConformityAssessmentSummary {
         use crate::model::{ConformityRoute, ExternalRefType};
         let class = self.effective_product_class();
         let route = self.effective_route();
 
         let any_ext = |needles: &[ExternalRefType]| -> bool {
             sbom.components.values().any(|c| {
-                c.external_refs
-                    .iter()
-                    .any(|r| needles.iter().any(|n| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(n)))
+                c.external_refs.iter().any(|r| {
+                    needles
+                        .iter()
+                        .any(|n| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(n))
+                })
             })
         };
         let any_ext_url_contains = |types: &[ExternalRefType], substr: &str| -> bool {
             sbom.components.values().any(|c| {
                 c.external_refs.iter().any(|r| {
-                    types.iter().any(|t| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(t))
+                    types
+                        .iter()
+                        .any(|t| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(t))
                         && r.url.to_lowercase().contains(substr)
                 })
             })
         };
 
-        let doc_or_ce = any_ext(&[
-            ExternalRefType::Attestation,
-            ExternalRefType::Certification,
-        ]) || self
-            .sidecar
-            .as_ref()
-            .is_some_and(|s| s.ce_marking_reference.is_some());
+        let doc_or_ce = any_ext(&[ExternalRefType::Attestation, ExternalRefType::Certification])
+            || self
+                .sidecar
+                .as_ref()
+                .is_some_and(|s| s.ce_marking_reference.is_some());
 
-        let attestation_present = any_ext(&[
-            ExternalRefType::Attestation,
-            ExternalRefType::Certification,
-        ]);
+        let attestation_present =
+            any_ext(&[ExternalRefType::Attestation, ExternalRefType::Certification]);
 
         let eucc_present = any_ext_url_contains(
-            &[
-                ExternalRefType::Certification,
-                ExternalRefType::Attestation,
-            ],
+            &[ExternalRefType::Certification, ExternalRefType::Attestation],
             "eucc",
         ) || any_ext_url_contains(
-            &[
-                ExternalRefType::Certification,
-                ExternalRefType::Attestation,
-            ],
+            &[ExternalRefType::Certification, ExternalRefType::Attestation],
             "common-criteria",
         );
 
@@ -1142,10 +1135,7 @@ impl ComplianceChecker {
         // Article 14 channels are required at all conformity routes once the
         // 2026-09-11 deadline applies; surface as evidence rows for
         // notified-body checklists.
-        let psirt = self
-            .sidecar
-            .as_ref()
-            .is_some_and(|s| s.psirt_url.is_some());
+        let psirt = self.sidecar.as_ref().is_some_and(|s| s.psirt_url.is_some());
         evidence.push(ConformityEvidence {
             label: "PSIRT contact (Art. 14)".to_string(),
             detail: "Public PSIRT URL for receiving external vulnerability reports.".to_string(),
@@ -2078,12 +2068,14 @@ impl ComplianceChecker {
                         ComplianceLevel::CraPhase2 if coverage < 0.50 => {
                             (ViolationSeverity::Error, "below 50% threshold".to_string())
                         }
-                        ComplianceLevel::CraPhase2 if coverage < 0.80 => {
-                            (ViolationSeverity::Warning, "below 80% threshold".to_string())
-                        }
-                        ComplianceLevel::CraPhase1 if coverage < 0.50 => {
-                            (ViolationSeverity::Warning, "below 50% threshold".to_string())
-                        }
+                        ComplianceLevel::CraPhase2 if coverage < 0.80 => (
+                            ViolationSeverity::Warning,
+                            "below 80% threshold".to_string(),
+                        ),
+                        ComplianceLevel::CraPhase1 if coverage < 0.50 => (
+                            ViolationSeverity::Warning,
+                            "below 50% threshold".to_string(),
+                        ),
                         _ => (ViolationSeverity::Info, String::new()),
                     }
                 };

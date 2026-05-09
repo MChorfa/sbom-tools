@@ -1539,9 +1539,9 @@ fn main() -> Result<()> {
                 VexAction::Export(export_args) => {
                     let fmt = match export_args.format.to_lowercase().as_str() {
                         "csaf" | "csaf-v2.0" | "csaf2" => cli::VexExportFormat::Csaf,
-                        other => anyhow::bail!(
-                            "Unsupported VEX export format '{other}'. Valid: csaf"
-                        ),
+                        other => {
+                            anyhow::bail!("Unsupported VEX export format '{other}'. Valid: csaf")
+                        }
                     };
                     let synth_args = VexArgs {
                         sbom: export_args.sbom,

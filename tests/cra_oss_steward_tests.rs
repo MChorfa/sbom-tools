@@ -66,17 +66,14 @@ fn oss_steward_does_not_require_manufacturer_email() {
     // vulnerability-handling process.
     let sbom = sbom_with_security_contact();
 
-    let res_steward =
-        ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
+    let res_steward = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
     let res_phase2 = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
 
     // Steward profile: should not fire manufacturer-email Art. 13(15)
     assert!(
-        !res_steward
-            .violations
-            .iter()
-            .any(|v| v.requirement.contains("Art. 13(15)")
-                || v.requirement.contains("Manufacturer")),
+        !res_steward.violations.iter().any(
+            |v| v.requirement.contains("Art. 13(15)") || v.requirement.contains("Manufacturer")
+        ),
         "OSS steward must not fire manufacturer-email checks"
     );
 
@@ -244,8 +241,7 @@ fn sidecar_is_oss_steward_field_roundtrips() {
     let default_sidecar = CraSidecarMetadata::default();
     let default_json = serde_json::to_string(&default_sidecar).unwrap();
     assert!(
-        !default_json.contains("is_oss_steward")
-            && !default_json.contains("isOssSteward"),
+        !default_json.contains("is_oss_steward") && !default_json.contains("isOssSteward"),
         "is_oss_steward=false should be skipped during serialization"
     );
 }

@@ -853,10 +853,7 @@ fn write_cra_compliance_view(md: &mut String, result: &ComplianceResult) -> std:
 /// Render a "Conformity assessment" subsection (CRA-P4.3) when a product
 /// class has been pinned. Surfaces the resolved Annex VIII route and a
 /// per-route evidence checklist.
-fn write_conformity_assessment_md(
-    md: &mut String,
-    result: &ComplianceResult,
-) -> std::fmt::Result {
+fn write_conformity_assessment_md(md: &mut String, result: &ComplianceResult) -> std::fmt::Result {
     let Some(summary) = result.conformity_summary.as_ref() else {
         return Ok(());
     };

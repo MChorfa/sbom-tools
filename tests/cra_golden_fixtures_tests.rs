@@ -20,8 +20,16 @@ fn fixtures_dir() -> PathBuf {
 fn cra_compliant_cdx_with_sidecar_has_no_errors_at_phase2() {
     let sbom_path = fixtures_dir().join("cra-compliant.cdx.json");
     let sidecar_path = fixtures_dir().join("cra-compliant.cra.json");
-    assert!(sbom_path.exists(), "fixture missing: {}", sbom_path.display());
-    assert!(sidecar_path.exists(), "sidecar missing: {}", sidecar_path.display());
+    assert!(
+        sbom_path.exists(),
+        "fixture missing: {}",
+        sbom_path.display()
+    );
+    assert!(
+        sidecar_path.exists(),
+        "sidecar missing: {}",
+        sidecar_path.display()
+    );
 
     let parsed = parse_sbom(&sbom_path).expect("parse compliant fixture");
     let sidecar = CraSidecarMetadata::from_file(&sidecar_path).expect("load sidecar");
@@ -112,7 +120,10 @@ fn noncompliant_weak_hashes_fires_at_bsi_or_phase2() {
         bsi_hash_finding,
         "weak-hashes fixture must fire a BSI TR-03183-2 hash-related violation; \
          got requirements: {:?}",
-        bsi.violations.iter().map(|v| &v.requirement).collect::<Vec<_>>()
+        bsi.violations
+            .iter()
+            .map(|v| &v.requirement)
+            .collect::<Vec<_>>()
     );
 }
 

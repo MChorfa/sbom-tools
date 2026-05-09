@@ -143,23 +143,14 @@ fn cra_docs_cli_product_class_overrides_default_when_no_sidecar() {
     let sbom = write_temp(dir.path(), "app.cdx.json", MINIMAL_CDX);
     let out = dir.path().join("dossier");
 
-    run_cra_docs(
-        sbom,
-        out.clone(),
-        None,
-        Some("critical".to_string()),
-    )
-    .expect("cra-docs runs");
+    run_cra_docs(sbom, out.clone(), None, Some("critical".to_string())).expect("cra-docs runs");
 
     let doc = fs::read_to_string(out.join("eu-declaration-of-conformity.md")).unwrap();
     assert!(
         doc.contains("Critical (Annex IV)"),
         "CLI --cra-product-class=critical must surface in DoC"
     );
-    assert!(
-        doc.contains("EUCC"),
-        "Critical class default route is EUCC"
-    );
+    assert!(doc.contains("EUCC"), "Critical class default route is EUCC");
 }
 
 #[test]

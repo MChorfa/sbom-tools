@@ -35,11 +35,7 @@ fn eucc_substantial_without_sidecar_fires_all_four_must_haves() {
             .any(|r| r.contains("Target of Evaluation reference"))
     );
     assert!(requirements.iter().any(|r| r.contains("ITSEF")));
-    assert!(
-        requirements
-            .iter()
-            .any(|r| r.contains("valid-until date"))
-    );
+    assert!(requirements.iter().any(|r| r.contains("valid-until date")));
 }
 
 #[test]
@@ -88,8 +84,10 @@ fn eucc_substantial_expired_certificate_is_error() {
         .with_sidecar(sidecar)
         .check(&sbom);
     assert!(
-        result.violations.iter().any(|v| v.severity == ViolationSeverity::Error
-            && v.message.contains("expired"))
+        result
+            .violations
+            .iter()
+            .any(|v| v.severity == ViolationSeverity::Error && v.message.contains("expired"))
     );
 }
 
@@ -108,8 +106,11 @@ fn eucc_substantial_near_expiry_is_warning() {
         .with_sidecar(sidecar)
         .check(&sbom);
     assert!(
-        result.violations.iter().any(|v| v.severity == ViolationSeverity::Warning
-            && v.message.contains("expires within"))
+        result
+            .violations
+            .iter()
+            .any(|v| v.severity == ViolationSeverity::Warning
+                && v.message.contains("expires within"))
     );
 }
 
@@ -246,17 +247,11 @@ fn controls_assertion_serde_roundtrip_preserves_btreemap() {
 fn tui_policy_preset_includes_eucc_and_oss_steward() {
     use sbom_tools::tui::PolicyPreset;
     let p = PolicyPreset::EuccSubstantial;
-    assert_eq!(
-        p.compliance_level(),
-        Some(ComplianceLevel::EuccSubstantial)
-    );
+    assert_eq!(p.compliance_level(), Some(ComplianceLevel::EuccSubstantial));
     assert!(p.is_standards_based());
 
     let oss = PolicyPreset::CraOssSteward;
-    assert_eq!(
-        oss.compliance_level(),
-        Some(ComplianceLevel::CraOssSteward)
-    );
+    assert_eq!(oss.compliance_level(), Some(ComplianceLevel::CraOssSteward));
     assert!(oss.is_standards_based());
 }
 

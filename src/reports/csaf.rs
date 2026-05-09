@@ -52,19 +52,13 @@ impl Default for CsafEmitOptions {
 }
 
 /// Emit a CSAF v2.0 VEX document from `sbom` as pretty-printed JSON.
-pub fn emit_csaf(
-    sbom: &NormalizedSbom,
-    options: &CsafEmitOptions,
-) -> Result<String, ReportError> {
+pub fn emit_csaf(sbom: &NormalizedSbom, options: &CsafEmitOptions) -> Result<String, ReportError> {
     let doc = build_csaf_document(sbom, options);
-    serde_json::to_string_pretty(&doc)
-        .map_err(|e| ReportError::SerializationError(e.to_string()))
+    serde_json::to_string_pretty(&doc).map_err(|e| ReportError::SerializationError(e.to_string()))
 }
 
 fn build_csaf_document(sbom: &NormalizedSbom, opt: &CsafEmitOptions) -> CsafDocOut {
-    let now_rfc3339 = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let now_rfc3339 = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     // Build product_tree and a (component_id) → product_id index.
     let mut product_index: BTreeMap<String, String> = BTreeMap::new();
@@ -150,13 +144,20 @@ fn build_csaf_document(sbom: &NormalizedSbom, opt: &CsafEmitOptions) -> CsafDocO
             .document
             .name
             .clone()
-            .or_else(|| sbom.primary_component_id.as_ref().map(|c| c.value().to_string()))
+            .or_else(|| {
+                sbom.primary_component_id
+                    .as_ref()
+                    .map(|c| c.value().to_string())
+            })
             .unwrap_or_else(|| "SBOM".to_string());
         format!("VEX advisory for {primary}")
     });
 
     let document_id = opt.document_id.clone().unwrap_or_else(|| {
-        format!("sbom-tools-vex-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"))
+        format!(
+            "sbom-tools-vex-{}",
+            chrono::Utc::now().format("%Y%m%d%H%M%S")
+        )
     });
 
     CsafDocOut {
@@ -197,9 +198,7 @@ fn build_csaf_document(sbom: &NormalizedSbom, opt: &CsafEmitOptions) -> CsafDocO
                 },
             },
         },
-        product_tree: CsafProductTreeOut {
-            full_product_names,
-        },
+        product_tree: CsafProductTreeOut { full_product_names },
         vulnerabilities,
     }
 }
@@ -400,8 +399,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let mut c =
-                Component::new(format!("c{i}"), format!("c{i}@1.0"));
+            let mut c = Component::new(format!("c{i}"), format!("c{i}@1.0"));
             c.identifiers.purl = Some(format!("pkg:cargo/c{i}@1.0"));
             let mut v =
                 VulnerabilityRef::new("CVE-2024-99999".to_string(), VulnerabilitySource::Cve);
@@ -441,8 +439,7 @@ mod tests {
     fn emit_skips_components_without_purl() {
         let mut sbom = NormalizedSbom::default();
         let mut c = Component::new("noident".to_string(), "noident".to_string());
-        let mut v =
-            VulnerabilityRef::new("CVE-2024-12345".to_string(), VulnerabilitySource::Cve);
+        let mut v = VulnerabilityRef::new("CVE-2024-12345".to_string(), VulnerabilitySource::Cve);
         v.vex_status = Some(VexStatus::new(VexState::Affected));
         c.vulnerabilities.push(v);
         sbom.add_component(c);

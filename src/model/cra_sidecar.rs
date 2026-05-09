@@ -215,10 +215,18 @@ pub enum CraProductClass {
     #[serde(rename = "default")]
     Default,
     /// Annex III items 1–11 (Important Class I). Module A or B+C.
-    #[serde(rename = "important-class-1", alias = "important1", alias = "ImportantClass1")]
+    #[serde(
+        rename = "important-class-1",
+        alias = "important1",
+        alias = "ImportantClass1"
+    )]
     ImportantClass1,
     /// Annex III items 12–17 (Important Class II). Module B+C, H, or EUCC.
-    #[serde(rename = "important-class-2", alias = "important2", alias = "ImportantClass2")]
+    #[serde(
+        rename = "important-class-2",
+        alias = "important2",
+        alias = "ImportantClass2"
+    )]
     ImportantClass2,
     /// Annex IV (Critical). EUCC mandatory.
     #[serde(rename = "critical")]

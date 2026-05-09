@@ -242,7 +242,11 @@ mod tests {
         for s in CATALOGUE {
             assert!(!s.id.is_empty(), "catalogue id must not be empty");
             assert!(!s.title.is_empty(), "catalogue title must not be empty");
-            assert!(s.url.starts_with("https://"), "catalogue URL must be https: {}", s.url);
+            assert!(
+                s.url.starts_with("https://"),
+                "catalogue URL must be https: {}",
+                s.url
+            );
         }
     }
 
@@ -256,8 +260,7 @@ mod tests {
 
     #[test]
     fn catalogue_covers_core_artefacts() {
-        let ids: std::collections::HashSet<&str> =
-            CATALOGUE.iter().map(|s| s.id).collect();
+        let ids: std::collections::HashSet<&str> = CATALOGUE.iter().map(|s| s.id).collect();
         for required in [
             "prEN-40000-1-3",
             "BSI-TR-03183-2",

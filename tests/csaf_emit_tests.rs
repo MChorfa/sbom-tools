@@ -20,13 +20,10 @@ fn fixtures_dir() -> PathBuf {
 fn sbom_with_vex_states(entries: &[(&str, &str, &str, VexState)]) -> NormalizedSbom {
     let mut sbom = NormalizedSbom::default();
     for (name, version, vuln, state) in entries {
-        let mut c =
-            Component::new((*name).to_string(), format!("{name}@{version}"));
+        let mut c = Component::new((*name).to_string(), format!("{name}@{version}"));
         c.version = Some((*version).to_string());
-        c.identifiers.purl =
-            Some(format!("pkg:cargo/{name}@{version}"));
-        let mut v =
-            VulnerabilityRef::new((*vuln).to_string(), VulnerabilitySource::Cve);
+        c.identifiers.purl = Some(format!("pkg:cargo/{name}@{version}"));
+        let mut v = VulnerabilityRef::new((*vuln).to_string(), VulnerabilitySource::Cve);
         v.vex_status = Some(VexStatus::new(state.clone()));
         c.vulnerabilities.push(v);
         sbom.add_component(c);
@@ -75,7 +72,10 @@ fn emit_options_override_defaults() {
     assert_eq!(json["document"]["title"], "Test Advisory");
     assert_eq!(json["document"]["tracking"]["id"], "EX-2026-001");
     assert_eq!(json["document"]["publisher"]["name"], "Example Corp");
-    assert_eq!(json["document"]["publisher"]["namespace"], "https://example.com");
+    assert_eq!(
+        json["document"]["publisher"]["namespace"],
+        "https://example.com"
+    );
 }
 
 #[test]
@@ -183,10 +183,7 @@ fn emit_skips_components_without_purl_or_vex_status() {
     let mut sbom = NormalizedSbom::default();
     // No PURL: should be skipped
     let mut c1 = Component::new("nopurl".to_string(), "nopurl".to_string());
-    let mut v1 = VulnerabilityRef::new(
-        "CVE-2024-1".to_string(),
-        VulnerabilitySource::Cve,
-    );
+    let mut v1 = VulnerabilityRef::new("CVE-2024-1".to_string(), VulnerabilitySource::Cve);
     v1.vex_status = Some(VexStatus::new(VexState::Affected));
     c1.vulnerabilities.push(v1);
     sbom.add_component(c1);

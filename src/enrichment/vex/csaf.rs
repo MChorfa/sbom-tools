@@ -326,8 +326,7 @@ mod tests {
 
     #[test]
     fn does_not_misdetect_openvex() {
-        let openvex =
-            r#"{"@context":"https://openvex.dev/ns/v0.2.0","statements":[]}"#;
+        let openvex = r#"{"@context":"https://openvex.dev/ns/v0.2.0","statements":[]}"#;
         assert!(!is_csaf(openvex));
     }
 
@@ -437,7 +436,10 @@ mod tests {
         let result = parse_csaf(csaf).unwrap();
         assert!(result.scoped.is_empty());
         assert_eq!(
-            result.unscoped.get("CVE-2024-77777").map(|v| v.status.clone()),
+            result
+                .unscoped
+                .get("CVE-2024-77777")
+                .map(|v| v.status.clone()),
             Some(VexState::Affected)
         );
     }

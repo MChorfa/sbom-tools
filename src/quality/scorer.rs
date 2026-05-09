@@ -420,10 +420,7 @@ impl QualityScorer {
     /// calibration when the embedded compliance check runs under
     /// `ScoringProfile::Cra`). Sidecar `productClass` overrides this.
     #[must_use]
-    pub const fn with_cra_product_class(
-        mut self,
-        class: crate::model::CraProductClass,
-    ) -> Self {
+    pub const fn with_cra_product_class(mut self, class: crate::model::CraProductClass) -> Self {
         self.cra_product_class = Some(class);
         self
     }

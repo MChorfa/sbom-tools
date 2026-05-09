@@ -338,17 +338,10 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
 
     // Conformity-assessment route (CRA-P4.3): only when product class pinned.
     if let Some(summary) = result.conformity_summary.as_ref() {
-        let satisfied = summary
-            .evidence
-            .iter()
-            .filter(|e| e.satisfied)
-            .count();
+        let satisfied = summary.evidence.iter().filter(|e| e.satisfied).count();
         let total = summary.evidence.len();
         lines.push(Line::from(vec![
-            Span::styled(
-                "  Annex VIII: ",
-                Style::default().fg(scheme.muted),
-            ),
+            Span::styled("  Annex VIII: ", Style::default().fg(scheme.muted)),
             Span::styled(
                 summary.route.label(),
                 Style::default().fg(scheme.text).bold(),

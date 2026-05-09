@@ -12,9 +12,7 @@
 //! Fields the SBOM/sidecar can supply are filled in; everything else is
 //! left as `_TBD_` so the operator can complete the document by hand.
 
-use crate::model::{
-    ConformityRoute, CraProductClass, CraSidecarMetadata, NormalizedSbom,
-};
+use crate::model::{ConformityRoute, CraProductClass, CraSidecarMetadata, NormalizedSbom};
 use crate::pipeline::parse_sbom_with_context;
 use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult};
 use anyhow::{Context, Result};
@@ -33,11 +31,9 @@ pub fn run_cra_docs(
 
     // Sidecar resolution: explicit path → auto-discover.
     let sidecar = match cra_sidecar_path {
-        Some(p) => Some(
-            CraSidecarMetadata::from_file(&p).map_err(|e| {
-                anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())
-            })?,
-        ),
+        Some(p) => Some(CraSidecarMetadata::from_file(&p).map_err(|e| {
+            anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())
+        })?),
         None => CraSidecarMetadata::find_for_sbom(&sbom_path),
     };
 
@@ -68,9 +64,8 @@ pub fn run_cra_docs(
     let compliance = checker.check(sbom);
     let route = checker.effective_route();
 
-    std::fs::create_dir_all(&output_dir).with_context(|| {
-        format!("creating output directory {}", output_dir.display())
-    })?;
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("creating output directory {}", output_dir.display()))?;
 
     write_doc(
         &output_dir.join("eu-declaration-of-conformity.md"),
@@ -94,8 +89,7 @@ pub fn run_cra_docs(
 }
 
 fn write_doc(path: &std::path::Path, content: &str) -> Result<()> {
-    std::fs::write(path, content)
-        .with_context(|| format!("writing {}", path.display()))
+    std::fs::write(path, content).with_context(|| format!("writing {}", path.display()))
 }
 
 /// Render the EU Declaration of Conformity (Annex V) template.
@@ -111,9 +105,7 @@ fn render_doc(
             sbom.document
                 .creators
                 .iter()
-                .find(|c| {
-                    matches!(c.creator_type, crate::model::CreatorType::Organization)
-                })
+                .find(|c| matches!(c.creator_type, crate::model::CreatorType::Organization))
                 .map(|c| c.name.as_str())
         })
         .unwrap_or("_TBD: manufacturer name_");
@@ -550,9 +542,7 @@ mod tests {
         let sidecar = CraSidecarMetadata {
             psirt_url: Some("https://example.com/psirt".to_string()),
             security_contact: Some("security@example.com".to_string()),
-            coordinated_disclosure_policy_url: Some(
-                "https://example.com/security/cvd".to_string(),
-            ),
+            coordinated_disclosure_policy_url: Some("https://example.com/security/cvd".to_string()),
             early_warning_contact: Some("ew@example.com".to_string()),
             incident_report_contact: Some("incidents@example.com".to_string()),
             enisa_reporting_platform_id: Some("EU-MFR-1".to_string()),

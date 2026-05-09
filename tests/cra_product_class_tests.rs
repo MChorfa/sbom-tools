@@ -15,9 +15,7 @@ use sbom_tools::model::{
     Component, ConformityRoute, CraProductClass, CraSidecarMetadata, EolInfo, EolStatus,
     ExternalRefType, ExternalReference, Hash, HashAlgorithm, NormalizedSbom, Organization,
 };
-use sbom_tools::quality::{
-    ClassCheck, ComplianceChecker, ComplianceLevel, ViolationSeverity,
-};
+use sbom_tools::quality::{ClassCheck, ComplianceChecker, ComplianceLevel, ViolationSeverity};
 
 // --- helpers -----------------------------------------------------------------
 
@@ -40,7 +38,9 @@ fn vendor_sbom(vendor_total: usize, with_hash: usize) -> NormalizedSbom {
     sbom
 }
 
-fn vendor_hash_violation(result: &sbom_tools::quality::ComplianceResult) -> Option<ViolationSeverity> {
+fn vendor_hash_violation(
+    result: &sbom_tools::quality::ComplianceResult,
+) -> Option<ViolationSeverity> {
     result
         .violations
         .iter()
@@ -57,7 +57,10 @@ fn vendor_hash_default_class_warns_below_50pct() {
     let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
         .with_product_class(CraProductClass::Default)
         .check(&sbom);
-    assert_eq!(vendor_hash_violation(&res), Some(ViolationSeverity::Warning));
+    assert_eq!(
+        vendor_hash_violation(&res),
+        Some(ViolationSeverity::Warning)
+    );
 }
 
 #[test]
@@ -77,7 +80,10 @@ fn vendor_hash_important_class_1_warns_below_80pct() {
     let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
         .with_product_class(CraProductClass::ImportantClass1)
         .check(&sbom);
-    assert_eq!(vendor_hash_violation(&res), Some(ViolationSeverity::Warning));
+    assert_eq!(
+        vendor_hash_violation(&res),
+        Some(ViolationSeverity::Warning)
+    );
 }
 
 #[test]
@@ -119,7 +125,10 @@ fn vendor_hash_no_class_preserves_phase2_two_stage() {
 
     let sbom_err = vendor_sbom(10, 4); // 40%
     let res_err = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom_err);
-    assert_eq!(vendor_hash_violation(&res_err), Some(ViolationSeverity::Error));
+    assert_eq!(
+        vendor_hash_violation(&res_err),
+        Some(ViolationSeverity::Error)
+    );
 }
 
 // --- EOL severity escalation -------------------------------------------------
@@ -219,7 +228,9 @@ fn eucc_reference_check_skipped_at_default_and_important_1() {
             .with_product_class(class)
             .check(&sbom);
         assert!(
-            !res.violations.iter().any(|v| v.requirement.contains("EUCC")),
+            !res.violations
+                .iter()
+                .any(|v| v.requirement.contains("EUCC")),
             "EUCC check should be skipped at {class:?}"
         );
     }
@@ -270,7 +281,9 @@ fn eucc_reference_satisfied_by_certification_with_eucc_url() {
         .with_product_class(CraProductClass::Critical)
         .check(&sbom);
     assert!(
-        !res.violations.iter().any(|v| v.requirement.contains("EUCC")),
+        !res.violations
+            .iter()
+            .any(|v| v.requirement.contains("EUCC")),
         "EUCC reference satisfied by EUCC certification URL"
     );
 }
@@ -389,28 +402,73 @@ fn class_severity_table_matches_plan() {
     use ViolationSeverity as S;
 
     // Vendor hash
-    assert_eq!(mk(C::Default).class_severity(K::VendorHashCoverage), Some(S::Warning));
-    assert_eq!(mk(C::ImportantClass1).class_severity(K::VendorHashCoverage), Some(S::Warning));
-    assert_eq!(mk(C::ImportantClass2).class_severity(K::VendorHashCoverage), Some(S::Error));
-    assert_eq!(mk(C::Critical).class_severity(K::VendorHashCoverage), Some(S::Error));
+    assert_eq!(
+        mk(C::Default).class_severity(K::VendorHashCoverage),
+        Some(S::Warning)
+    );
+    assert_eq!(
+        mk(C::ImportantClass1).class_severity(K::VendorHashCoverage),
+        Some(S::Warning)
+    );
+    assert_eq!(
+        mk(C::ImportantClass2).class_severity(K::VendorHashCoverage),
+        Some(S::Error)
+    );
+    assert_eq!(
+        mk(C::Critical).class_severity(K::VendorHashCoverage),
+        Some(S::Error)
+    );
     // EOL
-    assert_eq!(mk(C::Default).class_severity(K::EolComponents), Some(S::Warning));
-    assert_eq!(mk(C::Critical).class_severity(K::EolComponents), Some(S::Error));
+    assert_eq!(
+        mk(C::Default).class_severity(K::EolComponents),
+        Some(S::Warning)
+    );
+    assert_eq!(
+        mk(C::Critical).class_severity(K::EolComponents),
+        Some(S::Error)
+    );
     // DoC
-    assert_eq!(mk(C::Default).class_severity(K::DocReference), Some(S::Info));
-    assert_eq!(mk(C::ImportantClass1).class_severity(K::DocReference), Some(S::Warning));
-    assert_eq!(mk(C::Critical).class_severity(K::DocReference), Some(S::Error));
+    assert_eq!(
+        mk(C::Default).class_severity(K::DocReference),
+        Some(S::Info)
+    );
+    assert_eq!(
+        mk(C::ImportantClass1).class_severity(K::DocReference),
+        Some(S::Warning)
+    );
+    assert_eq!(
+        mk(C::Critical).class_severity(K::DocReference),
+        Some(S::Error)
+    );
     // EUCC
     assert_eq!(mk(C::Default).class_severity(K::EuccReference), None);
-    assert_eq!(mk(C::ImportantClass1).class_severity(K::EuccReference), None);
-    assert_eq!(mk(C::ImportantClass2).class_severity(K::EuccReference), Some(S::Info));
-    assert_eq!(mk(C::Critical).class_severity(K::EuccReference), Some(S::Error));
+    assert_eq!(
+        mk(C::ImportantClass1).class_severity(K::EuccReference),
+        None
+    );
+    assert_eq!(
+        mk(C::ImportantClass2).class_severity(K::EuccReference),
+        Some(S::Info)
+    );
+    assert_eq!(
+        mk(C::Critical).class_severity(K::EuccReference),
+        Some(S::Error)
+    );
     // Module attestation
     assert_eq!(mk(C::Default).class_severity(K::ModuleAttestation), None);
-    assert_eq!(mk(C::ImportantClass1).class_severity(K::ModuleAttestation), Some(S::Warning));
-    assert_eq!(mk(C::Critical).class_severity(K::ModuleAttestation), Some(S::Error));
+    assert_eq!(
+        mk(C::ImportantClass1).class_severity(K::ModuleAttestation),
+        Some(S::Warning)
+    );
+    assert_eq!(
+        mk(C::Critical).class_severity(K::ModuleAttestation),
+        Some(S::Error)
+    );
     // PSIRT
-    assert_eq!(mk(C::ImportantClass2).class_severity(K::Psirt), Some(S::Error));
+    assert_eq!(
+        mk(C::ImportantClass2).class_severity(K::Psirt),
+        Some(S::Error)
+    );
 }
 
 #[test]
@@ -425,7 +483,10 @@ fn vendor_hash_threshold_table_matches_plan() {
 #[test]
 fn effective_route_falls_back_to_class_default() {
     let mk = |c| ComplianceChecker::new(ComplianceLevel::CraPhase2).with_product_class(c);
-    assert_eq!(mk(CraProductClass::Default).effective_route(), ConformityRoute::ModuleA);
+    assert_eq!(
+        mk(CraProductClass::Default).effective_route(),
+        ConformityRoute::ModuleA
+    );
     assert_eq!(
         mk(CraProductClass::ImportantClass1).effective_route(),
         ConformityRoute::ModuleA
@@ -434,7 +495,10 @@ fn effective_route_falls_back_to_class_default() {
         mk(CraProductClass::ImportantClass2).effective_route(),
         ConformityRoute::ModuleBC
     );
-    assert_eq!(mk(CraProductClass::Critical).effective_route(), ConformityRoute::Eucc);
+    assert_eq!(
+        mk(CraProductClass::Critical).effective_route(),
+        ConformityRoute::Eucc
+    );
 }
 
 #[test]
