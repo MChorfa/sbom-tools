@@ -60,6 +60,9 @@ fn test_watch_loop_no_files_returns_error() {
         max_snapshots: 10,
         quiet: true,
         dry_run: false,
+        cra_standards_enabled: false,
+        cra_standards_interval: Duration::from_secs(86_400),
+        cra_standards_timeout: Duration::from_secs(10),
     };
 
     let result = sbom_tools::watch::run_watch_loop(&config);
@@ -85,6 +88,9 @@ fn test_watch_loop_nonexistent_dir() {
         max_snapshots: 10,
         quiet: true,
         dry_run: false,
+        cra_standards_enabled: false,
+        cra_standards_interval: Duration::from_secs(86_400),
+        cra_standards_timeout: Duration::from_secs(10),
     };
 
     // The cli handler checks for dir existence; the loop itself may still
@@ -114,6 +120,9 @@ fn test_watch_loop_exit_on_change() {
         max_snapshots: 10,
         quiet: true,
         dry_run: false,
+        cra_standards_enabled: false,
+        cra_standards_interval: Duration::from_secs(86_400),
+        cra_standards_timeout: Duration::from_secs(10),
     };
 
     // Spawn the watch loop in a thread, modify the file, then verify it exits
@@ -173,6 +182,9 @@ fn test_watch_loop_initial_scan_parses_fixtures() {
         max_snapshots: 10,
         quiet: true,
         dry_run: false,
+        cra_standards_enabled: false,
+        cra_standards_interval: Duration::from_secs(86_400),
+        cra_standards_timeout: Duration::from_secs(10),
     };
 
     let config_clone = config.clone();
@@ -221,6 +233,9 @@ fn test_watch_ndjson_output_produces_valid_json() {
         max_snapshots: 10,
         quiet: true,
         dry_run: false,
+        cra_standards_enabled: false,
+        cra_standards_interval: Duration::from_secs(86_400),
+        cra_standards_timeout: Duration::from_secs(10),
     };
 
     let config_clone = config.clone();

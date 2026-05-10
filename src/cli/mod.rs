@@ -21,7 +21,10 @@ mod view;
 mod watch;
 
 pub use cra_docs::run_cra_docs;
-pub use cra_standards_watch::{WatchOutputFormat, run_cra_standards_watch};
+pub use cra_standards_watch::{
+    OnlineProbe, TrackedStandard, WatchOutputFormat, cra_catalogue, probe_cra_standards,
+    run_cra_standards_watch,
+};
 pub use diff::run_diff;
 #[cfg(feature = "enrichment")]
 pub use enrich::run_enrich;

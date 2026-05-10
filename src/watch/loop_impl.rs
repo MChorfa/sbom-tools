@@ -3,13 +3,15 @@
 //! Coordinates file monitoring, parsing, diffing, enrichment, and alerting.
 
 use super::WatchError;
-use super::alerts::{AlertSink, build_alert_sinks};
+use super::alerts::{AlertSink, CraEventKind, CraStandardEvent, build_alert_sinks};
 use super::config::WatchConfig;
 use super::monitor::{FileChange, FileMonitor};
 use super::state::{DiffSnapshot, MonitorStatus, WatchState, WatchSummary};
+use crate::cli::{cra_catalogue, probe_cra_standards};
 use crate::diff::DiffEngine;
 use crate::matching::FuzzyMatchConfig;
 use crate::model::NormalizedSbom;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +27,9 @@ pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
     let mut state = WatchState::new(config.max_snapshots);
     let mut sinks = build_alert_sinks(config)?;
     let engine = DiffEngine::new().with_fuzzy_config(FuzzyMatchConfig::balanced());
+
+    let mut cra_status: HashMap<&'static str, String> = HashMap::new();
+    let mut cra_last_probe: Option<Instant> = None;
 
     // Graceful shutdown flag
     let stop = Arc::new(AtomicBool::new(false));
@@ -52,6 +57,11 @@ pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
 
     // Emit initial status
     emit_status(&state, &mut sinks);
+
+    // CRA-standards baseline probe at startup (if enabled).
+    if config.cra_standards_enabled {
+        run_cra_standards_cycle(config, &mut cra_status, &mut cra_last_probe, &mut sinks);
+    }
 
     // Dry-run mode: print discovered files and exit
     if config.dry_run {
@@ -135,6 +145,13 @@ pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
             .is_none_or(|t| t.elapsed() >= config.enrich_interval);
         if should_enrich && config.enrichment.enabled {
             run_enrichment_cycle(config, &mut state, &mut sinks);
+        }
+
+        // Periodic CRA-standards drift check
+        if config.cra_standards_enabled
+            && cra_last_probe.is_none_or(|t| t.elapsed() >= config.cra_standards_interval)
+        {
+            run_cra_standards_cycle(config, &mut cra_status, &mut cra_last_probe, &mut sinks);
         }
 
         // Periodic status
@@ -515,4 +532,48 @@ fn count_vulns(sbom: &NormalizedSbom) -> usize {
 
 fn count_eol(sbom: &NormalizedSbom) -> usize {
     sbom.components.values().filter(|c| c.eol.is_some()).count()
+}
+
+/// Probe the curated CRA-standards catalogue and emit
+/// [`CraStandardEvent`] alerts for new entries (`InitialBaseline`) and
+/// status drift (`StatusChanged`). Mutates `last_status` so the next
+/// tick can compare. No-op when no entries are available.
+fn run_cra_standards_cycle(
+    config: &WatchConfig,
+    last_status: &mut HashMap<&'static str, String>,
+    last_probe: &mut Option<Instant>,
+    sinks: &mut [Box<dyn AlertSink>],
+) {
+    *last_probe = Some(Instant::now());
+    let catalogue = cra_catalogue();
+    if catalogue.is_empty() {
+        return;
+    }
+    let probes = probe_cra_standards(catalogue, config.cra_standards_timeout);
+    for probe in probes {
+        let entry = catalogue.iter().find(|e| e.id == probe.id);
+        let Some(entry) = entry else { continue };
+        let kind = match last_status.get(probe.id) {
+            None => CraEventKind::InitialBaseline {
+                status: probe.status.clone(),
+            },
+            Some(prev) if prev == &probe.status => continue,
+            Some(prev) => CraEventKind::StatusChanged {
+                from: prev.clone(),
+                to: probe.status.clone(),
+            },
+        };
+        last_status.insert(probe.id, probe.status.clone());
+        let event = CraStandardEvent {
+            id: entry.id,
+            title: entry.title,
+            url: entry.url,
+            kind,
+        };
+        for sink in sinks.iter_mut() {
+            if let Err(e) = sink.on_cra_standard(&event) {
+                tracing::warn!("Alert sink error: {e}");
+            }
+        }
+    }
 }

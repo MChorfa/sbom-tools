@@ -28,6 +28,20 @@ pub struct TrackedStandard {
     pub watch_reason: &'static str,
 }
 
+/// Borrow the curated catalogue. Watch-loop integration probes these URLs
+/// on a configurable interval and surfaces status drift through
+/// [`crate::watch::alerts::AlertSink`].
+pub fn cra_catalogue() -> &'static [TrackedStandard] {
+    CATALOGUE
+}
+
+/// Probe each entry's URL with `timeout` and return the resulting
+/// [`OnlineProbe`] list. Without the `enrichment` feature the probes are
+/// returned with a static "feature disabled" status string.
+pub fn probe_cra_standards(entries: &[TrackedStandard], timeout: Duration) -> Vec<OnlineProbe> {
+    probe_urls(entries, timeout)
+}
+
 /// Curated catalogue. Update entries here when standards bodies publish a
 /// new draft or final version. Dates are last-confirmed by hand; the
 /// command does not mutate this list at runtime.
@@ -184,10 +198,13 @@ pub fn run_cra_standards_watch(
     Ok(())
 }
 
+/// Result of a single URL probe against the CRA standards catalogue.
+/// `status` is a verbatim HTTP status string (e.g. "200 OK") or an
+/// error description prefixed with `error:`.
 #[derive(Debug, Clone, Serialize)]
-struct OnlineProbe {
-    id: &'static str,
-    status: String,
+pub struct OnlineProbe {
+    pub id: &'static str,
+    pub status: String,
 }
 
 /// Fire HEAD requests at each catalogue URL with the supplied timeout.
