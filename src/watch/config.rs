@@ -31,6 +31,13 @@ pub struct WatchConfig {
     pub quiet: bool,
     /// Dry-run mode: do initial scan only, then exit
     pub dry_run: bool,
+    /// Periodically probe the curated CRA-standards catalogue and surface
+    /// status drift through the configured [`super::alerts::AlertSink`]s.
+    pub cra_standards_enabled: bool,
+    /// Interval between CRA-standards probe cycles
+    pub cra_standards_interval: Duration,
+    /// Per-request timeout for CRA-standards HTTP probes
+    pub cra_standards_timeout: Duration,
 }
 
 /// Parse a human-readable duration string into a [`Duration`].

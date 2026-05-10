@@ -773,6 +773,20 @@ struct WatchArgs {
     /// Scan once and print discovered SBOMs, then exit (useful for testing watch configuration)
     #[arg(long)]
     dry_run: bool,
+
+    /// Periodically probe the curated CRA-standards catalogue and surface
+    /// drift through the configured watch sinks (stdout / NDJSON / webhook).
+    /// Requires the `enrichment` feature for live HTTP probes.
+    #[arg(long)]
+    cra_standards: bool,
+
+    /// Interval between CRA-standards probe cycles (e.g., 6h, 24h, 7d)
+    #[arg(long, default_value = "24h")]
+    cra_standards_interval: String,
+
+    /// Per-request timeout for CRA-standards HTTP probes (e.g., 5s, 10s)
+    #[arg(long, default_value = "10s")]
+    cra_standards_timeout: String,
 }
 
 #[derive(Subcommand)]
@@ -1613,6 +1627,9 @@ fn main() -> Result<()> {
                 max_snapshots: args.max_snapshots,
                 quiet: cli.quiet,
                 dry_run: args.dry_run,
+                cra_standards_enabled: args.cra_standards,
+                cra_standards_interval: parse_duration(&args.cra_standards_interval)?,
+                cra_standards_timeout: parse_duration(&args.cra_standards_timeout)?,
             };
 
             cli::run_watch(config)
