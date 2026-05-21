@@ -455,7 +455,7 @@ fn format_ai_readiness_report(
 
     if metrics.not_applicable {
         let muted = if use_color { "\x1b[33m" } else { "" };
-        lines.push(format!("Overall Score: {}N/A{}", muted, reset));
+        lines.push(format!("Overall Score: {muted}N/A{reset}"));
         lines.push(
             metrics
                 .na_reason
@@ -507,7 +507,7 @@ fn format_ai_readiness_report(
         if config.show_metrics
             && let Some(detail) = &check.detail
         {
-            lines.push(format!("    {}", detail));
+            lines.push(format!("    {detail}"));
         }
     }
     lines.push(String::new());
