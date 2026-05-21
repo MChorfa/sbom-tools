@@ -340,6 +340,13 @@ pub struct AiReadinessMetrics {
     pub components_fully_documented: usize,
 }
 
+impl AiReadinessMetrics {
+    #[must_use]
+    pub const fn is_not_applicable(&self) -> bool {
+        self.not_applicable
+    }
+}
+
 /// Category for recommendations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -722,19 +729,10 @@ impl QualityScorer {
         ];
 
         let n = ml_components.len();
-        let mut checks: Vec<AiCheck> = CHECK_DEFS
-            .iter()
-            .map(|(id, name, w)| AiCheck {
-                id: (*id).to_string(),
-                name: (*name).to_string(),
-                passed: false,
-                detail: None,
-                weight: *w,
-            })
-            .collect();
-
         let mut total_weighted_score = 0.0_f32;
         let mut components_fully_documented = 0_usize;
+        let mut component_details: Vec<Vec<String>> = vec![Vec::new(); CHECK_DEFS.len()];
+        let mut failing_components = vec![0_usize; CHECK_DEFS.len()];
 
         for component in &ml_components {
             let ml = component.ml_model.as_ref();
@@ -801,23 +799,44 @@ impl QualityScorer {
                 .sum::<f32>();
             total_weighted_score += component_score;
 
-            // Annotate per-check detail with component name
+            // Track per-check detail and failing component counts.
             for (i, &passed) in results.iter().enumerate() {
-                let entry = format!(
+                component_details[i].push(format!(
                     "{}: {}",
                     component.name,
                     if passed { "pass" } else { "fail" }
-                );
-                checks[i].detail = Some(match checks[i].detail.take() {
-                    None => entry,
-                    Some(existing) => format!("{existing}; {entry}"),
-                });
-                // A check is considered passing if at least one component passes it.
-                if passed {
-                    checks[i].passed = true;
+                ));
+                if !passed {
+                    failing_components[i] += 1;
                 }
             }
         }
+
+        let checks: Vec<AiCheck> = CHECK_DEFS
+            .iter()
+            .enumerate()
+            .map(|(i, (id, name, weight))| {
+                let failures = failing_components[i];
+                let detail = if component_details[i].is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "{}/{} components passed; {}",
+                        n - failures,
+                        n,
+                        component_details[i].join("; ")
+                    ))
+                };
+
+                AiCheck {
+                    id: (*id).to_string(),
+                    name: (*name).to_string(),
+                    passed: failures == 0,
+                    detail,
+                    weight: *weight,
+                }
+            })
+            .collect();
 
         // Average over all ML components and scale to 0-100
         let overall_score = ((total_weighted_score / n as f32) * 100.0).min(100.0);
@@ -834,14 +853,15 @@ impl QualityScorer {
         let mut recommendations: Vec<Recommendation> = metrics
             .checks
             .iter()
-            .filter(|c| !c.passed)
+            .zip(failing_components.iter())
+            .filter(|(c, _)| !c.passed)
             .enumerate()
-            .map(|(i, chk)| Recommendation {
+            .map(|(i, (chk, &affected_count))| Recommendation {
                 priority: (i as u8 / 3) + 1,
                 category: RecommendationCategory::Completeness,
                 message: format!("[{}] {}", chk.id, chk.name),
                 impact: chk.weight * 100.0,
-                affected_count: n,
+                affected_count,
             })
             .collect();
 
@@ -1429,5 +1449,99 @@ mod tests {
                 "expected {check_id} to pass with nested model-card data"
             );
         }
+    }
+
+    #[test]
+    fn test_ai_readiness_fails_check_when_any_model_is_missing_it() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+
+        let mut complete = Component::new("complete-model".to_string(), "ml-complete".to_string())
+            .with_version("1.0.0".to_string());
+        complete.component_type = ComponentType::MachineLearningModel;
+        complete.ml_model = Some(MlModelInfo {
+            architecture_family: Some("transformer".to_string()),
+            training_datasets: vec![crate::model::DatasetRef {
+                reference: None,
+                name: Some("dataset".to_string()),
+                purl: Some("pkg:generic/dataset@1.0.0".to_string()),
+            }],
+            energy_kwh_training: Some(10.0),
+            model_card_url: Some("https://example.test/model-card".to_string()),
+            limitations: Some("Only validated for English text".to_string()),
+            ..MlModelInfo::default()
+        });
+        complete.extensions.raw = Some(json!({
+            "mlModel": {
+                "modelCard": {
+                    "quantitativeAnalysis": { "performanceMetrics": [{ "type": "accuracy", "value": 0.98 }] },
+                    "considerations": {
+                        "fairnessConsiderations": ["Reviewed"],
+                        "useCases": ["Classification"],
+                        "ethicalConsiderations": ["Human review required"]
+                    }
+                }
+            }
+        }));
+        complete.calculate_content_hash();
+        sbom.add_component(complete);
+
+        let mut incomplete = Component::new("incomplete-model".to_string(), "ml-incomplete".to_string())
+            .with_version("1.0.0".to_string());
+        incomplete.component_type = ComponentType::MachineLearningModel;
+        incomplete.ml_model = Some(MlModelInfo {
+            architecture_family: Some("transformer".to_string()),
+            training_datasets: vec![crate::model::DatasetRef {
+                reference: None,
+                name: Some("dataset".to_string()),
+                purl: Some("pkg:generic/dataset@1.0.0".to_string()),
+            }],
+            energy_kwh_training: Some(10.0),
+            model_card_url: Some("https://example.test/model-card-2".to_string()),
+            limitations: Some("Only validated for English text".to_string()),
+            ..MlModelInfo::default()
+        });
+        incomplete.extensions.raw = Some(json!({
+            "mlModel": {
+                "modelCard": {
+                    "quantitativeAnalysis": { "performanceMetrics": [{ "type": "accuracy", "value": 0.94 }] },
+                    "considerations": {
+                        "useCases": ["Classification"],
+                        "ethicalConsiderations": ["Human review required"]
+                    }
+                }
+            }
+        }));
+        incomplete.calculate_content_hash();
+        sbom.add_component(incomplete);
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let metrics = report
+            .ai_readiness_metrics
+            .expect("AI readiness metrics should be present");
+        let fairness_check = metrics
+            .checks
+            .iter()
+            .find(|check| check.id == "AI-005")
+            .expect("fairness check should be present");
+
+        assert!(
+            !fairness_check.passed,
+            "AI-005 should fail when any model is missing fairness data"
+        );
+        assert!(
+            fairness_check
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("1/2 components passed"),
+            "detail should include component pass count"
+        );
+
+        let recommendation = report
+            .recommendations
+            .iter()
+            .find(|rec| rec.message.contains("AI-005"))
+            .expect("missing fairness recommendation");
+        assert_eq!(recommendation.affected_count, 1);
     }
 }

@@ -459,8 +459,17 @@ impl CycloneDxParser {
         comp.is_external = cdx.is_external;
         comp.version_range.clone_from(&cdx.version_range);
 
+        let external_model_card_url = comp
+            .external_refs
+            .iter()
+            .find(|ext_ref| ext_ref.ref_type == ExternalRefType::ModelCard)
+            .map(|ext_ref| ext_ref.url.clone());
+
         // Set ML model metadata (CycloneDX 1.5+)
-        if cdx.legacy_ml_model.is_some() || cdx.model_card.is_some() {
+        if cdx.legacy_ml_model.is_some()
+            || cdx.model_card.is_some()
+            || external_model_card_url.is_some()
+        {
             let mut ml_info = crate::model::MlModelInfo::default();
             let model_card = cdx.model_card.as_ref().or_else(|| {
                 cdx.legacy_ml_model
@@ -572,13 +581,7 @@ impl CycloneDxParser {
                 }
             }
 
-            // Extract model card URL from external references
-            for ext_ref in &comp.external_refs {
-                if ext_ref.ref_type == ExternalRefType::ModelCard {
-                    ml_info.model_card_url = Some(ext_ref.url.clone());
-                    break;
-                }
-            }
+            ml_info.model_card_url = external_model_card_url;
 
             comp.ml_model = Some(ml_info);
         }

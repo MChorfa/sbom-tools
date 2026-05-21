@@ -112,7 +112,12 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     write_output(&output_text, &output_target, false)?;
 
     // Check minimum score threshold
+    let ai_not_applicable = report
+        .ai_readiness_metrics
+        .as_ref()
+        .is_some_and(crate::quality::AiReadinessMetrics::is_not_applicable);
     if let Some(threshold) = config.min_score
+        && !ai_not_applicable
         && report.overall_score < threshold
     {
         tracing::error!(
@@ -233,6 +238,10 @@ fn format_quality_sarif(report: &QualityReport, config: &QualityConfig) -> Strin
 fn format_quality_report(report: &QualityReport, config: &QualityConfig) -> String {
     let mut lines = Vec::new();
     let use_color = !config.no_color && std::env::var("NO_COLOR").is_err();
+
+    if report.profile == ScoringProfile::AiReadiness {
+        return format_ai_readiness_report(report, config, use_color);
+    }
 
     // Color codes
     let (grade_color, reset) = if use_color {
@@ -422,6 +431,100 @@ fn format_quality_report(report: &QualityReport, config: &QualityConfig) -> Stri
     lines.join("\n")
 }
 
+fn format_ai_readiness_report(
+    report: &QualityReport,
+    config: &QualityConfig,
+    use_color: bool,
+) -> String {
+    let mut lines = Vec::new();
+    let Some(metrics) = report.ai_readiness_metrics.as_ref() else {
+        return String::new();
+    };
+    let reset = if use_color { "\x1b[0m" } else { "" };
+
+    lines.push(format!(
+        "SBOM Quality Report: {}",
+        config
+            .sbom_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+    ));
+    lines.push(format!("Profile: {}", config.profile));
+    lines.push(String::new());
+
+    if metrics.not_applicable {
+        let muted = if use_color { "\x1b[33m" } else { "" };
+        lines.push(format!("Overall Score: {}N/A{}", muted, reset));
+        lines.push(
+            metrics
+                .na_reason
+                .clone()
+                .unwrap_or_else(|| "AI readiness is not applicable for this SBOM".to_string()),
+        );
+        return lines.join("\n");
+    }
+
+    let grade_color = if use_color {
+        match report.grade {
+            QualityGrade::A | QualityGrade::B => "\x1b[32m",
+            QualityGrade::C | QualityGrade::D => "\x1b[33m",
+            QualityGrade::F => "\x1b[31m",
+        }
+    } else {
+        ""
+    };
+    lines.push(format!(
+        "Overall Score: {}{:.1}/100 (Grade: {}){}",
+        grade_color,
+        report.overall_score,
+        report.grade.letter(),
+        reset
+    ));
+    lines.push(format!(
+        "ML Components: {} total, {} fully documented",
+        metrics.ml_component_count,
+        metrics.components_fully_documented
+    ));
+    lines.push(String::new());
+    lines.push("AI Readiness Checks:".to_string());
+
+    for check in &metrics.checks {
+        let status = if check.passed { "PASS" } else { "FAIL" };
+        let status_color = if use_color {
+            if check.passed { "\x1b[32m" } else { "\x1b[31m" }
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "  {}{}{} {} ({:.0}%)",
+            status_color,
+            status,
+            reset,
+            check.id,
+            check.weight * 100.0
+        ));
+        lines.push(format!("    {}", check.name));
+        if config.show_metrics && let Some(detail) = &check.detail {
+            lines.push(format!("    {}", detail));
+        }
+    }
+    lines.push(String::new());
+
+    if config.show_recommendations && !report.recommendations.is_empty() {
+        lines.push("Recommendations:".to_string());
+        for rec in report.recommendations.iter().take(10) {
+            lines.push(format!(
+                "  [P{}] {} ({} affected, +{:.1} impact)",
+                rec.priority, rec.message, rec.affected_count, rec.impact
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -432,6 +535,7 @@ mod tests {
     )]
 
     use super::*;
+    use crate::model::{Component, ComponentType, DocumentMetadata, MlModelInfo, NormalizedSbom};
 
     #[test]
     fn test_parse_scoring_profile() {
@@ -492,5 +596,80 @@ mod tests {
             parse_scoring_profile("cyber-resilience").unwrap(),
             ScoringProfile::Cra
         ));
+    }
+
+    #[test]
+    fn test_format_quality_report_ai_readiness_shows_checks() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut component = Component::new("bert-base".to_string(), "ml-model-1".to_string())
+            .with_version("1.0.0".to_string());
+        component.component_type = ComponentType::MachineLearningModel;
+        component.ml_model = Some(MlModelInfo {
+            architecture_family: Some("transformer".to_string()),
+            training_datasets: vec![crate::model::DatasetRef {
+                reference: None,
+                name: Some("dataset".to_string()),
+                purl: Some("pkg:generic/dataset@1.0.0".to_string()),
+            }],
+            energy_kwh_training: Some(20.0),
+            model_card_url: Some("https://example.test/model-card".to_string()),
+            limitations: Some("Only validated for English text".to_string()),
+            ..MlModelInfo::default()
+        });
+        component.extensions.raw = Some(serde_json::json!({
+            "mlModel": {
+                "modelCard": {
+                    "quantitativeAnalysis": { "performanceMetrics": [{ "type": "accuracy", "value": 0.97 }] },
+                    "considerations": {
+                        "fairnessConsiderations": ["Reviewed"],
+                        "useCases": ["Classification"],
+                        "ethicalConsiderations": ["Human review required"]
+                    }
+                }
+            }
+        }));
+        component.calculate_content_hash();
+        sbom.add_component(component);
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let config = QualityConfig {
+            sbom_path: PathBuf::from("model.cdx.json"),
+            profile: "ai-readiness".to_string(),
+            output: ReportFormat::Summary,
+            output_file: None,
+            show_recommendations: true,
+            show_metrics: true,
+            min_score: None,
+            no_color: true,
+            cra_sidecar_path: None,
+            cra_product_class: None,
+        };
+
+        let output = format_quality_report(&report, &config);
+        assert!(output.contains("AI Readiness Checks:"));
+        assert!(output.contains("PASS AI-001"));
+        assert!(!output.contains("Category Scores:"));
+    }
+
+    #[test]
+    fn test_format_quality_report_ai_readiness_na_shows_na() {
+        let sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let config = QualityConfig {
+            sbom_path: PathBuf::from("bom.cdx.json"),
+            profile: "ai-readiness".to_string(),
+            output: ReportFormat::Summary,
+            output_file: None,
+            show_recommendations: true,
+            show_metrics: true,
+            min_score: Some(70.0),
+            no_color: true,
+            cra_sidecar_path: None,
+            cra_product_class: None,
+        };
+
+        let output = format_quality_report(&report, &config);
+        assert!(output.contains("Overall Score: N/A"));
+        assert!(output.contains("No machine-learning-model components found"));
     }
 }

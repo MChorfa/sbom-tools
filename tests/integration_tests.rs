@@ -527,6 +527,51 @@ mod parser_tests {
     }
 
     #[test]
+    fn test_parse_cyclonedx_ml_model_card_external_reference_without_embedded_metadata() {
+        let content = r#"{
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "metadata": {
+                "timestamp": "2026-05-01T00:00:00Z",
+                "component": {
+                    "bom-ref": "root",
+                    "type": "application",
+                    "name": "test-ai-app",
+                    "version": "1.0.0"
+                }
+            },
+            "components": [
+                {
+                    "bom-ref": "model-1",
+                    "type": "machine-learning-model",
+                    "name": "bert-base",
+                    "version": "1.0.0",
+                    "externalReferences": [
+                        {
+                            "type": "model-card",
+                            "url": "https://example.test/model-card"
+                        }
+                    ]
+                }
+            ]
+        }"#;
+
+        let sbom = parse_sbom_str(content).expect("Failed to parse CycloneDX ML BOM");
+        let model = sbom
+            .components
+            .values()
+            .find(|component| component.name == "bert-base")
+            .expect("bert-base not found");
+        let ml_info = model.ml_model.as_ref().expect("ML metadata missing");
+
+        assert_eq!(
+            ml_info.model_card_url.as_deref(),
+            Some("https://example.test/model-card")
+        );
+    }
+
+    #[test]
     fn test_parse_cyclonedx_1_7_preserves_raw_extensions_and_external_ref_hashes() {
         let content = r#"{
             "bomFormat": "CycloneDX",
