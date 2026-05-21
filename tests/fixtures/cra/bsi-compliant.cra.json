@@ -1,0 +1,15 @@
+{
+  "securityContact": "security@example.com",
+  "vulnerabilityDisclosureUrl": "https://example.com/security",
+  "manufacturerName": "Demo Corp",
+  "manufacturerEmail": "contact@example.com",
+  "productName": "Demo App",
+  "productVersion": "1.0.0",
+  "psirtUrl": "https://example.com/psirt",
+  "earlyWarningContact": "psirt@example.com",
+  "incidentReportContact": "incidents@example.com",
+  "enisaReportingPlatformId": "EU-MFR-DEMO",
+  "coordinatedDisclosurePolicyUrl": "https://example.com/security/cvd-policy",
+  "riskAssessmentUrl": "https://example.com/docs/risk-assessment-2026.pdf",
+  "riskAssessmentMethodology": "ISO/IEC 27005:2022"
+}

@@ -1,0 +1,62 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:7c8d9e0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-04-26T10:00:00Z",
+    "tools": [
+      { "vendor": "Acme", "name": "sbom-tools", "version": "0.1.19" }
+    ],
+    "component": {
+      "type": "application",
+      "bom-ref": "swhid-app",
+      "name": "swhid-demo",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/swhid-demo@1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "lib-content",
+      "name": "lib-content",
+      "version": "0.1.0",
+      "purl": "pkg:generic/lib-content@0.1.0",
+      "swhid": [
+        "swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2"
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "lib-tree",
+      "name": "lib-tree",
+      "version": "2.0.0",
+      "purl": "pkg:generic/lib-tree@2.0.0",
+      "swhid": [
+        "swh:1:dir:309cf2674ee7a0749978cf8265ab91a60aea0f7d"
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "lib-revision-with-origin",
+      "name": "lib-revision",
+      "version": "git-pinned",
+      "purl": "pkg:github/example/lib-revision@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "swhid": [
+        "swh:1:rev:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef;origin=https://github.com/example/lib-revision"
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "lib-multi-swhid",
+      "name": "lib-multi-swhid",
+      "version": "3.1.4",
+      "purl": "pkg:generic/lib-multi-swhid@3.1.4",
+      "swhid": [
+        "swh:1:cnt:1234567890abcdef1234567890abcdef12345678",
+        "swh:1:dir:abcdef1234567890abcdef1234567890abcdef12"
+      ]
+    }
+  ]
+}

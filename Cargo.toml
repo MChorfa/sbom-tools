@@ -4,7 +4,7 @@ exclude = ["dagger/rust-sdk"]
 
 [package]
 name = "sbom-tools"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2024"
 rust-version = "1.88"
 description = "Semantic SBOM diff and analysis tool"
@@ -37,7 +37,7 @@ regex = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"
-quick-xml = { version = "0.39", features = ["serialize"] }
+quick-xml = { version = "0.40", features = ["serialize"] }
 
 # TUI (ratatui ecosystem)
 ratatui = { version = "0.30", features = ["crossterm"] }
