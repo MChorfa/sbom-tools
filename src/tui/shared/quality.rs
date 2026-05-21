@@ -30,6 +30,7 @@ pub const fn get_profile_weights(
         ScoringProfile::Security => (0.12, 0.18, 0.05, 0.20, 0.10, 0.15, 0.10, 0.10),
         ScoringProfile::LicenseCompliance => (0.15, 0.12, 0.35, 0.05, 0.10, 0.05, 0.10, 0.08),
         ScoringProfile::Cra => (0.12, 0.18, 0.08, 0.15, 0.12, 0.12, 0.15, 0.08),
+        ScoringProfile::BsiTr03183_2 => (0.10, 0.22, 0.08, 0.10, 0.12, 0.18, 0.12, 0.08),
         ScoringProfile::Comprehensive => (0.15, 0.13, 0.13, 0.10, 0.12, 0.12, 0.13, 0.12),
         ScoringProfile::Cbom => (0.15, 0.15, 0.22, 0.10, 0.13, 0.15, 0.08, 0.02),
     }

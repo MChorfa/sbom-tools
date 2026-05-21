@@ -20,6 +20,34 @@ pub(crate) trait AlertSink {
 
     /// Called periodically with a session summary.
     fn on_status(&mut self, summary: &WatchSummary) -> anyhow::Result<()>;
+
+    /// Called when a CRA-standards probe surfaces a status change for an
+    /// entry in the curated catalogue. Default is a no-op so sinks that
+    /// don't care about standards drift compile unchanged.
+    fn on_cra_standard(&mut self, _event: &CraStandardEvent) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// One CRA-standards drift event produced by the watch loop's periodic
+/// catalogue probe. Carries enough metadata for sinks to render a
+/// human-readable line or a structured JSON record without re-resolving
+/// the catalogue.
+#[derive(Debug, Clone)]
+pub(crate) struct CraStandardEvent {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub url: &'static str,
+    pub kind: CraEventKind,
+}
+
+/// Kind of CRA-standards drift the watch loop observed.
+#[derive(Debug, Clone)]
+pub(crate) enum CraEventKind {
+    /// First probe of this entry in the current watch session.
+    InitialBaseline { status: String },
+    /// HTTP probe status differs from the previous tick.
+    StatusChanged { from: String, to: String },
 }
 
 // ============================================================================
@@ -127,6 +155,27 @@ impl AlertSink for StdoutAlertSink {
         );
         Ok(())
     }
+
+    fn on_cra_standard(&mut self, event: &CraStandardEvent) -> anyhow::Result<()> {
+        let ts = chrono::Local::now().format("%H:%M:%S");
+        match &event.kind {
+            CraEventKind::InitialBaseline { status } => {
+                if !self.quiet {
+                    eprintln!(
+                        "[{ts}] cra-standard {}: baseline {} ({})",
+                        event.id, status, event.title
+                    );
+                }
+            }
+            CraEventKind::StatusChanged { from, to } => {
+                eprintln!(
+                    "[{ts}] cra-standard {}: status drift {from} -> {to} ({})",
+                    event.id, event.title
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -199,6 +248,32 @@ impl AlertSink for NdjsonAlertSink {
             "uptime_secs": summary.uptime_secs,
         });
         self.write_event(&event)
+    }
+
+    fn on_cra_standard(&mut self, event: &CraStandardEvent) -> anyhow::Result<()> {
+        let (kind, from, to, status) = match &event.kind {
+            CraEventKind::InitialBaseline { status } => {
+                ("baseline", None, None, Some(status.as_str()))
+            }
+            CraEventKind::StatusChanged { from, to } => (
+                "status_changed",
+                Some(from.as_str()),
+                Some(to.as_str()),
+                None,
+            ),
+        };
+        let payload = serde_json::json!({
+            "type": "cra_standard",
+            "kind": kind,
+            "id": event.id,
+            "title": event.title,
+            "url": event.url,
+            "from": from,
+            "to": to,
+            "status": status,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+        self.write_event(&payload)
     }
 }
 
@@ -364,6 +439,84 @@ mod tests {
         assert_eq!(parsed["type"], "change");
         assert_eq!(parsed["added"], 3);
         assert_eq!(parsed["new_vulns"][0], "CVE-2026-1234");
+    }
+
+    #[test]
+    fn test_ndjson_sink_emits_cra_standard_event() {
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let writer = {
+            struct ArcWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+            impl Write for ArcWriter {
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    self.0.lock().unwrap().write(buf)
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            ArcWriter(buffer.clone())
+        };
+        let mut sink = NdjsonAlertSink::new(Box::new(writer));
+
+        let baseline = CraStandardEvent {
+            id: "BSI-TR-03183-2",
+            title: "BSI TR-03183-2",
+            url: "https://example.invalid/tr",
+            kind: CraEventKind::InitialBaseline {
+                status: "200 OK".to_string(),
+            },
+        };
+        sink.on_cra_standard(&baseline).unwrap();
+
+        let drift = CraStandardEvent {
+            id: "BSI-TR-03183-2",
+            title: "BSI TR-03183-2",
+            url: "https://example.invalid/tr",
+            kind: CraEventKind::StatusChanged {
+                from: "200 OK".to_string(),
+                to: "503 Service Unavailable".to_string(),
+            },
+        };
+        sink.on_cra_standard(&drift).unwrap();
+
+        let output = buffer.lock().unwrap();
+        let text = String::from_utf8_lossy(&output);
+        let mut lines = text.lines();
+
+        let line1: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(line1["type"], "cra_standard");
+        assert_eq!(line1["kind"], "baseline");
+        assert_eq!(line1["id"], "BSI-TR-03183-2");
+        assert_eq!(line1["status"], "200 OK");
+
+        let line2: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(line2["kind"], "status_changed");
+        assert_eq!(line2["from"], "200 OK");
+        assert_eq!(line2["to"], "503 Service Unavailable");
+    }
+
+    #[test]
+    fn test_stdout_sink_cra_standard_does_not_panic() {
+        let mut sink = StdoutAlertSink::new(false);
+        let event = CraStandardEvent {
+            id: "STAN4CRA",
+            title: "STAN4CRA hub",
+            url: "https://example.invalid/",
+            kind: CraEventKind::InitialBaseline {
+                status: "200 OK".to_string(),
+            },
+        };
+        sink.on_cra_standard(&event).unwrap();
+        let drift = CraStandardEvent {
+            id: "STAN4CRA",
+            title: "STAN4CRA hub",
+            url: "https://example.invalid/",
+            kind: CraEventKind::StatusChanged {
+                from: "200 OK".to_string(),
+                to: "404 Not Found".to_string(),
+            },
+        };
+        sink.on_cra_standard(&drift).unwrap();
     }
 
     #[test]

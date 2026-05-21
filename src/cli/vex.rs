@@ -19,6 +19,16 @@ pub enum VexAction {
     Status,
     /// Filter vulnerabilities by VEX state
     Filter,
+    /// Export the SBOM's VEX state as a CSAF v2.0 advisory
+    /// (or other advisory format).
+    Export(VexExportFormat),
+}
+
+/// Export format for `vex export`. CSAF v2.0 is the only one wired up
+/// today; OpenVEX / CycloneDX VEX emit can be added later.
+#[derive(Debug, Clone, Copy)]
+pub enum VexExportFormat {
+    Csaf,
 }
 
 /// Run the vex subcommand.
@@ -72,7 +82,27 @@ pub fn run_vex(config: VexConfig, action: VexAction) -> Result<i32> {
         VexAction::Apply => run_vex_apply(parsed.sbom(), &config),
         VexAction::Status => run_vex_status(parsed.sbom(), &config),
         VexAction::Filter => run_vex_filter(parsed.sbom(), &config),
+        VexAction::Export(format) => run_vex_export(parsed.sbom(), &config, format),
     }
+}
+
+/// Emit a CSAF v2.0 (or future) advisory document derived from the SBOM's
+/// per-vulnerability VEX state.
+fn run_vex_export(
+    sbom: &NormalizedSbom,
+    config: &VexConfig,
+    format: VexExportFormat,
+) -> Result<i32> {
+    let output = match format {
+        VexExportFormat::Csaf => {
+            let opts = crate::reports::CsafEmitOptions::default();
+            crate::reports::emit_csaf(sbom, &opts)
+                .map_err(|e| anyhow::anyhow!("CSAF emit failed: {e}"))?
+        }
+    };
+    let target = OutputTarget::from_option(config.output_file.clone());
+    write_output(&output, &target, false)?;
+    Ok(exit_codes::SUCCESS)
 }
 
 /// Apply VEX documents and output the enriched SBOM vulnerability data as JSON.

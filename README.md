@@ -827,6 +827,9 @@ cargo bench
 
 - [Architecture overview](docs/ARCHITECTURE.md)
 - [Pipeline diagrams](docs/pipeline-diagrams.md)
+- [CRA compliance reverse-mapping](docs/CRA_COMPLIANCE.md) — every
+  CRA / BSI / prEN check sbom-tools surfaces, mapped to its
+  regulation, harmonised standard, sidecar field, and canonical URL
 - [Releases and changelog](https://github.com/sbom-tool/sbom-tools/releases)
 
 ## Contributing

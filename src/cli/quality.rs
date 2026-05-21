@@ -21,6 +21,12 @@ pub struct QualityConfig {
     pub show_metrics: bool,
     pub min_score: Option<f32>,
     pub no_color: bool,
+    /// Optional CRA sidecar metadata path (auto-discovered next to the SBOM
+    /// when None). Supplements the embedded compliance check used by the
+    /// `cra` scoring profile.
+    pub cra_sidecar_path: Option<PathBuf>,
+    /// CRA Annex III/IV product class (CLI string form). Sidecar value wins.
+    pub cra_product_class: Option<String>,
 }
 
 /// Run the quality command, returning the desired exit code.
@@ -37,6 +43,8 @@ pub fn run_quality(
     show_metrics: bool,
     min_score: Option<f32>,
     no_color: bool,
+    cra_sidecar_path: Option<PathBuf>,
+    cra_product_class: Option<String>,
 ) -> Result<i32> {
     let config = QualityConfig {
         sbom_path,
@@ -47,6 +55,8 @@ pub fn run_quality(
         show_metrics,
         min_score,
         no_color,
+        cra_sidecar_path,
+        cra_product_class,
     };
 
     run_quality_impl(config)
@@ -60,7 +70,34 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
 
     tracing::info!("Running quality assessment with {:?} profile", profile);
 
-    let scorer = QualityScorer::new(profile);
+    // Honour explicit --cra-sidecar; otherwise auto-discover.
+    let sidecar = match &config.cra_sidecar_path {
+        Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
+        None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
+    };
+    let cli_class = config
+        .cra_product_class
+        .as_deref()
+        .and_then(crate::model::CraProductClass::parse_cli);
+    let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
+    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
+        && cli != side
+    {
+        tracing::warn!(
+            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
+            cli.label(),
+            side.label()
+        );
+    }
+    let effective_class = sidecar_class.or(cli_class);
+
+    let mut scorer = QualityScorer::new(profile);
+    if let Some(sc) = sidecar {
+        scorer = scorer.with_cra_sidecar(sc);
+    }
+    if let Some(c) = effective_class {
+        scorer = scorer.with_cra_product_class(c);
+    }
     let report = scorer.score(parsed.sbom());
 
     // Build output based on format
@@ -97,11 +134,12 @@ fn parse_scoring_profile(profile_name: &str) -> Result<ScoringProfile> {
         "security" => Ok(ScoringProfile::Security),
         "license-compliance" | "license" => Ok(ScoringProfile::LicenseCompliance),
         "cra" | "cyber-resilience" => Ok(ScoringProfile::Cra),
+        "bsi" | "tr-03183" | "tr03183" | "bsi-tr-03183-2" => Ok(ScoringProfile::BsiTr03183_2),
         "comprehensive" | "full" => Ok(ScoringProfile::Comprehensive),
         "cbom" | "cryptographic" => Ok(ScoringProfile::Cbom),
         _ => {
             bail!(
-                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, comprehensive, cbom"
+                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, bsi, comprehensive, cbom"
             );
         }
     }

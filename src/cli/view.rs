@@ -99,8 +99,19 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
     tracing::info!("BOM profile: {bom_profile}");
 
     if effective_output == ReportFormat::Tui {
+        // Resolve sidecar so the compliance tab's OSS-Steward / EUCC /
+        // Article 14 / product-class checks render against the same
+        // metadata the CLI uses (auto-discovered next to the SBOM when
+        // `--cra-sidecar` is omitted).
+        let tui_sidecar = match &config.cra_sidecar_path {
+            Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
+            None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
+        };
         let (sbom, raw_content) = parsed.into_parts();
         let mut app = ViewApp::new(sbom, &raw_content, bom_profile);
+        if let Some(sc) = tui_sidecar {
+            app = app.with_cra_sidecar(sc);
+        }
         app.export_template = config.output.export_template.clone();
 
         // Show enrichment warnings in TUI footer
@@ -215,10 +226,37 @@ fn output_view_report(
 ) -> Result<()> {
     let effective_output = auto_detect_format(config.output.format, output_target);
 
-    // Pre-compute CRA compliance once for reporters
-    let cra_result =
-        crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2)
-            .check(sbom);
+    // Pre-compute CRA compliance once for reporters.
+    // Honour explicit --cra-sidecar; otherwise auto-discover next to the SBOM.
+    let sidecar = match &config.cra_sidecar_path {
+        Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
+        None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
+    };
+    let cli_class = config
+        .cra_product_class
+        .as_deref()
+        .and_then(crate::model::CraProductClass::parse_cli);
+    let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
+    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
+        && cli != side
+    {
+        tracing::warn!(
+            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
+            cli.label(),
+            side.label()
+        );
+    }
+    let effective_class = sidecar_class.or(cli_class);
+
+    let mut checker =
+        crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2);
+    if let Some(sc) = sidecar {
+        checker = checker.with_sidecar(sc);
+    }
+    if let Some(c) = effective_class {
+        checker = checker.with_product_class(c);
+    }
+    let cra_result = checker.check(sbom);
 
     let report_config = ReportConfig {
         report_types: vec![config.output.report_types],
@@ -293,6 +331,8 @@ mod tests {
             fail_on_vuln: false,
             bom_profile: None,
             enrichment: crate::config::EnrichmentConfig::default(),
+            cra_sidecar_path: None,
+            cra_product_class: None,
         };
 
         let removed = apply_view_filters(&mut sbom, &config);

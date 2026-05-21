@@ -74,7 +74,7 @@ jobs:
 
       - name: cargo-deny
         # v2
-        uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb
+        uses: EmbarkStudios/cargo-deny-action@6c8f9facfa5047ec02d8485b6bf52b587b7777d1
         with:
           arguments: --all-features
 
@@ -90,7 +90,7 @@ jobs:
           echo "hashes=$(sha256sum target/package/sbom-tools-*.crate | base64 -w0)" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to crates.io
-        uses: rust-lang/crates-io-auth-action@4c854e89b5a69306bb9a1abf09660d9cdb3a1e16 # v1
+        uses: rust-lang/crates-io-auth-action@cdf3709d22d7065f49a0a85d53b577024304e0df # v1
         id: auth
 
       - name: Publish crate
@@ -197,7 +197,7 @@ jobs:
 
       - name: Install cosign
         # v4.1.0
-        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
 
       - name: Build release binary
         run: cargo build --release --locked --all-features --target ${{ matrix.target }}
@@ -278,7 +278,7 @@ jobs:
 
       - name: Install cosign
         # v4.1.0
-        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
 
       - name: Install cargo-sbom
         run: cargo install cargo-sbom --locked

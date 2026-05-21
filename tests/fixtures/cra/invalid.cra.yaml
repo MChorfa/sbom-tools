@@ -1,0 +1,5 @@
+: this is not valid yaml because the key is empty
+- and: this
+  is: also
+    invalid
+indentation: ":
