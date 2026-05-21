@@ -718,12 +718,10 @@ fn render_ai_readiness_summary(
                     Style::default().fg(scheme.success).bold(),
                 ),
             ]),
-            Line::from(vec![
-                Span::styled(
-                    " Checks passing for every ML component are shown below.",
-                    Style::default().fg(scheme.text_muted),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                " Checks passing for every ML component are shown below.",
+                Style::default().fg(scheme.text_muted),
+            )]),
         ]
     };
     let summary = Paragraph::new(summary_lines).block(
@@ -1511,9 +1509,16 @@ fn render_ai_readiness_breakdown(frame: &mut Frame, area: Rect, report: &Quality
             .border_style(Style::default().fg(scheme.primary)),
     )
     .header(
-        Row::new(vec!["Check", "Description", "Weight", "Status", "Contrib.", "Detail"])
-            .style(Style::default().fg(scheme.accent).bold())
-            .bottom_margin(1),
+        Row::new(vec![
+            "Check",
+            "Description",
+            "Weight",
+            "Status",
+            "Contrib.",
+            "Detail",
+        ])
+        .style(Style::default().fg(scheme.accent).bold())
+        .bottom_margin(1),
     );
     frame.render_widget(table, area);
 }
@@ -1592,10 +1597,7 @@ fn render_ai_readiness_metrics(frame: &mut Frame, area: Rect, report: &QualityRe
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("{} ", check.id), Style::default().fg(scheme.accent)),
-                Span::styled(
-                    if check.passed { "PASS" } else { "FAIL" },
-                    status_style,
-                ),
+                Span::styled(if check.passed { "PASS" } else { "FAIL" }, status_style),
                 Span::styled(
                     format!(" {:.0}% {}", check.weight * 100.0, check.name),
                     Style::default().fg(scheme.text),

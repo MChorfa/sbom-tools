@@ -1485,8 +1485,9 @@ mod tests {
         complete.calculate_content_hash();
         sbom.add_component(complete);
 
-        let mut incomplete = Component::new("incomplete-model".to_string(), "ml-incomplete".to_string())
-            .with_version("1.0.0".to_string());
+        let mut incomplete =
+            Component::new("incomplete-model".to_string(), "ml-incomplete".to_string())
+                .with_version("1.0.0".to_string());
         incomplete.component_type = ComponentType::MachineLearningModel;
         incomplete.ml_model = Some(MlModelInfo {
             architecture_family: Some("transformer".to_string()),

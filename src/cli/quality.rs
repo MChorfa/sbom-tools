@@ -483,8 +483,7 @@ fn format_ai_readiness_report(
     ));
     lines.push(format!(
         "ML Components: {} total, {} fully documented",
-        metrics.ml_component_count,
-        metrics.components_fully_documented
+        metrics.ml_component_count, metrics.components_fully_documented
     ));
     lines.push(String::new());
     lines.push("AI Readiness Checks:".to_string());
@@ -505,7 +504,9 @@ fn format_ai_readiness_report(
             check.weight * 100.0
         ));
         lines.push(format!("    {}", check.name));
-        if config.show_metrics && let Some(detail) = &check.detail {
+        if config.show_metrics
+            && let Some(detail) = &check.detail
+        {
             lines.push(format!("    {}", detail));
         }
     }
