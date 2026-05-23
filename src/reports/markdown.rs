@@ -812,11 +812,30 @@ fn write_cra_compliance_diff(
     // Reporting channels (CRA Art. 14) — derived from new SBOM violations
     write_reporting_channels_md(md, new)?;
 
-    // Show new SBOM violations if any
-    if !new.violations.is_empty() {
-        writeln!(md, "### Violations (New SBOM)\n")?;
-        write_violation_table(md, &new.violations)?;
+    write_compact_diff_violation_summary(md, new)?;
+
+    Ok(())
+}
+
+fn write_compact_diff_violation_summary(
+    md: &mut String,
+    result: &ComplianceResult,
+) -> std::fmt::Result {
+    if result.violations.is_empty() {
+        return Ok(());
     }
+
+    let group_count = count_violation_groups(&result.violations);
+    writeln!(md, "### Violation Summary (New SBOM)\n")?;
+    writeln!(
+        md,
+        "- {} total findings across {group_count} distinct requirement groups.",
+        result.violations.len(),
+    )?;
+    writeln!(
+        md,
+        "- Re-run with `sbom-tools diff ... -o json` or `-o sarif` for the full CRA violation detail.\n"
+    )?;
 
     Ok(())
 }
@@ -953,6 +972,22 @@ impl ChannelStatus {
             Self::MissingPostDeadline => "Missing",
         }
     }
+}
+
+/// Count distinct `(severity, category, requirement)` violation groups without
+/// allocating the full aggregated representation.
+fn count_violation_groups(violations: &[crate::quality::Violation]) -> usize {
+    use std::collections::HashSet;
+    let mut groups: HashSet<(u8, &str, &str)> = HashSet::new();
+    for v in violations {
+        let sev_ord = match v.severity {
+            ViolationSeverity::Error => 0,
+            ViolationSeverity::Warning => 1,
+            ViolationSeverity::Info => 2,
+        };
+        groups.insert((sev_ord, v.category.name(), v.requirement.as_str()));
+    }
+    groups.len()
 }
 
 /// Aggregate violations by (severity, category, requirement) to reduce noise.
