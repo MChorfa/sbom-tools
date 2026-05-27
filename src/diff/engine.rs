@@ -134,6 +134,7 @@ impl DiffEngine {
 
         // Quick check: if content hashes match, SBOMs are identical
         if old.content_hash == new.content_hash && old.content_hash != 0 {
+            result.semantic_score = PERCENT_MAX;
             return Ok(result);
         }
 
@@ -220,7 +221,7 @@ impl DiffEngine {
         }
 
         // Calculate semantic score
-        result.semantic_score = self.compute_semantic_score(&result);
+        result.semantic_score = self.compute_semantic_score(&result, old, new);
 
         result.calculate_summary();
         Ok(result)
@@ -398,14 +399,19 @@ impl DiffEngine {
         }
 
         // Always recompute summary and semantic score since they depend on all sections
-        result.semantic_score = self.compute_semantic_score(&result);
+        result.semantic_score = self.compute_semantic_score(&result, &old_filtered, &new_filtered);
         result.calculate_summary();
         Ok(result)
     }
 
     /// Compute the semantic score from a `DiffResult`.
-    fn compute_semantic_score(&self, result: &DiffResult) -> f64 {
-        self.cost_model.calculate_semantic_score(
+    fn compute_semantic_score(
+        &self,
+        result: &DiffResult,
+        old_sbom: &NormalizedSbom,
+        new_sbom: &NormalizedSbom,
+    ) -> f64 {
+        let raw_cost = self.cost_model.calculate_semantic_score(
             result.components.added.len(),
             result.components.removed.len(),
             result.components.modified.len(),
@@ -414,9 +420,73 @@ impl DiffEngine {
             result.vulnerabilities.resolved.len(),
             result.dependencies.added.len(),
             result.dependencies.removed.len(),
-        )
+        );
+
+        self.normalize_semantic_score(raw_cost, result, old_sbom, new_sbom)
+    }
+
+    /// Normalize `raw_cost` to a 0–100 similarity percentage against an
+    /// SBOM-derived upper-bound budget.
+    ///
+    /// For each cost axis we compute the worst-case contribution given the
+    /// inputs (e.g. every component on both sides being added or removed) and
+    /// sum them to form `total_budget`. The score is then
+    /// `PERCENT_MAX * (1 - raw_cost / total_budget)`, clamped to `[0, PERCENT_MAX]`
+    /// to defend against future cost-model changes where the bound might no
+    /// longer dominate. When both SBOMs are empty the budget collapses to ~0
+    /// and the function returns `PERCENT_MAX` (an empty diff is fully similar).
+    ///
+    /// Note: `modification_budget` uses the actual `modified.len()` rather
+    /// than `min(old, new)`. The actual count is still a valid upper bound on
+    /// `raw_modification_cost` (each modification contributes at most
+    /// `max(version_major, license_changed)`), and using it keeps the per-axis
+    /// scoring sensitive to the modifications that actually occurred.
+    /// `vulnerability_resolved` is intentionally excluded from the budget: it
+    /// is a reward (negative cost in `CostModel`), so it can only reduce
+    /// `raw_cost`, never push it above the bound.
+    fn normalize_semantic_score(
+        &self,
+        raw_cost: f64,
+        result: &DiffResult,
+        old_sbom: &NormalizedSbom,
+        new_sbom: &NormalizedSbom,
+    ) -> f64 {
+        let component_budget = (old_sbom.component_count() + new_sbom.component_count()) as f64
+            * f64::from(
+                self.cost_model
+                    .component_added
+                    .max(self.cost_model.component_removed),
+            );
+        let dependency_budget = (old_sbom.edges.len() + new_sbom.edges.len()) as f64
+            * f64::from(
+                self.cost_model
+                    .dependency_added
+                    .max(self.cost_model.dependency_removed),
+            );
+        let vulnerability_budget = (old_sbom.vulnerability_counts().total()
+            + new_sbom.vulnerability_counts().total()) as f64
+            * f64::from(self.cost_model.vulnerability_introduced);
+        let modification_budget = result.components.modified.len() as f64
+            * f64::from(
+                self.cost_model
+                    .version_major
+                    .max(self.cost_model.license_changed),
+            );
+
+        let total_budget =
+            component_budget + dependency_budget + vulnerability_budget + modification_budget;
+
+        if total_budget <= f64::EPSILON {
+            return PERCENT_MAX;
+        }
+
+        (PERCENT_MAX * (1.0 - (raw_cost / total_budget))).clamp(0.0, PERCENT_MAX)
     }
 }
+
+/// Upper bound of the 0–100 similarity percentage emitted by
+/// [`DiffEngine::normalize_semantic_score`].
+const PERCENT_MAX: f64 = 100.0;
 
 impl Default for DiffEngine {
     fn default() -> Self {
