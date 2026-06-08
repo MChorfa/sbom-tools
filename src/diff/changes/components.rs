@@ -17,6 +17,30 @@ impl ComponentChangeComputer {
         Self { cost_model }
     }
 
+    fn serialize_optional<T: serde::Serialize>(value: &Option<T>) -> Option<String> {
+        value.as_ref().map(|value| {
+            serde_json::to_string(value).expect("serializing diff value should be infallible")
+        })
+    }
+
+    fn push_structured_change<T: serde::Serialize + PartialEq>(
+        changes: &mut Vec<FieldChange>,
+        field: &str,
+        old: &Option<T>,
+        new: &Option<T>,
+        total_cost: &mut u32,
+        field_cost: u32,
+    ) {
+        if old != new {
+            changes.push(FieldChange {
+                field: field.to_string(),
+                old_value: Self::serialize_optional(old),
+                new_value: Self::serialize_optional(new),
+            });
+            *total_cost += field_cost;
+        }
+    }
+
     /// Compute individual field changes between two components.
     fn compute_field_changes(&self, old: &Component, new: &Component) -> (Vec<FieldChange>, u32) {
         let mut changes = Vec::new();
@@ -103,6 +127,23 @@ impl ComponentChangeComputer {
                 total_cost += self.cost_model.hash_mismatch;
             }
         }
+
+        Self::push_structured_change(
+            &mut changes,
+            "ml_model",
+            &old.ml_model,
+            &new.ml_model,
+            &mut total_cost,
+            self.cost_model.ml_model_changed,
+        );
+        Self::push_structured_change(
+            &mut changes,
+            "dataset",
+            &old.dataset,
+            &new.dataset,
+            &mut total_cost,
+            self.cost_model.dataset_changed,
+        );
 
         // Cryptographic property changes
         if old.crypto_properties != new.crypto_properties {
@@ -327,6 +368,7 @@ impl ChangeComputer for ComponentChangeComputer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{DatasetInfo, MlModelInfo};
 
     #[test]
     fn test_component_change_computer_default() {
@@ -343,5 +385,55 @@ mod tests {
 
         let result = computer.compute(&old, &new, &matches);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_ml_model_change_uses_dedicated_cost() {
+        let computer = ComponentChangeComputer::new(CostModel {
+            ml_model_changed: 42,
+            ..CostModel::default()
+        });
+        let mut old = Component::new("model".to_string(), "model@1".to_string());
+        let mut new = old.clone();
+
+        old.ml_model = Some(MlModelInfo {
+            quantization: Some("fp32".to_string()),
+            ..MlModelInfo::default()
+        });
+        new.ml_model = Some(MlModelInfo {
+            quantization: Some("int8".to_string()),
+            ..MlModelInfo::default()
+        });
+
+        let (changes, total_cost) = computer.compute_field_changes(&old, &new);
+
+        assert_eq!(total_cost, 42);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].field, "ml_model");
+    }
+
+    #[test]
+    fn test_dataset_change_uses_dedicated_cost() {
+        let computer = ComponentChangeComputer::new(CostModel {
+            dataset_changed: 17,
+            ..CostModel::default()
+        });
+        let mut old = Component::new("dataset".to_string(), "dataset@1".to_string());
+        let mut new = old.clone();
+
+        old.dataset = Some(DatasetInfo {
+            dataset_type: Some("training".to_string()),
+            ..DatasetInfo::default()
+        });
+        new.dataset = Some(DatasetInfo {
+            dataset_type: Some("validation".to_string()),
+            ..DatasetInfo::default()
+        });
+
+        let (changes, total_cost) = computer.compute_field_changes(&old, &new);
+
+        assert_eq!(total_cost, 17);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].field, "dataset");
     }
 }

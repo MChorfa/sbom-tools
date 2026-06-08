@@ -516,3 +516,58 @@ pub struct Annotation {
     pub annotation_type: String,
     pub comment: String,
 }
+
+/// Machine learning model metadata (CycloneDX 1.5+)
+///
+/// Structured information about trained ML models, including architecture,
+/// approach, quantization, and environmental impact.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct MlModelInfo {
+    /// ML approach type: "supervised", "unsupervised", "reinforcement-learning", "semi-supervised"
+    pub approach: Option<String>,
+    /// Architecture family: "transformer", "cnn", "rnn", "llm", "gan", etc.
+    pub architecture_family: Option<String>,
+    /// Architecture name: "bert", "gpt", "resnet", etc.
+    pub architecture_name: Option<String>,
+    /// ML task: "nlp", "computer-vision", "audio", "tabular", etc.
+    pub task: Option<String>,
+    /// Quantization mode: "int4", "int8", "fp16", "bf16", "fp32", "mixed", etc.
+    pub quantization: Option<String>,
+    /// Limitations or known constraints of the model
+    pub limitations: Option<String>,
+    /// Training datasets used for this model
+    pub training_datasets: Vec<DatasetRef>,
+    /// Energy consumed during training in kWh (approximate)
+    pub energy_kwh_training: Option<f64>,
+    /// URL to detailed model card (from ExternalRefType::ModelCard)
+    pub model_card_url: Option<String>,
+}
+
+/// Reference to a dataset used for training or evaluation
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DatasetRef {
+    /// BOM-ref / BOM-Link to a dataset component (CycloneDX `modelParameters.datasets` `{ref}` form)
+    pub reference: Option<String>,
+    /// Dataset name (from an inline `componentData` dataset)
+    pub name: Option<String>,
+    /// Package URL (PURL). Not part of the CycloneDX spec for datasets; retained for
+    /// non-spec emitters and is `None` for spec-conformant input.
+    pub purl: Option<String>,
+}
+
+/// Dataset component metadata (CycloneDX 1.5+ data type)
+///
+/// Structured information about datasets, including type, sensitivity,
+/// governance, and content properties.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DatasetInfo {
+    /// Dataset type: "training", "testing", "validation", "evaluation"
+    pub dataset_type: Option<String>,
+    /// Sensitivity classifications: "sensitive", "confidential", "pii", etc.
+    pub sensitivity_classifications: Vec<String>,
+    /// Data governance owners/custodians
+    pub governance_owners: Vec<String>,
+}

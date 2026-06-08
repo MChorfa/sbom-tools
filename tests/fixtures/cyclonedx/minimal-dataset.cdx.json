@@ -1,0 +1,103 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-27T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "sbom-tools",
+        "name": "sbom-tools",
+        "version": "0.1.17"
+      }
+    ],
+    "component": {
+      "bom-ref": "root",
+      "type": "application",
+      "name": "test-dataset-app",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "dataset-training-1",
+      "type": "data",
+      "name": "training-dataset-v1",
+      "version": "1.0.0",
+      "description": "Primary training dataset for model development",
+      "data": [
+        {
+          "type": "dataset",
+          "name": "training-corpus",
+          "sensitiveData": [
+            "pii",
+            "phi"
+          ],
+          "governance": {
+            "owners": [
+              {
+                "organization": {
+                  "name": "Data Platform Team"
+                }
+              },
+              {
+                "contact": {
+                  "name": "Jane Doe",
+                  "email": "jane@example.com"
+                }
+              }
+            ],
+            "custodians": [
+              {
+                "organization": {
+                  "name": "ML Ops"
+                }
+              }
+            ],
+            "stewards": [
+              {
+                "contact": {
+                  "email": "steward@example.com"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "bom-ref": "dataset-validation-1",
+      "type": "data",
+      "name": "validation-dataset-v1",
+      "version": "1.0.0",
+      "description": "Validation dataset for model evaluation",
+      "data": [
+        {
+          "type": "dataset",
+          "name": "validation-corpus",
+          "sensitiveData": [
+            "pii"
+          ]
+        }
+      ]
+    },
+    {
+      "bom-ref": "dataset-legacy-1",
+      "type": "data",
+      "name": "legacy-dataset-v1",
+      "version": "1.0.0",
+      "description": "Legacy emitter: single-object data, sensitivityData, string owners (tolerated)",
+      "data": {
+        "type": "dataset",
+        "sensitivityData": [
+          "confidential"
+        ],
+        "governance": {
+          "owners": [
+            "legacy-team@example.com"
+          ]
+        }
+      }
+    }
+  ]
+}

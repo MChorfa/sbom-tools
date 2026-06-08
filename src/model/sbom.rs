@@ -9,6 +9,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
+const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
+
 /// Normalized SBOM document - the canonical intermediate representation.
 ///
 /// This structure represents an SBOM in a format-agnostic way, allowing
@@ -655,6 +657,10 @@ pub struct Component {
     pub staleness: Option<StalenessInfo>,
     /// End-of-life information (populated by enrichment)
     pub eol: Option<EolInfo>,
+    /// ML model metadata (populated for MachineLearningModel components)
+    pub ml_model: Option<crate::model::MlModelInfo>,
+    /// Dataset metadata (populated for Data components)
+    pub dataset: Option<crate::model::DatasetInfo>,
     /// Cryptographic properties (CycloneDX 1.6+ cryptoProperties)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crypto_properties: Option<CryptoProperties>,
@@ -691,6 +697,8 @@ impl Component {
             version_range: None,
             staleness: None,
             eol: None,
+            ml_model: None,
+            dataset: None,
             crypto_properties: None,
         }
     }
@@ -735,7 +743,6 @@ impl Component {
     pub fn with_swhid(mut self, swhid: String) -> Self {
         if let Ok(obj) = crate::model::SwhidObject::parse(&swhid) {
             self.identifiers.swhid.push(obj);
-            // Recompute canonical ID — SWHID may now be the best fallback
             self.canonical_id = self.identifiers.canonical_id();
         }
         self
@@ -749,17 +756,83 @@ impl Component {
         self
     }
 
+    /// Attach ML model metadata (CycloneDX modelCard)
+    #[must_use]
+    pub fn with_ml_model(mut self, ml_model: crate::model::MlModelInfo) -> Self {
+        self.ml_model = Some(ml_model);
+        self
+    }
+
+    /// Attach dataset metadata (CycloneDX ML BOM dataset component)
+    #[must_use]
+    pub fn with_dataset(mut self, dataset: crate::model::DatasetInfo) -> Self {
+        self.dataset = Some(dataset);
+        self
+    }
+
+    fn extend_with_optional_str(hasher_input: &mut Vec<u8>, value: &Option<String>) {
+        if let Some(value) = value {
+            hasher_input.extend(value.as_bytes());
+        }
+    }
+
+    fn extend_with_string_list(hasher_input: &mut Vec<u8>, values: &[String]) {
+        for value in values {
+            hasher_input.extend(value.as_bytes());
+        }
+    }
+
+    fn extend_with_optional_f64(hasher_input: &mut Vec<u8>, value: Option<f64>) {
+        if let Some(value) = value {
+            let normalized = if value == 0.0 {
+                0.0
+            } else if value.is_nan() {
+                f64::from_bits(CANONICAL_NAN_BITS)
+            } else {
+                value
+            };
+            hasher_input.extend(normalized.to_bits().to_le_bytes());
+        }
+    }
+
+    fn extend_with_ml_model(
+        hasher_input: &mut Vec<u8>,
+        ml_model: &Option<crate::model::MlModelInfo>,
+    ) {
+        if let Some(ml_model) = ml_model {
+            Self::extend_with_optional_str(hasher_input, &ml_model.approach);
+            Self::extend_with_optional_str(hasher_input, &ml_model.architecture_family);
+            Self::extend_with_optional_str(hasher_input, &ml_model.architecture_name);
+            Self::extend_with_optional_str(hasher_input, &ml_model.task);
+            Self::extend_with_optional_str(hasher_input, &ml_model.quantization);
+            Self::extend_with_optional_str(hasher_input, &ml_model.limitations);
+            Self::extend_with_optional_str(hasher_input, &ml_model.model_card_url);
+            Self::extend_with_optional_f64(hasher_input, ml_model.energy_kwh_training);
+
+            for dataset in &ml_model.training_datasets {
+                Self::extend_with_optional_str(hasher_input, &dataset.name);
+                Self::extend_with_optional_str(hasher_input, &dataset.purl);
+            }
+        }
+    }
+
+    fn extend_with_dataset(
+        hasher_input: &mut Vec<u8>,
+        dataset: &Option<crate::model::DatasetInfo>,
+    ) {
+        if let Some(dataset) = dataset {
+            Self::extend_with_optional_str(hasher_input, &dataset.dataset_type);
+            Self::extend_with_string_list(hasher_input, &dataset.sensitivity_classifications);
+            Self::extend_with_string_list(hasher_input, &dataset.governance_owners);
+        }
+    }
     /// Calculate and update content hash
     pub fn calculate_content_hash(&mut self) {
         let mut hasher_input = Vec::new();
 
         hasher_input.extend(self.name.as_bytes());
-        if let Some(v) = &self.version {
-            hasher_input.extend(v.as_bytes());
-        }
-        if let Some(purl) = &self.identifiers.purl {
-            hasher_input.extend(purl.as_bytes());
-        }
+        Self::extend_with_optional_str(&mut hasher_input, &self.version);
+        Self::extend_with_optional_str(&mut hasher_input, &self.identifiers.purl);
         for license in &self.licenses.declared {
             hasher_input.extend(license.expression.as_bytes());
         }
@@ -778,6 +851,9 @@ impl Component {
         if let Some(vr) = &self.version_range {
             hasher_input.extend(vr.as_bytes());
         }
+        Self::extend_with_ml_model(&mut hasher_input, &self.ml_model);
+        Self::extend_with_dataset(&mut hasher_input, &self.dataset);
+
         // Crypto properties: include fields that affect security semantics
         if let Some(cp) = &self.crypto_properties {
             hasher_input.extend(cp.asset_type.to_string().as_bytes());
@@ -866,5 +942,45 @@ impl DependencyEdge {
                 | DependencyType::TestDependsOn
                 | DependencyType::RuntimeDependsOn
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::MlModelInfo;
+
+    #[test]
+    fn test_content_hash_normalizes_ml_energy_zero_and_nan() {
+        let mut positive_zero = Component::new("model".to_string(), "model@1".to_string());
+        positive_zero.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(0.0),
+            ..MlModelInfo::default()
+        });
+        positive_zero.calculate_content_hash();
+
+        let mut negative_zero = Component::new("model".to_string(), "model@1".to_string());
+        negative_zero.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(-0.0),
+            ..MlModelInfo::default()
+        });
+        negative_zero.calculate_content_hash();
+
+        let mut nan_a = Component::new("model".to_string(), "model@1".to_string());
+        nan_a.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(f64::NAN),
+            ..MlModelInfo::default()
+        });
+        nan_a.calculate_content_hash();
+
+        let mut nan_b = Component::new("model".to_string(), "model@1".to_string());
+        nan_b.ml_model = Some(MlModelInfo {
+            energy_kwh_training: Some(f64::from_bits(CANONICAL_NAN_BITS + 1)),
+            ..MlModelInfo::default()
+        });
+        nan_b.calculate_content_hash();
+
+        assert_eq!(positive_zero.content_hash, negative_zero.content_hash);
+        assert_eq!(nan_a.content_hash, nan_b.content_hash);
     }
 }
