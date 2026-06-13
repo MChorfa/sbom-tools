@@ -83,6 +83,15 @@ impl ChangeComputer for LicenseChangeComputer {
             }
         }
 
+        // License sets are collected from hash-map iteration; sort for
+        // deterministic output ordering
+        result
+            .new_licenses
+            .sort_by(|a, b| a.license.cmp(&b.license));
+        result
+            .removed_licenses
+            .sort_by(|a, b| a.license.cmp(&b.license));
+
         // Per-component license transitions for matched pairs
         for (old_id, new_id_opt) in matches {
             if let Some(new_id) = new_id_opt
