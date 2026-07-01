@@ -24,6 +24,21 @@ Semantic SBOM/CBOM diff, quality scoring, and analysis tool. Compare, validate, 
 
 ![sbom-tools diff summary](assets/tui-diff-summary.svg)
 
+## Start with the big picture
+
+`sbom-tools` converts CycloneDX and SPDX documents into one canonical model,
+then uses the same Rust engine for semantic diffing, validation, quality
+scoring, enrichment, and reports. The CLI is the complete operator interface;
+language bindings provide application access to the JSON-oriented C ABI.
+
+- [Project overview](docs/PROJECT_OVERVIEW.md) - purpose, audiences, data flow,
+  and responsibility boundaries
+- [User journeys](docs/USER_JOURNEYS.md) - reproducible scientist and
+  developer/security workflows
+- [Project briefing](docs/PROJECT_BRIEF.md) - compact orientation for
+  contributors, integrators, and AI coding assistants
+- [Architecture](docs/ARCHITECTURE.md) - internal modules and invariants
+
 ## Features
 
 - **Semantic Diffing** — Component-level change detection (added, removed, modified), dependency graph diffing, vulnerability tracking, and license change analysis
@@ -139,6 +154,9 @@ Build the native Rust library before using a wrapper:
 ```sh
 bash ./scripts/build-bindings-mvp.sh
 ```
+
+For interface selection and end-to-end examples, follow the
+[user journeys](docs/USER_JOURNEYS.md).
 
 #### Go wrapper
 
