@@ -110,13 +110,14 @@ cargo build --release --no-default-features
 
 The binary is placed at `target/release/sbom-tools`.
 
-### Go, Swift, and Node.js bindings MVP
+### Go, Swift, Python, and Node.js bindings MVP
 
-The repository now includes a shared C ABI plus thin Go, Swift, and Node.js wrappers for the MVP binding surface.
+The repository includes a shared C ABI plus thin Go, Swift, Python, and Node.js wrappers for the MVP binding surface.
 
 - Shared ABI header: [bindings/swift/Sources/CSbomTools/include/sbom_tools.h](bindings/swift/Sources/CSbomTools/include/sbom_tools.h)
 - Go wrapper package: [bindings/go](bindings/go)
 - Swift package: [bindings/swift](bindings/swift)
+- Python package: [bindings/python](bindings/python)
 - Node.js package: [bindings/nodejs](bindings/nodejs)
 
 Current ABI scope:
@@ -133,7 +134,7 @@ Current ABI exclusions:
 - Enrichment providers
 - Non-JSON report formats
 
-Build the native Rust library before using either wrapper:
+Build the native Rust library before using a wrapper:
 
 ```sh
 bash ./scripts/build-bindings-mvp.sh
@@ -193,6 +194,27 @@ print(version.abiVersion)
 print(json)
 ```
 
+#### Python wrapper
+
+```sh
+cd bindings/python
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[test]'
+.venv/bin/python -m pytest -q
+```
+
+Example:
+
+```python
+import json
+
+from sbomtools import ScoringProfile, parse_path_json, score_json
+
+parsed = parse_path_json("../../tests/fixtures/cyclonedx/minimal.cdx.json")
+report = score_json(json.dumps(parsed), ScoringProfile.STANDARD)
+print(report)
+```
+
 #### Node.js wrapper
 
 ```sh
@@ -217,12 +239,13 @@ Memory and compatibility rules:
 
 - The Rust ABI owns returned memory and wrappers must call `sbom_tools_string_result_free` exactly once.
 - JSON payload shape is the compatibility contract for normalized SBOMs, diff results, and quality reports.
-- Error codes are stable across Go, Swift, and Node.js wrappers.
+- Error codes are stable across Go, Swift, Python, and Node.js wrappers.
 
-Typed helper APIs are available in both wrappers:
+Typed helper APIs are available in each wrapper:
 
 - Go: `ParsePath`, `ParseString`, `Diff`, `Score` over typed payload structs
 - Swift: `parsePath`, `parseString`, `diff`, `score` over Codable payload structs
+- Python: typed version/format results and JSON-decoded parse, diff, and score values
 
 Deduplication helper APIs are available in both wrappers:
 
