@@ -380,6 +380,13 @@ struct DiffArgs {
     #[arg(long)]
     fail_on_vex_gap: bool,
 
+    /// Exit with code 7 if a supported ML performance metric regresses.
+    ///
+    /// Higher is better: accuracy, f1, precision, recall, auc, roc_auc, bleu,
+    /// rouge. Lower is better: loss, error, perplexity, latency.
+    #[arg(long)]
+    fail_on_ml_regression: bool,
+
     /// Enable typosquat detection warnings
     #[arg(long)]
     detect_typosquats: bool,
@@ -1514,6 +1521,10 @@ fn main() -> Result<()> {
                     fail_on_vex_gap: resolve_bool(
                         args.fail_on_vex_gap,
                         app.filtering.fail_on_vex_gap,
+                    ),
+                    fail_on_ml_regression: resolve_bool(
+                        args.fail_on_ml_regression,
+                        app.filtering.fail_on_ml_regression,
                     ),
                 },
                 behavior: BehaviorConfig {
