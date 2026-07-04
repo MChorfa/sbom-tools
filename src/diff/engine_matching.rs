@@ -484,17 +484,23 @@ fn sparse_assignment(
     // Matching state: object -> source, source -> object.
     let mut object_owner: Vec<Option<usize>> = vec![None; num_obj];
     let mut source_obj: Vec<Option<usize>> = vec![None; num_old];
+    // Raw cost of each matched source's matched edge, so extending a path
+    // through an owner is O(1) instead of a linear adjacency scan.
+    let mut source_matched_cost: Vec<i64> = vec![0; num_old];
     // Dual potentials for reduced-cost Dijkstra (keeps reduced edge costs ≥ 0).
     let mut potential: Vec<i64> = vec![0; num_obj];
 
     // Per-augmentation scratch reused across iterations. `touched` records which
-    // objects had their dist set this round, so reset, the settle scan, and the
-    // potential update all run over only the reachable objects — keeping cost
-    // proportional to the candidate edges, not to num_obj.
+    // objects had their dist set this round, so reset and the potential update
+    // run over only the reachable objects — keeping cost proportional to the
+    // candidate edges, not to num_obj.
     let mut dist: Vec<i64> = vec![i64::MAX; num_obj];
     let mut src_for_obj: Vec<Option<usize>> = vec![None; num_obj];
+    let mut edge_cost_for_obj: Vec<i64> = vec![0; num_obj];
     let mut visited: Vec<bool> = vec![false; num_obj];
     let mut touched: Vec<usize> = Vec::new();
+    let mut heap: std::collections::BinaryHeap<std::cmp::Reverse<(i64, usize)>> =
+        std::collections::BinaryHeap::new();
 
     // Augment one source at a time, in sorted order, via the shortest
     // alternating path to a free object. Every source can always reach its own
@@ -506,6 +512,7 @@ fn sparse_assignment(
             visited[obj] = false;
         }
         touched.clear();
+        heap.clear();
 
         // Seed: relax the free start source's own edges.
         for &(obj, cost) in &adjacency[start] {
@@ -516,24 +523,21 @@ fn sparse_assignment(
                 }
                 dist[obj] = reduced;
                 src_for_obj[obj] = Some(start);
+                edge_cost_for_obj[obj] = cost;
+                heap.push(std::cmp::Reverse((reduced, obj)));
             }
         }
 
         let mut found_obj: Option<usize> = None;
 
-        loop {
-            // Settle the unvisited touched object with minimum distance (ties:
-            // lowest index, which keeps the search deterministic).
-            let mut best_obj = None;
-            let mut best_dist = i64::MAX;
-            for &obj in &touched {
-                if !visited[obj] && dist[obj] < best_dist {
-                    best_dist = dist[obj];
-                    best_obj = Some(obj);
-                }
+        // Dijkstra with lazy deletion: pop the closest unsettled object; stale
+        // entries (superseded by a later, cheaper relaxation) are skipped.
+        // Ties break by smaller object index via the (dist, obj) ordering,
+        // which keeps the search deterministic.
+        while let Some(std::cmp::Reverse((d, obj))) = heap.pop() {
+            if visited[obj] || d > dist[obj] {
+                continue;
             }
-
-            let Some(obj) = best_obj else { break };
             visited[obj] = true;
 
             match object_owner[obj] {
@@ -546,10 +550,7 @@ fn sparse_assignment(
                     // Object is taken. Extend the path through its owner: the
                     // owner gives up `obj` (subtract that edge's reduced cost)
                     // and bids on each of its other objects.
-                    let owner_obj_reduced = adjacency[owner]
-                        .iter()
-                        .find(|(o, _)| *o == obj)
-                        .map_or(0, |&(_, c)| c - potential[obj]);
+                    let owner_obj_reduced = source_matched_cost[owner] - potential[obj];
                     for &(obj2, cost) in &adjacency[owner] {
                         if visited[obj2] {
                             continue;
@@ -562,17 +563,27 @@ fn sparse_assignment(
                             }
                             dist[obj2] = nd;
                             src_for_obj[obj2] = Some(owner);
+                            edge_cost_for_obj[obj2] = cost;
+                            heap.push(std::cmp::Reverse((nd, obj2)));
                         }
                     }
                 }
             }
         }
 
-        // Shift potentials by the settled distances so reduced costs stay
-        // non-negative for the next augmentation.
-        for &obj in &touched {
-            if visited[obj] {
-                potential[obj] += dist[obj];
+        // Dual update: shift each settled object's potential by how much
+        // closer it was than the augmenting path's endpoint, so all reduced
+        // costs stay ≥ 0 for the next round. The −path_len term is essential:
+        // adding dist[obj] alone inflates potentials, hands negative reduced
+        // costs to sources matched outside the settled set, and lets a later
+        // search settle objects in the wrong order — producing suboptimal
+        // matchings (see `potential_update_regression`).
+        if let Some(found) = found_obj {
+            let path_len = dist[found];
+            for &obj in &touched {
+                if visited[obj] {
+                    potential[obj] += dist[obj] - path_len;
+                }
             }
         }
 
@@ -583,6 +594,7 @@ fn sparse_assignment(
                 let prev_obj = source_obj[src];
                 object_owner[obj] = Some(src);
                 source_obj[src] = Some(obj);
+                source_matched_cost[src] = edge_cost_for_obj[obj];
                 match prev_obj {
                     Some(p) => obj = p,
                     None => break,
@@ -716,6 +728,124 @@ mod tests {
             "expected optimal total 1.70, got {}",
             total_score(&result)
         );
+    }
+
+    /// Deterministic xorshift PRNG so the sweep below needs no external deps
+    /// and reproduces identically on every run.
+    struct XorShift(u64);
+
+    impl XorShift {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    /// Exhaustive maximum-total-score matching over integer micro-scores — the
+    /// reference optimum the solver must reach on small instances.
+    fn brute_force_optimum(num_old: usize, edges: &[(usize, usize, i64)]) -> i64 {
+        fn rec(src: usize, num_old: usize, adj: &[Vec<(usize, i64)>], used: &mut u64) -> i64 {
+            if src == num_old {
+                return 0;
+            }
+            let mut best = rec(src + 1, num_old, adj, used);
+            for &(obj, s) in &adj[src] {
+                if *used & (1 << obj) == 0 {
+                    *used |= 1 << obj;
+                    best = best.max(s + rec(src + 1, num_old, adj, used));
+                    *used &= !(1 << obj);
+                }
+            }
+            best
+        }
+        let mut adj = vec![Vec::new(); num_old];
+        for &(o, n, s) in edges {
+            adj[o].push((n, s));
+        }
+        rec(0, num_old, &adj, &mut 0)
+    }
+
+    /// Regression: the pre-fix potential update (`potential[obj] += dist[obj]`
+    /// without subtracting the augmenting-path length) broke the reduced-cost
+    /// invariant on this instance and returned total 1.660456 instead of the
+    /// optimum 1.717704 (o0→n2 + o1→n0 + o3→n1, o2 unmatched).
+    #[test]
+    fn potential_update_regression() {
+        let candidates = vec![
+            (cid("o0"), cid("n1"), 0.723_401),
+            (cid("o0"), cid("n2"), 0.922_365),
+            (cid("o1"), cid("n0"), 0.482_754),
+            (cid("o1"), cid("n2"), 0.937_055),
+            (cid("o2"), cid("n2"), 0.427_613),
+            (cid("o3"), cid("n1"), 0.312_585),
+            (cid("o3"), cid("n2"), 0.006_082),
+        ];
+        let result = sparse_assignment(&candidates);
+
+        assert!(
+            (total_score(&result) - 1.717_704).abs() < 1e-6,
+            "expected optimal total 1.717704, got {} from {:?}",
+            total_score(&result),
+            result
+        );
+    }
+
+    /// The solver must match the brute-force optimum on every random small
+    /// instance. Scores are quantized through the solver's own i64 scaling so
+    /// the totals compare exactly, with no float tolerance.
+    #[test]
+    fn sparse_assignment_matches_brute_force_on_random_instances() {
+        for num_old in 2..=6usize {
+            for num_new in 2..=6usize {
+                for rep in 0..40u64 {
+                    let seed = 0x9E37_79B9 ^ ((num_old as u64) << 32) ^ ((num_new as u64) << 16) ^ rep;
+                    let mut rng = XorShift(seed.max(1));
+
+                    let mut candidates = Vec::new();
+                    let mut edges = Vec::new();
+                    for o in 0..num_old {
+                        for n in 0..num_new {
+                            if rng.below(10) < 6 {
+                                let micro = 1_000 + rng.below(999_001) as i64;
+                                let score = micro as f64 / ASSIGNMENT_COST_SCALE as f64;
+                                // Quantize exactly the way the solver does, so
+                                // brute force optimizes the identical objective.
+                                let qmicro =
+                                    (score * ASSIGNMENT_COST_SCALE as f64) as i64;
+                                candidates.push((
+                                    cid(&format!("o{o:02}")),
+                                    cid(&format!("n{n:02}")),
+                                    score,
+                                ));
+                                edges.push((o, n, qmicro));
+                            }
+                        }
+                    }
+
+                    let result = sparse_assignment(&candidates);
+                    let solver_micro = (total_score(&result)
+                        * ASSIGNMENT_COST_SCALE as f64)
+                        .round() as i64;
+                    let optimum = brute_force_optimum(num_old, &edges);
+
+                    assert_eq!(
+                        solver_micro, optimum,
+                        "suboptimal assignment for seed {seed} \
+                         (num_old={num_old}, num_new={num_new}): \
+                         solver total {solver_micro} vs optimum {optimum}; \
+                         edges: {edges:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
