@@ -3139,7 +3139,7 @@ mod sparse_assignment_tests {
 
     #[test]
     fn trigram_ranking_surfaces_true_match_in_oversized_bucket() {
-        // One ecosystem bucket far larger than max_candidates (100). The true
+        // One ecosystem bucket far larger than max_candidates (50). The true
         // match for the source shares all trigrams with it; the decoys share
         // none. Without trigram ranking of Priority-1 candidates, the true
         // match could be cut by truncate(max_candidates) purely by insertion

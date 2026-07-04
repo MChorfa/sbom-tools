@@ -71,10 +71,10 @@ fn bench_lsh_threshold(c: &mut Criterion) {
 
     let (old, new) = generate_graph_pair(600, 10.0, Topology::Mixed);
 
-    // Without LSH (high threshold)
+    // Without LSH (high threshold); same candidate budget as the default
+    // config so the comparison isolates the LSH path itself.
     let engine_no_lsh = DiffEngine::new().with_large_sbom_config(LargeSbomConfig {
         lsh_threshold: 10000, // Effectively disable LSH
-        max_candidates: 100,
         ..LargeSbomConfig::default()
     });
 

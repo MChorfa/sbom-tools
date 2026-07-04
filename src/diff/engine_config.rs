@@ -9,7 +9,11 @@ pub struct LargeSbomConfig {
     pub lsh_threshold: usize,
     /// Cross-ecosystem matching configuration
     pub cross_ecosystem: CrossEcosystemConfig,
-    /// Maximum candidates per component
+    /// Per-component candidate budget, same value on both sides of the
+    /// `lsh_threshold` size gate. Above the gate it bounds the TOTAL across
+    /// all strategies (index + LSH + cross-ecosystem); below the gate it
+    /// bounds the index candidates (cross-ecosystem candidates there are
+    /// budgeted separately by `CrossEcosystemConfig::max_candidates`)
     pub max_candidates: usize,
 }
 
@@ -18,7 +22,12 @@ impl Default for LargeSbomConfig {
         Self {
             lsh_threshold: 500,
             cross_ecosystem: CrossEcosystemConfig::default(),
-            max_candidates: 100,
+            // Matches the budget the sub-threshold path has always used, so
+            // candidate volume no longer jumps ~3.5x (50 -> up to 175) when
+            // an SBOM crosses the size gate (candidates are quality-ranked,
+            // so the marginal recall of slots 51..100 is negligible next to
+            // their cost).
+            max_candidates: 50,
         }
     }
 }
@@ -36,7 +45,7 @@ impl LargeSbomConfig {
         Self {
             lsh_threshold: 300,
             cross_ecosystem: CrossEcosystemConfig::default(),
-            max_candidates: 50,
+            max_candidates: 25,
         }
     }
 

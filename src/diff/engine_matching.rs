@@ -251,7 +251,11 @@ fn match_with_component_index(
         HashMap::new()
     };
 
-    let max_candidates = 50;
+    // Honor the configured per-source candidate budget on this side of the
+    // lsh_threshold gate too, so match quality doesn't jump when an SBOM
+    // crosses the size boundary (this was previously hardcoded to 50 while
+    // the batch path used the config value).
+    let max_candidates = large_sbom_config.max_candidates;
     let max_length_diff = 10;
     let parallel_threshold = 50;
     let cross_eco_config = &large_sbom_config.cross_ecosystem;
@@ -419,7 +423,8 @@ const ASSIGNMENT_COST_SCALE: i64 = 1_000_000;
 /// Solves maximum-weight bipartite matching without materializing a dense n×n
 /// matrix: the graph is stored as per-source adjacency lists of the actual
 /// candidate edges, so both memory and time scale with the number of candidate
-/// edges (≤~100 per source), not with the product of the two SBOM sizes.
+/// edges (bounded by the configured per-source candidate budget), not with
+/// the product of the two SBOM sizes.
 ///
 /// Each real edge has non-negative integer cost `SCALE − score·SCALE` (lower =
 /// better match), and every source additionally gets a dummy "leave unmatched"
@@ -845,6 +850,80 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Build an SBOM of 560 fuzzy-matchable components (distinct syllable
+    /// names, versioned canonical IDs so nothing exact-matches across sides).
+    fn parity_sbom(version: &str) -> crate::model::NormalizedSbom {
+        use crate::model::{Component, DocumentMetadata, Ecosystem, NormalizedSbom};
+
+        const A: [&str; 14] = [
+            "alor", "brev", "cind", "dulm", "evar", "fost", "grin", "hulp", "ivex", "jorm",
+            "kral", "lund", "merv", "nixo",
+        ];
+        const B: [&str; 8] = ["bem", "tuk", "waz", "pol", "gus", "ryn", "sev", "dob"];
+        const C: [&str; 5] = ["mint", "zorf", "kelp", "wund", "trax"];
+
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        for a in A {
+            for b in B {
+                for c in C {
+                    let name = format!("{a}{b}{c}");
+                    let mut comp =
+                        Component::new(name.clone(), format!("pkg:npm/{name}@{version}"));
+                    comp.version = Some(version.to_string());
+                    comp.identifiers.purl = Some(format!("pkg:npm/{name}@{version}"));
+                    comp.ecosystem = Some(Ecosystem::Npm);
+                    sbom.add_component(comp);
+                }
+            }
+        }
+        sbom
+    }
+
+    /// Crossing the lsh_threshold size gate must not change match results:
+    /// with a shared candidate budget the batch (LSH) path and the plain
+    /// index path see the same ranked candidates, so a 560-component SBOM
+    /// pair must match identically through both.
+    #[test]
+    fn batch_and_index_paths_produce_identical_matches() {
+        use crate::matching::FuzzyMatcher;
+
+        let old = parity_sbom("1.0.0");
+        let new = parity_sbom("2.0.0");
+        let fuzzy_config = FuzzyMatchConfig::default();
+        let matcher = FuzzyMatcher::new(fuzzy_config.clone());
+
+        // 560 components >= 500 threshold: batch/LSH path.
+        let batch_cfg = LargeSbomConfig::default();
+        assert!(old.component_count() >= batch_cfg.lsh_threshold);
+        let via_batch = match_components(&old, &new, &matcher, &fuzzy_config, &batch_cfg);
+
+        // Same inputs with the gate pushed out of reach: plain index path.
+        let index_cfg = LargeSbomConfig {
+            lsh_threshold: 100_000,
+            ..LargeSbomConfig::default()
+        };
+        let via_index = match_components(&old, &new, &matcher, &fuzzy_config, &index_cfg);
+
+        assert_eq!(
+            via_batch.matches, via_index.matches,
+            "match results must not depend on which side of the size gate ran"
+        );
+
+        // And the matching itself must be complete and correct: every old
+        // component pairs with its same-named counterpart.
+        assert_eq!(via_batch.matches.len(), old.component_count());
+        for (old_id, new_id) in &via_batch.matches {
+            let new_id = new_id
+                .as_ref()
+                .unwrap_or_else(|| panic!("{old_id:?} unmatched"));
+            assert_eq!(
+                old.components.get(old_id).map(|c| &c.name),
+                new.components.get(new_id).map(|c| &c.name),
+                "component matched to a different name"
+            );
         }
     }
 
