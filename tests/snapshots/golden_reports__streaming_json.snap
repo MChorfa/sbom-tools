@@ -131,29 +131,13 @@ expression: output
       "cost": 7,
       "match_info": {
         "score": 1.0,
-        "method": "Fuzzy",
-        "reason": "Fuzzy match: 'acme-webapp' ~ 'acme-webapp' with 100% similarity",
-        "score_breakdown": [
-          {
-            "name": "Jaro-Winkler",
-            "weight": 0.6,
-            "raw_score": 1.0,
-            "weighted_score": 0.6,
-            "description": "'acme-webapp' vs 'acme-webapp' = 1.00"
-          },
-          {
-            "name": "Levenshtein",
-            "weight": 0.4,
-            "raw_score": 1.0,
-            "weighted_score": 0.4,
-            "description": "edit distance 0 / max_len 11 = 1.00"
-          }
-        ],
+        "method": "NameIdentity",
+        "reason": "Identical component names: 'acme-webapp'",
         "normalizations": [
-          "lowercase"
+          "case_insensitive_name"
         ],
         "confidence_interval": {
-          "lower": 0.92,
+          "lower": 0.97,
           "upper": 1.0,
           "level": 0.95
         }
@@ -175,15 +159,15 @@ expression: output
       ],
       "cost": 7,
       "match_info": {
-        "score": 0.9,
+        "score": 1.0,
         "method": "EcosystemRule",
         "reason": "Names match after npm ecosystem normalization: 'axios' -> 'axios'",
         "normalizations": [
           "npm_normalization"
         ],
         "confidence_interval": {
-          "lower": 0.87,
-          "upper": 0.93,
+          "lower": 0.97,
+          "upper": 1.0,
           "level": 0.95
         }
       }
@@ -204,15 +188,15 @@ expression: output
       ],
       "cost": 4,
       "match_info": {
-        "score": 0.9,
+        "score": 1.0,
         "method": "EcosystemRule",
         "reason": "Names match after npm ecosystem normalization: 'express' -> 'express'",
         "normalizations": [
           "npm_normalization"
         ],
         "confidence_interval": {
-          "lower": 0.87,
-          "upper": 0.93,
+          "lower": 0.97,
+          "upper": 1.0,
           "level": 0.95
         }
       }
@@ -233,15 +217,15 @@ expression: output
       ],
       "cost": 2,
       "match_info": {
-        "score": 0.9,
+        "score": 1.0,
         "method": "EcosystemRule",
         "reason": "Names match after npm ecosystem normalization: 'lodash' -> 'lodash'",
         "normalizations": [
           "npm_normalization"
         ],
         "confidence_interval": {
-          "lower": 0.87,
-          "upper": 0.93,
+          "lower": 0.97,
+          "upper": 1.0,
           "level": 0.95
         }
       }
@@ -262,15 +246,15 @@ expression: output
       ],
       "cost": 7,
       "match_info": {
-        "score": 0.9,
+        "score": 1.0,
         "method": "EcosystemRule",
         "reason": "Names match after npm ecosystem normalization: 'react' -> 'react'",
         "normalizations": [
           "npm_normalization"
         ],
         "confidence_interval": {
-          "lower": 0.87,
-          "upper": 0.93,
+          "lower": 0.97,
+          "upper": 1.0,
           "level": 0.95
         }
       }

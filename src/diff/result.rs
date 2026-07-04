@@ -350,7 +350,8 @@ impl QualityDelta {
 /// Provides visibility into matching quality for debugging and tuning.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MatchMetrics {
-    /// Number of exact matches (PURL, CPE, or canonical ID)
+    /// Number of exact matches: identical identifiers or identical names
+    /// (score ≥ 0.995, i.e. the 1.0 identity tiers)
     pub exact_matches: usize,
     /// Number of fuzzy matches (below exact threshold)
     pub fuzzy_matches: usize,
@@ -483,9 +484,11 @@ impl ConfidenceInterval {
         let margin = match tier {
             "ExactIdentifier" => 0.0,
             "Alias" => 0.02,
-            "EcosystemRule" => 0.03,
+            "EcosystemRule" | "NameIdentity" => 0.03,
             "CustomRule" => 0.05,
             "Fuzzy" => 0.08,
+            // Curated equivalence, but across ecosystems: widest interval
+            "CrossEcosystem" => 0.10,
             _ => 0.10,
         };
         Self::new(score - margin, score + margin, 0.95)

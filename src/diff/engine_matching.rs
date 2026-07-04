@@ -292,7 +292,7 @@ fn match_with_component_index(
                             })
                             .collect();
 
-                        // Cross-ecosystem candidates (secondary, with penalty)
+                        // Cross-ecosystem candidates (policy applied by the matcher)
                         if let (Some(db), Some(old_eco)) = (&cross_eco_db, &old_comp.ecosystem) {
                             let cross_matches = find_cross_ecosystem_candidates(
                                 old_id,
@@ -303,6 +303,7 @@ fn match_with_component_index(
                                 used_new_ids,
                                 matcher,
                                 cross_eco_config,
+                                fuzzy_config.threshold,
                             );
                             results.extend(cross_matches);
                         }
@@ -335,7 +336,7 @@ fn match_with_component_index(
                     }
                 }
 
-                // Cross-ecosystem candidates (secondary, with penalty)
+                // Cross-ecosystem candidates (policy applied by the matcher)
                 if let (Some(db), Some(old_eco)) = (&cross_eco_db, &old_comp.ecosystem) {
                     let cross_matches = find_cross_ecosystem_candidates(
                         old_id,
@@ -346,6 +347,7 @@ fn match_with_component_index(
                         used_new_ids,
                         matcher,
                         cross_eco_config,
+                        fuzzy_config.threshold,
                     );
                     candidates.extend(cross_matches);
                 }
@@ -357,8 +359,13 @@ fn match_with_component_index(
 
 /// Find cross-ecosystem candidates for a component.
 ///
-/// Looks up the component in the cross-ecosystem DB and finds equivalent
-/// packages in other ecosystems within the new SBOM.
+/// Pure candidate GENERATION: looks up the component in the cross-ecosystem
+/// DB and finds equivalent packages in other ecosystems within the new SBOM.
+/// The match policy — penalty, min-score floor, verified-only, DB gating —
+/// lives inside the matcher's `match_score` (see `FuzzyMatcher::score_pair`),
+/// so candidates from this path score identically to the same pairs surfaced
+/// by any other strategy. Candidates are gated at the same fuzzy threshold as
+/// every other candidate source.
 #[allow(clippy::too_many_arguments)]
 fn find_cross_ecosystem_candidates(
     old_id: &CanonicalId,
@@ -372,6 +379,7 @@ fn find_cross_ecosystem_candidates(
     used_new_ids: &HashSet<CanonicalId>,
     matcher: &dyn ComponentMatcher,
     config: &crate::matching::CrossEcosystemConfig,
+    threshold: f64,
 ) -> Vec<(CanonicalId, CanonicalId, f64)> {
     let mut results = Vec::new();
 
@@ -379,7 +387,7 @@ fn find_cross_ecosystem_candidates(
     let equivalents = db.find_equivalents(old_eco, &old_comp.name);
 
     for equiv in equivalents {
-        // Skip if only using verified mappings and this isn't verified
+        // Cheap pre-filter; the matcher enforces this too
         if config.verified_only && !equiv.verified {
             continue;
         }
@@ -397,12 +405,9 @@ fn find_cross_ecosystem_candidates(
 
                 // Check if names match the cross-ecosystem mapping
                 if new_comp.name.eq_ignore_ascii_case(&equiv.target_name) {
-                    let base_score = matcher.match_score(old_comp, new_comp);
-                    // Apply penalty for cross-ecosystem match
-                    let adjusted_score = (base_score - config.score_penalty).max(0.0);
-
-                    if adjusted_score >= config.min_score {
-                        results.push((old_id.clone(), new_id.clone(), adjusted_score));
+                    let score = matcher.match_score(old_comp, new_comp);
+                    if score >= threshold {
+                        results.push((old_id.clone(), new_id.clone(), score));
                         count += 1;
                     }
                 }
@@ -851,6 +856,95 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Regression for the score-tier inversion at assignment level: with
+    /// convention names sharing long prefixes/suffixes, near-miss neighbors
+    /// used to outscore exact-name twins (0.95 fuzzy vs 0.90 ecosystem-rule),
+    /// and the optimal assignment paired 6/6 components with the WRONG
+    /// neighbor. Exact-name pairs now score 1.0 and non-identical names cap
+    /// at 0.99, so identity must win.
+    #[test]
+    fn convention_named_components_match_their_exact_twins() {
+        use crate::matching::FuzzyMatcher;
+        use crate::model::{Component, DocumentMetadata, Ecosystem, NormalizedSbom};
+
+        let build = |version: &str| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            for i in 1..=6 {
+                let name = format!("comp{i:06}lib");
+                let mut comp = Component::new(name.clone(), format!("pkg:npm/{name}@{version}"));
+                comp.version = Some(version.to_string());
+                comp.ecosystem = Some(Ecosystem::Npm);
+                sbom.add_component(comp);
+            }
+            sbom
+        };
+        let old = build("1.0.0");
+        let new = build("2.0.0");
+
+        let fuzzy_config = FuzzyMatchConfig::default();
+        let matcher = FuzzyMatcher::new(fuzzy_config.clone());
+        let result = match_components(
+            &old,
+            &new,
+            &matcher,
+            &fuzzy_config,
+            &LargeSbomConfig::default(),
+        );
+
+        assert_eq!(result.matches.len(), 6);
+        for (old_id, new_id) in &result.matches {
+            let new_id = new_id
+                .as_ref()
+                .unwrap_or_else(|| panic!("{old_id:?} unmatched"));
+            assert_eq!(
+                old.components.get(old_id).map(|c| &c.name),
+                new.components.get(new_id).map(|c| &c.name),
+                "component must match its exact-name twin, not a neighbor"
+            );
+        }
+    }
+
+    /// Same-name packages from different ecosystems must degrade to
+    /// added+removed, not merge: end-to-end guard for the npm/redis vs
+    /// pypi/redis substitution scenario.
+    #[test]
+    fn cross_ecosystem_substitution_does_not_merge() {
+        use crate::matching::FuzzyMatcher;
+        use crate::model::{Component, DocumentMetadata, Ecosystem, NormalizedSbom};
+
+        let build = |eco: Ecosystem, purl_type: &str, version: &str| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut comp = Component::new(
+                "redis".to_string(),
+                format!("pkg:{purl_type}/redis@{version}"),
+            );
+            comp.version = Some(version.to_string());
+            comp.ecosystem = Some(eco);
+            sbom.add_component(comp);
+            sbom
+        };
+        let old = build(Ecosystem::Npm, "npm", "4.6.0");
+        let new = build(Ecosystem::PyPi, "pypi", "5.0.0");
+
+        let fuzzy_config = FuzzyMatchConfig::default();
+        let matcher = FuzzyMatcher::new(fuzzy_config.clone());
+        let result = match_components(
+            &old,
+            &new,
+            &matcher,
+            &fuzzy_config,
+            &LargeSbomConfig::default(),
+        );
+
+        let old_id = old.components.keys().next().unwrap();
+        assert_eq!(
+            result.matches.get(old_id),
+            Some(&None),
+            "npm/redis must be reported removed, not matched to pypi/redis"
+        );
+        assert!(result.pairs.is_empty());
     }
 
     /// Build an SBOM of 560 fuzzy-matchable components (distinct syllable

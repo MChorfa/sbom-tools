@@ -19,7 +19,19 @@ impl AliasTable {
         Self::default()
     }
 
-    /// Create an alias table with built-in common aliases
+    /// Create an alias table with built-in common aliases.
+    ///
+    /// The builtins map alternate spellings of the SAME package (import name
+    /// vs distribution name, underscore vs hyphen variants) — never related
+    /// but distinct packages. Entries here merge at high confidence in the
+    /// diff, so a wrong entry hides a real component change; related
+    /// packages (react/react-dom, webpack/webpack-cli) must NOT be aliased,
+    /// and cross-ecosystem equivalence belongs in [`CrossEcosystemDb`]
+    /// (crate::matching::CrossEcosystemDb), which applies a penalty and is
+    /// gated per config.
+    ///
+    /// The table is opt-in: `FuzzyMatcher` starts with an empty table; install
+    /// this one via `FuzzyMatcher::with_alias_table`.
     #[must_use]
     pub fn with_builtins() -> Self {
         let mut table = Self::new();
@@ -37,30 +49,10 @@ impl AliasTable {
             &["bs4", "BeautifulSoup", "beautifulsoup"],
         );
         self.add_aliases("pkg:pypi/pyyaml", &["yaml", "PyYAML"]);
-        self.add_aliases(
-            "pkg:pypi/opencv-python",
-            &["cv2", "opencv-python-headless", "opencv"],
-        );
+        self.add_aliases("pkg:pypi/opencv-python", &["cv2", "opencv"]);
         self.add_aliases("pkg:pypi/python-dateutil", &["dateutil"]);
-        self.add_aliases("pkg:pypi/attrs", &["attr"]);
         self.add_aliases("pkg:pypi/importlib-metadata", &["importlib_metadata"]);
         self.add_aliases("pkg:pypi/typing-extensions", &["typing_extensions"]);
-        self.add_aliases("pkg:pypi/zipp", &["zipfile"]);
-
-        // npm aliases (package variants)
-        self.add_aliases(
-            "pkg:npm/lodash",
-            &["lodash-es", "lodash.merge", "lodash.get"],
-        );
-        self.add_aliases("pkg:npm/react", &["react-dom"]);
-        self.add_aliases("pkg:npm/webpack", &["webpack-cli"]);
-
-        // Cross-ecosystem common libraries
-        self.add_aliases(
-            "yaml-parser",
-            &["pyyaml", "js-yaml", "serde_yaml", "gopkg.in/yaml"],
-        );
-        self.add_aliases("json-parser", &["serde_json", "json", "encoding/json"]);
     }
 
     /// Add aliases for a canonical package

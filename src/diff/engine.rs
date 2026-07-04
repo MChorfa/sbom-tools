@@ -152,8 +152,11 @@ impl DiffEngine {
                 (Cow::Borrowed(old), Cow::Borrowed(new), None)
             };
 
-        // Build component mappings using the configured matcher
-        let default_matcher = FuzzyMatcher::new(self.fuzzy_config.clone());
+        // Build component mappings using the configured matcher; the matcher
+        // carries the cross-ecosystem policy so every candidate source scores
+        // uniformly.
+        let default_matcher = FuzzyMatcher::new(self.fuzzy_config.clone())
+            .with_cross_ecosystem(self.large_sbom_config.cross_ecosystem.clone());
         let matcher: &dyn ComponentMatcher = self
             .custom_matcher
             .as_ref()
@@ -179,7 +182,10 @@ impl DiffEngine {
             // average) is identical across runs
             let mut scores: Vec<f64> = component_matches.pairs.values().copied().collect();
             scores.sort_unstable_by(f64::total_cmp);
-            let exact = scores.iter().filter(|&&s| s >= 0.99).count();
+            // 0.995 sits strictly between the 0.99 non-identical-name cap and
+            // the 1.0 identity tiers, so a capped near-miss never counts as
+            // an exact match.
+            let exact = scores.iter().filter(|&&s| s >= 0.995).count();
             let fuzzy = scores.len() - exact;
             let matched_count = scores.len();
             let unmatched_old = old_filtered.component_count().saturating_sub(matched_count);
@@ -326,7 +332,8 @@ impl DiffEngine {
             };
 
         // Always recompute matching — it's needed for any section computer
-        let default_matcher = FuzzyMatcher::new(self.fuzzy_config.clone());
+        let default_matcher = FuzzyMatcher::new(self.fuzzy_config.clone())
+            .with_cross_ecosystem(self.large_sbom_config.cross_ecosystem.clone());
         let matcher: &dyn ComponentMatcher = self
             .custom_matcher
             .as_ref()

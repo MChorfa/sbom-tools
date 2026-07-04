@@ -64,10 +64,15 @@ pub enum MatchTier {
     Alias,
     /// Match via ecosystem-specific rules
     EcosystemRule,
+    /// Case-insensitive identical names (ecosystem info missing or partial)
+    NameIdentity,
     /// Match via fuzzy string similarity
     Fuzzy,
     /// Match via custom user rules
     CustomRule,
+    /// Match across different ecosystems via the curated equivalence DB
+    /// (score carries the configured cross-ecosystem penalty)
+    CrossEcosystem,
 }
 
 impl MatchTier {
@@ -77,9 +82,11 @@ impl MatchTier {
         match self {
             Self::None => 0.0,
             Self::ExactIdentifier => 1.0,
+            Self::NameIdentity => 0.98,
             Self::Alias => 0.95,
             Self::EcosystemRule => 0.90,
             Self::CustomRule => 0.92,
+            Self::CrossEcosystem => 0.85,
             Self::Fuzzy => 0.80,
         }
     }
