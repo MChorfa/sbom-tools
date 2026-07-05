@@ -364,20 +364,21 @@ impl MultiDiffEngine {
             let comp_id = id.value().to_string();
             let target_version = comp.version.clone().unwrap_or_default();
 
-            // Check if baseline has different version
-            let baseline_version = baseline
+            // Presence and version availability are separate questions: a
+            // baseline component without a version (common for SPDX packages
+            // lacking versionInfo) is PRESENT, not Added.
+            let baseline_comp = baseline
                 .components
                 .iter()
                 .find(|(bid, _)| bid.value() == comp_id)
-                .and_then(|(_, bc)| bc.version.clone());
+                .map(|(_, bc)| bc);
 
-            let divergence_type = if baseline_version.is_none() {
-                DivergenceType::Added
-            } else if baseline_version.as_ref() != Some(&target_version) {
-                DivergenceType::VersionMismatch
-            } else {
-                continue; // Same version, not divergent
+            let divergence_type = match baseline_comp {
+                None => DivergenceType::Added,
+                Some(bc) if bc.version != comp.version => DivergenceType::VersionMismatch,
+                Some(_) => continue, // Same version (or both versionless), not divergent
             };
+            let baseline_version = baseline_comp.and_then(|bc| bc.version.clone());
 
             divergent.push(DivergentComponent {
                 id: comp_id.clone(),
@@ -482,6 +483,12 @@ impl MultiDiffEngine {
             let mut first_seen: Option<(usize, String)> = None;
             let mut last_seen: Option<usize> = None;
             let mut prev_version: Option<String> = None;
+            // Presence at the previous timeline point: Removed marks only the
+            // FIRST absent point after a presence (later gap points are
+            // Absent), and a component reappearing after a gap re-enters as
+            // Initial rather than being version-compared against the stale
+            // pre-gap version.
+            let mut was_present = false;
             let mut version_change_count: usize = 0;
 
             for (i, (sbom, name, _)) in sboms.iter().enumerate() {
@@ -491,6 +498,9 @@ impl MultiDiffEngine {
                     let ver = c.version.clone();
                     let change = if first_seen.is_none() {
                         first_seen = Some((i, ver.clone().unwrap_or_default()));
+                        VersionChangeType::Initial
+                    } else if !was_present {
+                        // Reappearance after a gap
                         VersionChangeType::Initial
                     } else {
                         let ct = classify_version_change(prev_version.as_ref(), ver.as_ref());
@@ -502,11 +512,17 @@ impl MultiDiffEngine {
                     };
                     last_seen = Some(i);
                     prev_version.clone_from(&ver);
+                    was_present = true;
                     (ver, change)
-                } else if first_seen.is_some() {
-                    (None, VersionChangeType::Removed)
                 } else {
-                    (None, VersionChangeType::Absent)
+                    let change = if was_present {
+                        VersionChangeType::Removed
+                    } else {
+                        VersionChangeType::Absent
+                    };
+                    was_present = false;
+                    prev_version = None;
+                    (None, change)
                 };
 
                 history.push(VersionAtPoint {
@@ -695,14 +711,16 @@ impl MultiDiffEngine {
         let mut clusters: Vec<SbomCluster> = vec![];
         let mut assigned: HashSet<usize> = HashSet::new();
 
-        // Simple greedy clustering
+        // Simple greedy clustering. A seed is only marked assigned when it
+        // actually forms a cluster: unconditionally assigning every seed made
+        // singleton SBOMs vanish from the output entirely (in no cluster) and
+        // left the outliers list structurally empty.
         for i in 0..n {
             if assigned.contains(&i) {
                 continue;
             }
 
             let mut cluster_members = vec![i];
-            assigned.insert(i);
 
             for j in (i + 1)..n {
                 if assigned.contains(&j) {
@@ -715,11 +733,13 @@ impl MultiDiffEngine {
 
                 if similarity >= threshold {
                     cluster_members.push(j);
-                    assigned.insert(j);
                 }
             }
 
             if cluster_members.len() > 1 {
+                for &member in &cluster_members {
+                    assigned.insert(member);
+                }
                 // Calculate average internal similarity
                 let mut total_sim = 0.0;
                 let mut count = 0;
@@ -878,37 +898,298 @@ fn compute_vulnerability_matrix(
     }
 }
 
-/// Classify version change type
+/// Classify version change type.
+///
+/// Semver-aware, including pre-release ordering: `1.0.0-alpha -> 1.0.0` and
+/// `1.0.0-alpha -> 1.0.0-beta` are upgrades (the old comparison ignored the
+/// pre-release field and fell through to Downgrade), and a build-metadata-only
+/// change is Unchanged. Non-semver schemes are compared by numeric
+/// dot-segments (`9.0 -> 10.0` is a major upgrade, not the lexicographic
+/// Downgrade the old fallback produced); genuinely incomparable strings
+/// report [`VersionChangeType::Changed`] rather than a fabricated direction.
 fn classify_version_change(old: Option<&String>, new: Option<&String>) -> VersionChangeType {
     match (old, new) {
         (None, Some(_)) => VersionChangeType::Initial,
         (Some(_), None) => VersionChangeType::Removed,
         (Some(o), Some(n)) if o == n => VersionChangeType::Unchanged,
-        (Some(o), Some(n)) => {
-            // Try to parse as semver
-            if let (Ok(old_v), Ok(new_v)) = (semver::Version::parse(o), semver::Version::parse(n)) {
+        (Some(o), Some(n)) => classify_version_strings(o, n),
+        (None, None) => VersionChangeType::Absent,
+    }
+}
+
+fn classify_version_strings(old: &str, new: &str) -> VersionChangeType {
+    use std::cmp::Ordering;
+
+    if let (Some(old_v), Some(new_v)) = (parse_semver_lenient(old), parse_semver_lenient(new)) {
+        // cmp_precedence implements spec precedence, which ignores build
+        // metadata — differing strings can still compare equal, and a
+        // build-metadata-only change is not a version change. (Version::cmp
+        // would tie-break on build metadata.)
+        return match new_v.cmp_precedence(&old_v) {
+            Ordering::Equal => VersionChangeType::Unchanged,
+            Ordering::Less => VersionChangeType::Downgrade,
+            Ordering::Greater => {
                 if new_v.major > old_v.major {
                     VersionChangeType::MajorUpgrade
-                } else if new_v.major < old_v.major {
-                    VersionChangeType::Downgrade
                 } else if new_v.minor > old_v.minor {
                     VersionChangeType::MinorUpgrade
-                } else if new_v.minor < old_v.minor {
-                    VersionChangeType::Downgrade
-                } else if new_v.patch > old_v.patch {
-                    VersionChangeType::PatchUpgrade
                 } else {
-                    VersionChangeType::Downgrade
-                }
-            } else {
-                // String comparison fallback
-                if n > o {
+                    // Patch bump, or a pre-release promotion within the same
+                    // major.minor.patch triple
                     VersionChangeType::PatchUpgrade
-                } else {
-                    VersionChangeType::Downgrade
                 }
             }
+        };
+    }
+
+    // Non-semver schemes (e.g. "1.2.3.4", "20240101"): compare numeric
+    // dot-segments positionally.
+    if let Some(change) = classify_numeric_segments(old, new) {
+        return change;
+    }
+
+    VersionChangeType::Changed
+}
+
+/// Lenient semver parse: trims whitespace and a leading `v`/`V`, and pads
+/// missing minor/patch components (`9` -> `9.0.0`, `1.2-rc1` -> `1.2.0-rc1`).
+fn parse_semver_lenient(version: &str) -> Option<semver::Version> {
+    let version = version.trim();
+    let version = version.strip_prefix(['v', 'V']).unwrap_or(version);
+    if let Ok(v) = semver::Version::parse(version) {
+        return Some(v);
+    }
+    // Pad a 1- or 2-segment numeric core, preserving pre-release/build parts.
+    let split_at = version.find(['-', '+']).unwrap_or(version.len());
+    let (core, rest) = version.split_at(split_at);
+    let padded = match core.matches('.').count() {
+        0 => format!("{core}.0.0{rest}"),
+        1 => format!("{core}.0{rest}"),
+        _ => return None,
+    };
+    semver::Version::parse(&padded).ok()
+}
+
+/// Compare dot-separated numeric segments (shorter side zero-padded).
+/// Returns `None` when any differing segment pair is non-numeric.
+fn classify_numeric_segments(old: &str, new: &str) -> Option<VersionChangeType> {
+    let old = old.trim();
+    let old = old.strip_prefix(['v', 'V']).unwrap_or(old);
+    let new = new.trim();
+    let new = new.strip_prefix(['v', 'V']).unwrap_or(new);
+    let old_segments: Vec<&str> = old.split('.').collect();
+    let new_segments: Vec<&str> = new.split('.').collect();
+    let len = old_segments.len().max(new_segments.len());
+
+    for position in 0..len {
+        let old_seg = old_segments.get(position).copied().unwrap_or("0");
+        let new_seg = new_segments.get(position).copied().unwrap_or("0");
+        if old_seg == new_seg {
+            continue;
         }
-        (None, None) => VersionChangeType::Absent,
+        let (old_num, new_num) = (old_seg.parse::<u64>().ok()?, new_seg.parse::<u64>().ok()?);
+        if old_num == new_num {
+            continue; // e.g. "02" vs "2"
+        }
+        let upgrade = new_num > old_num;
+        return Some(match (upgrade, position) {
+            (false, _) => VersionChangeType::Downgrade,
+            (true, 0) => VersionChangeType::MajorUpgrade,
+            (true, 1) => VersionChangeType::MinorUpgrade,
+            (true, _) => VersionChangeType::PatchUpgrade,
+        });
+    }
+
+    // All segments numerically or textually equal (e.g. "1.02" vs "1.2")
+    Some(VersionChangeType::Unchanged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Component, DocumentMetadata};
+
+    fn classify(old: &str, new: &str) -> VersionChangeType {
+        classify_version_change(Some(&old.to_string()), Some(&new.to_string()))
+    }
+
+    /// The full classification matrix, including the cases the old
+    /// implementation got wrong: pre-release transitions and non-semver
+    /// numeric versions were all reported as Downgrade.
+    #[test]
+    fn classify_version_change_matrix() {
+        use VersionChangeType::{
+            Absent, Changed, Downgrade, Initial, MajorUpgrade, MinorUpgrade, PatchUpgrade,
+            Removed, Unchanged,
+        };
+
+        // Plain semver
+        assert_eq!(classify("1.0.0", "2.0.0"), MajorUpgrade);
+        assert_eq!(classify("1.2.0", "1.3.0"), MinorUpgrade);
+        assert_eq!(classify("1.2.3", "1.2.4"), PatchUpgrade);
+        assert_eq!(classify("2.0.0", "1.9.9"), Downgrade);
+
+        // Pre-release ordering (previously all Downgrade)
+        assert_eq!(classify("1.0.0-alpha", "1.0.0"), PatchUpgrade);
+        assert_eq!(classify("1.0.0-alpha", "1.0.0-beta"), PatchUpgrade);
+        assert_eq!(classify("1.0.0", "1.0.0-alpha"), Downgrade);
+
+        // Build metadata is not a version change
+        assert_eq!(classify("1.0.0", "1.0.0+build2"), Unchanged);
+
+        // Non-semver numeric (previously lexicographic: 9.0 -> 10.0 was a
+        // Downgrade and 10.0 -> 9.0 a PatchUpgrade)
+        assert_eq!(classify("9.0", "10.0"), MajorUpgrade);
+        assert_eq!(classify("10.0", "9.0"), Downgrade);
+        assert_eq!(classify("1.2.3.4", "1.2.3.5"), PatchUpgrade);
+        assert_eq!(classify("1.02", "1.2"), Unchanged);
+
+        // Lenient parsing
+        assert_eq!(classify("v1.2.3", "v2.0.0"), MajorUpgrade);
+        assert_eq!(classify("1.2", "1.3"), MinorUpgrade);
+        assert_eq!(classify("2", "3"), MajorUpgrade);
+
+        // Incomparable schemes report Changed, never a fabricated direction
+        assert_eq!(classify("abc", "def"), Changed);
+        assert_eq!(classify("release-A", "release-B"), Changed);
+
+        // Presence transitions
+        assert_eq!(
+            classify_version_change(None, Some(&"1.0.0".to_string())),
+            Initial
+        );
+        assert_eq!(
+            classify_version_change(Some(&"1.0.0".to_string()), None),
+            Removed
+        );
+        assert_eq!(classify_version_change(None, None), Absent);
+        assert_eq!(classify("1.0.0", "1.0.0"), Unchanged);
+    }
+
+    fn info(name: &str) -> SbomInfo {
+        let sbom = NormalizedSbom::new(DocumentMetadata::default());
+        SbomInfo::from_sbom(&sbom, name.to_string(), format!("{name}.json"))
+    }
+
+    /// Singleton SBOMs must surface as outliers: previously every seed was
+    /// marked assigned unconditionally, so singletons appeared in neither
+    /// clusters nor outliers and the outliers list was structurally empty.
+    #[test]
+    fn cluster_sboms_reports_singletons_as_outliers() {
+        let engine = MultiDiffEngine::new();
+        let sboms = vec![info("a"), info("b"), info("c")];
+
+        // Upper triangle for n=3: [s(0,1), s(0,2), s(1,2)]
+        let scores = vec![0.95, 0.10, 0.10];
+        let clustering = engine.cluster_sboms(&sboms, &scores, 0.9);
+        assert_eq!(clustering.clusters.len(), 1);
+        assert_eq!(clustering.clusters[0].members, vec![0, 1]);
+        assert_eq!(
+            clustering.outliers,
+            vec![2],
+            "the dissimilar SBOM must be an outlier"
+        );
+
+        // All dissimilar: no clusters, everything an outlier
+        let scores = vec![0.1, 0.1, 0.1];
+        let clustering = engine.cluster_sboms(&sboms, &scores, 0.9);
+        assert!(clustering.clusters.is_empty());
+        assert_eq!(clustering.outliers, vec![0, 1, 2]);
+    }
+
+    fn timeline_sbom(component_version: Option<&str>) -> NormalizedSbom {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        // A stable second component so the SBOM is never empty
+        let mut anchor = Component::new("anchor".to_string(), "pkg:npm/anchor@1.0.0".to_string());
+        anchor.version = Some("1.0.0".to_string());
+        anchor.calculate_content_hash();
+        sbom.add_component(anchor);
+        if let Some(version) = component_version {
+            let mut c = Component::new("libgap".to_string(), "pkg:npm/libgap".to_string());
+            c.version = Some(version.to_string());
+            c.calculate_content_hash();
+            sbom.add_component(c);
+        }
+        sbom.calculate_content_hash();
+        sbom
+    }
+
+    /// Gap handling: Removed marks only the FIRST absent point; later gap
+    /// points are Absent; a reappearing component re-enters as Initial
+    /// rather than being version-compared against the stale pre-gap version
+    /// (previously: Removed, Removed, then MajorUpgrade against a version
+    /// from two revisions ago).
+    #[test]
+    fn timeline_gap_and_reappearance_handling() {
+        let r0 = timeline_sbom(Some("1.0.0"));
+        let r1 = timeline_sbom(None);
+        let r2 = timeline_sbom(None);
+        let r3 = timeline_sbom(Some("2.0.0"));
+
+        let mut engine = MultiDiffEngine::new();
+        let sboms: Vec<(&NormalizedSbom, &str, &str)> = vec![
+            (&r0, "r0", "r0.json"),
+            (&r1, "r1", "r1.json"),
+            (&r2, "r2", "r2.json"),
+            (&r3, "r3", "r3.json"),
+        ];
+        let result = engine.timeline(&sboms).expect("timeline");
+
+        let history = result
+            .evolution_summary
+            .version_history
+            .iter()
+            .find(|(id, _)| id.contains("libgap"))
+            .map(|(_, h)| h)
+            .expect("libgap history");
+
+        let changes: Vec<_> = history.iter().map(|p| p.change_type.clone()).collect();
+        assert_eq!(
+            changes,
+            vec![
+                VersionChangeType::Initial,
+                VersionChangeType::Removed,
+                VersionChangeType::Absent,
+                VersionChangeType::Initial,
+            ],
+            "gap must be Removed-then-Absent and reappearance must be Initial"
+        );
+    }
+
+    /// A baseline component that is present but versionless (SPDX without
+    /// versionInfo) must not be reported as Added in every target.
+    #[test]
+    fn versionless_baseline_component_is_not_added() {
+        let make = |version: Option<&str>| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut c = Component::new("libfoo".to_string(), "SPDXRef-Package-libfoo".to_string());
+            c.version = version.map(str::to_string);
+            c.calculate_content_hash();
+            sbom.add_component(c);
+            sbom.calculate_content_hash();
+            sbom
+        };
+
+        let baseline = make(None);
+        let same = make(None);
+        let versioned = make(Some("2.0.0"));
+
+        let engine = MultiDiffEngine::new();
+        let all_versions = HashMap::new();
+
+        let divergent = engine.find_divergent_components(&baseline, &same, "same", &all_versions);
+        assert!(
+            divergent.is_empty(),
+            "identical versionless components must not diverge: {divergent:?}"
+        );
+
+        let divergent =
+            engine.find_divergent_components(&baseline, &versioned, "versioned", &all_versions);
+        assert_eq!(divergent.len(), 1);
+        assert_eq!(
+            divergent[0].divergence_type,
+            DivergenceType::VersionMismatch,
+            "present-but-versionless baseline is a version mismatch, not Added"
+        );
     }
 }

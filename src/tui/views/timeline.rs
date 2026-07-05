@@ -834,8 +834,10 @@ fn render_component_history_modal(
         ]));
     }
 
-    // Show version history if available
-    if let Some(history) = result.evolution_summary.version_history.get(&evo.name) {
+    // Show version history if available. The map is keyed by component ID
+    // (purl-based canonical id), not display name — the name lookup only
+    // worked for components whose id happens to equal their name.
+    if let Some(history) = result.evolution_summary.version_history.get(&evo.id) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "Version History:",
@@ -849,6 +851,7 @@ fn render_component_history_modal(
                 VersionChangeType::MinorUpgrade => Style::default().fg(scheme.added),
                 VersionChangeType::PatchUpgrade => Style::default().fg(scheme.primary),
                 VersionChangeType::Downgrade => Style::default().fg(scheme.removed),
+                VersionChangeType::Changed => Style::default().fg(scheme.warning),
                 VersionChangeType::Unchanged => Style::default().fg(scheme.text_muted),
                 VersionChangeType::Removed | VersionChangeType::Absent => {
                     Style::default().fg(scheme.muted)

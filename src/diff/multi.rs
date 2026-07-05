@@ -269,6 +269,10 @@ pub enum VersionChangeType {
     MinorUpgrade,
     PatchUpgrade,
     Downgrade,
+    /// Version string changed but the direction is not classifiable
+    /// (incomparable, non-numeric schemes). Reported honestly instead of
+    /// fabricating an upgrade/downgrade direction.
+    Changed,
     Unchanged,
     Removed,
     Absent,
@@ -283,6 +287,7 @@ impl VersionChangeType {
             Self::MinorUpgrade => "↑",
             Self::PatchUpgrade => "↗",
             Self::Downgrade => "⬇",
+            Self::Changed => "~",
             Self::Unchanged => "─",
             Self::Removed => "✗",
             Self::Absent => " ",
