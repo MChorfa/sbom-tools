@@ -25,6 +25,30 @@ impl ComponentChangeComputer {
         let mut changes = Vec::new();
         let mut total_cost = 0u32;
 
+        // Name change (pair was matched via fuzzy/alias/cross-ecosystem, so
+        // differing names mean a rename/migration). Without this a matched
+        // pair whose only differences are name/ecosystem produced an empty
+        // field-change list and vanished from the modified section entirely.
+        if old.name != new.name {
+            changes.push(FieldChange {
+                field: "name".to_string(),
+                old_value: Some(old.name.clone()),
+                new_value: Some(new.name.clone()),
+            });
+            total_cost += self.cost_model.supplier_changed;
+        }
+
+        // Ecosystem migration (e.g. a curated cross-ecosystem match) — a
+        // supply-chain-relevant change that must be visible in reports.
+        if old.ecosystem != new.ecosystem {
+            changes.push(FieldChange {
+                field: "ecosystem".to_string(),
+                old_value: old.ecosystem.as_ref().map(std::string::ToString::to_string),
+                new_value: new.ecosystem.as_ref().map(std::string::ToString::to_string),
+            });
+            total_cost += self.cost_model.supplier_changed;
+        }
+
         // Version change
         if old.version != new.version {
             changes.push(FieldChange {
@@ -713,6 +737,55 @@ mod tests {
             .iter()
             .find(|c| c.field == field)
             .unwrap_or_else(|| panic!("expected a `{field}` field change, got {changes:?}"))
+    }
+
+    /// A matched pair differing only in name (rename) or ecosystem
+    /// (migration) previously produced an empty field-change list and was
+    /// silently dropped from the modified section — reported NOWHERE.
+    #[test]
+    fn renames_and_ecosystem_migrations_produce_field_changes() {
+        let computer = ComponentChangeComputer::default();
+
+        let mut old = Component::new("foo-utils".to_string(), "old-ref".to_string());
+        old.version = Some("1.0.0".to_string());
+        old.ecosystem = Some(crate::model::Ecosystem::Npm);
+        old.calculate_content_hash();
+
+        let mut renamed = Component::new("foo-util".to_string(), "new-ref".to_string());
+        renamed.version = Some("1.0.0".to_string());
+        renamed.ecosystem = Some(crate::model::Ecosystem::Npm);
+        renamed.calculate_content_hash();
+
+        let (changes, cost) = computer.compute_field_changes(&old, &renamed);
+        let change = find_change(&changes, "name");
+        assert_eq!(change.old_value.as_deref(), Some("foo-utils"));
+        assert_eq!(change.new_value.as_deref(), Some("foo-util"));
+        assert!(cost > 0, "a rename must carry a nonzero cost");
+
+        let mut migrated = Component::new("foo-utils".to_string(), "new-ref-2".to_string());
+        migrated.version = Some("1.0.0".to_string());
+        migrated.ecosystem = Some(crate::model::Ecosystem::PyPi);
+        migrated.calculate_content_hash();
+
+        let (changes, _) = computer.compute_field_changes(&old, &migrated);
+        let change = find_change(&changes, "ecosystem");
+        assert_eq!(change.old_value.as_deref(), Some("npm"));
+        assert_eq!(change.new_value.as_deref(), Some("pypi"));
+
+        // End-to-end through compute(): the rename pair must appear in the
+        // modified list, not vanish.
+        let mut old_sbom = NormalizedSbom::default();
+        let mut new_sbom = NormalizedSbom::default();
+        let old_id = old.canonical_id.clone();
+        let new_id = renamed.canonical_id.clone();
+        old_sbom.add_component(old);
+        new_sbom.add_component(renamed);
+        let mut matches = ComponentMatches::new();
+        matches.insert(old_id, Some(new_id));
+
+        let result = computer.compute(&old_sbom, &new_sbom, &matches);
+        assert_eq!(result.modified.len(), 1, "matched rename must be reported as modified");
+        find_change(&result.modified[0].field_changes, "name");
     }
 
     #[test]

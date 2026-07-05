@@ -176,129 +176,177 @@ impl DiffEngine {
                 remap_match_result(&component_matches, old_canonical, new_canonical);
         }
 
-        // Compute match metrics for observability
-        {
-            // Sorted so float accumulation order (and thus the serialized
-            // average) is identical across runs
-            let mut scores: Vec<f64> = component_matches.pairs.values().copied().collect();
-            scores.sort_unstable_by(f64::total_cmp);
-            // 0.995 sits strictly between the 0.99 non-identical-name cap and
-            // the 1.0 identity tiers, so a capped near-miss never counts as
-            // an exact match.
-            let exact = scores.iter().filter(|&&s| s >= 0.995).count();
-            let fuzzy = scores.len() - exact;
-            let matched_count = scores.len();
-            let unmatched_old = old_filtered.component_count().saturating_sub(matched_count);
-            let unmatched_new = new_filtered.component_count().saturating_sub(matched_count);
-            let avg = if scores.is_empty() {
-                0.0
-            } else {
-                scores.iter().sum::<f64>() / scores.len() as f64
-            };
-            let min = scores.iter().copied().fold(f64::INFINITY, f64::min);
-
-            result.match_metrics = Some(MatchMetrics {
-                exact_matches: exact,
-                fuzzy_matches: fuzzy,
-                rule_matches: result.rules_applied,
-                unmatched_old,
-                unmatched_new,
-                avg_match_score: avg,
-                min_match_score: if min.is_infinite() { 0.0 } else { min },
-            });
-        }
-
-        // Compute changes using the modular change computers
-        self.compute_all_changes(
+        // Compute all sections, then the derived outputs (metrics, graph
+        // diff, score, summary) via the same routines the incremental path
+        // uses — one implementation, so the two paths cannot drift.
+        self.compute_sections(
             &old_filtered,
             &new_filtered,
             &component_matches,
             matcher,
+            &ChangedSections::all_changed(),
             &mut result,
         );
+        self.finalize_result(
+            &old_filtered,
+            &new_filtered,
+            &component_matches,
+            true,
+            &mut result,
+        );
+        Ok(result)
+    }
 
-        // Perform graph-aware diffing if enabled
-        if let Some(ref graph_config) = self.graph_diff_config {
+    /// Compute the selected change sections into `result`.
+    ///
+    /// The SINGLE implementation behind both the full path (`diff`, all
+    /// sections) and the incremental path (`diff_sections`, dirty sections
+    /// only) — hand-duplicating this orchestration is how the two paths
+    /// previously drifted (the incremental path forgot match metrics and the
+    /// graph diff).
+    fn compute_sections(
+        &self,
+        old: &NormalizedSbom,
+        new: &NormalizedSbom,
+        match_result: &ComponentMatchResult,
+        matcher: &dyn ComponentMatcher,
+        sections: &ChangedSections,
+        result: &mut DiffResult,
+    ) {
+        if sections.components {
+            let comp_computer = ComponentChangeComputer::new(self.cost_model.clone());
+            let comp_changes = comp_computer.compute(old, new, &match_result.matches);
+            result.components.added = comp_changes.added;
+            result.components.removed = comp_changes.removed;
+            result.components.modified = comp_changes
+                .modified
+                .into_iter()
+                .map(|mut change| {
+                    // Add match explanation for modified components. Use
+                    // stored canonical IDs directly instead of reconstructing
+                    // from name+version.
+                    if let (Some(old_id), Some(new_id)) =
+                        (&change.old_canonical_id, &change.canonical_id)
+                        && let (Some(old_comp), Some(new_comp)) =
+                            (old.components.get(old_id), new.components.get(new_id))
+                    {
+                        let explanation = matcher.explain_match(old_comp, new_comp);
+                        let mut match_info = MatchInfo::from_explanation(&explanation);
+
+                        // Use the actual score from the matching phase if available
+                        if let Some(&score) =
+                            match_result.pairs.get(&(old_id.clone(), new_id.clone()))
+                        {
+                            match_info.score = score;
+                        }
+
+                        change = change.with_match_info(match_info);
+                    }
+                    change
+                })
+                .collect();
+        }
+
+        if sections.dependencies {
+            let dep_computer = DependencyChangeComputer::new();
+            let dep_changes = dep_computer.compute(old, new, &match_result.matches);
+            result.dependencies.added = dep_changes.added;
+            result.dependencies.removed = dep_changes.removed;
+        }
+
+        if sections.licenses {
+            let lic_computer = LicenseChangeComputer::new();
+            let lic_changes = lic_computer.compute(old, new, &match_result.matches);
+            result.licenses.new_licenses = lic_changes.new_licenses;
+            result.licenses.removed_licenses = lic_changes.removed_licenses;
+            result.licenses.component_changes = lic_changes.component_changes;
+        }
+
+        if sections.vulnerabilities {
+            let vuln_computer = VulnerabilityChangeComputer::new();
+            let vuln_changes = vuln_computer.compute(old, new, &match_result.matches);
+            result.vulnerabilities.introduced = vuln_changes.introduced;
+            result.vulnerabilities.resolved = vuln_changes.resolved;
+            result.vulnerabilities.persistent = vuln_changes.persistent;
+            result.vulnerabilities.vex_changes = vuln_changes.vex_changes;
+        }
+
+        // Document-level metadata changes are cheap and not tracked by
+        // `ChangedSections` — always recompute rather than risk serving a
+        // stale cached vec when only the document header changed.
+        result.metadata_changes = compute_metadata_changes(old, new);
+    }
+
+    /// Derived outputs recomputed on EVERY path: match metrics (from the
+    /// always-recomputed matching), the graph diff when `refresh_graph`,
+    /// the semantic score, and the summary.
+    ///
+    /// Score normalization convention: both paths normalize against the
+    /// rule-FILTERED SBOMs (the content that was actually diffed), so a
+    /// cache-warm incremental run scores identically to a cold full run.
+    fn finalize_result(
+        &self,
+        old_filtered: &NormalizedSbom,
+        new_filtered: &NormalizedSbom,
+        match_result: &ComponentMatchResult,
+        refresh_graph: bool,
+        result: &mut DiffResult,
+    ) {
+        result.match_metrics =
+            Some(self.compute_match_metrics(match_result, old_filtered, new_filtered, result));
+
+        if refresh_graph && let Some(ref graph_config) = self.graph_diff_config {
             let (graph_changes, graph_summary) = diff_dependency_graph(
-                &old_filtered,
-                &new_filtered,
-                &component_matches.matches,
+                old_filtered,
+                new_filtered,
+                &match_result.matches,
                 graph_config,
             );
             result.graph_changes = graph_changes;
             result.graph_summary = Some(graph_summary);
         }
 
-        // Calculate semantic score
-        result.semantic_score = self.compute_semantic_score(&result, old, new);
-
+        result.semantic_score =
+            self.compute_semantic_score(result, old_filtered, new_filtered);
         result.calculate_summary();
-        Ok(result)
     }
 
-    /// Compute all changes using the modular change computers.
-    fn compute_all_changes(
+    /// Match metrics for observability.
+    fn compute_match_metrics(
         &self,
-        old: &NormalizedSbom,
-        new: &NormalizedSbom,
         match_result: &ComponentMatchResult,
-        matcher: &dyn ComponentMatcher,
-        result: &mut DiffResult,
-    ) {
-        // Component changes
-        let comp_computer = ComponentChangeComputer::new(self.cost_model.clone());
-        let comp_changes = comp_computer.compute(old, new, &match_result.matches);
-        result.components.added = comp_changes.added;
-        result.components.removed = comp_changes.removed;
-        result.components.modified = comp_changes
-            .modified
-            .into_iter()
-            .map(|mut change| {
-                // Add match explanation for modified components
-                // Use stored canonical IDs directly instead of reconstructing from name+version
-                if let (Some(old_id), Some(new_id)) =
-                    (&change.old_canonical_id, &change.canonical_id)
-                    && let (Some(old_comp), Some(new_comp)) =
-                        (old.components.get(old_id), new.components.get(new_id))
-                {
-                    let explanation = matcher.explain_match(old_comp, new_comp);
-                    let mut match_info = MatchInfo::from_explanation(&explanation);
+        old_filtered: &NormalizedSbom,
+        new_filtered: &NormalizedSbom,
+        result: &DiffResult,
+    ) -> MatchMetrics {
+        // Sorted so float accumulation order (and thus the serialized
+        // average) is identical across runs
+        let mut scores: Vec<f64> = match_result.pairs.values().copied().collect();
+        scores.sort_unstable_by(f64::total_cmp);
+        // 0.995 sits strictly between the 0.99 non-identical-name cap and
+        // the 1.0 identity tiers, so a capped near-miss never counts as
+        // an exact match.
+        let exact = scores.iter().filter(|&&s| s >= 0.995).count();
+        let fuzzy = scores.len() - exact;
+        let matched_count = scores.len();
+        let unmatched_old = old_filtered.component_count().saturating_sub(matched_count);
+        let unmatched_new = new_filtered.component_count().saturating_sub(matched_count);
+        let avg = if scores.is_empty() {
+            0.0
+        } else {
+            scores.iter().sum::<f64>() / scores.len() as f64
+        };
+        let min = scores.iter().copied().fold(f64::INFINITY, f64::min);
 
-                    // Use the actual score from the matching phase if available
-                    if let Some(&score) = match_result.pairs.get(&(old_id.clone(), new_id.clone()))
-                    {
-                        match_info.score = score;
-                    }
-
-                    change = change.with_match_info(match_info);
-                }
-                change
-            })
-            .collect();
-
-        // Dependency changes
-        let dep_computer = DependencyChangeComputer::new();
-        let dep_changes = dep_computer.compute(old, new, &match_result.matches);
-        result.dependencies.added = dep_changes.added;
-        result.dependencies.removed = dep_changes.removed;
-
-        // License changes
-        let lic_computer = LicenseChangeComputer::new();
-        let lic_changes = lic_computer.compute(old, new, &match_result.matches);
-        result.licenses.new_licenses = lic_changes.new_licenses;
-        result.licenses.removed_licenses = lic_changes.removed_licenses;
-        result.licenses.component_changes = lic_changes.component_changes;
-
-        // Vulnerability changes
-        let vuln_computer = VulnerabilityChangeComputer::new();
-        let vuln_changes = vuln_computer.compute(old, new, &match_result.matches);
-        result.vulnerabilities.introduced = vuln_changes.introduced;
-        result.vulnerabilities.resolved = vuln_changes.resolved;
-        result.vulnerabilities.persistent = vuln_changes.persistent;
-        result.vulnerabilities.vex_changes = vuln_changes.vex_changes;
-
-        // Document-level metadata changes (author/tool/timestamp/spec-version/etc.)
-        result.metadata_changes = compute_metadata_changes(old, new);
+        MatchMetrics {
+            exact_matches: exact,
+            fuzzy_matches: fuzzy,
+            rule_matches: result.rules_applied,
+            unmatched_old,
+            unmatched_new,
+            avg_match_score: avg,
+            min_match_score: if min.is_infinite() { 0.0 } else { min },
+        }
     }
 
     /// Diff only the specified sections, reusing cached results for unchanged sections.
@@ -353,74 +401,46 @@ impl DiffEngine {
                 remap_match_result(&component_matches, old_canonical, new_canonical);
         }
 
-        // Selectively recompute only the changed sections
-        if sections.components {
-            let comp_computer = ComponentChangeComputer::new(self.cost_model.clone());
-            let comp_changes =
-                comp_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
-            result.components.added = comp_changes.added;
-            result.components.removed = comp_changes.removed;
-            result.components.modified = comp_changes
-                .modified
-                .into_iter()
-                .map(|mut change| {
-                    if let (Some(old_id), Some(new_id)) =
-                        (&change.old_canonical_id, &change.canonical_id)
-                        && let (Some(old_comp), Some(new_comp)) = (
-                            old_filtered.components.get(old_id),
-                            new_filtered.components.get(new_id),
-                        )
-                    {
-                        let explanation = matcher.explain_match(old_comp, new_comp);
-                        let mut match_info = MatchInfo::from_explanation(&explanation);
-                        if let Some(&score) = component_matches
-                            .pairs
-                            .get(&(old_id.clone(), new_id.clone()))
-                        {
-                            match_info.score = score;
-                        }
-                        change = change.with_match_info(match_info);
-                    }
-                    change
-                })
-                .collect();
-        }
+        // Selectively recompute only the changed sections via the shared
+        // implementation, then refresh every derived output.
+        //
+        // Widening rule: every section computer consumes the component
+        // MATCHES, and matches are a function of component content — so any
+        // component change can flip a match and with it the dependency,
+        // license, and vulnerability diffs, even when those sections' own
+        // hashes are clean (a rename spliced a stale empty dependency diff).
+        // The vulnerability computer additionally reads component depths,
+        // derived from the dependency graph, so edge changes rerun it too.
+        // The only splice that survives a components-dirty diff is the
+        // components section itself never being clean in that case — the
+        // savings remain for edge-only changes (components and licenses
+        // splice) and for pure metadata changes.
+        let mut effective_sections = sections.clone();
+        effective_sections.dependencies |= sections.components;
+        effective_sections.licenses |= sections.components;
+        effective_sections.vulnerabilities |= sections.dependencies || sections.components;
+        self.compute_sections(
+            &old_filtered,
+            &new_filtered,
+            &component_matches,
+            matcher,
+            &effective_sections,
+            &mut result,
+        );
 
-        if sections.dependencies {
-            let dep_computer = DependencyChangeComputer::new();
-            let dep_changes =
-                dep_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
-            result.dependencies.added = dep_changes.added;
-            result.dependencies.removed = dep_changes.removed;
-        }
-
-        if sections.licenses {
-            let lic_computer = LicenseChangeComputer::new();
-            let lic_changes =
-                lic_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
-            result.licenses.new_licenses = lic_changes.new_licenses;
-            result.licenses.removed_licenses = lic_changes.removed_licenses;
-            result.licenses.component_changes = lic_changes.component_changes;
-        }
-
-        if sections.vulnerabilities {
-            let vuln_computer = VulnerabilityChangeComputer::new();
-            let vuln_changes =
-                vuln_computer.compute(&old_filtered, &new_filtered, &component_matches.matches);
-            result.vulnerabilities.introduced = vuln_changes.introduced;
-            result.vulnerabilities.resolved = vuln_changes.resolved;
-            result.vulnerabilities.persistent = vuln_changes.persistent;
-            result.vulnerabilities.vex_changes = vuln_changes.vex_changes;
-        }
-
-        // Document-metadata changes are cheap and not tracked by `ChangedSections`,
-        // so always recompute them rather than risk serving a stale cached vec
-        // when only the document header changed.
-        result.metadata_changes = compute_metadata_changes(&old_filtered, &new_filtered);
-
-        // Always recompute summary and semantic score since they depend on all sections
-        result.semantic_score = self.compute_semantic_score(&result, &old_filtered, &new_filtered);
-        result.calculate_summary();
+        // The graph diff reads only components, edges, and matches — all
+        // pinned by the components/dependencies section hashes — so the
+        // spliced graph output is valid exactly when neither of those
+        // sections changed. Match metrics, score, and summary are refreshed
+        // unconditionally.
+        let refresh_graph = sections.components || sections.dependencies;
+        self.finalize_result(
+            &old_filtered,
+            &new_filtered,
+            &component_matches,
+            refresh_graph,
+            &mut result,
+        );
         Ok(result)
     }
 

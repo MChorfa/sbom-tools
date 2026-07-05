@@ -69,6 +69,19 @@ pub fn run_vex(config: VexConfig, action: VexAction) -> Result<i32> {
         }
     }
 
+    // This flow calls the step-level enrichers directly (not
+    // enrich_sbom_full), so refresh content hashes here too: enrichment
+    // mutates vulnerability/VEX content after parse-time hashes were
+    // computed, and Component.content_hash is a serialized field.
+    #[cfg(feature = "enrichment")]
+    if config.enrichment.enabled || config.enrichment.enable_eol || !config.vex_paths.is_empty() {
+        let sbom = parsed.sbom_mut();
+        for comp in sbom.components.values_mut() {
+            comp.calculate_content_hash();
+        }
+        sbom.calculate_content_hash();
+    }
+
     // Warn if enrichment requested but feature not enabled
     #[cfg(not(feature = "enrichment"))]
     if config.enrichment.enabled || config.enrichment.enable_eol || !config.vex_paths.is_empty() {
