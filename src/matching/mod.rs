@@ -315,6 +315,12 @@ impl FuzzyMatcher {
 
     /// Check if components match via alias table
     fn check_alias_match(&self, a: &Component, b: &Component) -> bool {
+        // The default table is empty; don't pay two Vec<String> allocations
+        // per candidate pair to consult it.
+        if self.alias_table.is_empty() {
+            return false;
+        }
+
         // Check if either component's name is an alias of the other
         let names_a = self.get_all_names(a);
         let names_b = self.get_all_names(b);

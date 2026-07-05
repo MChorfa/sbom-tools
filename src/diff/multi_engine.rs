@@ -210,44 +210,54 @@ impl MultiDiffEngine {
             .keys()
             .map(|k| k.value().to_string())
             .collect();
-        let _target_names: Vec<_> = targets
+
+        // Per-SBOM component sets and name maps, built once — the loops below
+        // previously did a linear iter().find() per component per SBOM,
+        // O(components² × SBOMs) overall.
+        let target_component_sets: Vec<HashSet<&str>> = targets
             .iter()
-            .map(|(_, name, _)| name.to_string())
+            .map(|(target_sbom, _, _)| {
+                target_sbom.components.keys().map(|k| k.value()).collect()
+            })
+            .collect();
+        let baseline_names: HashMap<&str, &str> = baseline
+            .components
+            .iter()
+            .map(|(id, c)| (id.value(), c.name.as_str()))
+            .collect();
+        let target_names: Vec<HashMap<&str, &str>> = targets
+            .iter()
+            .map(|(target_sbom, _, _)| {
+                target_sbom
+                    .components
+                    .iter()
+                    .map(|(id, c)| (id.value(), c.name.as_str()))
+                    .collect()
+            })
             .collect();
 
         // Find universal components (in baseline and ALL targets)
         let mut universal: HashSet<String> = baseline_components.clone();
-        for (target_sbom, _, _) in targets {
-            let target_components: HashSet<_> = target_sbom
-                .components
-                .keys()
-                .map(|k| k.value().to_string())
-                .collect();
-            universal = universal
-                .intersection(&target_components)
-                .cloned()
-                .collect();
-        }
+        universal.retain(|comp_id| {
+            target_component_sets
+                .iter()
+                .all(|set| set.contains(comp_id.as_str()))
+        });
 
         // Find variable components (different versions across targets)
         let mut variable_components: Vec<VariableComponent> = vec![];
         for (comp_id, versions) in all_versions {
             let unique_versions: HashSet<_> = versions.values().collect();
             if unique_versions.len() > 1 {
-                let name = baseline
-                    .components
-                    .iter()
-                    .find(|(id, _)| id.value() == comp_id)
-                    .map(|(_, c)| c.name.clone())
+                let name = baseline_names
+                    .get(comp_id.as_str())
+                    .copied()
                     .or_else(|| {
-                        targets.iter().find_map(|(sbom, _, _)| {
-                            sbom.components
-                                .iter()
-                                .find(|(id, _)| id.value() == comp_id)
-                                .map(|(_, c)| c.name.clone())
-                        })
+                        target_names
+                            .iter()
+                            .find_map(|names| names.get(comp_id.as_str()).copied())
                     })
-                    .unwrap_or_else(|| comp_id.clone());
+                    .map_or_else(|| comp_id.clone(), str::to_string);
 
                 let baseline_version = versions.get(&baseline_info.name.clone()).cloned();
                 let all_versions_vec: Vec<_> = unique_versions.into_iter().cloned().collect();
@@ -292,12 +302,8 @@ impl MultiDiffEngine {
                 missing_from.push(baseline_info.name.clone());
             }
 
-            for (target_sbom, target_name, _) in targets {
-                let has_component = target_sbom
-                    .components
-                    .iter()
-                    .any(|(id, _)| id.value() == comp_id);
-                if has_component {
+            for ((_, target_name, _), component_set) in targets.iter().zip(&target_component_sets) {
+                if component_set.contains(comp_id.as_str()) {
                     present_in.push(target_name.to_string());
                 } else {
                     missing_from.push(target_name.to_string());
@@ -305,16 +311,9 @@ impl MultiDiffEngine {
             }
 
             if !missing_from.is_empty() {
-                let name = all_versions
-                    .get(comp_id)
-                    .and_then(|_| {
-                        baseline
-                            .components
-                            .iter()
-                            .find(|(id, _)| id.value() == comp_id)
-                            .map(|(_, c)| c.name.clone())
-                    })
-                    .unwrap_or_else(|| comp_id.clone());
+                let name = baseline_names
+                    .get(comp_id.as_str())
+                    .map_or_else(|| comp_id.clone(), |n| (*n).to_string());
 
                 inconsistent_components.push(InconsistentComponent {
                     id: comp_id.clone(),
@@ -360,6 +359,15 @@ impl MultiDiffEngine {
     ) -> Vec<DivergentComponent> {
         let mut divergent = vec![];
 
+        // Hashed lookup tables; the loops below previously did a linear
+        // find/any per component, O(components²) per target.
+        let baseline_by_value: HashMap<&str, &crate::model::Component> = baseline
+            .components
+            .iter()
+            .map(|(id, c)| (id.value(), c))
+            .collect();
+        let target_ids: HashSet<&str> = target.components.keys().map(|k| k.value()).collect();
+
         for (id, comp) in &target.components {
             let comp_id = id.value().to_string();
             let target_version = comp.version.clone().unwrap_or_default();
@@ -367,11 +375,7 @@ impl MultiDiffEngine {
             // Presence and version availability are separate questions: a
             // baseline component without a version (common for SPDX packages
             // lacking versionInfo) is PRESENT, not Added.
-            let baseline_comp = baseline
-                .components
-                .iter()
-                .find(|(bid, _)| bid.value() == comp_id)
-                .map(|(_, bc)| bc);
+            let baseline_comp = baseline_by_value.get(comp_id.as_str()).copied();
 
             let divergence_type = match baseline_comp {
                 None => DivergenceType::Added,
@@ -393,12 +397,7 @@ impl MultiDiffEngine {
         // Check for removed components
         for (id, comp) in &baseline.components {
             let comp_id = id.value().to_string();
-            let in_target = target
-                .components
-                .iter()
-                .any(|(tid, _)| tid.value() == comp_id);
-
-            if !in_target {
+            if !target_ids.contains(comp_id.as_str()) {
                 divergent.push(DivergentComponent {
                     id: comp_id.clone(),
                     name: comp.name.clone(),
@@ -470,11 +469,21 @@ impl MultiDiffEngine {
         let mut components_removed: Vec<ComponentEvolution> = vec![];
         let mut all_components: HashSet<String> = HashSet::new();
 
-        // Collect all component IDs
+        // Collect all component IDs, and per-SBOM lookup maps — the history
+        // loop below runs all_components × sboms and previously did a linear
+        // find per cell.
+        let mut sbom_maps: Vec<HashMap<&str, &crate::model::Component>> =
+            Vec::with_capacity(sboms.len());
         for (sbom, _, _) in sboms {
             for (id, _) in &sbom.components {
                 all_components.insert(id.value().to_string());
             }
+            sbom_maps.push(
+                sbom.components
+                    .iter()
+                    .map(|(id, c)| (id.value(), c))
+                    .collect(),
+            );
         }
 
         // Build version history for each component
@@ -491,10 +500,10 @@ impl MultiDiffEngine {
             let mut was_present = false;
             let mut version_change_count: usize = 0;
 
-            for (i, (sbom, name, _)) in sboms.iter().enumerate() {
-                let comp = sbom.components.iter().find(|(id, _)| id.value() == comp_id);
+            for (i, (_, name, _)) in sboms.iter().enumerate() {
+                let comp = sbom_maps[i].get(comp_id.as_str()).copied();
 
-                let (version, change_type) = if let Some((_, c)) = comp {
+                let (version, change_type) = if let Some(c) = comp {
                     let ver = c.version.clone();
                     let change = if first_seen.is_none() {
                         first_seen = Some((i, ver.clone().unwrap_or_default()));
@@ -539,24 +548,17 @@ impl MultiDiffEngine {
             if let Some((first_idx, first_ver)) = first_seen {
                 let still_present = last_seen == Some(sboms.len() - 1);
                 let current_version = if still_present {
-                    sboms.last().and_then(|(sbom, _, _)| {
-                        sbom.components
-                            .iter()
-                            .find(|(id, _)| id.value() == comp_id)
-                            .and_then(|(_, c)| c.version.clone())
-                    })
+                    sbom_maps
+                        .last()
+                        .and_then(|map| map.get(comp_id.as_str()))
+                        .and_then(|c| c.version.clone())
                 } else {
                     None
                 };
 
-                let name = sboms
+                let name = sbom_maps
                     .iter()
-                    .find_map(|(sbom, _, _)| {
-                        sbom.components
-                            .iter()
-                            .find(|(id, _)| id.value() == comp_id)
-                            .map(|(_, c)| c.name.clone())
-                    })
+                    .find_map(|map| map.get(comp_id.as_str()).map(|c| c.name.clone()))
                     .unwrap_or_else(|| comp_id.clone());
 
                 let evolution = ComponentEvolution {

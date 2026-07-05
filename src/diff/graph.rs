@@ -442,6 +442,15 @@ fn detect_reparenting(
     matches: &HashMap<CanonicalId, Option<CanonicalId>>,
     changes: &mut Vec<DependencyGraphChange>,
 ) {
+    // Suppressions are collected and applied in ONE retain pass at the end:
+    // retain() inside the per-match loop rescans the whole accumulated
+    // change vector per reparented component — O(reparents × changes),
+    // measured at seconds for lockfile-flattening restructures. Detection
+    // never reads `changes`, so deferral is behavior-identical. Keyed
+    // child → parents so the retain queries by reference (no clones).
+    let mut suppress_added: HashMap<CanonicalId, HashSet<CanonicalId>> = HashMap::new();
+    let mut suppress_removed: HashMap<CanonicalId, HashSet<CanonicalId>> = HashMap::new();
+
     for (old_id, new_id_opt) in matches {
         if let Some(new_id) = new_id_opt {
             let old_parents = old_graph.get_parents(old_id);
@@ -487,15 +496,14 @@ fn detect_reparenting(
             // reparenting pair (old_parent→child removed, new_parent→child added).
             // Other add/remove entries for the same child but different parents
             // are preserved.
-            changes.retain(|c| match &c.change {
-                DependencyChangeType::DependencyAdded { dependency_id, .. } => {
-                    !(dependency_id == new_id && c.component_id == *new_parent)
-                }
-                DependencyChangeType::DependencyRemoved { dependency_id, .. } => {
-                    !(dependency_id == new_id && c.component_id == *old_parent)
-                }
-                _ => true,
-            });
+            suppress_added
+                .entry(new_id.clone())
+                .or_default()
+                .insert(new_parent.clone());
+            suppress_removed
+                .entry(new_id.clone())
+                .or_default()
+                .insert(old_parent.clone());
 
             changes.push(DependencyGraphChange {
                 component_id: new_id.clone(),
@@ -511,6 +519,18 @@ fn detect_reparenting(
                 impact: GraphChangeImpact::Medium,
             });
         }
+    }
+
+    if !suppress_added.is_empty() || !suppress_removed.is_empty() {
+        changes.retain(|c| match &c.change {
+            DependencyChangeType::DependencyAdded { dependency_id, .. } => !suppress_added
+                .get(dependency_id)
+                .is_some_and(|parents| parents.contains(&c.component_id)),
+            DependencyChangeType::DependencyRemoved { dependency_id, .. } => !suppress_removed
+                .get(dependency_id)
+                .is_some_and(|parents| parents.contains(&c.component_id)),
+            _ => true,
+        });
     }
 }
 

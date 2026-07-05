@@ -23,6 +23,7 @@ use crate::error::SbomDiffError;
 use crate::model::NormalizedSbom;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -91,15 +92,19 @@ impl SectionHashes {
         let components = hasher.finish();
 
         // Dependencies hash: every field of the DependencyChangeComputer's
-        // edge key, including scope.
+        // edge key, including scope. Enums hash by discriminant (plus the
+        // payload for `Other`) to keep the per-edge loop allocation-free.
         let mut hasher = DefaultHasher::new();
         for edge in &sbom.edges {
             edge.from.hash(&mut hasher);
             edge.to.hash(&mut hasher);
-            edge.relationship.to_string().hash(&mut hasher);
+            std::mem::discriminant(&edge.relationship).hash(&mut hasher);
+            if let crate::model::DependencyType::Other(other) = &edge.relationship {
+                other.hash(&mut hasher);
+            }
             edge.scope
                 .as_ref()
-                .map(std::string::ToString::to_string)
+                .map(std::mem::discriminant)
                 .hash(&mut hasher);
         }
         let dependencies = hasher.finish();
@@ -236,20 +241,21 @@ pub struct CachedDiffResult {
     pub old_hashes: SectionHashes,
     /// Section hashes from new SBOM
     pub new_hashes: SectionHashes,
-    /// Number of times this cache entry was hit
-    pub hit_count: u64,
 }
 
 impl CachedDiffResult {
     /// Create a new cached result.
     #[must_use]
-    pub fn new(result: DiffResult, old_hashes: SectionHashes, new_hashes: SectionHashes) -> Self {
+    pub fn new(
+        result: Arc<DiffResult>,
+        old_hashes: SectionHashes,
+        new_hashes: SectionHashes,
+    ) -> Self {
         Self {
-            result: Arc::new(result),
+            result,
             computed_at: Instant::now(),
             old_hashes,
             new_hashes,
-            hit_count: 0,
         }
     }
 
@@ -300,8 +306,34 @@ pub struct DiffCache {
     cache: RwLock<HashMap<DiffCacheKey, CachedDiffResult>>,
     /// Configuration
     config: DiffCacheConfig,
-    /// Statistics
-    stats: RwLock<CacheStats>,
+    /// Statistics (atomics so lookups never take a write lock)
+    stats: AtomicCacheStats,
+}
+
+/// Lock-free statistics storage; `get()` previously took the map's WRITE
+/// lock (to bump a never-read per-entry hit counter) plus a stats write
+/// lock, serializing all readers.
+#[derive(Debug, Default)]
+struct AtomicCacheStats {
+    lookups: AtomicU64,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    incremental_hits: AtomicU64,
+    evictions: AtomicU64,
+    time_saved_ms: AtomicU64,
+}
+
+impl AtomicCacheStats {
+    fn snapshot(&self) -> CacheStats {
+        CacheStats {
+            lookups: self.lookups.load(Ordering::Relaxed),
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            incremental_hits: self.incremental_hits.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+            time_saved_ms: self.time_saved_ms.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// Statistics for cache performance.
@@ -315,7 +347,8 @@ pub struct CacheStats {
     pub misses: u64,
     /// Incremental computations (partial cache hit)
     pub incremental_hits: u64,
-    /// Entries evicted
+    /// Entries evicted (capacity evictions plus bulk purges of expired
+    /// entries at capacity, so a single put can add more than one)
     pub evictions: u64,
     /// Total computation time saved (estimated)
     pub time_saved_ms: u64,
@@ -346,7 +379,7 @@ impl DiffCache {
         Self {
             cache: RwLock::new(HashMap::new()),
             config,
-            stats: RwLock::new(CacheStats::default()),
+            stats: AtomicCacheStats::default(),
         }
     }
 
@@ -355,22 +388,22 @@ impl DiffCache {
     /// Returns `Some` if an exact match is found and still valid.
     pub fn get(&self, key: &DiffCacheKey) -> Option<Arc<DiffResult>> {
         let result = {
-            let mut cache = self.cache.write().expect("cache lock poisoned");
-            cache.get_mut(key).and_then(|entry| {
-                entry.is_valid(self.config.ttl).then(|| {
-                    entry.hit_count += 1;
-                    Arc::clone(&entry.result)
-                })
+            let cache = self.cache.read().expect("cache lock poisoned");
+            cache.get(key).and_then(|entry| {
+                entry
+                    .is_valid(self.config.ttl)
+                    .then(|| Arc::clone(&entry.result))
             })
         };
 
-        let mut stats = self.stats.write().expect("stats lock poisoned");
-        stats.lookups += 1;
+        self.stats.lookups.fetch_add(1, Ordering::Relaxed);
         if let Some(ref result) = result {
-            stats.hits += 1;
-            stats.time_saved_ms += Self::estimate_computation_time(result);
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            self.stats
+                .time_saved_ms
+                .fetch_add(Self::estimate_computation_time(result), Ordering::Relaxed);
         } else {
-            stats.misses += 1;
+            self.stats.misses.fetch_add(1, Ordering::Relaxed);
         }
         result
     }
@@ -379,20 +412,33 @@ impl DiffCache {
     pub fn put(
         &self,
         key: DiffCacheKey,
-        result: DiffResult,
+        result: Arc<DiffResult>,
         old_hashes: SectionHashes,
         new_hashes: SectionHashes,
     ) {
         let mut cache = self.cache.write().expect("cache lock poisoned");
 
-        // Evict oldest entries if at capacity
-        while cache.len() >= self.config.max_entries {
-            if let Some(oldest_key) = Self::find_oldest_entry(&cache) {
-                cache.remove(&oldest_key);
-                let mut stats = self.stats.write().expect("stats lock poisoned");
-                stats.evictions += 1;
-            } else {
-                break;
+        // Overwriting an existing key needs no capacity; previously it still
+        // evicted an unrelated oldest entry first.
+        if !cache.contains_key(&key) && cache.len() >= self.config.max_entries {
+            // Expired entries occupy capacity but serve no one — drop them
+            // before evicting live entries.
+            let before = cache.len();
+            cache.retain(|_, entry| entry.is_valid(self.config.ttl));
+            let expired = before - cache.len();
+            if expired > 0 {
+                self.stats
+                    .evictions
+                    .fetch_add(expired as u64, Ordering::Relaxed);
+            }
+
+            while cache.len() >= self.config.max_entries {
+                if let Some(oldest_key) = Self::find_oldest_entry(&cache) {
+                    cache.remove(&oldest_key);
+                    self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -418,7 +464,7 @@ impl DiffCache {
 
     /// Get cache statistics.
     pub fn stats(&self) -> CacheStats {
-        self.stats.read().expect("stats lock poisoned").clone()
+        self.stats.snapshot()
     }
 
     /// Clear all cached entries.
@@ -516,7 +562,7 @@ impl IncrementalDiffEngine {
         if old.content_hash == 0 || new.content_hash == 0 {
             let result = self.engine.diff(old, new)?;
             return Ok(IncrementalDiffResult {
-                result,
+                result: Arc::new(result),
                 cache_hit: CacheHitType::Miss,
                 sections_recomputed: ChangedSections::all_changed(),
                 computation_time: start.elapsed(),
@@ -525,10 +571,10 @@ impl IncrementalDiffEngine {
 
         let cache_key = DiffCacheKey::from_sboms(old, new);
 
-        // Check for exact cache hit
+        // Check for exact cache hit — shared, not deep-cloned back out.
         if let Some(cached) = self.cache.get(&cache_key) {
             return Ok(IncrementalDiffResult {
-                result: (*cached).clone(),
+                result: cached,
                 cache_hit: CacheHitType::Full,
                 sections_recomputed: ChangedSections::default(),
                 computation_time: start.elapsed(),
@@ -596,16 +642,18 @@ impl IncrementalDiffEngine {
         };
 
         // Track incremental hits in cache stats
-        if cache_hit == CacheHitType::Partial
-            && let Ok(mut stats) = self.cache.stats.write()
-        {
-            stats.incremental_hits += 1;
+        if cache_hit == CacheHitType::Partial {
+            self.cache
+                .stats
+                .incremental_hits
+                .fetch_add(1, Ordering::Relaxed);
         }
 
-        // Cache the result
+        // Cache the result: Arc hand-off, no deep clone of the DiffResult.
+        let result = Arc::new(result);
         self.cache.put(
             cache_key.clone(),
-            result.clone(),
+            Arc::clone(&result),
             old_hashes.clone(),
             new_hashes.clone(),
         );
@@ -680,8 +728,9 @@ pub enum CacheHitType {
 /// Result of an incremental diff operation.
 #[derive(Debug)]
 pub struct IncrementalDiffResult {
-    /// The diff result
-    pub result: DiffResult,
+    /// The diff result, shared with the cache entry (no deep clone on
+    /// either the miss or the full-hit path)
+    pub result: Arc<DiffResult>,
     /// Type of cache hit
     pub cache_hit: CacheHitType,
     /// Which sections were recomputed (false = reused from cache)
@@ -693,7 +742,8 @@ pub struct IncrementalDiffResult {
 impl IncrementalDiffResult {
     /// Get the diff result.
     pub fn into_result(self) -> DiffResult {
-        self.result
+        // The cache usually holds the other reference; clone only then.
+        Arc::try_unwrap(self.result).unwrap_or_else(|shared| (*shared).clone())
     }
 
     /// Check if this was a cache hit.
@@ -796,7 +846,7 @@ mod tests {
             licenses: 0,
             vulnerabilities: 0,
         };
-        cache.put(key.clone(), result, hashes.clone(), hashes.clone());
+        cache.put(key.clone(), Arc::new(result), hashes.clone(), hashes.clone());
 
         // Should be retrievable
         assert!(cache.get(&key).is_some());
@@ -830,7 +880,7 @@ mod tests {
                 old_hash: i,
                 new_hash: i + 100,
             };
-            cache.put(key, DiffResult::new(), hashes.clone(), hashes.clone());
+            cache.put(key, Arc::new(DiffResult::new()), hashes.clone(), hashes.clone());
         }
 
         assert_eq!(cache.len(), 3);
@@ -1195,7 +1245,7 @@ mod tests {
 
         let fresh = engine().diff(base, v2).expect("full diff");
         assert_eq!(
-            serde_json::to_value(&got.result).expect("serialize incremental"),
+            serde_json::to_value(got.result.as_ref()).expect("serialize incremental"),
             serde_json::to_value(&fresh).expect("serialize full"),
             "incremental result diverged from a from-scratch full diff"
         );

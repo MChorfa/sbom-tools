@@ -312,10 +312,25 @@ impl ComponentIndex {
                 }
             }
             // Higher overlap first; ties broken by ID for deterministic output.
-            ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.value().cmp(b.1.value())));
-            for (_, id) in ranked {
-                candidates.push(Arc::clone(id));
-                seen.insert(Arc::clone(id));
+            // Only the top max_candidates survive the final truncate, so
+            // select-then-sort just that prefix instead of sorting (and
+            // Arc-cloning) the entire ecosystem bucket — for mono-ecosystem
+            // SBOMs the bucket is the whole component set and the full sort
+            // made candidate generation O(n² log n) per diff.
+            let rank_order = |a: &(usize, &Arc<CanonicalId>), b: &(usize, &Arc<CanonicalId>)| {
+                b.0.cmp(&a.0).then_with(|| a.1.value().cmp(b.1.value()))
+            };
+            let keep = max_candidates.min(ranked.len());
+            if keep > 0 {
+                if keep < ranked.len() {
+                    ranked.select_nth_unstable_by(keep - 1, rank_order);
+                    ranked.truncate(keep);
+                }
+                ranked.sort_by(rank_order);
+                for (_, id) in ranked {
+                    candidates.push(Arc::clone(id));
+                    seen.insert(Arc::clone(id));
+                }
             }
         }
 

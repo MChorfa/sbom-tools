@@ -81,6 +81,12 @@ impl AliasTable {
         }
     }
 
+    /// Check whether the table has any entries at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.alias_to_canonical.is_empty()
+    }
+
     /// Get the canonical name for an alias
     #[must_use]
     pub fn get_canonical(&self, alias: &str) -> Option<String> {

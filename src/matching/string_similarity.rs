@@ -169,7 +169,11 @@ pub fn compute_phonetic_similarity(name_a: &str, name_b: &str) -> f64 {
         return 0.0;
     }
 
-    // Count matching Soundex codes between tokens
+    // Count matching Soundex codes between tokens. Codes for the b-side are
+    // computed once — recomputing soundex(tb) inside the nested loop cost
+    // O(tokens_a × tokens_b) allocations per candidate pair.
+    let codes_b: Vec<String> = tokens_b.iter().map(|tb| soundex(tb)).collect();
+
     let mut matches = 0;
     let total = tokens_a.len().max(tokens_b.len());
 
@@ -178,12 +182,8 @@ pub fn compute_phonetic_similarity(name_a: &str, name_b: &str) -> f64 {
         if sa.is_empty() {
             continue;
         }
-        for tb in &tokens_b {
-            let sb = soundex(tb);
-            if sa == sb {
-                matches += 1;
-                break;
-            }
+        if codes_b.iter().any(|sb| &sa == sb) {
+            matches += 1;
         }
     }
 
