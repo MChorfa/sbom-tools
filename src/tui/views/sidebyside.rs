@@ -268,7 +268,7 @@ pub(crate) fn build_aligned_rows(
                 // The modified stream carries Unchanged inventory entries
                 // under --include-unchanged; hard-coding Modified here broke
                 // the change-jump filter and the Unchanged style arms.
-                change_type: comp.change_type.clone(),
+                change_type: comp.change_type,
                 component_id: Some(comp.id.clone()), // Use ID, not name
             });
         }

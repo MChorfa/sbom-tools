@@ -324,7 +324,7 @@ impl ReportGenerator for SideBySideReporter {
                 line_num,
                 Some(&old_text),
                 Some(&new_text),
-                comp.change_type.clone(),
+                comp.change_type,
             ));
             line_num += 1;
         }

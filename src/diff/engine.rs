@@ -6,7 +6,7 @@ use super::changes::{
 };
 pub use super::engine_config::LargeSbomConfig;
 use super::engine_matching::{ComponentMatchResult, match_components};
-use super::engine_rules::{apply_rules, remap_match_result};
+use super::engine_rules::apply_rules;
 use super::incremental::ChangedSections;
 use super::result::MatchMetrics;
 use super::traits::ChangeComputer;
@@ -162,18 +162,17 @@ impl DiffEngine {
             .as_ref()
             .map_or(&default_matcher as &dyn ComponentMatcher, |m| m.as_ref());
 
-        let mut component_matches = match_components(
+        // Equivalence canonical maps act as identity bridges INSIDE matching;
+        // the result always carries real component IDs.
+        let component_matches = match_components(
             &old_filtered,
             &new_filtered,
             matcher,
             &self.large_sbom_config,
+            canonical_maps
+                .as_ref()
+                .map(|(old_map, new_map)| (old_map, new_map)),
         );
-
-        // Apply canonical mappings from rule engine
-        if let Some((old_canonical, new_canonical)) = &canonical_maps {
-            component_matches =
-                remap_match_result(&component_matches, old_canonical, new_canonical);
-        }
 
         // Compute all sections, then the derived outputs (metrics, graph
         // diff, score, summary) via the same routines the incremental path
@@ -389,18 +388,17 @@ impl DiffEngine {
             .as_ref()
             .map_or(&default_matcher as &dyn ComponentMatcher, |m| m.as_ref());
 
-        let mut component_matches = match_components(
+        // Equivalence canonical maps act as identity bridges INSIDE matching;
+        // the result always carries real component IDs.
+        let component_matches = match_components(
             &old_filtered,
             &new_filtered,
             matcher,
             &self.large_sbom_config,
+            canonical_maps
+                .as_ref()
+                .map(|(old_map, new_map)| (old_map, new_map)),
         );
-
-        // Apply canonical mappings from rule engine
-        if let Some((old_canonical, new_canonical)) = &canonical_maps {
-            component_matches =
-                remap_match_result(&component_matches, old_canonical, new_canonical);
-        }
 
         // Selectively recompute only the changed sections via the shared
         // implementation, then refresh every derived output.
@@ -653,5 +651,217 @@ mod tests {
         );
         assert!(!identical.has_changes());
         assert!((identical.semantic_score - 100.0).abs() < 1e-9);
+    }
+
+    fn rules_component(name: &str, purl: &str, version: &str, id: &str) -> crate::model::Component {
+        let mut c = crate::model::Component::new(name.to_string(), id.to_string());
+        c.version = Some(version.to_string());
+        c.identifiers.purl = Some(purl.to_string());
+        c.calculate_content_hash();
+        c
+    }
+
+    fn rules_sbom(comps: Vec<crate::model::Component>) -> NormalizedSbom {
+        let mut sbom = NormalizedSbom::new(crate::model::DocumentMetadata::default());
+        for c in comps {
+            sbom.add_component(c);
+        }
+        sbom.calculate_content_hash();
+        sbom
+    }
+
+    fn equivalence_engine() -> DiffEngine {
+        use crate::matching::{AliasPattern, EquivalenceGroup, MatchingRulesConfig};
+        let rules = MatchingRulesConfig {
+            equivalences: vec![EquivalenceGroup {
+                name: Some("foo family".to_string()),
+                canonical: "pkg:npm/foo".to_string(),
+                aliases: vec![
+                    AliasPattern::exact("pkg:npm/foo-fork"),
+                    AliasPattern::exact("pkg:npm/foo-legacy"),
+                ],
+                version_sensitive: false,
+            }],
+            ..Default::default()
+        };
+        DiffEngine::new().with_rule_engine(RuleEngine::new(rules).expect("valid rules"))
+    }
+
+    /// Regression for the equivalence-remap corruption: the old
+    /// remap_match_result rewrote match keys into versionless canonical-PURL
+    /// space, so identical rule-matched components were re-reported as
+    /// Added, removed components vanished, and alias collisions silently
+    /// overwrote matches. Equivalences now bridge REAL ids during matching.
+    #[test]
+    fn equivalence_rules_bridge_matches_without_corrupting_the_diff() {
+        // Case A: identical component matching the rule on both sides —
+        // previously re-reported as Added.
+        let old = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "old-foo")]);
+        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "new-foo")]);
+        let result = equivalence_engine().diff(&old, &new).expect("diff");
+        // (Document metadata legitimately differs between hand-built SBOMs;
+        // the corruption under test was component-level.)
+        assert_eq!(
+            result.summary.components_added, 0,
+            "identical rule-matched components were re-reported as Added: {:?}",
+            result.summary
+        );
+        assert_eq!(result.summary.components_removed, 0);
+        assert_eq!(result.summary.components_modified, 0);
+
+        // Case B: alias -> canonical migration bridges into ONE modified
+        // entry (real ids), not added+removed.
+        let old = rules_sbom(vec![rules_component(
+            "foo-fork",
+            "pkg:npm/foo-fork",
+            "1.0.0",
+            "old-fork",
+        )]);
+        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "new-foo")]);
+        let result = equivalence_engine().diff(&old, &new).expect("diff");
+        assert_eq!(result.components.added.len(), 0, "must not report Added");
+        assert_eq!(result.components.removed.len(), 0, "must not report Removed");
+        assert_eq!(result.components.modified.len(), 1);
+        assert!(
+            result.components.modified[0]
+                .field_changes
+                .iter()
+                .any(|f| f.field == "name"),
+            "the migration must surface as a name change"
+        );
+        let bridge_score = result.components.modified[0]
+            .match_info
+            .as_ref()
+            .expect("bridged pair carries match info")
+            .score;
+        assert!(
+            (bridge_score - 1.0).abs() < 1e-9,
+            "an equivalence bridge asserts identity: score must be 1.0, got {bridge_score}"
+        );
+
+        // Case C: removed rule-matched component must still be reported
+        // (previously vanished entirely).
+        let old = rules_sbom(vec![rules_component(
+            "foo-fork",
+            "pkg:npm/foo-fork",
+            "1.0.0",
+            "old-fork",
+        )]);
+        let new = rules_sbom(vec![]);
+        let result = equivalence_engine().diff(&old, &new).expect("diff");
+        assert_eq!(result.components.removed.len(), 1);
+        assert_eq!(result.components.removed[0].name, "foo-fork");
+
+        // Case D: two aliases collapsing onto one canonical compete 1:1 —
+        // one matches, the loser is honestly reported removed (previously a
+        // silent HashMap overwrite).
+        let old = rules_sbom(vec![
+            rules_component("foo-fork", "pkg:npm/foo-fork", "1.0.0", "old-fork"),
+            rules_component("foo-legacy", "pkg:npm/foo-legacy", "1.0.0", "old-legacy"),
+        ]);
+        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "new-foo")]);
+        let result = equivalence_engine().diff(&old, &new).expect("diff");
+        assert_eq!(result.components.added.len(), 0);
+        assert_eq!(result.components.modified.len(), 1);
+        assert_eq!(
+            result.components.removed.len(),
+            1,
+            "the losing alias must be reported removed, not silently dropped"
+        );
+    }
+
+    /// Exclusion rules must take a component's edges with it — leaving them
+    /// in produced dependency changes for explicitly excluded components.
+    #[test]
+    fn exclusion_rules_drop_edges_with_their_components() {
+        use crate::matching::{ExclusionRule, MatchingRulesConfig};
+        use crate::model::{DependencyEdge, DependencyType};
+
+        let rules = MatchingRulesConfig {
+            exclusions: vec![ExclusionRule::exact("pkg:npm/noise")],
+            ..Default::default()
+        };
+        let engine =
+            DiffEngine::new().with_rule_engine(RuleEngine::new(rules).expect("valid rules"));
+
+        let build = |with_edge: bool| {
+            let app = rules_component("app", "pkg:npm/app", "1.0.0", "app-ref");
+            let noise = rules_component("noise", "pkg:npm/noise", "1.0.0", "noise-ref");
+            let app_id = app.canonical_id.clone();
+            let noise_id = noise.canonical_id.clone();
+            let mut sbom = rules_sbom(vec![app, noise]);
+            if with_edge {
+                sbom.add_edge(DependencyEdge::new(
+                    app_id,
+                    noise_id,
+                    DependencyType::DependsOn,
+                ));
+            }
+            sbom.calculate_content_hash();
+            sbom
+        };
+
+        // The only difference is an edge to the EXCLUDED component.
+        let old = build(true);
+        let new = build(false);
+        let result = engine.diff(&old, &new).expect("diff");
+        assert_eq!(
+            result.dependencies.removed.len(),
+            0,
+            "edges of excluded components must not surface in the diff: {:?}",
+            result.dependencies.removed
+        );
+        assert_eq!(result.dependencies.added.len(), 0);
+    }
+
+    /// version_sensitive equivalences bridge only matching versions — the
+    /// flag was previously accepted from config and silently ignored, which
+    /// became consequential once equivalences started working at all.
+    #[test]
+    fn version_sensitive_equivalences_bridge_only_matching_versions() {
+        use crate::matching::{AliasPattern, EquivalenceGroup, MatchingRulesConfig};
+        let engine = |sensitive: bool| {
+            let rules = MatchingRulesConfig {
+                equivalences: vec![EquivalenceGroup {
+                    name: None,
+                    canonical: "pkg:npm/foo".to_string(),
+                    aliases: vec![AliasPattern::exact("pkg:npm/foo-fork")],
+                    version_sensitive: sensitive,
+                }],
+                ..Default::default()
+            };
+            DiffEngine::new().with_rule_engine(RuleEngine::new(rules).expect("valid rules"))
+        };
+
+        let old = rules_sbom(vec![rules_component(
+            "foo-fork",
+            "pkg:npm/foo-fork",
+            "1.0.0",
+            "old-fork",
+        )]);
+        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "2.0.0", "new-foo")]);
+
+        // Version-insensitive: bridges across the version bump.
+        let result = engine(false).diff(&old, &new).expect("diff");
+        assert_eq!(result.components.modified.len(), 1);
+        assert_eq!(result.components.added.len(), 0);
+
+        // Version-sensitive: 1.0.0 and 2.0.0 do not bridge; names are too
+        // different for fuzzy, so the diff is added + removed.
+        let result = engine(true).diff(&old, &new).expect("diff");
+        assert_eq!(result.components.modified.len(), 0);
+        assert_eq!(result.components.added.len(), 1);
+        assert_eq!(result.components.removed.len(), 1);
+
+        // Version-sensitive with MATCHING versions still bridges.
+        let new_same = rules_sbom(vec![rules_component(
+            "foo",
+            "pkg:npm/foo",
+            "1.0.0",
+            "new-foo-same",
+        )]);
+        let result = engine(true).diff(&old, &new_same).expect("diff");
+        assert_eq!(result.components.modified.len(), 1);
+        assert_eq!(result.components.added.len(), 0);
     }
 }

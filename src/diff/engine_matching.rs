@@ -15,6 +15,9 @@ use super::engine_config::LargeSbomConfig;
 /// Simple result of component matching (`old_id` -> Option<`new_id`>).
 pub type MatchResult = HashMap<CanonicalId, Option<CanonicalId>>;
 
+/// Real component ID -> equivalence canonical ID (from matching rules).
+pub type CanonicalMap = HashMap<CanonicalId, CanonicalId>;
+
 /// Rich result of component matching with score information.
 ///
 /// This struct provides both the match mappings and the scores for each matched pair,
@@ -56,6 +59,7 @@ pub fn match_components(
     new: &NormalizedSbom,
     matcher: &dyn ComponentMatcher,
     large_sbom_config: &LargeSbomConfig,
+    equivalences: Option<(&CanonicalMap, &CanonicalMap)>,
 ) -> ComponentMatchResult {
     let _span = tracing::info_span!(
         "diff_engine::match_components",
@@ -83,12 +87,44 @@ pub fn match_components(
         .filter(|id| !result.matches.contains_key(*id))
         .collect();
 
+    // Phase 1.5: equivalence-rule identity bridges. Two REAL component IDs
+    // mapping to the same canonical ID are declared identical by a user
+    // rule, so they become score-1.0 candidate edges — resolved 1:1 by the
+    // assignment below (several aliases collapsing onto one canonical
+    // compete, and the loser is honestly reported removed instead of
+    // silently overwriting the winner). Canonical IDs never leak into the
+    // match result: the change computers look every ID up in the SBOM maps.
+    let mut equivalence_candidates: Vec<(CanonicalId, CanonicalId, f64)> = Vec::new();
+    if let Some((old_canonical, new_canonical)) = equivalences {
+        let mut new_by_canonical: HashMap<&CanonicalId, Vec<&CanonicalId>> = HashMap::new();
+        for (new_id, canonical) in new_canonical {
+            if !used_new_ids.contains(new_id) && new.components.contains_key(new_id) {
+                new_by_canonical.entry(canonical).or_default().push(new_id);
+            }
+        }
+        for old_id in &unmatched_old {
+            if let Some(canonical) = old_canonical.get(*old_id)
+                && let Some(new_ids) = new_by_canonical.get(canonical)
+            {
+                for new_id in new_ids {
+                    equivalence_candidates.push(((*old_id).clone(), (*new_id).clone(), 1.0));
+                }
+            }
+        }
+        // Deterministic candidate order regardless of HashMap iteration.
+        equivalence_candidates.sort_by(|a, b| {
+            a.0.value()
+                .cmp(b.0.value())
+                .then_with(|| a.1.value().cmp(b.1.value()))
+        });
+    }
+
     // Determine if we should use enhanced matching for large SBOMs
     let total_components = old.component_count().max(new.component_count());
     let use_batch_generator = total_components >= large_sbom_config.lsh_threshold;
 
     // Phase 2 & 3: Collect candidates (strategy depends on SBOM size)
-    let candidates: Vec<(CanonicalId, CanonicalId, f64)> = if use_batch_generator {
+    let mut candidates: Vec<(CanonicalId, CanonicalId, f64)> = if use_batch_generator {
         match_with_batch_generator(
             old,
             new,
@@ -107,8 +143,10 @@ pub fn match_components(
             large_sbom_config,
         )
     };
+    candidates.extend(equivalence_candidates);
 
     // Phase 4: Optimal assignment over the sparse candidate edge list
+    // (duplicate (old, new) edges collapse to the highest score inside).
     let assignment = sparse_assignment(&candidates);
 
     // Apply assignment results
@@ -893,6 +931,7 @@ mod tests {
             &new,
             &matcher,
             &LargeSbomConfig::default(),
+            None,
         );
 
         assert_eq!(result.matches.len(), 6);
@@ -936,6 +975,7 @@ mod tests {
             &new,
             &matcher,
             &LargeSbomConfig::default(),
+            None,
         );
 
         let old_id = old.components.keys().next().unwrap();
@@ -991,14 +1031,14 @@ mod tests {
         // 560 components >= 500 threshold: batch/LSH path.
         let batch_cfg = LargeSbomConfig::default();
         assert!(old.component_count() >= batch_cfg.lsh_threshold);
-        let via_batch = match_components(&old, &new, &matcher, &batch_cfg);
+        let via_batch = match_components(&old, &new, &matcher, &batch_cfg, None);
 
         // Same inputs with the gate pushed out of reach: plain index path.
         let index_cfg = LargeSbomConfig {
             lsh_threshold: 100_000,
             ..LargeSbomConfig::default()
         };
-        let via_index = match_components(&old, &new, &matcher, &index_cfg);
+        let via_index = match_components(&old, &new, &matcher, &index_cfg, None);
 
         assert_eq!(
             via_batch.matches, via_index.matches,
