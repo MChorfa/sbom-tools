@@ -8,7 +8,6 @@
 use super::DiffResult;
 use crate::model::{NormalizedSbom, VulnerabilityCounts};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // ============================================================================
 // SBOM Info (common metadata)
@@ -84,7 +83,7 @@ pub struct DivergentComponent {
     pub baseline_version: Option<String>,
     pub target_version: String,
     /// All versions across targets: `target_name` -> version
-    pub versions_across_targets: HashMap<String, String>,
+    pub versions_across_targets: std::collections::BTreeMap<String, String>,
     pub divergence_type: DivergenceType,
 }
 
@@ -118,7 +117,7 @@ pub struct MultiDiffSummary {
     /// Components missing from one or more targets
     pub inconsistent_components: Vec<InconsistentComponent>,
     /// Per-target deviation scores
-    pub deviation_scores: HashMap<String, f64>,
+    pub deviation_scores: std::collections::BTreeMap<String, f64>,
     /// Maximum deviation from baseline
     pub max_deviation: f64,
     /// Aggregate vulnerability exposure across targets
@@ -194,9 +193,9 @@ pub struct InconsistentComponent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VulnerabilityMatrix {
     /// Vulnerability counts per SBOM name
-    pub per_sbom: HashMap<String, VulnerabilityCounts>,
+    pub per_sbom: std::collections::BTreeMap<String, VulnerabilityCounts>,
     /// Vulnerabilities unique to specific targets
-    pub unique_vulnerabilities: HashMap<String, Vec<String>>,
+    pub unique_vulnerabilities: std::collections::BTreeMap<String, Vec<String>>,
     /// Vulnerabilities common to all
     pub common_vulnerabilities: Vec<String>,
 }
@@ -226,7 +225,7 @@ pub struct EvolutionSummary {
     /// Components removed over the timeline
     pub components_removed: Vec<ComponentEvolution>,
     /// Version progression for each component: `component_id` -> versions at each point
-    pub version_history: HashMap<String, Vec<VersionAtPoint>>,
+    pub version_history: std::collections::BTreeMap<String, Vec<VersionAtPoint>>,
     /// Vulnerability trend over time
     pub vulnerability_trend: Vec<VulnerabilitySnapshot>,
     /// License changes over time

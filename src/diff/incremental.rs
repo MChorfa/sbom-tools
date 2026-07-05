@@ -569,7 +569,13 @@ impl IncrementalDiffEngine {
         let cache_key = DiffCacheKey::from_sboms(old, new);
 
         // Check for exact cache hit — shared, not deep-cloned back out.
-        if let Some(cached) = self.cache.get(&cache_key) {
+        if let Some(mut cached) = self.cache.get(&cache_key) {
+            // Day-count fields embed the day they were computed; a hit
+            // across midnight would serve yesterday's counts. The clone
+            // only happens when a count actually changed (rare).
+            if cached.day_counts_stale() {
+                Arc::make_mut(&mut cached).refresh_derived_day_counts();
+            }
             return Ok(IncrementalDiffResult {
                 result: cached,
                 cache_hit: CacheHitType::Full,
@@ -644,6 +650,13 @@ impl IncrementalDiffEngine {
                 .stats
                 .incremental_hits
                 .fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Partial splices reuse cached vulnerability sections, which carry
+        // day counts from when the splice base was computed.
+        let mut result = result;
+        if cache_hit == CacheHitType::Partial {
+            result.refresh_derived_day_counts();
         }
 
         // Cache the result: Arc hand-off, no deep clone of the DiffResult.
@@ -1568,6 +1581,54 @@ mod tests {
             SectionHashes::from_sbom(&l1).licenses,
             SectionHashes::from_sbom(&l2).licenses,
             "the owning component must be part of the licenses hash"
+        );
+    }
+
+    /// Cached results embed the day their day-count fields were computed;
+    /// a cache hit across midnight must refresh them from the stored dates.
+    #[test]
+    fn day_count_refresh_corrects_stale_counts() {
+        let mut detail = crate::diff::VulnerabilityDetail::from_ref(
+            &VulnerabilityRef::new("CVE-2024-1111".to_string(), VulnerabilitySource::Osv),
+            &rich_comp("liba", "1.0.0"),
+        );
+        detail.published_date = Some("2020-01-01".to_string());
+        detail.days_since_published = Some(1); // stale: computed "long ago"
+        detail.kev_due_date = Some("2030-01-01".to_string());
+        detail.days_until_due = Some(9999); // stale
+
+        let today = chrono::Utc::now().date_naive();
+        assert!(detail.refresh_day_counts(today), "stale counts must change");
+        let expected_since =
+            (today - chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()).num_days();
+        let expected_due =
+            (chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap() - today).num_days();
+        assert_eq!(detail.days_since_published, Some(expected_since));
+        assert_eq!(detail.days_until_due, Some(expected_due));
+
+        // Idempotent: a second refresh on the same day changes nothing.
+        assert!(!detail.refresh_day_counts(today));
+
+        // Producer/refresher parity: a FRESHLY computed KEV-bearing detail
+        // must not read as stale (from_ref previously stored a
+        // DateTime-truncated due-day count, one lower than the refresher's
+        // date-granular value for midnight-UTC due dates — so every KEV
+        // cache hit deep-cloned and hit/miss disagreed).
+        let mut kev_vuln =
+            VulnerabilityRef::new("CVE-2024-2222".to_string(), VulnerabilitySource::Osv);
+        kev_vuln.is_kev = true;
+        kev_vuln.kev_info = Some(crate::model::KevInfo::new(
+            chrono::Utc::now(),
+            chrono::Utc::now() + chrono::Duration::days(30),
+            "patch".to_string(),
+        ));
+        let mut fresh = crate::diff::VulnerabilityDetail::from_ref(
+            &kev_vuln,
+            &rich_comp("libb", "1.0.0"),
+        );
+        assert!(
+            !fresh.refresh_day_counts(today),
+            "fresh KEV day counts must already be date-granular consistent"
         );
     }
 

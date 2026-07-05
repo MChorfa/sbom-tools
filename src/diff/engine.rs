@@ -231,15 +231,38 @@ impl DiffEngine {
                         && let (Some(old_comp), Some(new_comp)) =
                             (old.components.get(old_id), new.components.get(new_id))
                     {
-                        let explanation = matcher.explain_match(old_comp, new_comp);
-                        let mut match_info = MatchInfo::from_explanation(&explanation);
+                        let pair = (old_id.clone(), new_id.clone());
+                        let match_info = if match_result.rule_bridged.contains(&pair) {
+                            // Rule provenance: the pair was matched because a
+                            // user equivalence rule declared it identical, not
+                            // because the fuzzy matcher scored it — a fuzzy
+                            // explanation here would mislabel the match.
+                            let score =
+                                match_result.pairs.get(&pair).copied().unwrap_or(1.0);
+                            MatchInfo {
+                                score,
+                                method: "EquivalenceRule".to_string(),
+                                reason: "Declared equivalent by a user matching rule"
+                                    .to_string(),
+                                score_breakdown: Vec::new(),
+                                normalizations: vec!["equivalence_rule".to_string()],
+                                confidence_interval: Some(
+                                    super::result::ConfidenceInterval::from_tier(
+                                        score,
+                                        "EquivalenceRule",
+                                    ),
+                                ),
+                            }
+                        } else {
+                            let explanation = matcher.explain_match(old_comp, new_comp);
+                            let mut match_info = MatchInfo::from_explanation(&explanation);
 
-                        // Use the actual score from the matching phase if available
-                        if let Some(&score) =
-                            match_result.pairs.get(&(old_id.clone(), new_id.clone()))
-                        {
-                            match_info.score = score;
-                        }
+                            // Use the actual score from the matching phase if available
+                            if let Some(&score) = match_result.pairs.get(&pair) {
+                                match_info.score = score;
+                            }
+                            match_info
+                        };
 
                         change = change.with_match_info(match_info);
                     }
@@ -294,7 +317,7 @@ impl DiffEngine {
         result: &mut DiffResult,
     ) {
         result.match_metrics =
-            Some(self.compute_match_metrics(match_result, old_filtered, new_filtered, result));
+            Some(self.compute_match_metrics(match_result, old_filtered, new_filtered));
 
         if refresh_graph && let Some(ref graph_config) = self.graph_diff_config {
             let (graph_changes, graph_summary) = diff_dependency_graph(
@@ -318,7 +341,6 @@ impl DiffEngine {
         match_result: &ComponentMatchResult,
         old_filtered: &NormalizedSbom,
         new_filtered: &NormalizedSbom,
-        result: &DiffResult,
     ) -> MatchMetrics {
         // Sorted so float accumulation order (and thus the serialized
         // average) is identical across runs
@@ -342,7 +364,9 @@ impl DiffEngine {
         MatchMetrics {
             exact_matches: exact,
             fuzzy_matches: fuzzy,
-            rule_matches: result.rules_applied,
+            // Matched pairs bridged by user equivalence rules (formerly the
+            // applied-rule tally, which conflated exclusions and per-side tags)
+            rule_matches: match_result.rule_bridged.len(),
             unmatched_old,
             unmatched_new,
             avg_match_score: avg,
@@ -729,14 +753,27 @@ mod tests {
                 .any(|f| f.field == "name"),
             "the migration must surface as a name change"
         );
-        let bridge_score = result.components.modified[0]
+        let match_info = result.components.modified[0]
             .match_info
             .as_ref()
-            .expect("bridged pair carries match info")
-            .score;
+            .expect("bridged pair carries match info");
         assert!(
-            (bridge_score - 1.0).abs() < 1e-9,
-            "an equivalence bridge asserts identity: score must be 1.0, got {bridge_score}"
+            (match_info.score - 1.0).abs() < 1e-9,
+            "an equivalence bridge asserts identity: score must be 1.0, got {}",
+            match_info.score
+        );
+        assert_eq!(
+            match_info.method, "EquivalenceRule",
+            "bridged pairs must carry rule provenance, not a fuzzy explanation"
+        );
+        assert_eq!(
+            result
+                .match_metrics
+                .as_ref()
+                .expect("metrics populated")
+                .rule_matches,
+            1,
+            "rule_matches must count bridged pairs"
         );
 
         // Case C: removed rule-matched component must still be reported

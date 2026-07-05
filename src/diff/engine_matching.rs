@@ -28,6 +28,9 @@ pub struct ComponentMatchResult {
     pub matches: MatchResult,
     /// Score for each matched pair (`old_id`, `new_id`) -> score
     pub pairs: HashMap<(CanonicalId, CanonicalId), f64>,
+    /// Matched pairs that an equivalence rule declared identical — used for
+    /// rule provenance in match info and metrics.
+    pub rule_bridged: HashSet<(CanonicalId, CanonicalId)>,
 }
 
 impl ComponentMatchResult {
@@ -36,6 +39,7 @@ impl ComponentMatchResult {
         Self {
             matches: HashMap::new(),
             pairs: HashMap::new(),
+            rule_bridged: HashSet::new(),
         }
     }
 }
@@ -143,6 +147,10 @@ pub fn match_components(
             large_sbom_config,
         )
     };
+    let equivalence_pairs: HashSet<(CanonicalId, CanonicalId)> = equivalence_candidates
+        .iter()
+        .map(|(o, n, _)| (o.clone(), n.clone()))
+        .collect();
     candidates.extend(equivalence_candidates);
 
     // Phase 4: Optimal assignment over the sparse candidate edge list
@@ -152,6 +160,11 @@ pub fn match_components(
     // Apply assignment results
     for (old_id, new_id, score) in assignment {
         if used_new_ids.insert(new_id.clone()) {
+            if equivalence_pairs.contains(&(old_id.clone(), new_id.clone())) {
+                result
+                    .rule_bridged
+                    .insert((old_id.clone(), new_id.clone()));
+            }
             result.pairs.insert((old_id.clone(), new_id.clone()), score);
             result.matches.insert(old_id, Some(new_id));
         }

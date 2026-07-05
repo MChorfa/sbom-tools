@@ -339,12 +339,20 @@ impl MultiDiffEngine {
         let vulnerability_matrix =
             compute_vulnerability_matrix(baseline, &baseline_info.name, targets);
 
+        // Sorted/BTreeMap outputs: several of these collections come from
+        // HashSet/HashMap iteration, whose order differs run to run —
+        // serialized multi results were not byte-reproducible.
+        let mut universal_components: Vec<String> = universal.into_iter().collect();
+        universal_components.sort_unstable();
+        variable_components.sort_by(|a, b| a.id.cmp(&b.id));
+        inconsistent_components.sort_by(|a, b| a.id.cmp(&b.id));
+
         MultiDiffSummary {
             baseline_component_count: baseline_info.component_count,
-            universal_components: universal.into_iter().collect(),
+            universal_components,
             variable_components,
             inconsistent_components,
-            deviation_scores,
+            deviation_scores: deviation_scores.into_iter().collect(),
             max_deviation,
             vulnerability_matrix,
         }
@@ -389,7 +397,10 @@ impl MultiDiffEngine {
                 name: comp.name.clone(),
                 baseline_version,
                 target_version,
-                versions_across_targets: all_versions.get(&comp_id).cloned().unwrap_or_default(),
+                versions_across_targets: all_versions
+                    .get(&comp_id)
+                    .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    .unwrap_or_default(),
                 divergence_type,
             });
         }
@@ -405,7 +416,7 @@ impl MultiDiffEngine {
                     target_version: String::new(),
                     versions_across_targets: all_versions
                         .get(&comp_id)
-                        .cloned()
+                        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                         .unwrap_or_default(),
                     divergence_type: DivergenceType::Removed,
                 });
@@ -647,10 +658,13 @@ impl MultiDiffEngine {
             })
             .collect();
 
+        components_added.sort_by(|a, b| a.id.cmp(&b.id));
+        components_removed.sort_by(|a, b| a.id.cmp(&b.id));
+
         EvolutionSummary {
             components_added,
             components_removed,
-            version_history,
+            version_history: version_history.into_iter().collect(),
             vulnerability_trend,
             license_changes: vec![],
             dependency_trend,
@@ -893,10 +907,18 @@ fn compute_vulnerability_matrix(
         }
     }
 
+    let mut common: Vec<String> = common_vulnerabilities.into_iter().collect();
+    common.sort_unstable();
     VulnerabilityMatrix {
-        per_sbom,
-        unique_vulnerabilities,
-        common_vulnerabilities: common_vulnerabilities.into_iter().collect(),
+        per_sbom: per_sbom.into_iter().collect(),
+        unique_vulnerabilities: unique_vulnerabilities
+            .into_iter()
+            .map(|(k, mut v)| {
+                v.sort_unstable();
+                (k, v)
+            })
+            .collect(),
+        common_vulnerabilities: common,
     }
 }
 

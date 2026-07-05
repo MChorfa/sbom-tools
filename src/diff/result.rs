@@ -144,6 +144,42 @@ impl DiffResult {
             || !self.vulnerabilities.resolved.is_empty()
     }
 
+    /// Recompute date-derived vulnerability day counts for today.
+    ///
+    /// Cached results embed the day they were computed; the incremental
+    /// engine calls this on cache hits so counts (and the SLA statuses
+    /// derived from them) do not go stale across midnight. Returns true if
+    /// anything changed.
+    pub fn refresh_derived_day_counts(&mut self) -> bool {
+        let today = chrono::Utc::now().date_naive();
+        let mut changed = false;
+        for detail in self
+            .vulnerabilities
+            .introduced
+            .iter_mut()
+            .chain(self.vulnerabilities.resolved.iter_mut())
+            .chain(self.vulnerabilities.persistent.iter_mut())
+        {
+            changed |= detail.refresh_day_counts(today);
+        }
+        changed
+    }
+
+    /// Whether any vulnerability day-count field is stale for today.
+    #[must_use]
+    pub fn day_counts_stale(&self) -> bool {
+        let today = chrono::Utc::now().date_naive();
+        self.vulnerabilities
+            .introduced
+            .iter()
+            .chain(self.vulnerabilities.resolved.iter())
+            .chain(self.vulnerabilities.persistent.iter())
+            .any(|detail| {
+                let mut probe = detail.clone();
+                probe.refresh_day_counts(today)
+            })
+    }
+
     /// Find a component change by canonical ID
     #[must_use]
     pub fn find_component_by_id(&self, id: &CanonicalId) -> Option<&ComponentChange> {
@@ -371,7 +407,7 @@ pub struct MatchMetrics {
     pub exact_matches: usize,
     /// Number of fuzzy matches (below exact threshold)
     pub fuzzy_matches: usize,
-    /// Number of custom rule matches
+    /// Matched pairs declared equivalent by user matching rules
     pub rule_matches: usize,
     /// Components in old SBOM with no match
     pub unmatched_old: usize,
@@ -499,6 +535,8 @@ impl ConfidenceInterval {
     pub fn from_tier(score: f64, tier: &str) -> Self {
         let margin = match tier {
             "ExactIdentifier" => 0.0,
+            // A user rule asserts identity outright
+            "EquivalenceRule" => 0.02,
             "Alias" => 0.02,
             "EcosystemRule" | "NameIdentity" => 0.03,
             "CustomRule" => 0.05,
@@ -1175,11 +1213,17 @@ impl VulnerabilityDetail {
         // Format published date as string for serialization
         let published_date = vuln.published.map(|dt| dt.format("%Y-%m-%d").to_string());
 
-        // Get KEV info if present
+        // Get KEV info if present. days_until_due is DATE-granular
+        // (matching days_since_published above and refresh_day_counts):
+        // KevInfo::days_until_due() truncates a DateTime delta, which is one
+        // day lower for midnight-UTC due dates at any time past 00:00 — a
+        // fresh value the refresher would immediately "correct", defeating
+        // the cache's no-clone fast path and making hit/miss disagree.
         let (kev_due_date, days_until_due) = vuln.kev_info.as_ref().map_or((None, None), |kev| {
+            let today = chrono::Utc::now().date_naive();
             (
                 Some(kev.due_date.format("%Y-%m-%d").to_string()),
-                Some(kev.days_until_due()),
+                Some((kev.due_date.date_naive() - today).num_days()),
             )
         });
 
@@ -1225,6 +1269,36 @@ impl VulnerabilityDetail {
                 vex_source.and_then(|v| v.impact_statement.clone())
             },
         }
+    }
+
+    /// Recompute the day-count fields from the stored dates.
+    ///
+    /// `days_since_published` and `days_until_due` embed the date they were
+    /// computed on; a cached result served across midnight carries stale
+    /// counts. Returns true if anything changed. `days_until_due` follows
+    /// `KevInfo::days_until_due` semantics (whole days, date-granular here
+    /// since only the date string is stored).
+    pub(crate) fn refresh_day_counts(&mut self, today: chrono::NaiveDate) -> bool {
+        let mut changed = false;
+        if let Some(published) = self.published_date.as_deref()
+            && let Ok(date) = chrono::NaiveDate::parse_from_str(published, "%Y-%m-%d")
+        {
+            let days = (today - date).num_days();
+            if self.days_since_published != Some(days) {
+                self.days_since_published = Some(days);
+                changed = true;
+            }
+        }
+        if let Some(due) = self.kev_due_date.as_deref()
+            && let Ok(date) = chrono::NaiveDate::parse_from_str(due, "%Y-%m-%d")
+        {
+            let days = (date - today).num_days();
+            if self.days_until_due != Some(days) {
+                self.days_until_due = Some(days);
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Create from a vulnerability reference and component with known depth
