@@ -394,7 +394,12 @@ impl FuzzyMatcher {
     /// Fuzzy string similarity with the full component breakdown retained
     /// for explanations. Applies [`NON_IDENTICAL_NAME_CAP`] unless
     /// `identical_names`.
-    fn fuzzy_breakdown(&self, a: &Component, b: &Component, identical_names: bool) -> FuzzyBreakdown {
+    fn fuzzy_breakdown(
+        &self,
+        a: &Component,
+        b: &Component,
+        identical_names: bool,
+    ) -> FuzzyBreakdown {
         let name_a = a.name.to_lowercase();
         let name_b = b.name.to_lowercase();
 
@@ -1543,13 +1548,31 @@ mod tests {
         let pairs = [
             // token-reorder pair: matched via token similarity, previously
             // labeled no-match by explain_match's jw+lev-only formula
-            (comp("react-dom", None, "18.0.0"), comp("dom-react", None, "18.0.0")),
-            (comp("lodash", Some(Ecosystem::Npm), "4.0.0"), comp("lodash", Some(Ecosystem::Npm), "5.0.0")),
-            (comp("redis", Some(Ecosystem::Npm), "4.0.0"), comp("redis", Some(Ecosystem::PyPi), "5.0.0")),
-            (comp("regex", Some(Ecosystem::PyPi), "2023.1.1"), comp("regex", Some(Ecosystem::Cargo), "1.10.0")),
+            (
+                comp("react-dom", None, "18.0.0"),
+                comp("dom-react", None, "18.0.0"),
+            ),
+            (
+                comp("lodash", Some(Ecosystem::Npm), "4.0.0"),
+                comp("lodash", Some(Ecosystem::Npm), "5.0.0"),
+            ),
+            (
+                comp("redis", Some(Ecosystem::Npm), "4.0.0"),
+                comp("redis", Some(Ecosystem::PyPi), "5.0.0"),
+            ),
+            (
+                comp("regex", Some(Ecosystem::PyPi), "2023.1.1"),
+                comp("regex", Some(Ecosystem::Cargo), "1.10.0"),
+            ),
             (comp("PIL", None, "9.0.0"), comp("pillow", None, "10.0.0")),
-            (comp("react", None, "18.0.0"), comp("angular", None, "17.0.0")),
-            (comp("lodash-utils", None, "1.2.3"), comp("lodash-util", None, "1.2.4")),
+            (
+                comp("react", None, "18.0.0"),
+                comp("angular", None, "17.0.0"),
+            ),
+            (
+                comp("lodash-utils", None, "1.2.3"),
+                comp("lodash-util", None, "1.2.4"),
+            ),
         ];
 
         for (a, b) in &pairs {
@@ -1590,14 +1613,13 @@ mod tests {
     #[test]
     fn fully_penalized_cross_ecosystem_pair_is_rejected() {
         use crate::model::Ecosystem;
-        let matcher =
-            FuzzyMatcher::new(FuzzyMatchConfig::balanced()).with_cross_ecosystem(
-                CrossEcosystemConfig {
-                    min_score: 0.0,
-                    score_penalty: 1.0,
-                    ..CrossEcosystemConfig::default()
-                },
-            );
+        let matcher = FuzzyMatcher::new(FuzzyMatchConfig::balanced()).with_cross_ecosystem(
+            CrossEcosystemConfig {
+                min_score: 0.0,
+                score_penalty: 1.0,
+                ..CrossEcosystemConfig::default()
+            },
+        );
 
         let a = comp("regex", Some(Ecosystem::PyPi), "2023.1.1");
         let b = comp("regex", Some(Ecosystem::Cargo), "1.10.0");
@@ -1645,7 +1667,11 @@ mod tests {
         use crate::model::Ecosystem;
         let matcher = FuzzyMatcher::new(FuzzyMatchConfig::balanced());
 
-        let a = comp("rails", Some(Ecosystem::Unknown("rubygems".to_string())), "7.0.0");
+        let a = comp(
+            "rails",
+            Some(Ecosystem::Unknown("rubygems".to_string())),
+            "7.0.0",
+        );
         let b = comp("rails", Some(Ecosystem::RubyGems), "7.1.0");
 
         let score = matcher.match_components(&a, &b);
@@ -1679,8 +1705,8 @@ mod tests {
         let a = comp("PIL", None, "9.0.0");
         let b = comp("pillow", None, "10.0.0");
 
-        let enabled = FuzzyMatcher::new(FuzzyMatchConfig::balanced())
-            .with_alias_table(table.clone());
+        let enabled =
+            FuzzyMatcher::new(FuzzyMatchConfig::balanced()).with_alias_table(table.clone());
         assert_eq!(
             enabled.match_components(&a, &b),
             0.95,

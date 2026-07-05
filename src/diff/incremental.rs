@@ -149,7 +149,8 @@ impl SectionHashes {
                 vuln.is_kev.hash(&mut hasher);
                 vuln.epss_score.map(f64::to_bits).hash(&mut hasher);
                 let vex = vuln.vex_status.as_ref().or(comp.vex_status.as_ref());
-                vex.map(|v| std::mem::discriminant(&v.status)).hash(&mut hasher);
+                vex.map(|v| std::mem::discriminant(&v.status))
+                    .hash(&mut hasher);
                 vex.and_then(|v| v.justification.as_ref().map(std::mem::discriminant))
                     .hash(&mut hasher);
                 vex.and_then(|v| v.impact_statement.as_deref())
@@ -856,7 +857,12 @@ mod tests {
             licenses: 0,
             vulnerabilities: 0,
         };
-        cache.put(key.clone(), Arc::new(result), hashes.clone(), hashes.clone());
+        cache.put(
+            key.clone(),
+            Arc::new(result),
+            hashes.clone(),
+            hashes.clone(),
+        );
 
         // Should be retrievable
         assert!(cache.get(&key).is_some());
@@ -889,7 +895,12 @@ mod tests {
                 old_hash: i,
                 new_hash: i + 100,
             };
-            cache.put(key, Arc::new(DiffResult::new()), hashes.clone(), hashes.clone());
+            cache.put(
+                key,
+                Arc::new(DiffResult::new()),
+                hashes.clone(),
+                hashes.clone(),
+            );
         }
 
         assert_eq!(cache.len(), 3);
@@ -1208,7 +1219,8 @@ mod tests {
     }
 
     fn with_license(mut c: Component, expr: &str) -> Component {
-        c.licenses.add_declared(LicenseExpression::new(expr.to_string()));
+        c.licenses
+            .add_declared(LicenseExpression::new(expr.to_string()));
         c
     }
 
@@ -1237,8 +1249,12 @@ mod tests {
 
     /// Prime with (base, v1), diff (base, v2), and require equivalence with
     /// a from-scratch full diff of (base, v2).
-    fn assert_incremental_matches_full<F>(engine: F, base: &NormalizedSbom, v1: &NormalizedSbom, v2: &NormalizedSbom)
-    where
+    fn assert_incremental_matches_full<F>(
+        engine: F,
+        base: &NormalizedSbom,
+        v1: &NormalizedSbom,
+        v2: &NormalizedSbom,
+    ) where
         F: Fn() -> DiffEngine,
     {
         let incremental = IncrementalDiffEngine::new(engine());
@@ -1309,7 +1325,11 @@ mod tests {
         );
         let v2 = rich_sbom(
             vec![
-                with_vuln(rich_comp("liba", "1.0.0"), "CVE-2024-0002", Severity::Critical),
+                with_vuln(
+                    rich_comp("liba", "1.0.0"),
+                    "CVE-2024-0002",
+                    Severity::Critical,
+                ),
                 rich_comp("app", "2.0.0"),
             ],
             vec![],
@@ -1395,9 +1415,7 @@ mod tests {
 
     #[test]
     fn graph_changes_and_match_metrics_refresh_on_partial_hit() {
-        let engine = || {
-            DiffEngine::new().with_graph_diff(crate::diff::GraphDiffConfig::default())
-        };
+        let engine = || DiffEngine::new().with_graph_diff(crate::diff::GraphDiffConfig::default());
         let a = rich_comp("a", "1.0.0");
         let b = rich_comp("b", "1.0.0");
         let c = rich_comp("c", "1.0.0");
@@ -1537,17 +1555,11 @@ mod tests {
 
         // Vulnerability attribution
         let v1 = rich_sbom(
-            vec![
-                with_vuln(a.clone(), "CVE-1", Severity::High),
-                b.clone(),
-            ],
+            vec![with_vuln(a.clone(), "CVE-1", Severity::High), b.clone()],
             vec![],
         );
         let v2 = rich_sbom(
-            vec![
-                a.clone(),
-                with_vuln(b.clone(), "CVE-1", Severity::High),
-            ],
+            vec![a.clone(), with_vuln(b.clone(), "CVE-1", Severity::High)],
             vec![],
         );
         assert_ne!(
@@ -1569,14 +1581,8 @@ mod tests {
         );
 
         // License attribution
-        let l1 = rich_sbom(
-            vec![with_license(a.clone(), "MIT"), b.clone()],
-            vec![],
-        );
-        let l2 = rich_sbom(
-            vec![a.clone(), with_license(b.clone(), "MIT")],
-            vec![],
-        );
+        let l1 = rich_sbom(vec![with_license(a.clone(), "MIT"), b.clone()], vec![]);
+        let l2 = rich_sbom(vec![a.clone(), with_license(b.clone(), "MIT")], vec![]);
         assert_ne!(
             SectionHashes::from_sbom(&l1).licenses,
             SectionHashes::from_sbom(&l2).licenses,
@@ -1622,10 +1628,8 @@ mod tests {
             chrono::Utc::now() + chrono::Duration::days(30),
             "patch".to_string(),
         ));
-        let mut fresh = crate::diff::VulnerabilityDetail::from_ref(
-            &kev_vuln,
-            &rich_comp("libb", "1.0.0"),
-        );
+        let mut fresh =
+            crate::diff::VulnerabilityDetail::from_ref(&kev_vuln, &rich_comp("libb", "1.0.0"));
         assert!(
             !fresh.refresh_day_counts(today),
             "fresh KEV day counts must already be date-granular consistent"

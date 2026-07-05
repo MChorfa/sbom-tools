@@ -918,10 +918,7 @@ impl Component {
             );
             vuln_buf.push(u8::from(vuln.is_kev));
             Self::extend_with_optional_f64(&mut vuln_buf, vuln.epss_score);
-            Self::extend_with_optional_f64(
-                &mut vuln_buf,
-                vuln.max_cvss_score().map(f64::from),
-            );
+            Self::extend_with_optional_f64(&mut vuln_buf, vuln.max_cvss_score().map(f64::from));
             Self::extend_with_optional_str(&mut vuln_buf, &Some(vuln.source.to_string()));
             Self::extend_with_string_list(&mut vuln_buf, &vuln.cwes);
             Self::extend_with_optional_str(&mut vuln_buf, &vuln.description);
@@ -931,17 +928,17 @@ impl Component {
             );
             Self::extend_with_optional_str(
                 &mut vuln_buf,
-                &vuln
-                    .kev_info
-                    .as_ref()
-                    .map(|k| k.due_date.to_rfc3339()),
+                &vuln.kev_info.as_ref().map(|k| k.due_date.to_rfc3339()),
             );
             Self::extend_with_optional_str(
                 &mut vuln_buf,
-                &vuln
-                    .remediation
-                    .as_ref()
-                    .map(|r| format!("{}:{}", r.remediation_type, r.description.as_deref().unwrap_or(""))),
+                &vuln.remediation.as_ref().map(|r| {
+                    format!(
+                        "{}:{}",
+                        r.remediation_type,
+                        r.description.as_deref().unwrap_or("")
+                    )
+                }),
             );
             Self::extend_tagged(&mut hasher_input, 8, &vuln_buf);
         }
@@ -971,13 +968,15 @@ impl Component {
             Self::extend_with_optional_str(&mut crypto_buf, &Some(cp.asset_type.to_string()));
             Self::extend_with_optional_str(&mut crypto_buf, &cp.oid);
             let (family, level, classical) =
-                cp.algorithm_properties.as_ref().map_or((None, None, None), |a| {
-                    (
-                        a.algorithm_family.clone(),
-                        a.nist_quantum_security_level,
-                        a.classical_security_level,
-                    )
-                });
+                cp.algorithm_properties
+                    .as_ref()
+                    .map_or((None, None, None), |a| {
+                        (
+                            a.algorithm_family.clone(),
+                            a.nist_quantum_security_level,
+                            a.classical_security_level,
+                        )
+                    });
             Self::extend_with_optional_str(&mut crypto_buf, &family);
             match level {
                 Some(level) => {
@@ -998,7 +997,9 @@ impl Component {
             }
             Self::extend_with_optional_str(
                 &mut crypto_buf,
-                &cp.protocol_properties.as_ref().and_then(|p| p.version.clone()),
+                &cp.protocol_properties
+                    .as_ref()
+                    .and_then(|p| p.version.clone()),
             );
             Self::extend_with_optional_str(
                 &mut crypto_buf,

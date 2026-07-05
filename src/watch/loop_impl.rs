@@ -478,11 +478,11 @@ fn build_diff_snapshot(
                 components_added: result.components.added.len(),
                 components_removed: result.components.removed.len(),
                 components_modified: result
-                        .components
-                        .modified
-                        .iter()
-                        .filter(|c| c.change_type != crate::diff::ChangeType::Unchanged)
-                        .count(),
+                    .components
+                    .modified
+                    .iter()
+                    .filter(|c| c.change_type != crate::diff::ChangeType::Unchanged)
+                    .count(),
                 new_vulns,
                 resolved_vulns,
                 new_kev,

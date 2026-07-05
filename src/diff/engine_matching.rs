@@ -161,9 +161,7 @@ pub fn match_components(
     for (old_id, new_id, score) in assignment {
         if used_new_ids.insert(new_id.clone()) {
             if equivalence_pairs.contains(&(old_id.clone(), new_id.clone())) {
-                result
-                    .rule_bridged
-                    .insert((old_id.clone(), new_id.clone()));
+                result.rule_bridged.insert((old_id.clone(), new_id.clone()));
             }
             result.pairs.insert((old_id.clone(), new_id.clone()), score);
             result.matches.insert(old_id, Some(new_id));
@@ -871,7 +869,8 @@ mod tests {
         for num_old in 2..=6usize {
             for num_new in 2..=6usize {
                 for rep in 0..40u64 {
-                    let seed = 0x9E37_79B9 ^ ((num_old as u64) << 32) ^ ((num_new as u64) << 16) ^ rep;
+                    let seed =
+                        0x9E37_79B9 ^ ((num_old as u64) << 32) ^ ((num_new as u64) << 16) ^ rep;
                     let mut rng = XorShift(seed.max(1));
 
                     let mut candidates = Vec::new();
@@ -883,8 +882,7 @@ mod tests {
                                 let score = micro as f64 / ASSIGNMENT_COST_SCALE as f64;
                                 // Quantize exactly the way the solver does, so
                                 // brute force optimizes the identical objective.
-                                let qmicro =
-                                    (score * ASSIGNMENT_COST_SCALE as f64) as i64;
+                                let qmicro = (score * ASSIGNMENT_COST_SCALE as f64) as i64;
                                 candidates.push((
                                     cid(&format!("o{o:02}")),
                                     cid(&format!("n{n:02}")),
@@ -896,9 +894,8 @@ mod tests {
                     }
 
                     let result = sparse_assignment(&candidates);
-                    let solver_micro = (total_score(&result)
-                        * ASSIGNMENT_COST_SCALE as f64)
-                        .round() as i64;
+                    let solver_micro =
+                        (total_score(&result) * ASSIGNMENT_COST_SCALE as f64).round() as i64;
                     let optimum = brute_force_optimum(num_old, &edges);
 
                     assert_eq!(
@@ -939,13 +936,7 @@ mod tests {
         let new = build("2.0.0");
 
         let matcher = FuzzyMatcher::new(crate::matching::FuzzyMatchConfig::default());
-        let result = match_components(
-            &old,
-            &new,
-            &matcher,
-            &LargeSbomConfig::default(),
-            None,
-        );
+        let result = match_components(&old, &new, &matcher, &LargeSbomConfig::default(), None);
 
         assert_eq!(result.matches.len(), 6);
         for (old_id, new_id) in &result.matches {
@@ -983,13 +974,7 @@ mod tests {
         let new = build(Ecosystem::PyPi, "pypi", "5.0.0");
 
         let matcher = FuzzyMatcher::new(crate::matching::FuzzyMatchConfig::default());
-        let result = match_components(
-            &old,
-            &new,
-            &matcher,
-            &LargeSbomConfig::default(),
-            None,
-        );
+        let result = match_components(&old, &new, &matcher, &LargeSbomConfig::default(), None);
 
         let old_id = old.components.keys().next().unwrap();
         assert_eq!(
@@ -1006,8 +991,8 @@ mod tests {
         use crate::model::{Component, DocumentMetadata, Ecosystem, NormalizedSbom};
 
         const A: [&str; 14] = [
-            "alor", "brev", "cind", "dulm", "evar", "fost", "grin", "hulp", "ivex", "jorm",
-            "kral", "lund", "merv", "nixo",
+            "alor", "brev", "cind", "dulm", "evar", "fost", "grin", "hulp", "ivex", "jorm", "kral",
+            "lund", "merv", "nixo",
         ];
         const B: [&str; 8] = ["bem", "tuk", "waz", "pol", "gus", "ryn", "sev", "dob"];
         const C: [&str; 5] = ["mint", "zorf", "kelp", "wund", "trax"];

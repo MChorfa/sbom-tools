@@ -12,9 +12,7 @@ use super::result::MatchMetrics;
 use super::traits::ChangeComputer;
 use super::{CostModel, DiffResult, GraphDiffConfig, MatchInfo, diff_dependency_graph};
 use crate::error::SbomDiffError;
-use crate::matching::{
-    ComponentMatcher, FuzzyMatchConfig, FuzzyMatcher, RuleEngine,
-};
+use crate::matching::{ComponentMatcher, FuzzyMatchConfig, FuzzyMatcher, RuleEngine};
 use crate::model::NormalizedSbom;
 use std::borrow::Cow;
 
@@ -130,9 +128,7 @@ impl DiffEngine {
         // --include-unchanged the caller asked for full inventory output, so
         // the shortcut would contradict the flag (identical SBOMs would be
         // the one case with NO inventory) — fall through instead.
-        if old.content_hash == new.content_hash
-            && old.content_hash != 0
-            && !self.include_unchanged
+        if old.content_hash == new.content_hash && old.content_hash != 0 && !self.include_unchanged
         {
             result.semantic_score = PERCENT_MAX;
             return Ok(result);
@@ -237,13 +233,11 @@ impl DiffEngine {
                             // user equivalence rule declared it identical, not
                             // because the fuzzy matcher scored it — a fuzzy
                             // explanation here would mislabel the match.
-                            let score =
-                                match_result.pairs.get(&pair).copied().unwrap_or(1.0);
+                            let score = match_result.pairs.get(&pair).copied().unwrap_or(1.0);
                             MatchInfo {
                                 score,
                                 method: "EquivalenceRule".to_string(),
-                                reason: "Declared equivalent by a user matching rule"
-                                    .to_string(),
+                                reason: "Declared equivalent by a user matching rule".to_string(),
                                 score_breakdown: Vec::new(),
                                 normalizations: vec!["equivalence_rule".to_string()],
                                 confidence_interval: Some(
@@ -330,8 +324,7 @@ impl DiffEngine {
             result.graph_summary = Some(graph_summary);
         }
 
-        result.semantic_score =
-            self.compute_semantic_score(result, old_filtered, new_filtered);
+        result.semantic_score = self.compute_semantic_score(result, old_filtered, new_filtered);
         result.calculate_summary();
     }
 
@@ -600,8 +593,7 @@ mod tests {
                 ("stable-lib", "3.1.0"),
                 ("other-lib", "0.9.0"),
             ] {
-                let mut c =
-                    Component::new(name.to_string(), format!("pkg:npm/{name}@{version}"));
+                let mut c = Component::new(name.to_string(), format!("pkg:npm/{name}@{version}"));
                 c.version = Some(version.to_string());
                 c.calculate_content_hash();
                 sbom.add_component(c);
@@ -720,8 +712,18 @@ mod tests {
     fn equivalence_rules_bridge_matches_without_corrupting_the_diff() {
         // Case A: identical component matching the rule on both sides —
         // previously re-reported as Added.
-        let old = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "old-foo")]);
-        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "new-foo")]);
+        let old = rules_sbom(vec![rules_component(
+            "foo",
+            "pkg:npm/foo",
+            "1.0.0",
+            "old-foo",
+        )]);
+        let new = rules_sbom(vec![rules_component(
+            "foo",
+            "pkg:npm/foo",
+            "1.0.0",
+            "new-foo",
+        )]);
         let result = equivalence_engine().diff(&old, &new).expect("diff");
         // (Document metadata legitimately differs between hand-built SBOMs;
         // the corruption under test was component-level.)
@@ -741,10 +743,19 @@ mod tests {
             "1.0.0",
             "old-fork",
         )]);
-        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "new-foo")]);
+        let new = rules_sbom(vec![rules_component(
+            "foo",
+            "pkg:npm/foo",
+            "1.0.0",
+            "new-foo",
+        )]);
         let result = equivalence_engine().diff(&old, &new).expect("diff");
         assert_eq!(result.components.added.len(), 0, "must not report Added");
-        assert_eq!(result.components.removed.len(), 0, "must not report Removed");
+        assert_eq!(
+            result.components.removed.len(),
+            0,
+            "must not report Removed"
+        );
         assert_eq!(result.components.modified.len(), 1);
         assert!(
             result.components.modified[0]
@@ -796,7 +807,12 @@ mod tests {
             rules_component("foo-fork", "pkg:npm/foo-fork", "1.0.0", "old-fork"),
             rules_component("foo-legacy", "pkg:npm/foo-legacy", "1.0.0", "old-legacy"),
         ]);
-        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "1.0.0", "new-foo")]);
+        let new = rules_sbom(vec![rules_component(
+            "foo",
+            "pkg:npm/foo",
+            "1.0.0",
+            "new-foo",
+        )]);
         let result = equivalence_engine().diff(&old, &new).expect("diff");
         assert_eq!(result.components.added.len(), 0);
         assert_eq!(result.components.modified.len(), 1);
@@ -876,7 +892,12 @@ mod tests {
             "1.0.0",
             "old-fork",
         )]);
-        let new = rules_sbom(vec![rules_component("foo", "pkg:npm/foo", "2.0.0", "new-foo")]);
+        let new = rules_sbom(vec![rules_component(
+            "foo",
+            "pkg:npm/foo",
+            "2.0.0",
+            "new-foo",
+        )]);
 
         // Version-insensitive: bridges across the version bump.
         let result = engine(false).diff(&old, &new).expect("diff");

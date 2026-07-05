@@ -570,7 +570,10 @@ mod tests {
             PathBuf::from("v2/app.json"),
             PathBuf::from("v3/app.json"),
         ];
-        assert_eq!(unique_sbom_names(&paths), vec!["v1/app", "v2/app", "v3/app"]);
+        assert_eq!(
+            unique_sbom_names(&paths),
+            vec!["v1/app", "v2/app", "v3/app"]
+        );
 
         // Same parent directory: ordinal fallback
         let paths = vec![PathBuf::from("a/x.json"), PathBuf::from("a/x.json")];

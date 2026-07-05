@@ -262,12 +262,11 @@ fn write_diff_component_table(html: &mut String, result: &DiffResult) -> std::fm
     }
 
     for comp in &result.components.modified {
-        let (badge_class, badge_label) =
-            if comp.change_type == crate::diff::ChangeType::Unchanged {
-                ("badge", "Unchanged")
-            } else {
-                ("badge badge-modified", "Modified")
-            };
+        let (badge_class, badge_label) = if comp.change_type == crate::diff::ChangeType::Unchanged {
+            ("badge", "Unchanged")
+        } else {
+            ("badge badge-modified", "Modified")
+        };
         writeln!(html, "            <tr>")?;
         writeln!(
             html,

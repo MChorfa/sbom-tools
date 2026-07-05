@@ -216,9 +216,7 @@ impl MultiDiffEngine {
         // O(components² × SBOMs) overall.
         let target_component_sets: Vec<HashSet<&str>> = targets
             .iter()
-            .map(|(target_sbom, _, _)| {
-                target_sbom.components.keys().map(|k| k.value()).collect()
-            })
+            .map(|(target_sbom, _, _)| target_sbom.components.keys().map(|k| k.value()).collect())
             .collect();
         let baseline_names: HashMap<&str, &str> = baseline
             .components
@@ -1043,8 +1041,8 @@ mod tests {
     #[test]
     fn classify_version_change_matrix() {
         use VersionChangeType::{
-            Absent, Changed, Downgrade, Initial, MajorUpgrade, MinorUpgrade, PatchUpgrade,
-            Removed, Unchanged,
+            Absent, Changed, Downgrade, Initial, MajorUpgrade, MinorUpgrade, PatchUpgrade, Removed,
+            Unchanged,
         };
 
         // Plain semver

@@ -806,7 +806,11 @@ mod tests {
         matches.insert(old_id, Some(new_id));
 
         let result = computer.compute(&old_sbom, &new_sbom, &matches);
-        assert_eq!(result.modified.len(), 1, "matched rename must be reported as modified");
+        assert_eq!(
+            result.modified.len(),
+            1,
+            "matched rename must be reported as modified"
+        );
         find_change(&result.modified[0].field_changes, "name");
     }
 
