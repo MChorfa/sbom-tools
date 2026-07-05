@@ -517,9 +517,14 @@ impl ReportGenerator for TableReporter {
         for comp in &result.components.modified {
             let old_ver = sanitize_terminal(comp.old_version.as_deref().unwrap_or("-"));
             let new_ver = sanitize_terminal(comp.new_version.as_deref().unwrap_or("-"));
+            let (label, color) = if comp.change_type == crate::diff::ChangeType::Unchanged {
+                ("= Unchanged", "white")
+            } else {
+                ("~ Modified", "yellow")
+            };
             lines.push(format!(
                 "{:<12} {:<40} {:<15} {:<15}",
-                self.color("~ Modified", "yellow"),
+                self.color(label, color),
                 truncate(&sanitize_terminal(&comp.name), 40),
                 old_ver,
                 new_ver

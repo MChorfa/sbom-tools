@@ -776,28 +776,50 @@ impl Component {
         self
     }
 
+    /// Append a tagged, length-prefixed value. Tags and length prefixes make
+    /// field boundaries unambiguous: raw concatenation let a dropped declared
+    /// license "MIT" plus a gained supplier named "MIT" produce the identical
+    /// byte stream — and therefore an identical content hash — silently
+    /// suppressing both changes from the diff.
+    fn extend_tagged(hasher_input: &mut Vec<u8>, tag: u8, bytes: &[u8]) {
+        hasher_input.push(tag);
+        hasher_input.extend((bytes.len() as u64).to_le_bytes());
+        hasher_input.extend(bytes);
+    }
+
     fn extend_with_optional_str(hasher_input: &mut Vec<u8>, value: &Option<String>) {
-        if let Some(value) = value {
-            hasher_input.extend(value.as_bytes());
+        match value {
+            Some(value) => {
+                hasher_input.push(1);
+                hasher_input.extend((value.len() as u64).to_le_bytes());
+                hasher_input.extend(value.as_bytes());
+            }
+            None => hasher_input.push(0),
         }
     }
 
     fn extend_with_string_list(hasher_input: &mut Vec<u8>, values: &[String]) {
+        hasher_input.extend((values.len() as u64).to_le_bytes());
         for value in values {
+            hasher_input.extend((value.len() as u64).to_le_bytes());
             hasher_input.extend(value.as_bytes());
         }
     }
 
     fn extend_with_optional_f64(hasher_input: &mut Vec<u8>, value: Option<f64>) {
-        if let Some(value) = value {
-            let normalized = if value == 0.0 {
-                0.0
-            } else if value.is_nan() {
-                f64::from_bits(CANONICAL_NAN_BITS)
-            } else {
-                value
-            };
-            hasher_input.extend(normalized.to_bits().to_le_bytes());
+        match value {
+            Some(value) => {
+                let normalized = if value == 0.0 {
+                    0.0
+                } else if value.is_nan() {
+                    f64::from_bits(CANONICAL_NAN_BITS)
+                } else {
+                    value
+                };
+                hasher_input.push(1);
+                hasher_input.extend(normalized.to_bits().to_le_bytes());
+            }
+            None => hasher_input.push(0),
         }
     }
 
@@ -815,11 +837,17 @@ impl Component {
             Self::extend_with_optional_str(hasher_input, &ml_model.model_card_url);
             Self::extend_with_optional_f64(hasher_input, ml_model.energy_kwh_training);
 
+            // Count-prefix each list: entries of both lists are three
+            // optional strings, so without framing a training dataset and a
+            // performance metric with the same payload are byte-identical
+            // and the two lists collide.
+            hasher_input.extend((ml_model.training_datasets.len() as u64).to_le_bytes());
             for dataset in &ml_model.training_datasets {
                 Self::extend_with_optional_str(hasher_input, &dataset.reference);
                 Self::extend_with_optional_str(hasher_input, &dataset.name);
                 Self::extend_with_optional_str(hasher_input, &dataset.purl);
             }
+            hasher_input.extend((ml_model.performance_metrics.len() as u64).to_le_bytes());
             for metric in &ml_model.performance_metrics {
                 Self::extend_with_optional_str(hasher_input, &metric.metric_type);
                 Self::extend_with_optional_str(hasher_input, &metric.value);
@@ -838,58 +866,154 @@ impl Component {
             Self::extend_with_string_list(hasher_input, &dataset.governance_owners);
         }
     }
-    /// Calculate and update content hash
+    /// Calculate and update content hash.
+    ///
+    /// Every field is tagged and length-prefixed (see `extend_tagged`) so a
+    /// value moving between fields always changes the hash. Coverage matters:
+    /// the diff's modified-component gate and the incremental cache key both
+    /// trust this hash, so any semantic field left out produces silently
+    /// empty or stale diffs (vulnerability severity and VEX status were
+    /// previously invisible here).
     pub fn calculate_content_hash(&mut self) {
         let mut hasher_input = Vec::new();
 
-        hasher_input.extend(self.name.as_bytes());
+        Self::extend_tagged(&mut hasher_input, 1, self.name.as_bytes());
+        hasher_input.push(2);
         Self::extend_with_optional_str(&mut hasher_input, &self.version);
+        hasher_input.push(3);
         Self::extend_with_optional_str(&mut hasher_input, &self.identifiers.purl);
+        if let Some(ecosystem) = &self.ecosystem {
+            Self::extend_tagged(&mut hasher_input, 4, ecosystem.to_string().as_bytes());
+        }
+        if let Some(group) = &self.group {
+            // Group/namespace is a fuzzy-matcher scoring input; leaving it
+            // out lets a group-only change slip past the identical-SBOM
+            // short-circuit and the incremental cache key.
+            Self::extend_tagged(&mut hasher_input, 15, group.as_bytes());
+        }
         for license in &self.licenses.declared {
-            hasher_input.extend(license.expression.as_bytes());
+            Self::extend_tagged(&mut hasher_input, 5, license.expression.as_bytes());
         }
         if let Some(supplier) = &self.supplier {
-            hasher_input.extend(supplier.name.as_bytes());
+            Self::extend_tagged(&mut hasher_input, 6, supplier.name.as_bytes());
         }
         for hash in &self.hashes {
-            hasher_input.extend(hash.value.as_bytes());
+            Self::extend_tagged(&mut hasher_input, 7, hash.value.as_bytes());
         }
         for vuln in &self.vulnerabilities {
-            hasher_input.extend(vuln.id.as_bytes());
+            // Cover every VulnerabilityRef field that VulnerabilityDetail
+            // serializes: a field change invisible here short-circuits
+            // DiffEngine::diff as "identical" and collides incremental cache
+            // keys, serving stale details.
+            let mut vuln_buf = Vec::new();
+            vuln_buf.extend((vuln.id.len() as u64).to_le_bytes());
+            vuln_buf.extend(vuln.id.as_bytes());
+            Self::extend_with_optional_str(
+                &mut vuln_buf,
+                &vuln.severity.as_ref().map(std::string::ToString::to_string),
+            );
+            Self::extend_with_optional_str(
+                &mut vuln_buf,
+                &vuln.vex_status.as_ref().map(|v| format!("{v:?}")),
+            );
+            vuln_buf.push(u8::from(vuln.is_kev));
+            Self::extend_with_optional_f64(&mut vuln_buf, vuln.epss_score);
+            Self::extend_with_optional_f64(&mut vuln_buf, vuln.max_cvss_score().map(f64::from));
+            Self::extend_with_optional_str(&mut vuln_buf, &Some(vuln.source.to_string()));
+            Self::extend_with_string_list(&mut vuln_buf, &vuln.cwes);
+            Self::extend_with_optional_str(&mut vuln_buf, &vuln.description);
+            Self::extend_with_optional_str(
+                &mut vuln_buf,
+                &vuln.published.as_ref().map(|d| d.to_rfc3339()),
+            );
+            Self::extend_with_optional_str(
+                &mut vuln_buf,
+                &vuln.kev_info.as_ref().map(|k| k.due_date.to_rfc3339()),
+            );
+            Self::extend_with_optional_str(
+                &mut vuln_buf,
+                &vuln.remediation.as_ref().map(|r| {
+                    format!(
+                        "{}:{}",
+                        r.remediation_type,
+                        r.description.as_deref().unwrap_or("")
+                    )
+                }),
+            );
+            Self::extend_tagged(&mut hasher_input, 8, &vuln_buf);
+        }
+        if let Some(vex) = &self.vex_status {
+            Self::extend_tagged(&mut hasher_input, 9, format!("{vex:?}").as_bytes());
         }
         if self.is_external {
-            hasher_input.push(b'E');
+            hasher_input.push(10);
         }
         if let Some(vr) = &self.version_range {
-            hasher_input.extend(vr.as_bytes());
+            Self::extend_tagged(&mut hasher_input, 11, vr.as_bytes());
         }
-        Self::extend_with_ml_model(&mut hasher_input, &self.ml_model);
-        Self::extend_with_dataset(&mut hasher_input, &self.dataset);
+        let mut ml_buf = Vec::new();
+        Self::extend_with_ml_model(&mut ml_buf, &self.ml_model);
+        if !ml_buf.is_empty() {
+            Self::extend_tagged(&mut hasher_input, 12, &ml_buf);
+        }
+        let mut dataset_buf = Vec::new();
+        Self::extend_with_dataset(&mut dataset_buf, &self.dataset);
+        if !dataset_buf.is_empty() {
+            Self::extend_tagged(&mut hasher_input, 13, &dataset_buf);
+        }
 
         // Crypto properties: include fields that affect security semantics
         if let Some(cp) = &self.crypto_properties {
-            hasher_input.extend(cp.asset_type.to_string().as_bytes());
-            if let Some(oid) = &cp.oid {
-                hasher_input.extend(oid.as_bytes());
-            }
-            if let Some(algo) = &cp.algorithm_properties {
-                if let Some(family) = &algo.algorithm_family {
-                    hasher_input.extend(family.as_bytes());
+            let mut crypto_buf = Vec::new();
+            Self::extend_with_optional_str(&mut crypto_buf, &Some(cp.asset_type.to_string()));
+            Self::extend_with_optional_str(&mut crypto_buf, &cp.oid);
+            let (family, level, classical) =
+                cp.algorithm_properties
+                    .as_ref()
+                    .map_or((None, None, None), |a| {
+                        (
+                            a.algorithm_family.clone(),
+                            a.nist_quantum_security_level,
+                            a.classical_security_level,
+                        )
+                    });
+            Self::extend_with_optional_str(&mut crypto_buf, &family);
+            match level {
+                Some(level) => {
+                    crypto_buf.push(1);
+                    crypto_buf.push(level);
                 }
-                if let Some(level) = algo.nist_quantum_security_level {
-                    hasher_input.push(level);
+                None => crypto_buf.push(0),
+            }
+            // classical_security_level drives the crypto-downgrade detector;
+            // protocol version drives TLS-version change reporting — both
+            // must be hash-visible or those diffs are gated away.
+            match classical {
+                Some(bits) => {
+                    crypto_buf.push(1);
+                    crypto_buf.extend(bits.to_le_bytes());
                 }
+                None => crypto_buf.push(0),
             }
-            if let Some(mat) = &cp.related_crypto_material_properties
-                && let Some(state) = &mat.state
-            {
-                hasher_input.extend(state.to_string().as_bytes());
-            }
-            if let Some(cert) = &cp.certificate_properties
-                && let Some(expiry) = &cert.not_valid_after
-            {
-                hasher_input.extend(expiry.to_rfc3339().as_bytes());
-            }
+            Self::extend_with_optional_str(
+                &mut crypto_buf,
+                &cp.protocol_properties
+                    .as_ref()
+                    .and_then(|p| p.version.clone()),
+            );
+            Self::extend_with_optional_str(
+                &mut crypto_buf,
+                &cp.related_crypto_material_properties
+                    .as_ref()
+                    .and_then(|m| m.state.as_ref().map(std::string::ToString::to_string)),
+            );
+            Self::extend_with_optional_str(
+                &mut crypto_buf,
+                &cp.certificate_properties
+                    .as_ref()
+                    .and_then(|c| c.not_valid_after.as_ref().map(|e| e.to_rfc3339())),
+            );
+            Self::extend_tagged(&mut hasher_input, 14, &crypto_buf);
         }
 
         self.content_hash = xxh3_64(&hasher_input);

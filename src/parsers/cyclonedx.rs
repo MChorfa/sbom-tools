@@ -223,6 +223,17 @@ impl CycloneDxParser {
             for vuln in vulns {
                 self.apply_vulnerability(&mut sbom, &vuln, &id_map);
             }
+            // Vulnerabilities and VEX were attached AFTER component
+            // conversion computed each content hash; recompute the affected
+            // hashes so vulnerability content is reflected in them (and in
+            // the SBOM hash derived from them below). Without this,
+            // vulnerability-only changes were invisible to the diff's
+            // modified-component gate and the incremental cache key.
+            for comp in sbom.components.values_mut() {
+                if !comp.vulnerabilities.is_empty() || comp.vex_status.is_some() {
+                    comp.calculate_content_hash();
+                }
+            }
         }
 
         // Store citations in format extensions for lossless preservation (1.7+)
@@ -2696,6 +2707,54 @@ mod tests {
         assert_eq!(vuln.severity, Some(Severity::Critical));
         assert_eq!(vuln.affected_versions, vec!["2.14.1".to_string()]);
         assert_eq!(sbom.vulnerability_counts().critical, 1);
+    }
+
+    /// Vulnerabilities are attached after component conversion, so the
+    /// content hashes must be recomputed afterwards — otherwise the same
+    /// document with and without its vulnerability section produces
+    /// identical component (and SBOM) hashes, making vulnerability-only
+    /// changes invisible to the diff gate and the incremental cache.
+    #[test]
+    fn test_vulnerabilities_are_reflected_in_content_hashes() {
+        let without_vuln = r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+  <components>
+    <component type="library" bom-ref="pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1">
+      <name>log4j-core</name>
+      <version>2.14.1</version>
+    </component>
+  </components>
+</bom>"#;
+        let with_vuln = r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+  <components>
+    <component type="library" bom-ref="pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1">
+      <name>log4j-core</name>
+      <version>2.14.1</version>
+    </component>
+  </components>
+  <vulnerabilities>
+    <vulnerability>
+      <id>CVE-2021-44228</id>
+      <affects>
+        <target>
+          <ref>pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1</ref>
+        </target>
+      </affects>
+    </vulnerability>
+  </vulnerabilities>
+</bom>"#;
+
+        let clean = parse(without_vuln);
+        let vulnerable = parse(with_vuln);
+
+        assert_ne!(
+            component(&clean, "log4j-core").content_hash,
+            component(&vulnerable, "log4j-core").content_hash,
+            "component content hash must reflect attached vulnerabilities"
+        );
+        assert_ne!(
+            clean.content_hash, vulnerable.content_hash,
+            "SBOM content hash must reflect attached vulnerabilities"
+        );
     }
 
     fn parse_json(json: &str) -> NormalizedSbom {

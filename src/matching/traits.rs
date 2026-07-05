@@ -64,10 +64,15 @@ pub enum MatchTier {
     Alias,
     /// Match via ecosystem-specific rules
     EcosystemRule,
+    /// Case-insensitive identical names (ecosystem info missing or partial)
+    NameIdentity,
     /// Match via fuzzy string similarity
     Fuzzy,
     /// Match via custom user rules
     CustomRule,
+    /// Match across different ecosystems via the curated equivalence DB
+    /// (score carries the configured cross-ecosystem penalty)
+    CrossEcosystem,
 }
 
 impl MatchTier {
@@ -77,9 +82,11 @@ impl MatchTier {
         match self {
             Self::None => 0.0,
             Self::ExactIdentifier => 1.0,
+            Self::NameIdentity => 0.98,
             Self::Alias => 0.95,
             Self::EcosystemRule => 0.90,
             Self::CustomRule => 0.92,
+            Self::CrossEcosystem => 0.85,
             Self::Fuzzy => 0.80,
         }
     }
@@ -612,6 +619,19 @@ impl ComponentMatcher for CompositeMatcher {
 
     fn name(&self) -> &'static str {
         "CompositeMatcher"
+    }
+
+    /// The acceptance threshold matching this matcher's max-score semantics:
+    /// a pair is acceptable if ANY inner matcher would accept it, so the
+    /// composite threshold is the MINIMUM of the inner thresholds. (Without
+    /// this override the trait default of 0.0 made the engine's
+    /// matcher-owned gate accept every candidate pair, including score-0.)
+    fn threshold(&self) -> f64 {
+        self.matchers
+            .iter()
+            .map(|m| m.threshold())
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(1.0)
     }
 }
 

@@ -65,24 +65,28 @@ impl LshConfig {
     /// of finding pairs with similarity >= threshold while minimizing false positives.
     #[must_use]
     pub fn for_threshold(threshold: f64) -> Self {
-        // For threshold t, optimal parameters satisfy: t ≈ (1/b)^(1/r)
-        // where b = bands, r = rows per band, and b × r = num_hashes
+        // The S-curve midpoint of banded MinHash is t ≈ (1/b)^(1/r) with
+        // b bands of r rows (b × r = 100 hashes here). Stricter thresholds
+        // want fewer bands with more rows (higher midpoint); permissive
+        // thresholds want many bands of few rows so low-similarity pairs
+        // still collide in some band. Each midpoint sits below its target
+        // threshold so target-similarity pairs are caught with high
+        // probability (recall-safe). The 0.8 row keeps its historical
+        // (25, 4) — looser than the 0.7 row's midpoint — because it is the
+        // production default and its candidate sets are pinned.
         //
-        // Common configurations:
-        // - t=0.5: b=20, r=5 (100 hashes)
-        // - t=0.8: b=50, r=2 (100 hashes)
-        // - t=0.9: b=90, r=1 (90 hashes) - but this is just exact bucketing
-
+        // The previous table had this inverted: t≥0.9 got (50, 2)
+        // (midpoint ~0.14 — floods with dissimilar candidates) and t≥0.5
+        // got (10, 10) (midpoint ~0.79 — missed ~99% of the pairs
+        // permissive() claims to target).
         let (num_bands, rows_per_band) = if threshold >= 0.9 {
-            (50, 2) // 100 hashes, catches ~90%+ similar
+            (10, 10) // midpoint ~0.79; P(catch a 0.9-similar pair) ≈ 0.99
         } else if threshold >= 0.8 {
-            (25, 4) // 100 hashes, catches ~80%+ similar
+            (25, 4) // midpoint ~0.45 (unchanged: the production default)
         } else if threshold >= 0.7 {
-            (20, 5) // 100 hashes, catches ~70%+ similar
-        } else if threshold >= 0.5 {
-            (10, 10) // 100 hashes, catches ~50%+ similar
+            (20, 5) // midpoint ~0.55
         } else {
-            (5, 20) // 100 hashes, very permissive
+            (50, 2) // midpoint ~0.14; P(catch a 0.5-similar pair) ≈ 1.0
         };
 
         Self {
@@ -477,6 +481,40 @@ mod tests {
         assert_eq!(config.num_hashes, 100);
         assert!(config.num_bands > 0);
         assert_eq!(config.num_hashes, config.num_bands * config.rows_per_band());
+    }
+
+    /// The band/row table must be theory-consistent: the S-curve midpoint
+    /// (1/b)^(1/r) must not EXCEED the target threshold (recall safety) and
+    /// must increase with the threshold (stricter thresholds prune harder).
+    /// The old table was inverted — permissive() missed ~99% of the pairs it
+    /// targeted while strict() flooded.
+    #[test]
+    fn test_for_threshold_bands_are_theory_consistent() {
+        let midpoint = |t: f64| {
+            let c = LshConfig::for_threshold(t);
+            (1.0 / c.num_bands as f64).powf(1.0 / c.rows_per_band() as f64)
+        };
+
+        for t in [0.5, 0.7, 0.8, 0.9] {
+            assert!(
+                midpoint(t) < t,
+                "midpoint {:.3} must sit below target {t} for recall",
+                midpoint(t)
+            );
+        }
+        assert!(
+            midpoint(0.9) > midpoint(0.5),
+            "stricter thresholds must prune harder: {:.3} vs {:.3}",
+            midpoint(0.9),
+            midpoint(0.5)
+        );
+        // The production default (0.8 -> 25x4) is pinned: changing it changes
+        // candidate sets for every diff above the LSH gate.
+        let default_config = LshConfig::default();
+        assert_eq!(
+            (default_config.num_bands, default_config.rows_per_band()),
+            (25, 4)
+        );
     }
 
     #[test]

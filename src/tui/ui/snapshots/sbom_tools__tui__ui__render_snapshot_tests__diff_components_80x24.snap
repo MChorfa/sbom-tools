@@ -18,11 +18,11 @@ Filter:  All   Sort: Name  │  [f] filter  [s] sort  [1/2/3/4/5/6/7/8] quick  [
 │   ~ MODIFIED  express          4. 4. n 1 █│Version: 1.0.0 → 2.0.0            │
 │   - REMOVED   jquery           3. —  n - █│                                  │
 │   ~ MODIFIED  lodash           4. 4. n 1 ║│━━━ Match ━━━                     │
-│   - REMOVED   moment           2. —  n - ║│Score: 1.00 via Fuzzy             │
-│   + ADDED     prisma           —  4. n - ║│Reason: Fuzzy match: 'acme-weba...│
-│   ~ MODIFIED  react            17 18 n 1 ║│• Jaro-Winkler 1.00 (w=0.6)       │
-│   - REMOVED   request          2. —  n - ║│• Levenshtein 1.00 (w=0.4)        │
-│   + ADDED     typescript       —  5. n - ▼│                                  │
+│   - REMOVED   moment           2. —  n - ║│Score: 1.00 via NameIdentity      │
+│   + ADDED     prisma           —  4. n - ║│Reason: Identical component nam...│
+│   ~ MODIFIED  react            17 18 n 1 ║│                                  │
+│   - REMOVED   request          2. —  n - ║│━━━ Security Analysis ━━━         │
+│   + ADDED     typescript       —  5. n - ▼│Risk Level:  Low                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
  f filter  s sort │  Tab switch  / search  e export  ? help  q quit [y] copy day

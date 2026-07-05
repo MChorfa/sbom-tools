@@ -53,7 +53,6 @@ pub fn output_report(
 
     let report_config = ReportConfig {
         report_types: vec![config.output.report_types],
-        include_unchanged: config.matching.include_unchanged,
         only_changes: config.filtering.only_changes,
         min_severity: config
             .filtering

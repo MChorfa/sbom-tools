@@ -90,7 +90,14 @@ impl DiffResult {
     pub fn calculate_summary(&mut self) {
         self.summary.components_added = self.components.added.len();
         self.summary.components_removed = self.components.removed.len();
-        self.summary.components_modified = self.components.modified.len();
+        // Unchanged entries (produced under --include-unchanged) live in the
+        // modified stream for rendering but are not modifications.
+        self.summary.components_modified = self
+            .components
+            .modified
+            .iter()
+            .filter(|c| c.change_type != ChangeType::Unchanged)
+            .count();
 
         self.summary.dependencies_added = self.dependencies.added.len();
         self.summary.dependencies_removed = self.dependencies.removed.len();
@@ -117,15 +124,60 @@ impl DiffResult {
     ///
     /// Checks both the pre-computed summary and the source-of-truth fields to be
     /// safe regardless of whether `calculate_summary()` was called.
+    ///
+    /// Unchanged inventory entries (produced under `--include-unchanged`) are
+    /// not changes: a zero-change diff reports `false` regardless of the flag.
     #[must_use]
     pub fn has_changes(&self) -> bool {
         self.summary.total_changes > 0
-            || !self.components.is_empty()
+            || !self.components.added.is_empty()
+            || !self.components.removed.is_empty()
+            || self
+                .components
+                .modified
+                .iter()
+                .any(|c| c.change_type != ChangeType::Unchanged)
             || !self.dependencies.is_empty()
             || !self.graph_changes.is_empty()
             || !self.metadata_changes.is_empty()
             || !self.vulnerabilities.introduced.is_empty()
             || !self.vulnerabilities.resolved.is_empty()
+    }
+
+    /// Recompute date-derived vulnerability day counts for today.
+    ///
+    /// Cached results embed the day they were computed; the incremental
+    /// engine calls this on cache hits so counts (and the SLA statuses
+    /// derived from them) do not go stale across midnight. Returns true if
+    /// anything changed.
+    pub fn refresh_derived_day_counts(&mut self) -> bool {
+        let today = chrono::Utc::now().date_naive();
+        let mut changed = false;
+        for detail in self
+            .vulnerabilities
+            .introduced
+            .iter_mut()
+            .chain(self.vulnerabilities.resolved.iter_mut())
+            .chain(self.vulnerabilities.persistent.iter_mut())
+        {
+            changed |= detail.refresh_day_counts(today);
+        }
+        changed
+    }
+
+    /// Whether any vulnerability day-count field is stale for today.
+    #[must_use]
+    pub fn day_counts_stale(&self) -> bool {
+        let today = chrono::Utc::now().date_naive();
+        self.vulnerabilities
+            .introduced
+            .iter()
+            .chain(self.vulnerabilities.resolved.iter())
+            .chain(self.vulnerabilities.persistent.iter())
+            .any(|detail| {
+                let mut probe = detail.clone();
+                probe.refresh_day_counts(today)
+            })
     }
 
     /// Find a component change by canonical ID
@@ -350,11 +402,12 @@ impl QualityDelta {
 /// Provides visibility into matching quality for debugging and tuning.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MatchMetrics {
-    /// Number of exact matches (PURL, CPE, or canonical ID)
+    /// Number of exact matches: identical identifiers or identical names
+    /// (score ≥ 0.995, i.e. the 1.0 identity tiers)
     pub exact_matches: usize,
     /// Number of fuzzy matches (below exact threshold)
     pub fuzzy_matches: usize,
-    /// Number of custom rule matches
+    /// Matched pairs declared equivalent by user matching rules
     pub rule_matches: usize,
     /// Components in old SBOM with no match
     pub unmatched_old: usize,
@@ -482,10 +535,14 @@ impl ConfidenceInterval {
     pub fn from_tier(score: f64, tier: &str) -> Self {
         let margin = match tier {
             "ExactIdentifier" => 0.0,
+            // A user rule asserts identity outright
+            "EquivalenceRule" => 0.02,
             "Alias" => 0.02,
-            "EcosystemRule" => 0.03,
+            "EcosystemRule" | "NameIdentity" => 0.03,
             "CustomRule" => 0.05,
             "Fuzzy" => 0.08,
+            // Curated equivalence, but across ecosystems: widest interval
+            "CrossEcosystem" => 0.10,
             _ => 0.10,
         };
         Self::new(score - margin, score + margin, 0.95)
@@ -585,6 +642,26 @@ impl ComponentChange {
             change_type: ChangeType::Removed,
             field_changes: Vec::new(),
             cost,
+            match_info: None,
+        }
+    }
+
+    /// Create an unchanged-component entry (matched, content-equal pair).
+    /// Produced only when `--include-unchanged` is enabled; carries zero cost
+    /// and is excluded from modified counts and semantic scoring.
+    pub fn unchanged(old: &Component, new: &Component) -> Self {
+        Self {
+            id: new.canonical_id.to_string(),
+            canonical_id: Some(new.canonical_id.clone()),
+            component_ref: Some(ComponentRef::from_component(new)),
+            old_canonical_id: Some(old.canonical_id.clone()),
+            name: new.name.clone(),
+            old_version: old.version.clone(),
+            new_version: new.version.clone(),
+            ecosystem: new.ecosystem.as_ref().map(std::string::ToString::to_string),
+            change_type: ChangeType::Unchanged,
+            field_changes: Vec::new(),
+            cost: 0,
             match_info: None,
         }
     }
@@ -1136,11 +1213,17 @@ impl VulnerabilityDetail {
         // Format published date as string for serialization
         let published_date = vuln.published.map(|dt| dt.format("%Y-%m-%d").to_string());
 
-        // Get KEV info if present
+        // Get KEV info if present. days_until_due is DATE-granular
+        // (matching days_since_published above and refresh_day_counts):
+        // KevInfo::days_until_due() truncates a DateTime delta, which is one
+        // day lower for midnight-UTC due dates at any time past 00:00 — a
+        // fresh value the refresher would immediately "correct", defeating
+        // the cache's no-clone fast path and making hit/miss disagree.
         let (kev_due_date, days_until_due) = vuln.kev_info.as_ref().map_or((None, None), |kev| {
+            let today = chrono::Utc::now().date_naive();
             (
                 Some(kev.due_date.format("%Y-%m-%d").to_string()),
-                Some(kev.days_until_due()),
+                Some((kev.due_date.date_naive() - today).num_days()),
             )
         });
 
@@ -1186,6 +1269,36 @@ impl VulnerabilityDetail {
                 vex_source.and_then(|v| v.impact_statement.clone())
             },
         }
+    }
+
+    /// Recompute the day-count fields from the stored dates.
+    ///
+    /// `days_since_published` and `days_until_due` embed the date they were
+    /// computed on; a cached result served across midnight carries stale
+    /// counts. Returns true if anything changed. `days_until_due` follows
+    /// `KevInfo::days_until_due` semantics (whole days, date-granular here
+    /// since only the date string is stored).
+    pub(crate) fn refresh_day_counts(&mut self, today: chrono::NaiveDate) -> bool {
+        let mut changed = false;
+        if let Some(published) = self.published_date.as_deref()
+            && let Ok(date) = chrono::NaiveDate::parse_from_str(published, "%Y-%m-%d")
+        {
+            let days = (today - date).num_days();
+            if self.days_since_published != Some(days) {
+                self.days_since_published = Some(days);
+                changed = true;
+            }
+        }
+        if let Some(due) = self.kev_due_date.as_deref()
+            && let Ok(date) = chrono::NaiveDate::parse_from_str(due, "%Y-%m-%d")
+        {
+            let days = (date - today).num_days();
+            if self.days_until_due != Some(days) {
+                self.days_until_due = Some(days);
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Create from a vulnerability reference and component with known depth

@@ -808,6 +808,7 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearc
                         ChangeType::Added => colors().added,
                         ChangeType::Removed => colors().removed,
                         ChangeType::Modified => colors().modified,
+                        ChangeType::Unchanged => colors().muted,
                     };
                     Line::from(vec![
                         Span::styled(prefix, Style::default().fg(colors().accent)),
@@ -877,6 +878,7 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearc
                         ChangeType::Added => colors().added,
                         ChangeType::Removed => colors().removed,
                         ChangeType::Modified => colors().modified,
+                        ChangeType::Unchanged => colors().muted,
                     };
                     Line::from(vec![
                         Span::styled(prefix, Style::default().fg(colors().accent)),

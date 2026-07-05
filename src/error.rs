@@ -146,6 +146,9 @@ pub enum MatchingErrorKind {
 
     #[error("Ecosystem not supported: {0}")]
     UnsupportedEcosystem(String),
+
+    #[error("Invalid matching rule: {0}")]
+    InvalidRule(String),
 }
 
 /// Specific enrichment error kinds

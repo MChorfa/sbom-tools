@@ -213,6 +213,15 @@ pub fn enrich_sbom_full(
         }
     }
 
+    // Enrichment mutates vulnerability/VEX content after parse-time hashes
+    // were computed; refresh them so the diff's modified-component gate and
+    // the incremental cache keys see the enriched content rather than the
+    // parse-time snapshot.
+    for comp in sbom.components.values_mut() {
+        comp.calculate_content_hash();
+    }
+    sbom.calculate_content_hash();
+
     stats
 }
 

@@ -231,6 +231,16 @@ impl Spdx3Parser {
             self.process_vuln_assessment(assessment, &id_map, &mut sbom, &vuln_map);
         }
 
+        // Vulnerabilities/VEX were attached after component conversion
+        // computed each content hash; recompute the affected hashes so
+        // vulnerability content is reflected in them (and in the SBOM hash
+        // below) — same rule as the CycloneDX parser.
+        for comp in sbom.components.values_mut() {
+            if !comp.vulnerabilities.is_empty() || comp.vex_status.is_some() {
+                comp.calculate_content_hash();
+            }
+        }
+
         // Process annotations → attach to components (Phase 2)
         for annotation in &annotations {
             self.process_annotation(annotation, &id_map, &mut sbom);

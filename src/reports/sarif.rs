@@ -82,6 +82,12 @@ impl ReportGenerator for SarifReporter {
             }
 
             for comp in &result.components.modified {
+                // Unchanged inventory entries (--include-unchanged) are not
+                // findings; emitting them as SBOM-TOOLS-003 pushed false
+                // "modified" results into code-scanning consumers.
+                if comp.change_type == crate::diff::ChangeType::Unchanged {
+                    continue;
+                }
                 if self.include_info {
                     results.push(SarifResult {
                         rule_id: "SBOM-TOOLS-003".to_string(),

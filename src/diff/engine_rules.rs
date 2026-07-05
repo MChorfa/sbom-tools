@@ -1,6 +1,5 @@
 //! Rule engine integration for the diff engine.
 
-use super::engine_matching::ComponentMatchResult;
 use crate::matching::RuleEngine;
 use crate::model::{CanonicalId, NormalizedSbom};
 use indexmap::IndexMap;
@@ -40,11 +39,19 @@ pub fn apply_rules(
         .map(|(id, c)| (id.clone(), c.clone()))
         .collect();
 
-    // Create filtered SBOMs
+    // Create filtered SBOMs. Edges referencing an excluded component go
+    // with it — leaving them in produced dependency/graph changes for
+    // components the user explicitly excluded.
     let mut old_filtered = old.clone();
     old_filtered.components = old_components;
+    old_filtered
+        .edges
+        .retain(|e| !old_result.excluded.contains(&e.from) && !old_result.excluded.contains(&e.to));
     let mut new_filtered = new.clone();
     new_filtered.components = new_components;
+    new_filtered
+        .edges
+        .retain(|e| !new_result.excluded.contains(&e.from) && !new_result.excluded.contains(&e.to));
 
     // Count applied rules
     let rules_count = old_result.applied_rules.len() + new_result.applied_rules.len();
@@ -58,43 +65,11 @@ pub fn apply_rules(
     })
 }
 
-/// Remap a `ComponentMatchResult` through canonical IDs from rule engine.
-pub fn remap_match_result(
-    result: &ComponentMatchResult,
-    old_canonical: &HashMap<CanonicalId, CanonicalId>,
-    new_canonical: &HashMap<CanonicalId, CanonicalId>,
-) -> ComponentMatchResult {
-    let mut remapped = ComponentMatchResult::new();
-
-    // Remap matches
-    for (old_id, new_id_opt) in &result.matches {
-        let canonical_old = old_canonical
-            .get(old_id)
-            .cloned()
-            .unwrap_or_else(|| old_id.clone());
-        let canonical_new = new_id_opt.as_ref().and_then(|nid| {
-            new_canonical
-                .get(nid)
-                .cloned()
-                .or_else(|| Some(nid.clone()))
-        });
-        remapped.matches.insert(canonical_old, canonical_new);
-    }
-
-    // Remap pairs
-    for ((old_id, new_id), score) in &result.pairs {
-        let canonical_old = old_canonical
-            .get(old_id)
-            .cloned()
-            .unwrap_or_else(|| old_id.clone());
-        let canonical_new = new_canonical
-            .get(new_id)
-            .cloned()
-            .unwrap_or_else(|| new_id.clone());
-        remapped
-            .pairs
-            .insert((canonical_old, canonical_new), *score);
-    }
-
-    remapped
-}
+// NOTE: there is deliberately no post-match "remap to canonical IDs" step.
+// Equivalence canonical IDs exist only as identity BRIDGES during matching
+// (see `match_components`' equivalence phase): every ID in the match result
+// must remain a REAL component ID, because the change computers look those
+// IDs up in the SBOM component maps. The old remap_match_result rewrote
+// match keys into versionless canonical-PURL space, so every downstream
+// lookup missed — matched components were re-reported as Added and removed
+// components vanished from the diff entirely.

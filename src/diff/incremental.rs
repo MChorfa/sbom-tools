@@ -23,6 +23,7 @@ use crate::error::SbomDiffError;
 use crate::model::NormalizedSbom;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -65,6 +66,17 @@ pub struct SectionHashes {
 
 impl SectionHashes {
     /// Compute section hashes for an SBOM.
+    ///
+    /// CORRECTNESS CONTRACT: each section hash must cover EVERY input its
+    /// section computer reads — `diff_sections` splices the previous pair's
+    /// section verbatim whenever a hash is unchanged, so an uncovered field
+    /// silently serves a stale diff (a vulnerability moving between
+    /// components and an edge scope flip both did exactly that). A hash that
+    /// covers too much only costs a spurious recompute; one that covers too
+    /// little is a correctness bug.
+    ///
+    /// Hashes are order-sensitive by design: reordering only ever produces a
+    /// false "changed", which is safe.
     #[must_use]
     pub fn from_sbom(sbom: &NormalizedSbom) -> Self {
         use std::collections::hash_map::DefaultHasher;
@@ -79,29 +91,70 @@ impl SectionHashes {
         }
         let components = hasher.finish();
 
-        // Dependencies hash
+        // Dependencies hash: every field of the DependencyChangeComputer's
+        // edge key, including scope. Enums hash by discriminant (plus the
+        // payload for `Other`) to keep the per-edge loop allocation-free.
         let mut hasher = DefaultHasher::new();
         for edge in &sbom.edges {
             edge.from.hash(&mut hasher);
             edge.to.hash(&mut hasher);
-            edge.relationship.to_string().hash(&mut hasher);
+            std::mem::discriminant(&edge.relationship).hash(&mut hasher);
+            if let crate::model::DependencyType::Other(other) = &edge.relationship {
+                other.hash(&mut hasher);
+            }
+            edge.scope
+                .as_ref()
+                .map(std::mem::discriminant)
+                .hash(&mut hasher);
         }
         let dependencies = hasher.finish();
 
-        // Licenses hash
+        // Licenses hash: the LicenseChangeComputer attributes declared
+        // licenses to their owning component, so the owner is part of the
+        // section content — without it, a license moving between components
+        // leaves the hash unchanged.
         let mut hasher = DefaultHasher::new();
-        for (_, comp) in &sbom.components {
+        for (id, comp) in &sbom.components {
             for lic in &comp.licenses.declared {
+                id.hash(&mut hasher);
                 lic.expression.hash(&mut hasher);
             }
         }
         let licenses = hasher.finish();
 
-        // Vulnerabilities hash
+        // Vulnerabilities hash: covers the fields VulnerabilityDetail and
+        // VexStatusChange are built from — owning component, severity, CVSS,
+        // KEV/EPSS, and the effective VEX source (per-vuln falling back to
+        // per-component, mirroring VulnerabilityDetail::from_ref).
+        //
+        // Two inputs are deliberately covered elsewhere: component_depth
+        // derives from edges + the component set, so the engine reruns the
+        // vulnerability computer whenever the dependencies or components
+        // sections are dirty; and the remaining textual detail fields
+        // (source, CWEs, description, remediation, published, KEV dates) are
+        // part of Component::content_hash, which feeds the components hash
+        // above — the same rerun rule catches them.
+        //
+        // Enum fields hash by discriminant to keep this loop allocation-free.
         let mut hasher = DefaultHasher::new();
-        for (_, comp) in &sbom.components {
+        for (id, comp) in &sbom.components {
             for vuln in &comp.vulnerabilities {
+                id.hash(&mut hasher);
                 vuln.id.hash(&mut hasher);
+                vuln.severity
+                    .as_ref()
+                    .map(std::mem::discriminant)
+                    .hash(&mut hasher);
+                vuln.max_cvss_score().map(f32::to_bits).hash(&mut hasher);
+                vuln.is_kev.hash(&mut hasher);
+                vuln.epss_score.map(f64::to_bits).hash(&mut hasher);
+                let vex = vuln.vex_status.as_ref().or(comp.vex_status.as_ref());
+                vex.map(|v| std::mem::discriminant(&v.status))
+                    .hash(&mut hasher);
+                vex.and_then(|v| v.justification.as_ref().map(std::mem::discriminant))
+                    .hash(&mut hasher);
+                vex.and_then(|v| v.impact_statement.as_deref())
+                    .hash(&mut hasher);
             }
         }
         let vulnerabilities = hasher.finish();
@@ -189,20 +242,21 @@ pub struct CachedDiffResult {
     pub old_hashes: SectionHashes,
     /// Section hashes from new SBOM
     pub new_hashes: SectionHashes,
-    /// Number of times this cache entry was hit
-    pub hit_count: u64,
 }
 
 impl CachedDiffResult {
     /// Create a new cached result.
     #[must_use]
-    pub fn new(result: DiffResult, old_hashes: SectionHashes, new_hashes: SectionHashes) -> Self {
+    pub fn new(
+        result: Arc<DiffResult>,
+        old_hashes: SectionHashes,
+        new_hashes: SectionHashes,
+    ) -> Self {
         Self {
-            result: Arc::new(result),
+            result,
             computed_at: Instant::now(),
             old_hashes,
             new_hashes,
-            hit_count: 0,
         }
     }
 
@@ -230,8 +284,6 @@ pub struct DiffCacheConfig {
     pub max_entries: usize,
     /// Time-to-live for cache entries
     pub ttl: Duration,
-    /// Enable incremental computation for partial changes
-    pub enable_incremental: bool,
 }
 
 impl Default for DiffCacheConfig {
@@ -239,7 +291,6 @@ impl Default for DiffCacheConfig {
         Self {
             max_entries: 100,
             ttl: Duration::from_secs(3600), // 1 hour
-            enable_incremental: true,
         }
     }
 }
@@ -253,8 +304,34 @@ pub struct DiffCache {
     cache: RwLock<HashMap<DiffCacheKey, CachedDiffResult>>,
     /// Configuration
     config: DiffCacheConfig,
-    /// Statistics
-    stats: RwLock<CacheStats>,
+    /// Statistics (atomics so lookups never take a write lock)
+    stats: AtomicCacheStats,
+}
+
+/// Lock-free statistics storage; `get()` previously took the map's WRITE
+/// lock (to bump a never-read per-entry hit counter) plus a stats write
+/// lock, serializing all readers.
+#[derive(Debug, Default)]
+struct AtomicCacheStats {
+    lookups: AtomicU64,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    incremental_hits: AtomicU64,
+    evictions: AtomicU64,
+    time_saved_ms: AtomicU64,
+}
+
+impl AtomicCacheStats {
+    fn snapshot(&self) -> CacheStats {
+        CacheStats {
+            lookups: self.lookups.load(Ordering::Relaxed),
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            incremental_hits: self.incremental_hits.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+            time_saved_ms: self.time_saved_ms.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// Statistics for cache performance.
@@ -268,7 +345,8 @@ pub struct CacheStats {
     pub misses: u64,
     /// Incremental computations (partial cache hit)
     pub incremental_hits: u64,
-    /// Entries evicted
+    /// Entries evicted (capacity evictions plus bulk purges of expired
+    /// entries at capacity, so a single put can add more than one)
     pub evictions: u64,
     /// Total computation time saved (estimated)
     pub time_saved_ms: u64,
@@ -299,7 +377,7 @@ impl DiffCache {
         Self {
             cache: RwLock::new(HashMap::new()),
             config,
-            stats: RwLock::new(CacheStats::default()),
+            stats: AtomicCacheStats::default(),
         }
     }
 
@@ -308,22 +386,22 @@ impl DiffCache {
     /// Returns `Some` if an exact match is found and still valid.
     pub fn get(&self, key: &DiffCacheKey) -> Option<Arc<DiffResult>> {
         let result = {
-            let mut cache = self.cache.write().expect("cache lock poisoned");
-            cache.get_mut(key).and_then(|entry| {
-                entry.is_valid(self.config.ttl).then(|| {
-                    entry.hit_count += 1;
-                    Arc::clone(&entry.result)
-                })
+            let cache = self.cache.read().expect("cache lock poisoned");
+            cache.get(key).and_then(|entry| {
+                entry
+                    .is_valid(self.config.ttl)
+                    .then(|| Arc::clone(&entry.result))
             })
         };
 
-        let mut stats = self.stats.write().expect("stats lock poisoned");
-        stats.lookups += 1;
+        self.stats.lookups.fetch_add(1, Ordering::Relaxed);
         if let Some(ref result) = result {
-            stats.hits += 1;
-            stats.time_saved_ms += Self::estimate_computation_time(result);
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            self.stats
+                .time_saved_ms
+                .fetch_add(Self::estimate_computation_time(result), Ordering::Relaxed);
         } else {
-            stats.misses += 1;
+            self.stats.misses.fetch_add(1, Ordering::Relaxed);
         }
         result
     }
@@ -332,20 +410,33 @@ impl DiffCache {
     pub fn put(
         &self,
         key: DiffCacheKey,
-        result: DiffResult,
+        result: Arc<DiffResult>,
         old_hashes: SectionHashes,
         new_hashes: SectionHashes,
     ) {
         let mut cache = self.cache.write().expect("cache lock poisoned");
 
-        // Evict oldest entries if at capacity
-        while cache.len() >= self.config.max_entries {
-            if let Some(oldest_key) = Self::find_oldest_entry(&cache) {
-                cache.remove(&oldest_key);
-                let mut stats = self.stats.write().expect("stats lock poisoned");
-                stats.evictions += 1;
-            } else {
-                break;
+        // Overwriting an existing key needs no capacity; previously it still
+        // evicted an unrelated oldest entry first.
+        if !cache.contains_key(&key) && cache.len() >= self.config.max_entries {
+            // Expired entries occupy capacity but serve no one — drop them
+            // before evicting live entries.
+            let before = cache.len();
+            cache.retain(|_, entry| entry.is_valid(self.config.ttl));
+            let expired = before - cache.len();
+            if expired > 0 {
+                self.stats
+                    .evictions
+                    .fetch_add(expired as u64, Ordering::Relaxed);
+            }
+
+            while cache.len() >= self.config.max_entries {
+                if let Some(oldest_key) = Self::find_oldest_entry(&cache) {
+                    cache.remove(&oldest_key);
+                    self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -371,7 +462,7 @@ impl DiffCache {
 
     /// Get cache statistics.
     pub fn stats(&self) -> CacheStats {
-        self.stats.read().expect("stats lock poisoned").clone()
+        self.stats.snapshot()
     }
 
     /// Clear all cached entries.
@@ -460,12 +551,34 @@ impl IncrementalDiffEngine {
         new: &NormalizedSbom,
     ) -> Result<IncrementalDiffResult, SbomDiffError> {
         let start = Instant::now();
+
+        // Hand-built SBOMs carry content_hash == 0 (the documented "unset"
+        // state the engine's identical-SBOM short-circuit also respects).
+        // Every such pair would collide on the (0,0) cache key and be served
+        // each other's cached results, and the last-pair splice base would be
+        // unidentifiable — bypass the incremental machinery entirely.
+        if old.content_hash == 0 || new.content_hash == 0 {
+            let result = self.engine.diff(old, new)?;
+            return Ok(IncrementalDiffResult {
+                result: Arc::new(result),
+                cache_hit: CacheHitType::Miss,
+                sections_recomputed: ChangedSections::all_changed(),
+                computation_time: start.elapsed(),
+            });
+        }
+
         let cache_key = DiffCacheKey::from_sboms(old, new);
 
-        // Check for exact cache hit
-        if let Some(cached) = self.cache.get(&cache_key) {
+        // Check for exact cache hit — shared, not deep-cloned back out.
+        if let Some(mut cached) = self.cache.get(&cache_key) {
+            // Day-count fields embed the day they were computed; a hit
+            // across midnight would serve yesterday's counts. The clone
+            // only happens when a count actually changed (rare).
+            if cached.day_counts_stale() {
+                Arc::make_mut(&mut cached).refresh_derived_day_counts();
+            }
             return Ok(IncrementalDiffResult {
-                result: (*cached).clone(),
+                result: cached,
                 cache_hit: CacheHitType::Full,
                 sections_recomputed: ChangedSections::default(),
                 computation_time: start.elapsed(),
@@ -533,16 +646,25 @@ impl IncrementalDiffEngine {
         };
 
         // Track incremental hits in cache stats
-        if cache_hit == CacheHitType::Partial
-            && let Ok(mut stats) = self.cache.stats.write()
-        {
-            stats.incremental_hits += 1;
+        if cache_hit == CacheHitType::Partial {
+            self.cache
+                .stats
+                .incremental_hits
+                .fetch_add(1, Ordering::Relaxed);
         }
 
-        // Cache the result
+        // Partial splices reuse cached vulnerability sections, which carry
+        // day counts from when the splice base was computed.
+        let mut result = result;
+        if cache_hit == CacheHitType::Partial {
+            result.refresh_derived_day_counts();
+        }
+
+        // Cache the result: Arc hand-off, no deep clone of the DiffResult.
+        let result = Arc::new(result);
         self.cache.put(
             cache_key.clone(),
-            result.clone(),
+            Arc::clone(&result),
             old_hashes.clone(),
             new_hashes.clone(),
         );
@@ -617,8 +739,9 @@ pub enum CacheHitType {
 /// Result of an incremental diff operation.
 #[derive(Debug)]
 pub struct IncrementalDiffResult {
-    /// The diff result
-    pub result: DiffResult,
+    /// The diff result, shared with the cache entry (no deep clone on
+    /// either the miss or the full-hit path)
+    pub result: Arc<DiffResult>,
     /// Type of cache hit
     pub cache_hit: CacheHitType,
     /// Which sections were recomputed (false = reused from cache)
@@ -630,7 +753,8 @@ pub struct IncrementalDiffResult {
 impl IncrementalDiffResult {
     /// Get the diff result.
     pub fn into_result(self) -> DiffResult {
-        self.result
+        // The cache usually holds the other reference; clone only then.
+        Arc::try_unwrap(self.result).unwrap_or_else(|shared| (*shared).clone())
     }
 
     /// Check if this was a cache hit.
@@ -733,7 +857,12 @@ mod tests {
             licenses: 0,
             vulnerabilities: 0,
         };
-        cache.put(key.clone(), result, hashes.clone(), hashes.clone());
+        cache.put(
+            key.clone(),
+            Arc::new(result),
+            hashes.clone(),
+            hashes.clone(),
+        );
 
         // Should be retrievable
         assert!(cache.get(&key).is_some());
@@ -750,7 +879,6 @@ mod tests {
         let config = DiffCacheConfig {
             max_entries: 3,
             ttl: Duration::from_secs(3600),
-            enable_incremental: true,
         };
         let cache = DiffCache::with_config(config);
 
@@ -767,7 +895,12 @@ mod tests {
                 old_hash: i,
                 new_hash: i + 100,
             };
-            cache.put(key, DiffResult::new(), hashes.clone(), hashes.clone());
+            cache.put(
+                key,
+                Arc::new(DiffResult::new()),
+                hashes.clone(),
+                hashes.clone(),
+            );
         }
 
         assert_eq!(cache.len(), 3);
@@ -1057,5 +1190,543 @@ mod tests {
             .diff(&s0, &s2)
             .expect("diff should succeed");
         assert_sections_match(&result.result, &fresh);
+    }
+
+    // ------------------------------------------------------------------
+    // Stale-splice regressions: every scenario below previously produced a
+    // Partial hit whose section hash missed the change, splicing a stale
+    // section from the previous pair's result. Each test primes the engine
+    // with (base, v1), diffs (base, v2), and requires the result to be
+    // byte-equivalent (via serde) to a from-scratch full diff.
+    // ------------------------------------------------------------------
+
+    use crate::model::{
+        Component, DependencyEdge, DependencyScope, DependencyType, LicenseExpression,
+        Organization, Severity, VexState, VexStatus, VulnerabilityRef, VulnerabilitySource,
+    };
+
+    fn rich_comp(name: &str, version: &str) -> Component {
+        let mut c = Component::new(name.to_string(), format!("pkg:npm/{name}@{version}"));
+        c.version = Some(version.to_string());
+        c
+    }
+
+    fn with_vuln(mut c: Component, id: &str, severity: Severity) -> Component {
+        let mut v = VulnerabilityRef::new(id.to_string(), VulnerabilitySource::Osv);
+        v.severity = Some(severity);
+        c.vulnerabilities.push(v);
+        c
+    }
+
+    fn with_license(mut c: Component, expr: &str) -> Component {
+        c.licenses
+            .add_declared(LicenseExpression::new(expr.to_string()));
+        c
+    }
+
+    fn rich_sbom(comps: Vec<Component>, edges: Vec<DependencyEdge>) -> NormalizedSbom {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        for mut c in comps {
+            c.calculate_content_hash();
+            sbom.add_component(c);
+        }
+        for e in edges {
+            sbom.add_edge(e);
+        }
+        sbom.calculate_content_hash();
+        sbom
+    }
+
+    fn edge(from: &Component, to: &Component, scope: Option<DependencyScope>) -> DependencyEdge {
+        let mut e = DependencyEdge::new(
+            from.canonical_id.clone(),
+            to.canonical_id.clone(),
+            DependencyType::DependsOn,
+        );
+        e.scope = scope;
+        e
+    }
+
+    /// Prime with (base, v1), diff (base, v2), and require equivalence with
+    /// a from-scratch full diff of (base, v2).
+    fn assert_incremental_matches_full<F>(
+        engine: F,
+        base: &NormalizedSbom,
+        v1: &NormalizedSbom,
+        v2: &NormalizedSbom,
+    ) where
+        F: Fn() -> DiffEngine,
+    {
+        let incremental = IncrementalDiffEngine::new(engine());
+        let _ = incremental.diff(base, v1).expect("prime diff");
+        let got = incremental.diff(base, v2).expect("target diff");
+        assert_eq!(
+            got.cache_hit,
+            CacheHitType::Partial,
+            "test fixture must exercise the partial-splice path \
+             (recomputed: {:?})",
+            got.sections_recomputed
+        );
+
+        let fresh = engine().diff(base, v2).expect("full diff");
+        assert_eq!(
+            serde_json::to_value(got.result.as_ref()).expect("serialize incremental"),
+            serde_json::to_value(&fresh).expect("serialize full"),
+            "incremental result diverged from a from-scratch full diff"
+        );
+    }
+
+    #[test]
+    fn vulnerability_moving_between_components_is_not_spliced_stale() {
+        let base = rich_sbom(
+            vec![
+                with_vuln(rich_comp("liba", "1.0.0"), "CVE-2024-0001", Severity::High),
+                rich_comp("libb", "1.0.0"),
+                rich_comp("app", "1.0.0"),
+            ],
+            vec![],
+        );
+        let v1 = rich_sbom(
+            vec![
+                with_vuln(rich_comp("liba", "1.0.0"), "CVE-2024-0001", Severity::High),
+                rich_comp("libb", "1.0.0"),
+                rich_comp("app", "2.0.0"),
+            ],
+            vec![],
+        );
+        // Same vuln id, different owning component: the old id-only section
+        // hash was identical to v1's, splicing v1's stale attribution.
+        let v2 = rich_sbom(
+            vec![
+                rich_comp("liba", "1.0.0"),
+                with_vuln(rich_comp("libb", "1.0.0"), "CVE-2024-0001", Severity::High),
+                rich_comp("app", "2.0.0"),
+            ],
+            vec![],
+        );
+        assert_incremental_matches_full(DiffEngine::new, &base, &v1, &v2);
+    }
+
+    #[test]
+    fn vulnerability_severity_change_is_not_spliced_stale() {
+        let base = rich_sbom(
+            vec![
+                with_vuln(rich_comp("liba", "1.0.0"), "CVE-2024-0002", Severity::Low),
+                rich_comp("app", "1.0.0"),
+            ],
+            vec![],
+        );
+        let v1 = rich_sbom(
+            vec![
+                with_vuln(rich_comp("liba", "1.0.0"), "CVE-2024-0002", Severity::Low),
+                rich_comp("app", "2.0.0"),
+            ],
+            vec![],
+        );
+        let v2 = rich_sbom(
+            vec![
+                with_vuln(
+                    rich_comp("liba", "1.0.0"),
+                    "CVE-2024-0002",
+                    Severity::Critical,
+                ),
+                rich_comp("app", "2.0.0"),
+            ],
+            vec![],
+        );
+        assert_incremental_matches_full(DiffEngine::new, &base, &v1, &v2);
+    }
+
+    #[test]
+    fn vex_status_change_is_not_spliced_stale() {
+        let vex_comp = |state: Option<VexState>| {
+            let mut c = rich_comp("liba", "1.0.0");
+            let mut v =
+                VulnerabilityRef::new("CVE-2024-0003".to_string(), VulnerabilitySource::Osv);
+            v.severity = Some(Severity::High);
+            v.vex_status = state.map(VexStatus::new);
+            c.vulnerabilities.push(v);
+            c
+        };
+        let base = rich_sbom(vec![vex_comp(None), rich_comp("app", "1.0.0")], vec![]);
+        let v1 = rich_sbom(vec![vex_comp(None), rich_comp("app", "2.0.0")], vec![]);
+        let v2 = rich_sbom(
+            vec![
+                vex_comp(Some(VexState::NotAffected)),
+                rich_comp("app", "2.0.0"),
+            ],
+            vec![],
+        );
+        assert_incremental_matches_full(DiffEngine::new, &base, &v1, &v2);
+    }
+
+    #[test]
+    fn license_moving_between_components_is_not_spliced_stale() {
+        let base = rich_sbom(
+            vec![
+                with_license(rich_comp("liba", "1.0.0"), "MIT"),
+                rich_comp("libb", "1.0.0"),
+                rich_comp("app", "1.0.0"),
+            ],
+            vec![],
+        );
+        let v1 = rich_sbom(
+            vec![
+                with_license(rich_comp("liba", "1.0.0"), "MIT"),
+                rich_comp("libb", "1.0.0"),
+                rich_comp("app", "2.0.0"),
+            ],
+            vec![],
+        );
+        // Same flattened expression sequence, different owner.
+        let v2 = rich_sbom(
+            vec![
+                rich_comp("liba", "1.0.0"),
+                with_license(rich_comp("libb", "1.0.0"), "MIT"),
+                rich_comp("app", "2.0.0"),
+            ],
+            vec![],
+        );
+        assert_incremental_matches_full(DiffEngine::new, &base, &v1, &v2);
+    }
+
+    #[test]
+    fn edge_scope_change_is_not_spliced_stale() {
+        let a = rich_comp("a", "1.0.0");
+        let b = rich_comp("b", "1.0.0");
+        let base = rich_sbom(
+            vec![a.clone(), b.clone()],
+            vec![edge(&a, &b, Some(DependencyScope::Required))],
+        );
+        let a2 = rich_comp("a", "2.0.0");
+        let v1 = rich_sbom(
+            vec![a2.clone(), b.clone()],
+            vec![edge(&a2, &b, Some(DependencyScope::Required))],
+        );
+        // Only the edge scope flips between v1 and v2: the old section hash
+        // (from/to/relationship only) saw no change and spliced v1's empty
+        // dependency diff.
+        let v2 = rich_sbom(
+            vec![a2.clone(), b.clone()],
+            vec![edge(&a2, &b, Some(DependencyScope::Optional))],
+        );
+        assert_incremental_matches_full(DiffEngine::new, &base, &v1, &v2);
+    }
+
+    #[test]
+    fn graph_changes_and_match_metrics_refresh_on_partial_hit() {
+        let engine = || DiffEngine::new().with_graph_diff(crate::diff::GraphDiffConfig::default());
+        let a = rich_comp("a", "1.0.0");
+        let b = rich_comp("b", "1.0.0");
+        let c = rich_comp("c", "1.0.0");
+        let d = rich_comp("d", "1.0.0");
+        let base = rich_sbom(vec![a.clone(), b.clone()], vec![edge(&a, &b, None)]);
+        let v1 = rich_sbom(
+            vec![a.clone(), b.clone(), c.clone()],
+            vec![edge(&a, &b, None), edge(&a, &c, None)],
+        );
+        // v2 differs from v1 in components and edges: the graph diff and the
+        // match metrics must be recomputed, not carried from (base, v1).
+        let v2 = rich_sbom(
+            vec![a.clone(), b.clone(), c.clone(), d.clone()],
+            vec![edge(&a, &b, None), edge(&a, &c, None), edge(&b, &d, None)],
+        );
+        assert_incremental_matches_full(engine, &base, &v1, &v2);
+    }
+
+    /// Audit regression: every section computer consumes the component
+    /// MATCHES, which derive from component content. A component-only change
+    /// (rename with unchanged canonical id, so the edges — and the
+    /// dependencies/licenses section hashes — are untouched) can flip a
+    /// fuzzy match and with it the dependency and license diffs; those
+    /// sections must rerun rather than splice stale.
+    #[test]
+    fn component_only_change_refreshes_match_dependent_sections() {
+        let app = rich_comp("app", "1.0.0");
+        // Fuzzy-matched counterpart of base's "libfoo": different purl (so
+        // no exact-id match), identical name.
+        let make_lib = |name: &str| {
+            let mut c = Component::new(name.to_string(), "pkg:npm/libfoo-fork@1.0.0".to_string());
+            c.version = Some("1.0.0".to_string());
+            c.licenses
+                .add_declared(LicenseExpression::new("MIT".to_string()));
+            c
+        };
+        let base_lib = with_license(rich_comp("libfoo", "1.0.0"), "MIT");
+
+        let base = rich_sbom(
+            vec![app.clone(), base_lib.clone()],
+            vec![edge(&app, &base_lib, None)],
+        );
+        let v1_lib = make_lib("libfoo");
+        let v1 = rich_sbom(
+            vec![app.clone(), v1_lib.clone()],
+            vec![edge(&app, &v1_lib, None)],
+        );
+        // v2: same canonical id (same purl-derived ref), renamed — the match
+        // against base's "libfoo" breaks, so the edge and license diffs
+        // change while the dependencies/licenses section hashes stay clean.
+        let v2_lib = make_lib("totally-unrelated");
+        let v2 = rich_sbom(
+            vec![app.clone(), v2_lib.clone()],
+            vec![edge(&app, &v2_lib, None)],
+        );
+        assert_incremental_matches_full(DiffEngine::new, &base, &v1, &v2);
+    }
+
+    /// Audit regression: VulnerabilityDetail carries component_depth,
+    /// derived from edges — an EDGE-ONLY change (component set and
+    /// vulnerability content untouched) must still rerun the vulnerability
+    /// computer, or spliced details carry stale depths.
+    #[test]
+    fn edge_only_change_refreshes_vulnerability_depths() {
+        let app = rich_comp("app", "1.0.0");
+        let mid = rich_comp("mid", "1.0.0");
+        let vulnerable = with_vuln(rich_comp("leaf", "1.0.0"), "CVE-2024-0009", Severity::High);
+        let app2 = rich_comp("app", "2.0.0");
+
+        // base/v1: leaf is a direct dependency (depth 1); mid is isolated.
+        let base = rich_sbom(
+            vec![app.clone(), mid.clone(), vulnerable.clone()],
+            vec![edge(&app, &vulnerable, None)],
+        );
+        let v1 = rich_sbom(
+            vec![app2.clone(), mid.clone(), vulnerable.clone()],
+            vec![edge(&app2, &vulnerable, None)],
+        );
+        // v2: identical components, but leaf now sits behind mid (depth 2).
+        let v2 = rich_sbom(
+            vec![app2.clone(), mid.clone(), vulnerable.clone()],
+            vec![edge(&app2, &mid, None), edge(&mid, &vulnerable, None)],
+        );
+        assert_incremental_matches_full(DiffEngine::new, &base, &v1, &v2);
+    }
+
+    #[test]
+    fn zero_content_hash_sboms_bypass_the_cache() {
+        // Hand-built SBOMs without calculate_content_hash() all carry hash 0
+        // and previously collided on the (0,0) cache key: the second pair got
+        // the first pair's result as a Full hit.
+        let hand_built = |names: &[&str]| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            for name in names {
+                sbom.add_component(Component::new((*name).to_string(), format!("ref-{name}")));
+            }
+            sbom
+        };
+        let incremental = IncrementalDiffEngine::new(DiffEngine::new());
+
+        let first = incremental
+            .diff(&hand_built(&["a", "b"]), &hand_built(&["a", "b", "c"]))
+            .expect("first diff");
+        assert_eq!(first.cache_hit, CacheHitType::Miss);
+
+        let second = incremental
+            .diff(&hand_built(&["x"]), &hand_built(&["x", "y", "z", "w"]))
+            .expect("second diff");
+        assert_eq!(
+            second.cache_hit,
+            CacheHitType::Miss,
+            "zero-hash pairs must never be served from cache"
+        );
+        assert_eq!(second.result.summary.components_added, 3);
+    }
+
+    #[test]
+    fn section_hashes_cover_all_section_computer_inputs() {
+        // Direct sensitivity checks: each mutation must flip its section hash.
+        let a = rich_comp("liba", "1.0.0");
+        let b = rich_comp("libb", "1.0.0");
+
+        // Edge scope
+        let s1 = rich_sbom(
+            vec![a.clone(), b.clone()],
+            vec![edge(&a, &b, Some(DependencyScope::Required))],
+        );
+        let s2 = rich_sbom(
+            vec![a.clone(), b.clone()],
+            vec![edge(&a, &b, Some(DependencyScope::Optional))],
+        );
+        assert_ne!(
+            SectionHashes::from_sbom(&s1).dependencies,
+            SectionHashes::from_sbom(&s2).dependencies,
+            "edge scope must be part of the dependencies hash"
+        );
+
+        // Vulnerability attribution
+        let v1 = rich_sbom(
+            vec![with_vuln(a.clone(), "CVE-1", Severity::High), b.clone()],
+            vec![],
+        );
+        let v2 = rich_sbom(
+            vec![a.clone(), with_vuln(b.clone(), "CVE-1", Severity::High)],
+            vec![],
+        );
+        assert_ne!(
+            SectionHashes::from_sbom(&v1).vulnerabilities,
+            SectionHashes::from_sbom(&v2).vulnerabilities,
+            "the owning component must be part of the vulnerabilities hash"
+        );
+
+        // Severity
+        let sev1 = rich_sbom(vec![with_vuln(a.clone(), "CVE-1", Severity::Low)], vec![]);
+        let sev2 = rich_sbom(
+            vec![with_vuln(a.clone(), "CVE-1", Severity::Critical)],
+            vec![],
+        );
+        assert_ne!(
+            SectionHashes::from_sbom(&sev1).vulnerabilities,
+            SectionHashes::from_sbom(&sev2).vulnerabilities,
+            "severity must be part of the vulnerabilities hash"
+        );
+
+        // License attribution
+        let l1 = rich_sbom(vec![with_license(a.clone(), "MIT"), b.clone()], vec![]);
+        let l2 = rich_sbom(vec![a.clone(), with_license(b.clone(), "MIT")], vec![]);
+        assert_ne!(
+            SectionHashes::from_sbom(&l1).licenses,
+            SectionHashes::from_sbom(&l2).licenses,
+            "the owning component must be part of the licenses hash"
+        );
+    }
+
+    /// Cached results embed the day their day-count fields were computed;
+    /// a cache hit across midnight must refresh them from the stored dates.
+    #[test]
+    fn day_count_refresh_corrects_stale_counts() {
+        let mut detail = crate::diff::VulnerabilityDetail::from_ref(
+            &VulnerabilityRef::new("CVE-2024-1111".to_string(), VulnerabilitySource::Osv),
+            &rich_comp("liba", "1.0.0"),
+        );
+        detail.published_date = Some("2020-01-01".to_string());
+        detail.days_since_published = Some(1); // stale: computed "long ago"
+        detail.kev_due_date = Some("2030-01-01".to_string());
+        detail.days_until_due = Some(9999); // stale
+
+        let today = chrono::Utc::now().date_naive();
+        assert!(detail.refresh_day_counts(today), "stale counts must change");
+        let expected_since =
+            (today - chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()).num_days();
+        let expected_due =
+            (chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap() - today).num_days();
+        assert_eq!(detail.days_since_published, Some(expected_since));
+        assert_eq!(detail.days_until_due, Some(expected_due));
+
+        // Idempotent: a second refresh on the same day changes nothing.
+        assert!(!detail.refresh_day_counts(today));
+
+        // Producer/refresher parity: a FRESHLY computed KEV-bearing detail
+        // must not read as stale (from_ref previously stored a
+        // DateTime-truncated due-day count, one lower than the refresher's
+        // date-granular value for midnight-UTC due dates — so every KEV
+        // cache hit deep-cloned and hit/miss disagreed).
+        let mut kev_vuln =
+            VulnerabilityRef::new("CVE-2024-2222".to_string(), VulnerabilitySource::Osv);
+        kev_vuln.is_kev = true;
+        kev_vuln.kev_info = Some(crate::model::KevInfo::new(
+            chrono::Utc::now(),
+            chrono::Utc::now() + chrono::Duration::days(30),
+            "patch".to_string(),
+        ));
+        let mut fresh =
+            crate::diff::VulnerabilityDetail::from_ref(&kev_vuln, &rich_comp("libb", "1.0.0"));
+        assert!(
+            !fresh.refresh_day_counts(today),
+            "fresh KEV day counts must already be date-granular consistent"
+        );
+    }
+
+    #[test]
+    fn component_hash_distinguishes_field_boundaries() {
+        // Dropped license "MIT" + gained supplier "MIT" used to collide.
+        let mut with_mit_license = rich_comp("x", "1.0.0");
+        with_mit_license
+            .licenses
+            .add_declared(LicenseExpression::new("MIT".to_string()));
+        with_mit_license.calculate_content_hash();
+
+        let mut with_mit_supplier = rich_comp("x", "1.0.0");
+        with_mit_supplier.supplier = Some(Organization::new("MIT".to_string()));
+        with_mit_supplier.calculate_content_hash();
+
+        assert_ne!(
+            with_mit_license.content_hash, with_mit_supplier.content_hash,
+            "field boundaries must be unambiguous in the content hash"
+        );
+
+        // Severity and VEX changes must be hash-visible.
+        let low = {
+            let mut c = with_vuln(rich_comp("y", "1.0.0"), "CVE-9", Severity::Low);
+            c.calculate_content_hash();
+            c
+        };
+        let critical = {
+            let mut c = with_vuln(rich_comp("y", "1.0.0"), "CVE-9", Severity::Critical);
+            c.calculate_content_hash();
+            c
+        };
+        assert_ne!(low.content_hash, critical.content_hash);
+
+        let vexed = {
+            let mut c = with_vuln(rich_comp("y", "1.0.0"), "CVE-9", Severity::Low);
+            c.vulnerabilities[0].vex_status = Some(VexStatus::new(VexState::NotAffected));
+            c.calculate_content_hash();
+            c
+        };
+        assert_ne!(low.content_hash, vexed.content_hash);
+
+        // CVSS-only changes must be hash-visible: same id, same severity,
+        // different base score.
+        let cvss = |score: f32| {
+            let mut c = with_vuln(rich_comp("z", "1.0.0"), "CVE-9", Severity::High);
+            c.vulnerabilities[0].cvss.push(crate::model::CvssScore {
+                version: crate::model::CvssVersion::V31,
+                base_score: score,
+                vector: None,
+                exploitability_score: None,
+                impact_score: None,
+            });
+            c.calculate_content_hash();
+            c
+        };
+        assert_ne!(
+            cvss(7.5).content_hash,
+            cvss(8.0).content_hash,
+            "CVSS base score must be part of the content hash"
+        );
+
+        // ML list framing: a training dataset and a performance metric with
+        // the same payload used to collide byte-for-byte.
+        use crate::model::{DatasetRef, MetricEntry, MlModelInfo};
+        let with_training = {
+            let mut c = rich_comp("m", "1.0.0");
+            c.ml_model = Some(MlModelInfo {
+                training_datasets: vec![DatasetRef {
+                    reference: Some("a".to_string()),
+                    name: None,
+                    purl: None,
+                }],
+                ..MlModelInfo::default()
+            });
+            c.calculate_content_hash();
+            c
+        };
+        let with_metric = {
+            let mut c = rich_comp("m", "1.0.0");
+            c.ml_model = Some(MlModelInfo {
+                performance_metrics: vec![MetricEntry {
+                    metric_type: Some("a".to_string()),
+                    value: None,
+                    slice: None,
+                }],
+                ..MlModelInfo::default()
+            });
+            c.calculate_content_hash();
+            c
+        };
+        assert_ne!(
+            with_training.content_hash, with_metric.content_hash,
+            "ml list boundaries must be unambiguous in the content hash"
+        );
     }
 }

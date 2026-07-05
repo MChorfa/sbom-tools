@@ -15,8 +15,6 @@ pub struct FuzzyMatchConfig {
     pub use_aliases: bool,
     /// Whether to use ecosystem-specific rules
     pub use_ecosystem_rules: bool,
-    /// Maximum candidates to consider for fuzzy matching
-    pub max_candidates: usize,
     /// Multi-field scoring weights (optional, enables multi-field matching when set)
     #[serde(default)]
     pub field_weights: Option<MultiFieldWeights>,
@@ -184,7 +182,6 @@ impl FuzzyMatchConfig {
             jaro_winkler_weight: 0.5,
             use_aliases: true,
             use_ecosystem_rules: true,
-            max_candidates: 100,
             field_weights: None, // Single-field (name) matching by default
         }
     }
@@ -198,7 +195,6 @@ impl FuzzyMatchConfig {
             jaro_winkler_weight: 0.6,
             use_aliases: true,
             use_ecosystem_rules: true,
-            max_candidates: 500,
             field_weights: None, // Single-field (name) matching by default
         }
     }
@@ -212,7 +208,6 @@ impl FuzzyMatchConfig {
             jaro_winkler_weight: 0.7,
             use_aliases: true,
             use_ecosystem_rules: true,
-            max_candidates: 1000,
             field_weights: None, // Single-field (name) matching by default
         }
     }

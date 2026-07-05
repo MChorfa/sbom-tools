@@ -118,8 +118,19 @@ pub fn run_diff_multi(config: MultiDiffConfig) -> Result<i32> {
 
     let fuzzy_config = get_fuzzy_config(&config.matching.fuzzy_preset);
 
-    // Prepare target references with names
-    let targets = prepare_sbom_refs(&target_sboms, &config.targets);
+    // Prepare display names, unique across the baseline AND all targets —
+    // the engine keys spreads and the vulnerability matrix by these names.
+    let mut all_paths = vec![config.baseline.clone()];
+    all_paths.extend(config.targets.iter().cloned());
+    let mut all_names = unique_sbom_names(&all_paths);
+    let baseline_name = all_names.remove(0);
+
+    let targets: Vec<(&NormalizedSbom, String, String)> = target_sboms
+        .iter()
+        .zip(all_names)
+        .zip(config.targets.iter())
+        .map(|((sbom, name), path)| (sbom, name, path.to_string_lossy().to_string()))
+        .collect();
     let target_refs: Vec<_> = targets
         .iter()
         .map(|(sbom, name, path)| (*sbom, name.as_str(), path.as_str()))
@@ -132,8 +143,6 @@ pub fn run_diff_multi(config: MultiDiffConfig) -> Result<i32> {
         &config.graph_diff,
         &config.rules,
     );
-
-    let baseline_name = get_sbom_name(&config.baseline);
 
     let mut result = engine.diff_multi(
         baseline_parsed.sbom(),
@@ -206,6 +215,30 @@ pub fn run_timeline(config: TimelineConfig) -> Result<i32> {
         parse_and_enrich_sboms(&config.sbom_paths, &config.enrichment, quiet)?;
 
     tracing::info!("Analyzing timeline of {} SBOMs", sboms.len());
+
+    // Chronological argv order (oldest first) is a documented precondition;
+    // a shuffled invocation silently inverts every Initial/Removed/Downgrade
+    // classification, so at least warn when document timestamps disagree.
+    if !quiet {
+        let out_of_order: Vec<usize> = sboms
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| w[1].document.created < w[0].document.created)
+            .map(|(i, _)| i + 1)
+            .collect();
+        if !out_of_order.is_empty() {
+            eprintln!(
+                "Warning: SBOM document timestamps are not in chronological order \
+                 (position{} {}); timeline analysis assumes oldest-first argument order",
+                if out_of_order.len() == 1 { "" } else { "s" },
+                out_of_order
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
 
     let fuzzy_config = get_fuzzy_config(&config.matching.fuzzy_preset);
 
@@ -431,15 +464,74 @@ fn prepare_sbom_refs<'a>(
     sboms: &'a [NormalizedSbom],
     paths: &[PathBuf],
 ) -> Vec<(&'a NormalizedSbom, String, String)> {
+    let names = unique_sbom_names(paths);
     sboms
         .iter()
+        .zip(names)
         .zip(paths.iter())
-        .map(|(sbom, path)| {
-            let name = get_sbom_name(path);
+        .map(|((sbom, name), path)| {
             let path_str = path.to_string_lossy().to_string();
             (sbom, name, path_str)
         })
         .collect()
+}
+
+/// Derive display names from paths, guaranteed unique.
+///
+/// The multi-diff engine keys version spreads and the vulnerability matrix by
+/// display name, so duplicate names (the natural `v1/app.json v2/app.json`
+/// layout collapses to one "app" key) silently erase spreads and corrupt the
+/// matrix. Colliding stems get their parent directory prepended; anything
+/// still colliding gets a positional ordinal.
+pub(crate) fn unique_sbom_names(paths: &[PathBuf]) -> Vec<String> {
+    use std::collections::HashMap;
+
+    let stems: Vec<String> = paths.iter().map(|p| get_sbom_name(p)).collect();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for stem in &stems {
+        *counts.entry(stem.as_str()).or_default() += 1;
+    }
+
+    let mut names: Vec<String> = stems
+        .iter()
+        .zip(paths.iter())
+        .map(|(stem, path)| {
+            if counts[stem.as_str()] > 1 {
+                match path.parent().and_then(|p| p.file_name()) {
+                    Some(parent) => format!("{}/{}", parent.to_string_lossy(), stem),
+                    None => stem.clone(),
+                }
+            } else {
+                stem.clone()
+            }
+        })
+        .collect();
+
+    // Ordinal fallback for anything still colliding (same parent dir name).
+    // Ordinals are bumped until the generated name is unused ANYWHERE in the
+    // final set — a plain " (1)" suffix can collide with a literal stem like
+    // "app (1).json", silently re-collapsing the name-keyed maps this
+    // function exists to protect.
+    let mut totals: HashMap<String, usize> = HashMap::new();
+    for name in &names {
+        *totals.entry(name.clone()).or_default() += 1;
+    }
+    let mut taken: std::collections::HashSet<String> = names
+        .iter()
+        .filter(|n| totals[n.as_str()] == 1)
+        .cloned()
+        .collect();
+    for name in &mut names {
+        if totals[name.as_str()] > 1 {
+            let mut ordinal = 1;
+            while taken.contains(&format!("{name} ({ordinal})")) {
+                ordinal += 1;
+            }
+            *name = format!("{name} ({ordinal})");
+            taken.insert(name.clone());
+        }
+    }
+    names
 }
 
 #[cfg(test)]
@@ -465,6 +557,46 @@ mod tests {
 
         let path = PathBuf::from("simple.json");
         assert_eq!(get_sbom_name(&path), "simple");
+    }
+
+    /// Duplicate file stems (v1/app.json v2/app.json — the natural way to
+    /// snapshot one application) previously collapsed to one HashMap key in
+    /// the engine, erasing version spreads and corrupting the vulnerability
+    /// matrix.
+    #[test]
+    fn test_unique_sbom_names_disambiguates_duplicates() {
+        let paths = vec![
+            PathBuf::from("v1/app.json"),
+            PathBuf::from("v2/app.json"),
+            PathBuf::from("v3/app.json"),
+        ];
+        assert_eq!(
+            unique_sbom_names(&paths),
+            vec!["v1/app", "v2/app", "v3/app"]
+        );
+
+        // Same parent directory: ordinal fallback
+        let paths = vec![PathBuf::from("a/x.json"), PathBuf::from("a/x.json")];
+        assert_eq!(unique_sbom_names(&paths), vec!["a/x (1)", "a/x (2)"]);
+
+        // Distinct stems stay untouched
+        let paths = vec![PathBuf::from("old.json"), PathBuf::from("new.json")];
+        assert_eq!(unique_sbom_names(&paths), vec!["old", "new"]);
+
+        // Audit regression: an ordinal-suffixed name must not collide with a
+        // literal stem — "app (1).json" is a real browser-download name.
+        let paths = vec![
+            PathBuf::from("app.json"),
+            PathBuf::from("app.xml"),
+            PathBuf::from("app (1).json"),
+        ];
+        let names = unique_sbom_names(&paths);
+        let unique: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(
+            unique.len(),
+            names.len(),
+            "names must be unique even against literal ordinal-style stems: {names:?}"
+        );
     }
 
     #[test]

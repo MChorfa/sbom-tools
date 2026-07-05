@@ -312,10 +312,25 @@ impl ComponentIndex {
                 }
             }
             // Higher overlap first; ties broken by ID for deterministic output.
-            ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.value().cmp(b.1.value())));
-            for (_, id) in ranked {
-                candidates.push(Arc::clone(id));
-                seen.insert(Arc::clone(id));
+            // Only the top max_candidates survive the final truncate, so
+            // select-then-sort just that prefix instead of sorting (and
+            // Arc-cloning) the entire ecosystem bucket — for mono-ecosystem
+            // SBOMs the bucket is the whole component set and the full sort
+            // made candidate generation O(n² log n) per diff.
+            let rank_order = |a: &(usize, &Arc<CanonicalId>), b: &(usize, &Arc<CanonicalId>)| {
+                b.0.cmp(&a.0).then_with(|| a.1.value().cmp(b.1.value()))
+            };
+            let keep = max_candidates.min(ranked.len());
+            if keep > 0 {
+                if keep < ranked.len() {
+                    ranked.select_nth_unstable_by(keep - 1, rank_order);
+                    ranked.truncate(keep);
+                }
+                ranked.sort_by(rank_order);
+                for (_, id) in ranked {
+                    candidates.push(Arc::clone(id));
+                    seen.insert(Arc::clone(id));
+                }
             }
         }
 
@@ -589,7 +604,13 @@ pub struct IndexStats {
 /// 2. LSH index (for large SBOMs, catches approximate matches)
 /// 3. Cross-ecosystem mappings (optional)
 ///
-/// The candidates from each source are deduplicated and merged.
+/// The candidates from each source are deduplicated and merged under a
+/// shared per-source budget: `max_candidates` bounds the TOTAL across all
+/// three strategies. Ranked index candidates fill the budget first; LSH and
+/// cross-ecosystem only top up whatever room remains. (Letting each strategy
+/// add its own quota on top of a full index list flooded downstream scoring
+/// with up to 1.75× the configured budget — measured as a 30×+ slowdown on
+/// large single-ecosystem SBOMs.)
 pub struct BatchCandidateGenerator {
     /// Primary component index
     component_index: ComponentIndex,
@@ -604,7 +625,8 @@ pub struct BatchCandidateGenerator {
 /// Configuration for batch candidate generation.
 #[derive(Debug, Clone)]
 pub struct BatchCandidateConfig {
-    /// Maximum candidates per source component
+    /// Maximum total candidates per source component across all strategies
+    /// (index + LSH + cross-ecosystem combined)
     pub max_candidates: usize,
     /// Maximum name length difference
     pub max_length_diff: usize,
@@ -617,7 +639,9 @@ pub struct BatchCandidateConfig {
 impl Default for BatchCandidateConfig {
     fn default() -> Self {
         Self {
-            max_candidates: 100,
+            // Keep in lockstep with LargeSbomConfig::default().max_candidates
+            // so standalone generator users get the engine's budget.
+            max_candidates: 50,
             max_length_diff: 5,
             lsh_threshold: 500, // Only use LSH for SBOMs with 500+ components
             enable_cross_ecosystem: true,
@@ -699,14 +723,21 @@ impl BatchCandidateGenerator {
             seen.insert(id.clone());
         }
 
-        // 2. LSH candidates (additional ones not found by component index)
+        // 2. LSH candidates (additional ones not found by component index).
+        // Only fill whatever room the ranked index candidates left in the
+        // per-source budget, still bounded by the historical max/2 share.
+        let lsh_budget = self
+            .config
+            .max_candidates
+            .saturating_sub(seen.len())
+            .min(self.config.max_candidates / 2);
         let lsh_candidates: Vec<CanonicalId> =
             self.lsh_index.as_ref().map_or_else(Vec::new, |lsh| {
                 let candidates: Vec<_> = lsh
                     .find_candidates(source_component)
                     .into_iter()
                     .filter(|id| id != source_id && !seen.contains(id))
-                    .take(self.config.max_candidates / 2) // Limit LSH additions
+                    .take(lsh_budget)
                     .collect();
                 for id in &candidates {
                     seen.insert(id.clone());
@@ -714,7 +745,13 @@ impl BatchCandidateGenerator {
                 candidates
             });
 
-        // 3. Cross-ecosystem candidates
+        // 3. Cross-ecosystem candidates, from the budget room still left,
+        // bounded by the historical max/4 share.
+        let cross_eco_budget = self
+            .config
+            .max_candidates
+            .saturating_sub(seen.len())
+            .min(self.config.max_candidates / 4);
         let cross_ecosystem_candidates: Vec<CanonicalId> = if let (Some(db), Some(eco)) =
             (&self.cross_ecosystem_db, &source_component.ecosystem)
         {
@@ -729,7 +766,7 @@ impl BatchCandidateGenerator {
                         .unwrap_or_default()
                 })
                 .filter(|id| id != source_id && !seen.contains(id))
-                .take(self.config.max_candidates / 4) // Limit cross-ecosystem
+                .take(cross_eco_budget)
                 .collect();
             for id in &candidates {
                 seen.insert(id.clone());
@@ -1119,5 +1156,65 @@ mod tests {
         });
 
         assert!(preact_found, "Should find preact-dom via trigram matching");
+    }
+
+    /// `max_candidates` is a TOTAL per-source budget: LSH and cross-ecosystem
+    /// may only top up what the index candidates left, never stack their own
+    /// quotas on top of a full index list (which previously produced up to
+    /// 1.75x the configured budget and flooded downstream scoring).
+    #[test]
+    fn test_batch_generator_enforces_total_candidate_budget() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        // 80 similarly named components: both the index and LSH will each
+        // find far more than the budget on their own.
+        for i in 0..80 {
+            let name = format!("libfoo-{i:03}");
+            let purl = format!("pkg:npm/{name}@1.0.0");
+            sbom.add_component(make_component(&name, Some(&purl)));
+        }
+
+        let max_candidates = 20;
+        let generator = BatchCandidateGenerator::build(
+            &sbom,
+            BatchCandidateConfig {
+                max_candidates,
+                max_length_diff: 10,
+                lsh_threshold: 1, // force the LSH index on
+                enable_cross_ecosystem: true,
+            },
+        );
+
+        // Source from a different SBOM, similar to every indexed component.
+        let source = make_component("libfoo-100", Some("pkg:npm/libfoo-100@1.0.0"));
+        let result = generator.find_candidates(&source.canonical_id, &source);
+
+        let total = result.index_candidates.len()
+            + result.lsh_candidates.len()
+            + result.cross_ecosystem_candidates.len();
+        assert!(
+            total <= max_candidates,
+            "candidate strategies must share one budget: got {} (index {} + lsh {} + cross-eco {}) > {}",
+            total,
+            result.index_candidates.len(),
+            result.lsh_candidates.len(),
+            result.cross_ecosystem_candidates.len(),
+            max_candidates
+        );
+        assert!(result.total_unique <= max_candidates);
+        // The index alone can fill the budget here, so it should have.
+        assert_eq!(result.index_candidates.len(), max_candidates);
+    }
+
+    /// The engine-level and generator-level defaults must stay in lockstep:
+    /// a standalone `BatchCandidateGenerator` user should get the same
+    /// per-source budget the diff engine uses, and the value itself (50, the
+    /// budget the sub-lsh_threshold path always used) is what keeps candidate
+    /// volume flat across the size gate.
+    #[test]
+    fn test_default_candidate_budgets_agree() {
+        let generator_default = BatchCandidateConfig::default().max_candidates;
+        let engine_default = crate::diff::LargeSbomConfig::default().max_candidates;
+        assert_eq!(generator_default, engine_default);
+        assert_eq!(engine_default, 50);
     }
 }

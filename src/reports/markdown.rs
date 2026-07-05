@@ -214,11 +214,15 @@ impl ReportGenerator for MarkdownReporter {
                 writeln!(md, "| Name | Old Version | New Version | Changes |")?;
                 writeln!(md, "|------|-------------|-------------|---------|")?;
                 for comp in &result.components.modified {
-                    let changes: Vec<String> = comp
-                        .field_changes
-                        .iter()
-                        .map(|c| escape_markdown_table(&c.field))
-                        .collect();
+                    let changes: Vec<String> =
+                        if comp.change_type == crate::diff::ChangeType::Unchanged {
+                            vec!["_unchanged_".to_string()]
+                        } else {
+                            comp.field_changes
+                                .iter()
+                                .map(|c| escape_markdown_table(&c.field))
+                                .collect()
+                        };
                     writeln!(
                         md,
                         "| {} | {} | {} | {} |",

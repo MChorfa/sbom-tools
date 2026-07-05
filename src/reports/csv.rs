@@ -53,7 +53,12 @@ impl ReportGenerator for CsvReporter {
         }
 
         for comp in &result.components.modified {
-            write_component_line(&mut content, "Modified", comp);
+            let label = if comp.change_type == crate::diff::ChangeType::Unchanged {
+                "Unchanged"
+            } else {
+                "Modified"
+            };
+            write_component_line(&mut content, label, comp);
         }
 
         // Vulnerabilities CSV

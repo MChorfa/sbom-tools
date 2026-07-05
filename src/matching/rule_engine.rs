@@ -60,8 +60,20 @@ pub struct RuleEngine {
 }
 
 impl RuleEngine {
-    /// Create a new rule engine from configuration
-    pub fn new(config: MatchingRulesConfig) -> Result<Self, String> {
+    /// Create a new rule engine from configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::SbomDiffError::Matching`] when an exclusion or alias
+    /// pattern fails to compile.
+    pub fn new(config: MatchingRulesConfig) -> Result<Self, crate::error::SbomDiffError> {
+        Self::build(config).map_err(|message| crate::error::SbomDiffError::Matching {
+            context: "invalid matching rules configuration".to_string(),
+            source: crate::error::MatchingErrorKind::InvalidRule(message),
+        })
+    }
+
+    fn build(config: MatchingRulesConfig) -> Result<Self, String> {
         // Pre-compile regex patterns for exclusions
         let compiled_exclusion_regexes = config
             .exclusions
@@ -269,7 +281,17 @@ impl RuleEngine {
             let matches_alias = self.alias_matches(eq_idx, eq, purl);
 
             if matches_canonical || matches_alias {
-                let canonical_id = CanonicalId::from_purl(&eq.canonical);
+                // version_sensitive scopes the equivalence to matching
+                // versions: the canonical identity is qualified with the
+                // component's version, so foo-fork@1.0.0 bridges to
+                // foo@1.0.0 but not to foo@2.0.0. (The flag was previously
+                // accepted from config and silently ignored.)
+                let canonical_id = if eq.version_sensitive {
+                    let version = component.version.as_deref().unwrap_or("");
+                    CanonicalId::from_purl(&format!("{}@{version}", eq.canonical))
+                } else {
+                    CanonicalId::from_purl(&eq.canonical)
+                };
                 let applied = AppliedRule {
                     component_id: id.clone(),
                     component_name: component.name.clone(),

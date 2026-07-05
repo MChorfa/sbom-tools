@@ -132,21 +132,23 @@ impl ChangeComputer for VulnerabilityChangeComputer {
             }
         }
 
+        // Membership is by vuln ID only (component might have been
+        // renamed/matched); build each side's ID set once instead of a
+        // linear scan per entry — three O(V_old × V_new) passes cost whole
+        // seconds on vuln-heavy container-image SBOMs.
+        let old_ids: HashSet<&str> = old_vulns.values().map(|v| v.id.as_str()).collect();
+        let new_ids: HashSet<&str> = new_vulns.values().map(|v| v.id.as_str()).collect();
+
         // Find introduced vulnerabilities (in new but not old)
         for detail in new_vulns.values() {
-            // Check by vuln ID only (component might have been renamed/matched)
-            let vuln_id = &detail.id;
-            let exists_in_old = old_vulns.values().any(|v| &v.id == vuln_id);
-            if !exists_in_old {
+            if !old_ids.contains(detail.id.as_str()) {
                 result.introduced.push(detail.clone());
             }
         }
 
         // Find resolved vulnerabilities (in old but not new)
         for detail in old_vulns.values() {
-            let vuln_id = &detail.id;
-            let exists_in_new = new_vulns.values().any(|v| &v.id == vuln_id);
-            if !exists_in_new {
+            if !new_ids.contains(detail.id.as_str()) {
                 result.resolved.push(detail.clone());
             }
         }
@@ -154,8 +156,7 @@ impl ChangeComputer for VulnerabilityChangeComputer {
         // Find persistent vulnerabilities (in both)
         let mut vex_changes = Vec::new();
         for (key, detail) in &new_vulns {
-            let vuln_id = &detail.id;
-            let exists_in_old = old_vulns.values().any(|v| &v.id == vuln_id);
+            let exists_in_old = old_ids.contains(detail.id.as_str());
             if exists_in_old {
                 result.persistent.push(detail.clone());
 

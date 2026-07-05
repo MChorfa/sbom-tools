@@ -91,11 +91,16 @@ impl PackageFamily {
     }
 
     /// Check if this family contains a package name in a specific ecosystem.
+    ///
+    /// Uses Unicode lowercasing to stay symmetric with the DB's name index
+    /// (which is keyed by `to_lowercase()`), so `equivalence(a, b)` and
+    /// `equivalence(b, a)` agree for non-ASCII names too.
     #[must_use]
     pub fn contains(&self, ecosystem: &Ecosystem, name: &str) -> bool {
+        let name_lower = name.to_lowercase();
         self.ecosystem_names
             .get(ecosystem)
-            .is_some_and(|names| names.iter().any(|n| n.eq_ignore_ascii_case(name)))
+            .is_some_and(|names| names.iter().any(|n| n.to_lowercase() == name_lower))
     }
 
     /// Get all names for a specific ecosystem.
@@ -124,6 +129,7 @@ impl PackageFamily {
 }
 
 /// Cross-ecosystem mapping database.
+#[derive(Debug, Clone)]
 pub struct CrossEcosystemDb {
     /// All package families
     families: Vec<PackageFamily>,
@@ -211,13 +217,39 @@ impl CrossEcosystemDb {
         eco_b: &Ecosystem,
         name_b: &str,
     ) -> bool {
-        let families_a = self.lookup(eco_a, name_a);
-        for family in families_a {
+        self.equivalence(eco_a, name_a, eco_b, name_b).is_some()
+    }
+
+    /// Look up the equivalence between two packages, returning whether the
+    /// covering family is verified. `None` means no family links them.
+    ///
+    /// Allocation-light variant of [`find_equivalents`](Self::find_equivalents)
+    /// for hot scoring paths: when several families link the pair, a verified
+    /// one wins.
+    #[must_use]
+    pub fn equivalence(
+        &self,
+        eco_a: &Ecosystem,
+        name_a: &str,
+        eco_b: &Ecosystem,
+        name_b: &str,
+    ) -> Option<EquivalenceInfo> {
+        let mut found: Option<EquivalenceInfo> = None;
+        for family in self.lookup(eco_a, name_a) {
             if family.contains(eco_b, name_b) {
-                return true;
+                if family.verified {
+                    return Some(EquivalenceInfo {
+                        verified: true,
+                        family_name: family.canonical_name.clone(),
+                    });
+                }
+                found.get_or_insert(EquivalenceInfo {
+                    verified: false,
+                    family_name: family.canonical_name.clone(),
+                });
             }
         }
-        false
+        found
     }
 
     /// Get statistics about the database.
@@ -432,6 +464,15 @@ impl Default for CrossEcosystemDb {
     fn default() -> Self {
         Self::with_builtin_mappings()
     }
+}
+
+/// Result of an [`equivalence`](CrossEcosystemDb::equivalence) lookup.
+#[derive(Debug, Clone)]
+pub struct EquivalenceInfo {
+    /// Whether the covering family is a verified mapping
+    pub verified: bool,
+    /// Name of the package family linking the two packages
+    pub family_name: String,
 }
 
 /// A cross-ecosystem match result.
