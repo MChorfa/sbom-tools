@@ -454,7 +454,12 @@ impl<'w, W: Write> NdjsonWriter<'w, W> {
             self.write_tagged("component_removed", comp)?;
         }
         for comp in &result.components.modified {
-            self.write_tagged("component_modified", comp)?;
+            let tag = if comp.change_type == crate::diff::ChangeType::Unchanged {
+                "component_unchanged"
+            } else {
+                "component_modified"
+            };
+            self.write_tagged(tag, comp)?;
         }
         self.writer.flush()?;
         Ok(())

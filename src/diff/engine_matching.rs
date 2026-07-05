@@ -5,7 +5,7 @@
 
 use crate::matching::{
     BatchCandidateConfig, BatchCandidateGenerator, ComponentIndex, ComponentMatcher,
-    CrossEcosystemDb, FuzzyMatchConfig,
+    CrossEcosystemDb,
 };
 use crate::model::{CanonicalId, NormalizedSbom};
 use std::collections::{HashMap, HashSet};
@@ -55,7 +55,6 @@ pub fn match_components(
     old: &NormalizedSbom,
     new: &NormalizedSbom,
     matcher: &dyn ComponentMatcher,
-    fuzzy_config: &FuzzyMatchConfig,
     large_sbom_config: &LargeSbomConfig,
 ) -> ComponentMatchResult {
     let _span = tracing::info_span!(
@@ -96,7 +95,6 @@ pub fn match_components(
             &unmatched_old,
             &used_new_ids,
             matcher,
-            fuzzy_config,
             large_sbom_config,
         )
     } else {
@@ -106,7 +104,6 @@ pub fn match_components(
             &unmatched_old,
             &used_new_ids,
             matcher,
-            fuzzy_config,
             large_sbom_config,
         )
     };
@@ -139,10 +136,15 @@ fn match_with_batch_generator(
     unmatched_old: &[&CanonicalId],
     used_new_ids: &HashSet<CanonicalId>,
     matcher: &dyn ComponentMatcher,
-    fuzzy_config: &FuzzyMatchConfig,
     large_sbom_config: &LargeSbomConfig,
 ) -> Vec<(CanonicalId, CanonicalId, f64)> {
     use rayon::prelude::*;
+
+    // The acceptance gate honors the MATCHER's threshold, so custom
+    // ComponentMatcher implementations are no longer silently gated by the
+    // fuzzy config they do not use (identical for the default FuzzyMatcher,
+    // whose threshold() returns the fuzzy-config value).
+    let threshold = matcher.threshold();
 
     // Build batch candidate generator for the new SBOM
     let batch_config = BatchCandidateConfig {
@@ -178,7 +180,7 @@ fn match_with_batch_generator(
                     .filter_map(|new_id| {
                         new.components.get(new_id).and_then(|new_comp| {
                             let score = matcher.match_score(old_comp, new_comp);
-                            if score >= fuzzy_config.threshold {
+                            if score >= threshold {
                                 Some(((*old_id).clone(), new_id.clone(), score))
                             } else {
                                 None
@@ -204,7 +206,7 @@ fn match_with_batch_generator(
                 }
                 if let Some(new_comp) = new.components.get(&new_id) {
                     let score = matcher.match_score(old_comp, new_comp);
-                    if score >= fuzzy_config.threshold {
+                    if score >= threshold {
                         candidates.push((old_id.clone(), new_id, score));
                     }
                 }
@@ -223,10 +225,12 @@ fn match_with_component_index(
     unmatched_old: &[&CanonicalId],
     used_new_ids: &HashSet<CanonicalId>,
     matcher: &dyn ComponentMatcher,
-    fuzzy_config: &FuzzyMatchConfig,
     large_sbom_config: &LargeSbomConfig,
 ) -> Vec<(CanonicalId, CanonicalId, f64)> {
     use rayon::prelude::*;
+
+    // See match_with_batch_generator: gate on the matcher's own threshold.
+    let threshold = matcher.threshold();
 
     let new_index = ComponentIndex::build(new);
     let old_index = ComponentIndex::build(old);
@@ -283,7 +287,7 @@ fn match_with_component_index(
                             .filter_map(|new_id| {
                                 new.components.get(new_id).and_then(|new_comp| {
                                     let score = matcher.match_score(old_comp, new_comp);
-                                    if score >= fuzzy_config.threshold {
+                                    if score >= threshold {
                                         Some(((*old_id).clone(), new_id.clone(), score))
                                     } else {
                                         None
@@ -303,7 +307,7 @@ fn match_with_component_index(
                                 used_new_ids,
                                 matcher,
                                 cross_eco_config,
-                                fuzzy_config.threshold,
+                                threshold,
                             );
                             results.extend(cross_matches);
                         }
@@ -330,7 +334,7 @@ fn match_with_component_index(
                     }
                     if let Some(new_comp) = new.components.get(&new_id) {
                         let score = matcher.match_score(old_comp, new_comp);
-                        if score >= fuzzy_config.threshold {
+                        if score >= threshold {
                             candidates.push(((*old_id).clone(), new_id, score));
                         }
                     }
@@ -347,7 +351,7 @@ fn match_with_component_index(
                         used_new_ids,
                         matcher,
                         cross_eco_config,
-                        fuzzy_config.threshold,
+                        threshold,
                     );
                     candidates.extend(cross_matches);
                 }
@@ -883,13 +887,11 @@ mod tests {
         let old = build("1.0.0");
         let new = build("2.0.0");
 
-        let fuzzy_config = FuzzyMatchConfig::default();
-        let matcher = FuzzyMatcher::new(fuzzy_config.clone());
+        let matcher = FuzzyMatcher::new(crate::matching::FuzzyMatchConfig::default());
         let result = match_components(
             &old,
             &new,
             &matcher,
-            &fuzzy_config,
             &LargeSbomConfig::default(),
         );
 
@@ -928,13 +930,11 @@ mod tests {
         let old = build(Ecosystem::Npm, "npm", "4.6.0");
         let new = build(Ecosystem::PyPi, "pypi", "5.0.0");
 
-        let fuzzy_config = FuzzyMatchConfig::default();
-        let matcher = FuzzyMatcher::new(fuzzy_config.clone());
+        let matcher = FuzzyMatcher::new(crate::matching::FuzzyMatchConfig::default());
         let result = match_components(
             &old,
             &new,
             &matcher,
-            &fuzzy_config,
             &LargeSbomConfig::default(),
         );
 
@@ -986,20 +986,19 @@ mod tests {
 
         let old = parity_sbom("1.0.0");
         let new = parity_sbom("2.0.0");
-        let fuzzy_config = FuzzyMatchConfig::default();
-        let matcher = FuzzyMatcher::new(fuzzy_config.clone());
+        let matcher = FuzzyMatcher::new(crate::matching::FuzzyMatchConfig::default());
 
         // 560 components >= 500 threshold: batch/LSH path.
         let batch_cfg = LargeSbomConfig::default();
         assert!(old.component_count() >= batch_cfg.lsh_threshold);
-        let via_batch = match_components(&old, &new, &matcher, &fuzzy_config, &batch_cfg);
+        let via_batch = match_components(&old, &new, &matcher, &batch_cfg);
 
         // Same inputs with the gate pushed out of reach: plain index path.
         let index_cfg = LargeSbomConfig {
             lsh_threshold: 100_000,
             ..LargeSbomConfig::default()
         };
-        let via_index = match_components(&old, &new, &matcher, &fuzzy_config, &index_cfg);
+        let via_index = match_components(&old, &new, &matcher, &index_cfg);
 
         assert_eq!(
             via_batch.matches, via_index.matches,

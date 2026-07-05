@@ -90,7 +90,14 @@ impl DiffResult {
     pub fn calculate_summary(&mut self) {
         self.summary.components_added = self.components.added.len();
         self.summary.components_removed = self.components.removed.len();
-        self.summary.components_modified = self.components.modified.len();
+        // Unchanged entries (produced under --include-unchanged) live in the
+        // modified stream for rendering but are not modifications.
+        self.summary.components_modified = self
+            .components
+            .modified
+            .iter()
+            .filter(|c| c.change_type != ChangeType::Unchanged)
+            .count();
 
         self.summary.dependencies_added = self.dependencies.added.len();
         self.summary.dependencies_removed = self.dependencies.removed.len();
@@ -117,10 +124,19 @@ impl DiffResult {
     ///
     /// Checks both the pre-computed summary and the source-of-truth fields to be
     /// safe regardless of whether `calculate_summary()` was called.
+    ///
+    /// Unchanged inventory entries (produced under `--include-unchanged`) are
+    /// not changes: a zero-change diff reports `false` regardless of the flag.
     #[must_use]
     pub fn has_changes(&self) -> bool {
         self.summary.total_changes > 0
-            || !self.components.is_empty()
+            || !self.components.added.is_empty()
+            || !self.components.removed.is_empty()
+            || self
+                .components
+                .modified
+                .iter()
+                .any(|c| c.change_type != ChangeType::Unchanged)
             || !self.dependencies.is_empty()
             || !self.graph_changes.is_empty()
             || !self.metadata_changes.is_empty()
@@ -588,6 +604,26 @@ impl ComponentChange {
             change_type: ChangeType::Removed,
             field_changes: Vec::new(),
             cost,
+            match_info: None,
+        }
+    }
+
+    /// Create an unchanged-component entry (matched, content-equal pair).
+    /// Produced only when `--include-unchanged` is enabled; carries zero cost
+    /// and is excluded from modified counts and semantic scoring.
+    pub fn unchanged(old: &Component, new: &Component) -> Self {
+        Self {
+            id: new.canonical_id.to_string(),
+            canonical_id: Some(new.canonical_id.clone()),
+            component_ref: Some(ComponentRef::from_component(new)),
+            old_canonical_id: Some(old.canonical_id.clone()),
+            name: new.name.clone(),
+            old_version: old.version.clone(),
+            new_version: new.version.clone(),
+            ecosystem: new.ecosystem.as_ref().map(std::string::ToString::to_string),
+            change_type: ChangeType::Unchanged,
+            field_changes: Vec::new(),
+            cost: 0,
             match_info: None,
         }
     }

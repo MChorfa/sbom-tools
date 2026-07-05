@@ -283,8 +283,6 @@ pub struct DiffCacheConfig {
     pub max_entries: usize,
     /// Time-to-live for cache entries
     pub ttl: Duration,
-    /// Enable incremental computation for partial changes
-    pub enable_incremental: bool,
 }
 
 impl Default for DiffCacheConfig {
@@ -292,7 +290,6 @@ impl Default for DiffCacheConfig {
         Self {
             max_entries: 100,
             ttl: Duration::from_secs(3600), // 1 hour
-            enable_incremental: true,
         }
     }
 }
@@ -863,7 +860,6 @@ mod tests {
         let config = DiffCacheConfig {
             max_entries: 3,
             ttl: Duration::from_secs(3600),
-            enable_incremental: true,
         };
         let cache = DiffCache::with_config(config);
 

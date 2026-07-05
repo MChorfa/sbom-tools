@@ -116,8 +116,6 @@ impl MinSeverity {
 pub struct ReportConfig {
     /// Which report types to include
     pub report_types: Vec<ReportType>,
-    /// Include unchanged items in the report
-    pub include_unchanged: bool,
     /// Maximum items per section
     pub max_items: Option<usize>,
     /// Include detailed field changes
@@ -145,7 +143,6 @@ impl Default for ReportConfig {
     fn default() -> Self {
         Self {
             report_types: vec![ReportType::All],
-            include_unchanged: false,
             max_items: None,
             include_field_changes: true,
             title: None,

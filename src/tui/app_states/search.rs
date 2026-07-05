@@ -103,6 +103,8 @@ pub enum ChangeType {
     Added,
     Removed,
     Modified,
+    /// Inventory entry produced under --include-unchanged
+    Unchanged,
 }
 
 impl ChangeType {
@@ -111,6 +113,7 @@ impl ChangeType {
             Self::Added => "added",
             Self::Removed => "removed",
             Self::Modified => "modified",
+            Self::Unchanged => "unchanged",
         }
     }
 }

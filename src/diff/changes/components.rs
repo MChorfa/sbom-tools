@@ -11,13 +11,25 @@ use std::collections::HashSet;
 /// Computes component-level changes between SBOMs.
 pub struct ComponentChangeComputer {
     cost_model: CostModel,
+    include_unchanged: bool,
 }
 
 impl ComponentChangeComputer {
     /// Create a new component change computer with the given cost model.
     #[must_use]
     pub const fn new(cost_model: CostModel) -> Self {
-        Self { cost_model }
+        Self {
+            cost_model,
+            include_unchanged: false,
+        }
+    }
+
+    /// Also emit `ChangeType::Unchanged` entries for matched, content-equal
+    /// pairs (drives `--include-unchanged`).
+    #[must_use]
+    pub const fn with_include_unchanged(mut self, include_unchanged: bool) -> Self {
+        self.include_unchanged = include_unchanged;
+        self
     }
 
     /// Compute individual field changes between two components.
@@ -690,7 +702,17 @@ impl ChangeComputer for ComponentChangeComputer {
                             field_changes,
                             cost,
                         ));
+                    } else if self.include_unchanged {
+                        // Hash differs only in untracked detail; no reportable
+                        // field change — an unchanged entry for inventory view.
+                        result
+                            .modified
+                            .push(ComponentChange::unchanged(old_comp, new_comp));
                     }
+                } else if self.include_unchanged {
+                    result
+                        .modified
+                        .push(ComponentChange::unchanged(old_comp, new_comp));
                 }
             }
         }

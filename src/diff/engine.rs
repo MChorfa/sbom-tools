@@ -13,7 +13,7 @@ use super::traits::ChangeComputer;
 use super::{CostModel, DiffResult, GraphDiffConfig, MatchInfo, diff_dependency_graph};
 use crate::error::SbomDiffError;
 use crate::matching::{
-    ComponentMatcher, FuzzyMatchConfig, FuzzyMatcher, MatchingRulesConfig, RuleEngine,
+    ComponentMatcher, FuzzyMatchConfig, FuzzyMatcher, RuleEngine,
 };
 use crate::model::NormalizedSbom;
 use std::borrow::Cow;
@@ -66,12 +66,6 @@ impl DiffEngine {
     pub fn with_graph_diff(mut self, config: GraphDiffConfig) -> Self {
         self.graph_diff_config = Some(config);
         self
-    }
-
-    /// Set custom matching rules from a configuration
-    pub fn with_matching_rules(mut self, config: MatchingRulesConfig) -> Result<Self, String> {
-        self.rule_engine = Some(RuleEngine::new(config)?);
-        Ok(self)
     }
 
     /// Set custom matching rules engine directly
@@ -132,8 +126,14 @@ impl DiffEngine {
 
         let mut result = DiffResult::new();
 
-        // Quick check: if content hashes match, SBOMs are identical
-        if old.content_hash == new.content_hash && old.content_hash != 0 {
+        // Quick check: if content hashes match, SBOMs are identical. With
+        // --include-unchanged the caller asked for full inventory output, so
+        // the shortcut would contradict the flag (identical SBOMs would be
+        // the one case with NO inventory) — fall through instead.
+        if old.content_hash == new.content_hash
+            && old.content_hash != 0
+            && !self.include_unchanged
+        {
             result.semantic_score = PERCENT_MAX;
             return Ok(result);
         }
@@ -166,7 +166,6 @@ impl DiffEngine {
             &old_filtered,
             &new_filtered,
             matcher,
-            &self.fuzzy_config,
             &self.large_sbom_config,
         );
 
@@ -214,7 +213,8 @@ impl DiffEngine {
         result: &mut DiffResult,
     ) {
         if sections.components {
-            let comp_computer = ComponentChangeComputer::new(self.cost_model.clone());
+            let comp_computer = ComponentChangeComputer::new(self.cost_model.clone())
+                .with_include_unchanged(self.include_unchanged);
             let comp_changes = comp_computer.compute(old, new, &match_result.matches);
             result.components.added = comp_changes.added;
             result.components.removed = comp_changes.removed;
@@ -224,9 +224,11 @@ impl DiffEngine {
                 .map(|mut change| {
                     // Add match explanation for modified components. Use
                     // stored canonical IDs directly instead of reconstructing
-                    // from name+version.
-                    if let (Some(old_id), Some(new_id)) =
-                        (&change.old_canonical_id, &change.canonical_id)
+                    // from name+version. Unchanged inventory entries skip the
+                    // enrichment — explaining a self-match is wasted work.
+                    if change.change_type != crate::diff::ChangeType::Unchanged
+                        && let (Some(old_id), Some(new_id)) =
+                            (&change.old_canonical_id, &change.canonical_id)
                         && let (Some(old_comp), Some(new_comp)) =
                             (old.components.get(old_id), new.components.get(new_id))
                     {
@@ -391,7 +393,6 @@ impl DiffEngine {
             &old_filtered,
             &new_filtered,
             matcher,
-            &self.fuzzy_config,
             &self.large_sbom_config,
         );
 
@@ -451,10 +452,19 @@ impl DiffEngine {
         old_sbom: &NormalizedSbom,
         new_sbom: &NormalizedSbom,
     ) -> f64 {
+        // Unchanged inventory entries (--include-unchanged) live in the
+        // modified stream but are not changes; scoring must ignore them or
+        // the flag would alter the semantic score.
+        let modified_count = result
+            .components
+            .modified
+            .iter()
+            .filter(|c| c.change_type != crate::diff::ChangeType::Unchanged)
+            .count();
         let raw_cost = self.cost_model.calculate_semantic_score(
             result.components.added.len(),
             result.components.removed.len(),
-            result.components.modified.len(),
+            modified_count,
             result.licenses.component_changes.len(),
             result.vulnerabilities.introduced.len(),
             result.vulnerabilities.resolved.len(),
@@ -506,7 +516,13 @@ impl DiffEngine {
         let vulnerability_budget = (old_sbom.vulnerability_counts().total()
             + new_sbom.vulnerability_counts().total()) as f64
             * f64::from(self.cost_model.vulnerability_introduced);
-        let modification_budget = result.components.modified.len() as f64
+        // Excludes Unchanged inventory entries, mirroring compute_semantic_score.
+        let modification_budget = result
+            .components
+            .modified
+            .iter()
+            .filter(|c| c.change_type != crate::diff::ChangeType::Unchanged)
+            .count() as f64
             * f64::from(
                 self.cost_model
                     .version_major
@@ -544,5 +560,98 @@ mod tests {
         let sbom = NormalizedSbom::default();
         let result = engine.diff(&sbom, &sbom).expect("diff should succeed");
         assert!(!result.has_changes());
+    }
+
+    /// `--include-unchanged` was an end-to-end no-op: the flag is now
+    /// honored (Unchanged entries appear) without perturbing summary counts
+    /// or the semantic score.
+    #[test]
+    fn include_unchanged_emits_inventory_entries_without_changing_scores() {
+        use crate::diff::ChangeType;
+        use crate::model::{Component, DocumentMetadata};
+
+        let build = |bump_app: bool| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let app_version = if bump_app { "2.0.0" } else { "1.0.0" };
+            for (name, version) in [
+                ("app", app_version),
+                ("stable-lib", "3.1.0"),
+                ("other-lib", "0.9.0"),
+            ] {
+                let mut c =
+                    Component::new(name.to_string(), format!("pkg:npm/{name}@{version}"));
+                c.version = Some(version.to_string());
+                c.calculate_content_hash();
+                sbom.add_component(c);
+            }
+            sbom.calculate_content_hash();
+            sbom
+        };
+        let old = build(false);
+        let new = build(true);
+
+        let without = DiffEngine::new().diff(&old, &new).expect("diff");
+        let with = DiffEngine::new()
+            .include_unchanged(true)
+            .diff(&old, &new)
+            .expect("diff");
+
+        let unchanged: Vec<_> = with
+            .components
+            .modified
+            .iter()
+            .filter(|c| c.change_type == ChangeType::Unchanged)
+            .collect();
+        assert_eq!(
+            unchanged.len(),
+            2,
+            "the two stable components must appear as Unchanged inventory entries"
+        );
+        assert!(unchanged.iter().all(|c| c.cost == 0));
+
+        // Counts and scoring must be flag-invariant.
+        assert_eq!(
+            with.summary.components_modified,
+            without.summary.components_modified
+        );
+        assert_eq!(with.summary.total_changes, without.summary.total_changes);
+        assert!(
+            (with.semantic_score - without.semantic_score).abs() < 1e-9,
+            "the flag must not change the semantic score: {} vs {}",
+            with.semantic_score,
+            without.semantic_score
+        );
+
+        // Flag off: no Unchanged entries anywhere (default output unchanged).
+        assert!(
+            without
+                .components
+                .modified
+                .iter()
+                .all(|c| c.change_type != ChangeType::Unchanged)
+        );
+
+        // Inventory entries are not changes: has_changes() is flag-invariant.
+        assert_eq!(with.has_changes(), without.has_changes());
+
+        // Identical SBOMs with the flag on must still produce full inventory
+        // (the identical-hash short-circuit would otherwise make "everything
+        // unchanged" the one case with NO inventory).
+        let identical = DiffEngine::new()
+            .include_unchanged(true)
+            .diff(&old, &old)
+            .expect("diff");
+        assert_eq!(
+            identical
+                .components
+                .modified
+                .iter()
+                .filter(|c| c.change_type == ChangeType::Unchanged)
+                .count(),
+            3,
+            "identical SBOMs must yield one Unchanged entry per component"
+        );
+        assert!(!identical.has_changes());
+        assert!((identical.semantic_score - 100.0).abs() < 1e-9);
     }
 }

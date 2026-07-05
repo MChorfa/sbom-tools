@@ -620,6 +620,19 @@ impl ComponentMatcher for CompositeMatcher {
     fn name(&self) -> &'static str {
         "CompositeMatcher"
     }
+
+    /// The acceptance threshold matching this matcher's max-score semantics:
+    /// a pair is acceptable if ANY inner matcher would accept it, so the
+    /// composite threshold is the MINIMUM of the inner thresholds. (Without
+    /// this override the trait default of 0.0 made the engine's
+    /// matcher-owned gate accept every candidate pair, including score-0.)
+    fn threshold(&self) -> f64 {
+        self.matchers
+            .iter()
+            .map(|m| m.threshold())
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(1.0)
+    }
 }
 
 #[cfg(test)]

@@ -44,7 +44,6 @@ pub mod multi;
 mod multi_engine;
 mod result;
 pub mod traits;
-mod vertex;
 
 pub use cost::CostModel;
 pub use engine::{DiffEngine, LargeSbomConfig};
@@ -74,4 +73,3 @@ pub use traits::{
     ChangeComputer, ComponentChangeSet, ComponentMatches, DependencyChangeSet, LicenseChangeSet,
     VulnerabilityChangeSet,
 };
-pub use vertex::DiffVertex;

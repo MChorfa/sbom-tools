@@ -60,8 +60,20 @@ pub struct RuleEngine {
 }
 
 impl RuleEngine {
-    /// Create a new rule engine from configuration
-    pub fn new(config: MatchingRulesConfig) -> Result<Self, String> {
+    /// Create a new rule engine from configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::SbomDiffError::Matching`] when an exclusion or alias
+    /// pattern fails to compile.
+    pub fn new(config: MatchingRulesConfig) -> Result<Self, crate::error::SbomDiffError> {
+        Self::build(config).map_err(|message| crate::error::SbomDiffError::Matching {
+            context: "invalid matching rules configuration".to_string(),
+            source: crate::error::MatchingErrorKind::InvalidRule(message),
+        })
+    }
+
+    fn build(config: MatchingRulesConfig) -> Result<Self, String> {
         // Pre-compile regex patterns for exclusions
         let compiled_exclusion_regexes = config
             .exclusions

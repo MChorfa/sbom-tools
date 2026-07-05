@@ -75,6 +75,9 @@ impl App {
                     ChangeType::Added => comp.change_type == crate::diff::ChangeType::Added,
                     ChangeType::Removed => comp.change_type == crate::diff::ChangeType::Removed,
                     ChangeType::Modified => comp.change_type == crate::diff::ChangeType::Modified,
+                    ChangeType::Unchanged => {
+                        comp.change_type == crate::diff::ChangeType::Unchanged
+                    }
                 });
                 let matches_name = comp.name.to_lowercase() == name_lower;
                 let matches_version = version_lower.as_ref().is_none_or(|v| {

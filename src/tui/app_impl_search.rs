@@ -99,10 +99,16 @@ impl App {
             // Search modified components
             for change in &diff.components.modified {
                 if matches_query(&change.name) {
+                    let change_type =
+                        if change.change_type == crate::diff::ChangeType::Unchanged {
+                            ChangeType::Unchanged
+                        } else {
+                            ChangeType::Modified
+                        };
                     results.push(DiffSearchResult::Component {
                         name: change.name.clone(),
                         version: change.new_version.clone(),
-                        change_type: ChangeType::Modified,
+                        change_type,
                     });
                 }
             }
