@@ -57,3 +57,8 @@ doc = false
 name = "fuzz_score_sbom"
 path = "fuzz_targets/fuzz_score_sbom.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_spdx3_json"
+path = "fuzz_targets/fuzz_spdx3_json.rs"
+doc = false

@@ -1,0 +1,39 @@
+{
+ "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+ "@graph": [
+  {
+   "type": "SpdxDocument",
+   "spdxId": "urn:doc",
+   "name": "graph-seed",
+   "rootElement": [
+    "urn:app"
+   ],
+   "element": [
+    "urn:app",
+    "urn:lib",
+    "urn:r1"
+   ]
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "urn:app",
+   "name": "app",
+   "software_packageUrl": "pkg:npm/app@1.0"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "urn:lib",
+   "name": "lib",
+   "software_packageUrl": "pkg:npm/lib@1.0"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "urn:r1",
+   "relationshipType": "dependsOn",
+   "from": "urn:app",
+   "to": [
+    "urn:lib"
+   ]
+  }
+ ]
+}

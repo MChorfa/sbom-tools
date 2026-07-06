@@ -1945,12 +1945,48 @@ mod model_tests {
 
         assert_ne!(sbom.content_hash, 0, "Content hash should be calculated");
 
-        // Same content should produce same hash
+        // Same bytes MUST produce the same hash — this is the diff
+        // engine's identity check and the incremental cache key. This doc
+        // deliberately has NO timestamp: parsers previously substituted
+        // Utc::now(), making every parse of a timestamp-less document
+        // content-unique.
         let mut sbom2 = parse_sbom_str(content).unwrap();
         sbom2.calculate_content_hash();
+        assert_eq!(
+            sbom.content_hash, sbom2.content_hash,
+            "identical input bytes must produce identical content hashes"
+        );
+    }
 
-        // Note: Hash might differ due to parsing order, but should be consistent
-        // for the same input
+    /// Parse determinism across all three formats: identical bytes yield
+    /// identical content hashes, timestamp or not.
+    #[test]
+    fn test_content_hash_deterministic_across_formats() {
+        let cases: &[&str] = &[
+            // CycloneDX without timestamp
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","name":"a","version":"1.0"}]}"#,
+            // CycloneDX with timestamp
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "metadata":{"timestamp":"2024-01-01T00:00:00Z"},
+                "components":[{"type":"library","name":"a","version":"1.0"}]}"#,
+            // SPDX 2.x JSON without created
+            r#"{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","name":"d",
+                "dataLicense":"CC0-1.0",
+                "packages":[{"SPDXID":"SPDXRef-a","name":"a","versionInfo":"1.0"}]}"#,
+            // SPDX 3.0 without creationInfo.created
+            r#"{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+                "type":"SpdxDocument","spdxId":"urn:doc",
+                "element":[{"type":"software_Package","spdxId":"urn:a","name":"a"}]}"#,
+        ];
+        for (i, content) in cases.iter().enumerate() {
+            let a = parse_sbom_str(content).unwrap_or_else(|e| panic!("case {i}: {e}"));
+            let b = parse_sbom_str(content).unwrap();
+            assert_eq!(
+                a.content_hash, b.content_hash,
+                "case {i}: identical bytes must hash identically"
+            );
+        }
     }
 
     #[test]
@@ -3044,6 +3080,103 @@ mod streaming_tests {
 
         assert_eq!(sbom.document.spec_version, "3.0.1");
         assert_eq!(sbom.component_count(), 4);
+    }
+
+    /// The reader path (FormatDetector::parse_reader, serde_json::from_reader
+    /// for the JSON variants) is a genuinely different code path than
+    /// parse_str/from_str; the two must produce IDENTICAL NormalizedSbom
+    /// output for the same bytes, across every format variant. Compared via
+    /// serialized JSON so any field-level divergence fails loudly.
+    #[test]
+    fn test_reader_path_equivalent_to_string_path_across_formats() {
+        use std::path::Path;
+
+        let fixtures = [
+            "tests/fixtures/cyclonedx/minimal.cdx.json",
+            "tests/fixtures/cyclonedx/minimal-1.5.cdx.xml",
+            "tests/fixtures/cyclonedx/with-vulnerabilities.cdx.json",
+            "tests/fixtures/spdx/minimal.spdx.json",
+            "tests/fixtures/spdx/minimal.spdx.rdf.xml",
+            "tests/fixtures/spdx3/minimal.spdx3.json",
+            "tests/fixtures/spdx3/security-profile.spdx3.json",
+        ];
+
+        let detector = sbom_tools::parsers::FormatDetector::new();
+        for rel in fixtures {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{rel}: read failed: {e}"));
+
+            let via_str = detector
+                .parse_str(&content)
+                .unwrap_or_else(|e| panic!("{rel}: parse_str failed: {e}"));
+            let via_reader = detector
+                .parse_reader(std::io::BufReader::new(content.as_bytes()))
+                .unwrap_or_else(|e| panic!("{rel}: parse_reader failed: {e}"));
+
+            assert_sboms_equivalent(&via_str, &via_reader, rel);
+        }
+    }
+
+    /// Field-level equivalence check for two parses of the same bytes.
+    /// (NormalizedSbom's IndexMap<CanonicalId, _> keys aren't JSON map keys,
+    /// so a whole-struct serde compare isn't possible.)
+    fn assert_sboms_equivalent(
+        a: &sbom_tools::model::NormalizedSbom,
+        b: &sbom_tools::model::NormalizedSbom,
+        label: &str,
+    ) {
+        let mut a = a.clone();
+        let mut b = b.clone();
+        a.calculate_content_hash();
+        b.calculate_content_hash();
+        assert_eq!(
+            a.content_hash, b.content_hash,
+            "{label}: content hashes must match (doc metadata + components + edges)"
+        );
+        assert_eq!(
+            a.component_count(),
+            b.component_count(),
+            "{label}: component count"
+        );
+        assert_eq!(a.edges.len(), b.edges.len(), "{label}: edge count");
+        assert_eq!(
+            a.primary_component_id, b.primary_component_id,
+            "{label}: primary component"
+        );
+        assert_eq!(
+            serde_json::to_value(&a.extensions).expect("ext"),
+            serde_json::to_value(&b.extensions).expect("ext"),
+            "{label}: extensions"
+        );
+        let ids = |s: &sbom_tools::model::NormalizedSbom| {
+            let mut v: Vec<String> = s.components.keys().map(|k| k.value().to_string()).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(ids(&a), ids(&b), "{label}: component id sets");
+    }
+
+    /// SPDX tag-value through the reader path (not covered by the JSON
+    /// fixtures above — tag-value takes the read_to_string_capped branch).
+    #[test]
+    fn test_reader_path_equivalent_for_tag_value() {
+        let content = "SPDXVersion: SPDX-2.3\n\
+             SPDXID: SPDXRef-DOCUMENT\n\
+             DocumentName: eq-test\n\
+             DataLicense: CC0-1.0\n\
+             Created: 2024-01-01T00:00:00Z\n\
+             PackageName: libfoo\n\
+             SPDXID: SPDXRef-Package-libfoo\n\
+             PackageVersion: 1.0\n";
+
+        let detector = sbom_tools::parsers::FormatDetector::new();
+        let via_str = detector.parse_str(content).expect("parse_str");
+        let via_reader = detector
+            .parse_reader(std::io::BufReader::new(content.as_bytes()))
+            .expect("parse_reader");
+
+        assert_sboms_equivalent(&via_str, &via_reader, "tag-value");
     }
 }
 

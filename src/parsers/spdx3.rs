@@ -35,6 +35,7 @@ impl Spdx3Parser {
 
     /// Parse SPDX 3.0 JSON-LD content
     fn parse_json_ld(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
+        let content = super::strip_bom(content);
         let doc: Spdx3Document =
             serde_json::from_str(content).map_err(|e| ParseError::JsonError(e.to_string()))?;
 
@@ -66,8 +67,16 @@ impl Spdx3Parser {
         let mut seen_ids: HashSet<String> = HashSet::new();
         let mut duplicate_count: usize = 0;
 
-        // First pass: categorize elements by type (move, not clone)
-        if let Some(elements) = doc.element.take() {
+        // First pass: categorize elements by type (move, not clone).
+        // Elements may be provided inline (`element`) or as a JSON-LD flat
+        // graph (`@graph`); handle both, chained.
+        let elements = doc
+            .element
+            .take()
+            .into_iter()
+            .flatten()
+            .chain(doc.graph.take().into_iter().flatten());
+        {
             for element in elements {
                 // Track duplicate element IDs
                 let element_id = match &element {
@@ -167,6 +176,28 @@ impl Spdx3Parser {
                         if let Some(id) = lic.spdx_id {
                             let text = lic.license_text.unwrap_or_default();
                             license_elements.insert(id, text);
+                        }
+                    }
+                    Spdx3Element::SpdxDocument(inner) => {
+                        // In @graph serialization the document metadata lives
+                        // on a node inside the graph, not the top level.
+                        // Lift it (without clobbering an already-populated
+                        // top-level document, e.g. a mixed serialization).
+                        let inner = *inner;
+                        if doc.name.is_none() {
+                            doc.name = inner.name;
+                        }
+                        if doc.creation_info.is_none() {
+                            doc.creation_info = inner.creation_info;
+                        }
+                        if doc.root_element.is_none() {
+                            doc.root_element = inner.root_element;
+                        }
+                        if doc.spdx_id.is_none() {
+                            doc.spdx_id = inner.spdx_id;
+                        }
+                        if doc.description.is_none() {
+                            doc.description = inner.description;
                         }
                     }
                     _ => {} // Skip unknown element types
@@ -311,7 +342,13 @@ impl Spdx3Parser {
             .as_ref()
             .and_then(|ci| ci.created.as_ref())
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-            .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
+            // Deterministic fallback: a document with a missing/invalid
+            // timestamp must hash identically on every parse (created is
+            // folded into the content hash; Utc::now() here made every
+            // parse of such a document content-unique, defeating diff
+            // identity and the incremental cache). Epoch is an honest
+            // "unknown" sentinel rather than a fabricated parse time.
+            .map_or(DateTime::UNIX_EPOCH, |dt| dt.with_timezone(&Utc));
 
         let mut creators = Vec::new();
         if let Some(ci) = &doc.creation_info {
@@ -750,8 +787,9 @@ impl Spdx3Parser {
         // Use resolved VEX state from enum variant discrimination
         let vex_state = assessment.resolved_vex_state.clone();
 
-        // Extract CVSS score if present
-        let cvss_score = assessment.score.map(|score| {
+        // Extract CVSS score if present. Reject non-finite (NaN/inf) scores
+        // so a hostile value can't reach severity derivation.
+        let cvss_score = assessment.score.filter(|s| s.is_finite()).map(|score| {
             // Infer version from vector string (more precise), fallback to variant type
             let version = assessment.vector.as_deref().map_or_else(
                 || {
@@ -782,19 +820,23 @@ impl Spdx3Parser {
             cs
         });
 
-        // Map justification string to enum
-        let justification = assessment.justification.as_deref().map(|j| {
+        // Map justification string to enum. Unknown/unrecognized yields None,
+        // never fabricating a strong not-affected justification from hostile
+        // or malformed input.
+        let justification = assessment.justification.as_deref().and_then(|j| {
             match j.to_lowercase().replace(['-', '_'], "").as_str() {
-                "componentnotpresent" => VexJustification::ComponentNotPresent,
-                "vulnerablecodenotpresent" => VexJustification::VulnerableCodeNotPresent,
+                "componentnotpresent" => Some(VexJustification::ComponentNotPresent),
+                "vulnerablecodenotpresent" => Some(VexJustification::VulnerableCodeNotPresent),
                 "vulnerablecodenotinexecutepath" => {
-                    VexJustification::VulnerableCodeNotInExecutePath
+                    Some(VexJustification::VulnerableCodeNotInExecutePath)
                 }
                 "vulnerablecodecannotbecontrolledbyadversary" => {
-                    VexJustification::VulnerableCodeCannotBeControlledByAdversary
+                    Some(VexJustification::VulnerableCodeCannotBeControlledByAdversary)
                 }
-                "inlinemitigationsalreadyexist" => VexJustification::InlineMitigationsAlreadyExist,
-                _ => VexJustification::VulnerableCodeNotPresent, // fallback
+                "inlinemitigationsalreadyexist" => {
+                    Some(VexJustification::InlineMitigationsAlreadyExist)
+                }
+                _ => None,
             }
         });
 
@@ -888,7 +930,9 @@ impl Spdx3Parser {
                 .spdx_id
                 .clone()
                 .unwrap_or_else(|| "unknown".to_string()),
-            annotation_date: Utc::now(), // SPDX 3.0 annotations don't always have timestamps
+            // Deterministic: annotations without timestamps must not make
+            // serialized output differ run-to-run.
+            annotation_date: DateTime::UNIX_EPOCH,
             annotation_type: ann_type,
             comment: statement,
         });
@@ -904,59 +948,91 @@ impl Spdx3Parser {
         license_elements: &HashMap<String, String>,
     ) {
         let rel_type = rel.relationship_type.as_deref().unwrap_or("");
+        // SPDX 3.0 JSON-LD serializes relationship types in camelCase
+        // ("dependsOn", "hasDeclaredLicense", "fixedIn"); older/underscore
+        // forms ("DEPENDS_ON") also occur. Normalize BOTH to UPPER_SNAKE so
+        // spec-compliant camelCase documents don't parse to zero edges (a
+        // bare to_uppercase() turned "dependsOn" into "DEPENDSON", matching
+        // no arm).
+        let normalized = normalize_relationship_type(rel_type);
+        // Inverse (`*_OF` / `GENERATED_FROM` / `*_TOOL_OF`) relationships
+        // read "A is a dependency of B" = B depends on A, so their edge is
+        // swapped relative to the forward form. Types with a dedicated
+        // DependencyType (ContainedBy/AncestorOf/VariantOf/Patch/Copy/…)
+        // keep from→to, since the type itself encodes the direction.
+        let swap = is_inverse_dependency(&normalized);
 
-        match rel_type.to_uppercase().as_str() {
+        match normalized.as_str() {
             // Dependency relationships -> DependencyEdge
             "DEPENDS_ON" | "DEPENDENCY_OF" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DependsOn);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DependsOn, swap);
             }
             "DEV_DEPENDENCY_OF" | "DEV_DEPENDS_ON" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DevDependsOn);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DevDependsOn, swap);
             }
             "BUILD_DEPENDENCY_OF" | "BUILD_DEPENDS_ON" | "BUILD_TOOL_OF" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::BuildDependsOn);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::BuildDependsOn, swap);
             }
             "TEST_DEPENDENCY_OF" | "TEST_DEPENDS_ON" | "TEST_TOOL_OF" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::TestDependsOn);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::TestDependsOn, swap);
             }
             "RUNTIME_DEPENDENCY_OF" | "RUNTIME_DEPENDS_ON" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::RuntimeDependsOn);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::RuntimeDependsOn, swap);
             }
             "OPTIONAL_DEPENDENCY_OF" | "OPTIONAL_DEPENDS_ON" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::OptionalDependsOn);
+                self.add_dependency_edge(
+                    rel,
+                    id_map,
+                    sbom,
+                    DependencyType::OptionalDependsOn,
+                    swap,
+                );
             }
             "PROVIDED_DEPENDENCY_OF" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::ProvidedDependsOn);
+                self.add_dependency_edge(
+                    rel,
+                    id_map,
+                    sbom,
+                    DependencyType::ProvidedDependsOn,
+                    swap,
+                );
             }
             "CONTAINS" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::Contains);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::Contains, false);
             }
             "DESCRIBES" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::Describes);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::Describes, false);
             }
             "GENERATES" | "GENERATED_FROM" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::Generates);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::Generates, swap);
             }
             "ANCESTOR_OF" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::AncestorOf);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::AncestorOf, false);
             }
             "VARIANT_OF" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::VariantOf);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::VariantOf, false);
             }
             "DISTRIBUTION_ARTIFACT" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DistributionArtifact);
+                self.add_dependency_edge(
+                    rel,
+                    id_map,
+                    sbom,
+                    DependencyType::DistributionArtifact,
+                    false,
+                );
             }
             "PATCH_FOR" | "PATCH_APPLIED" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::PatchFor);
+                // Both have from=patch, to=target (same direction per spec).
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::PatchFor, false);
             }
             "COPY_OF" | "EXPANDED_FROM_ARCHIVE" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::CopyOf);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::CopyOf, false);
             }
             "DYNAMIC_LINK" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DynamicLink);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::DynamicLink, false);
             }
             "STATIC_LINK" => {
-                self.add_dependency_edge(rel, id_map, sbom, DependencyType::StaticLink);
+                self.add_dependency_edge(rel, id_map, sbom, DependencyType::StaticLink, false);
             }
 
             // License relationships -> populate Component.licenses
@@ -970,7 +1046,7 @@ impl Spdx3Parser {
                             && let Some(comp) = sbom.components.get_mut(canonical_id)
                         {
                             let lic = LicenseExpression::new(expr.clone());
-                            if rel_type.to_uppercase().contains("CONCLUDED") {
+                            if normalized.contains("CONCLUDED") {
                                 comp.licenses.concluded = Some(lic);
                             } else {
                                 comp.licenses.add_declared(lic);
@@ -987,12 +1063,18 @@ impl Spdx3Parser {
                     && let Some(vuln) = vuln_map.get(from_ref)
                     && let Some(to_refs) = &rel.to
                 {
+                    // Convert ONCE (capped description) and clone per target,
+                    // deduped: rebuilding per `to` entry re-clones the
+                    // attacker-controlled description — a memory-amplification
+                    // DoS from one relationship with a huge `to` array.
+                    let vuln_ref = self.convert_vulnerability(vuln);
+                    let mut seen: HashSet<&CanonicalId> = HashSet::new();
                     for to_ref in to_refs {
-                        if let Some(canonical_id) = id_map.get(to_ref) {
-                            let vuln_ref = self.convert_vulnerability(vuln);
-                            if let Some(comp) = sbom.components.get_mut(canonical_id) {
-                                comp.vulnerabilities.push(vuln_ref);
-                            }
+                        if let Some(canonical_id) = id_map.get(to_ref)
+                            && seen.insert(canonical_id)
+                            && let Some(comp) = sbom.components.get_mut(canonical_id)
+                        {
+                            comp.vulnerabilities.push(vuln_ref.clone());
                         }
                     }
                 }
@@ -1004,10 +1086,23 @@ impl Spdx3Parser {
                     && let Some(vuln) = vuln_map.get(from_ref)
                     && let Some(to_refs) = &rel.to
                 {
+                    let mut base = self.convert_vulnerability(vuln);
+                    base.vex_status = Some(VexStatus {
+                        status: VexState::Fixed,
+                        justification: None,
+                        action_statement: None,
+                        impact_statement: None,
+                        responses: Vec::new(),
+                        detail: None,
+                    });
+                    let mut seen: HashSet<&CanonicalId> = HashSet::new();
                     for to_ref in to_refs {
-                        if let Some(canonical_id) = id_map.get(to_ref) {
-                            let mut vuln_ref = self.convert_vulnerability(vuln);
-                            vuln_ref.vex_status = Some(VexStatus {
+                        if let Some(canonical_id) = id_map.get(to_ref)
+                            && seen.insert(canonical_id)
+                            && let Some(comp) = sbom.components.get_mut(canonical_id)
+                        {
+                            comp.vulnerabilities.push(base.clone());
+                            comp.vex_status = Some(VexStatus {
                                 status: VexState::Fixed,
                                 justification: None,
                                 action_statement: None,
@@ -1015,17 +1110,6 @@ impl Spdx3Parser {
                                 responses: Vec::new(),
                                 detail: None,
                             });
-                            if let Some(comp) = sbom.components.get_mut(canonical_id) {
-                                comp.vulnerabilities.push(vuln_ref);
-                                comp.vex_status = Some(VexStatus {
-                                    status: VexState::Fixed,
-                                    justification: None,
-                                    action_statement: None,
-                                    impact_statement: None,
-                                    responses: Vec::new(),
-                                    detail: None,
-                                });
-                            }
                         }
                     }
                 }
@@ -1036,13 +1120,12 @@ impl Spdx3Parser {
                 // These are processed in process_vuln_assessment()
             }
 
-            // AI profile: an ai_AIPackage TRAINED_ON a dataset. SPDX 3.0 JSON-LD
-            // uppercases the relationship type WITHOUT an underscore ("trainedOn"
-            // → "TRAINEDON"), so the canonical key has no separator. This is the
-            // SPDX equivalent of CycloneDX `modelParameters.datasets`; populate the
-            // model's typed `training_datasets` so AI-003 passes for SPDX too.
-            // `testedOn` is intentionally not treated as a training dataset.
-            "TRAINEDON" | "TRAINED_ON" => {
+            // AI profile: an ai_AIPackage TRAINED_ON a dataset (SPDX 3.0
+            // JSON-LD "trainedOn"). The SPDX equivalent of CycloneDX
+            // `modelParameters.datasets`; populate the model's typed
+            // `training_datasets` so AI-003 passes for SPDX too. `testedOn`
+            // is intentionally not treated as a training dataset.
+            "TRAINED_ON" => {
                 if let Some(from_ref) = &rel.from
                     && let Some(from_id) = id_map.get(from_ref)
                     && let Some(to_refs) = &rel.to
@@ -1074,19 +1157,25 @@ impl Spdx3Parser {
                         id_map,
                         sbom,
                         DependencyType::Other(rel_type.to_string()),
+                        false,
                     );
                 }
             }
         }
     }
 
-    /// Add a dependency edge from a relationship
+    /// Add a dependency edge from a relationship.
+    ///
+    /// `swap` reverses the edge direction for inverse relationship types
+    /// (`*_OF`): SPDX "A DEPENDENCY_OF B" means B depends on A, so the edge
+    /// runs to→from rather than from→to.
     fn add_dependency_edge(
         &self,
         rel: &Spdx3Relationship,
         id_map: &HashMap<String, CanonicalId>,
         sbom: &mut NormalizedSbom,
         dep_type: DependencyType,
+        swap: bool,
     ) {
         if let Some(from_ref) = &rel.from
             && let Some(from_id) = id_map.get(from_ref)
@@ -1094,11 +1183,12 @@ impl Spdx3Parser {
         {
             for to_ref in to_refs {
                 if let Some(to_id) = id_map.get(to_ref) {
-                    sbom.add_edge(DependencyEdge::new(
-                        from_id.clone(),
-                        to_id.clone(),
-                        dep_type.clone(),
-                    ));
+                    let (src, dst) = if swap {
+                        (to_id.clone(), from_id.clone())
+                    } else {
+                        (from_id.clone(), to_id.clone())
+                    };
+                    sbom.add_edge(DependencyEdge::new(src, dst, dep_type.clone()));
                 }
             }
         }
@@ -1133,7 +1223,7 @@ impl Spdx3Parser {
         };
 
         let mut vuln_ref = VulnerabilityRef::new(id, source);
-        vuln_ref.description.clone_from(&vuln.description);
+        vuln_ref.description = super::capped_description(&vuln.description);
 
         // Parse published/modified times
         if let Some(t) = &vuln.published_time {
@@ -1171,23 +1261,31 @@ impl SbomParser for Spdx3Parser {
     }
 
     fn detect(&self, content: &str) -> FormatDetection {
+        use crate::parsers::contains_json_key;
+
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
 
         if !trimmed.starts_with('{') {
             return FormatDetection::no_match();
         }
 
-        // SPDX 3.0 indicators
-        let has_context = content.contains("\"@context\"");
-        let has_spdx3_context = content.contains("spdx.org/rdf/3")
-            || content.contains("spdx.org/rdf/v3")
-            || content.contains("spdx3");
+        // SPDX 3.0 indicators. Marker keys must appear as actual JSON keys
+        // (see contains_json_key), not a coincidental string value elsewhere.
+        // The bare "spdx3" substring (no namespace URL, no quoting) was
+        // dropped: real SPDX 3.0 JSON-LD documents always carry one of the
+        // two spdx.org/rdf/{3,v3} context URLs below, and the bare word was
+        // the exact vector for an unrelated document (e.g. one that mentions
+        // "spdx3" in a description or property) to be misrouted here.
+        let has_context = contains_json_key(content, "@context");
+        let has_spdx3_context =
+            content.contains("spdx.org/rdf/3") || content.contains("spdx.org/rdf/v3");
         let has_type_spdx_document =
-            content.contains("\"type\"") && content.contains("\"SpdxDocument\"");
-        let has_spdx_id = content.contains("\"spdxId\"");
-        let has_creation_info = content.contains("\"creationInfo\"");
-        let has_element = content.contains("\"element\"");
-        let has_root_element = content.contains("\"rootElement\"");
+            contains_json_key(content, "type") && content.contains("\"SpdxDocument\"");
+        let has_spdx_id = contains_json_key(content, "spdxId");
+        let has_creation_info = contains_json_key(content, "creationInfo");
+        let has_element = contains_json_key(content, "element");
+        let has_root_element = contains_json_key(content, "rootElement");
 
         // Extract version
         let version = Self::extract_spec_version(content);
@@ -1250,6 +1348,46 @@ impl Spdx3Parser {
     }
 }
 
+/// Normalize a relationship type to UPPER_SNAKE_CASE.
+///
+/// Accepts both the SPDX 3.0 JSON-LD camelCase form ("dependsOn") and the
+/// underscore form ("DEPENDS_ON"): a `_` is inserted at each lower→upper
+/// camelCase boundary and the whole string uppercased, so both map to the
+/// same key. Without this, camelCase types uppercased to "DEPENDSON" and
+/// matched no arm, so spec-compliant documents parsed with zero edges.
+fn normalize_relationship_type(rel_type: &str) -> String {
+    let mut out = String::with_capacity(rel_type.len() + 4);
+    let mut prev_lower_or_digit = false;
+    for ch in rel_type.chars() {
+        if ch.is_ascii_uppercase() && prev_lower_or_digit {
+            out.push('_');
+        }
+        // Underscores already present pass through; runs won't double because
+        // an existing '_' resets prev_lower_or_digit to false.
+        out.push(ch.to_ascii_uppercase());
+        prev_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+    }
+    out
+}
+
+/// Whether a (normalized) relationship type is the inverse of a forward
+/// dependency and therefore needs its edge direction swapped.
+fn is_inverse_dependency(normalized: &str) -> bool {
+    matches!(
+        normalized,
+        "DEPENDENCY_OF"
+            | "DEV_DEPENDENCY_OF"
+            | "BUILD_DEPENDENCY_OF"
+            | "TEST_DEPENDENCY_OF"
+            | "RUNTIME_DEPENDENCY_OF"
+            | "OPTIONAL_DEPENDENCY_OF"
+            | "PROVIDED_DEPENDENCY_OF"
+            | "BUILD_TOOL_OF"
+            | "TEST_TOOL_OF"
+            | "GENERATED_FROM"
+    )
+}
+
 /// Map SPDX 3.0 hash algorithm names to our enum
 fn map_spdx3_hash_algorithm(algo: &str) -> HashAlgorithm {
     match algo.to_uppercase().as_str() {
@@ -1301,8 +1439,16 @@ struct Spdx3Document {
     imports: Option<Vec<Spdx3ExternalMap>>,
     /// Root elements (URIs of primary elements)
     root_element: Option<Vec<String>>,
-    /// All elements in the document
+    /// All elements in the document (embedded serialization)
     element: Option<Vec<Spdx3Element>>,
+    /// JSON-LD `@graph` node set. The canonical SPDX 3.0/3.0.1 serialization
+    /// (pyspdx and the spec examples) is a flat graph — `{"@graph":[ …all
+    /// elements…, {"type":"SpdxDocument", …} ]}` — rather than an
+    /// SpdxDocument with an inline `element` array. Without this the parser
+    /// only read `element` and produced a silently empty SBOM for
+    /// spec-conformant documents.
+    #[serde(rename = "@graph")]
+    graph: Option<Vec<Spdx3Element>>,
     /// Profile conformance declarations
     profile_conformance: Option<Vec<String>>,
     /// Integrity methods (hash/signature)
@@ -1415,9 +1561,28 @@ enum Spdx3Element {
     SsvcAssessment(Spdx3VulnAssessment),
     /// Lifecycle-scoped relationship
     LifecycleScopedRelationship(Spdx3Relationship),
+    /// An SpdxDocument node appearing INSIDE a JSON-LD `@graph` (its
+    /// metadata is lifted into the top-level document, which is empty in
+    /// that serialization). Its `element`/`rootElement` are ID-reference
+    /// strings, so it uses a metadata-only struct rather than the full
+    /// `Spdx3Document` (whose `element` is objects).
+    SpdxDocument(Box<Spdx3DocumentMeta>),
     /// Catch-all for unknown types (deserialized as raw JSON)
     #[serde(other)]
     Unknown,
+}
+
+/// Metadata-only view of an SpdxDocument node inside a JSON-LD `@graph`.
+/// Deliberately omits `element` (string ID refs there, not objects), which
+/// serde then ignores.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Spdx3DocumentMeta {
+    spdx_id: Option<String>,
+    name: Option<String>,
+    creation_info: Option<Spdx3CreationInfo>,
+    root_element: Option<Vec<String>>,
+    description: Option<String>,
 }
 
 /// SPDX 3.0 Package (Software profile)
@@ -1942,6 +2107,178 @@ mod tests {
             ds.sensitivity_classifications
                 .contains(&"amber".to_string())
         );
+    }
+
+    fn spdx3_lib(elements: &str) -> NormalizedSbom {
+        let doc = format!(
+            r#"{{
+              "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+              "type": "SpdxDocument", "spdxId": "urn:doc",
+              "element": [
+                {{"type": "software_Package", "spdxId": "urn:pkg:lib", "name": "lib",
+                 "software_packageVersion": "1.0",
+                 "software_packageUrl": "pkg:npm/lib@1.0"}},
+                {{"type": "security_Vulnerability", "spdxId": "urn:vuln:cve",
+                 "name": "CVE-2025-9999", "description": "boom"}},
+                {elements}
+              ]
+            }}"#
+        );
+        Spdx3Parser::new().parse_str(&doc).expect("parse")
+    }
+
+    fn spdx3_component<'a>(sbom: &'a NormalizedSbom, name: &str) -> &'a Component {
+        sbom.components
+            .values()
+            .find(|c| c.name == name)
+            .expect("component present")
+    }
+
+    #[test]
+    fn normalize_relationship_type_handles_camel_and_snake() {
+        assert_eq!(normalize_relationship_type("dependsOn"), "DEPENDS_ON");
+        assert_eq!(normalize_relationship_type("DEPENDS_ON"), "DEPENDS_ON");
+        assert_eq!(normalize_relationship_type("dependencyOf"), "DEPENDENCY_OF");
+        assert_eq!(
+            normalize_relationship_type("hasDeclaredLicense"),
+            "HAS_DECLARED_LICENSE"
+        );
+        assert_eq!(normalize_relationship_type("fixedIn"), "FIXED_IN");
+        assert_eq!(normalize_relationship_type("buildToolOf"), "BUILD_TOOL_OF");
+        assert!(is_inverse_dependency("DEPENDENCY_OF"));
+        assert!(is_inverse_dependency("GENERATED_FROM"));
+        assert!(!is_inverse_dependency("DEPENDS_ON"));
+        assert!(!is_inverse_dependency("CONTAINS"));
+    }
+
+    fn edge_between<'a>(sbom: &'a NormalizedSbom, from_name: &str, to_name: &str) -> bool {
+        let id = |name: &str| {
+            sbom.components
+                .iter()
+                .find(|(_, c)| c.name == name)
+                .map(|(id, _)| id.clone())
+        };
+        let (Some(f), Some(t)) = (id(from_name), id(to_name)) else {
+            return false;
+        };
+        sbom.edges.iter().any(|e| e.from == f && e.to == t)
+    }
+
+    /// SPDX 3.0 JSON-LD camelCase `dependsOn` must produce a dependency edge
+    /// (a bare to_uppercase turned it into "DEPENDSON", matching no arm →
+    /// zero edges for spec-compliant documents).
+    #[test]
+    fn spdx3_camelcase_relationship_produces_edge() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "type": "SpdxDocument", "spdxId": "urn:doc",
+          "element": [
+            {"type": "software_Package", "spdxId": "urn:app", "name": "app",
+             "software_packageUrl": "pkg:npm/app@1.0"},
+            {"type": "software_Package", "spdxId": "urn:lib", "name": "lib",
+             "software_packageUrl": "pkg:npm/lib@1.0"},
+            {"type": "Relationship", "spdxId": "urn:rel",
+             "relationshipType": "dependsOn", "from": "urn:app", "to": ["urn:lib"]}
+          ]
+        }"#;
+        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
+        assert!(
+            edge_between(&sbom, "app", "lib"),
+            "camelCase dependsOn must yield app→lib, edges={:?}",
+            sbom.edges
+        );
+    }
+
+    /// An inverse `dependencyOf` relationship must be direction-swapped:
+    /// "lib dependencyOf app" means app depends on lib → edge app→lib.
+    #[test]
+    fn spdx3_inverse_dependency_swaps_direction() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "type": "SpdxDocument", "spdxId": "urn:doc",
+          "element": [
+            {"type": "software_Package", "spdxId": "urn:app", "name": "app",
+             "software_packageUrl": "pkg:npm/app@1.0"},
+            {"type": "software_Package", "spdxId": "urn:lib", "name": "lib",
+             "software_packageUrl": "pkg:npm/lib@1.0"},
+            {"type": "Relationship", "spdxId": "urn:rel",
+             "relationshipType": "dependencyOf", "from": "urn:lib", "to": ["urn:app"]}
+          ]
+        }"#;
+        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
+        assert!(
+            edge_between(&sbom, "app", "lib"),
+            "dependencyOf must swap to app→lib, edges={:?}",
+            sbom.edges
+        );
+        assert!(
+            !edge_between(&sbom, "lib", "app"),
+            "the un-swapped lib→app edge must not exist"
+        );
+    }
+
+    /// The canonical @graph JSON-LD serialization must parse to a populated
+    /// SBOM (was silently empty — only the inline `element` array was read).
+    #[test]
+    fn spdx3_graph_envelope_is_not_empty() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "@graph": [
+            {"type": "SpdxDocument", "spdxId": "urn:doc", "name": "d",
+             "rootElement": ["urn:app"], "element": ["urn:app", "urn:lib", "urn:rel"]},
+            {"type": "software_Package", "spdxId": "urn:app", "name": "app",
+             "software_packageUrl": "pkg:npm/app@1.0"},
+            {"type": "software_Package", "spdxId": "urn:lib", "name": "lib",
+             "software_packageUrl": "pkg:npm/lib@1.0"},
+            {"type": "Relationship", "spdxId": "urn:rel",
+             "relationshipType": "dependsOn", "from": "urn:app", "to": ["urn:lib"]}
+          ]
+        }"#;
+        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
+        assert_eq!(sbom.component_count(), 2, "@graph elements must be parsed");
+        assert!(edge_between(&sbom, "app", "lib"));
+        // Document metadata and the primary component are lifted from the
+        // in-@graph SpdxDocument node (CRA compliance keys on the primary).
+        assert_eq!(sbom.document.name.as_deref(), Some("d"));
+        assert_eq!(
+            sbom.primary_component().map(|c| c.name.as_str()),
+            Some("app"),
+            "rootElement must designate the primary component in @graph mode"
+        );
+    }
+
+    /// An AFFECTS relationship with a duplicated `to` target must attach the
+    /// vuln once (dedup, bounding the memory-amplification fan-out).
+    #[test]
+    fn spdx3_affects_dedups_duplicate_targets() {
+        let sbom = spdx3_lib(
+            r#"{"type": "Relationship", "spdxId": "urn:rel:affects",
+                "relationshipType": "AFFECTS", "from": "urn:vuln:cve",
+                "to": ["urn:pkg:lib", "urn:pkg:lib", "urn:pkg:lib"]}"#,
+        );
+        assert_eq!(
+            spdx3_component(&sbom, "lib").vulnerabilities.len(),
+            1,
+            "duplicated AFFECTS targets must dedup, not attach N times"
+        );
+    }
+
+    /// An unknown VEX justification must yield None, never fabricate the
+    /// strong VulnerableCodeNotPresent not-affected claim.
+    #[test]
+    fn spdx3_unknown_vex_justification_is_none() {
+        let sbom = spdx3_lib(
+            r#"{"type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "urn:assess:vex", "from": "urn:vuln:cve",
+                "assessedElement": "urn:pkg:lib",
+                "security_justificationType": "totally_made_up"}"#,
+        );
+        if let Some(vex) = &spdx3_component(&sbom, "lib").vex_status {
+            assert_eq!(
+                vex.justification, None,
+                "unknown justification must not fabricate a strong claim"
+            );
+        }
     }
 
     #[test]

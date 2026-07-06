@@ -5,9 +5,39 @@
 //! thresholds and detection behavior.
 
 use super::traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
-use super::{CycloneDxParser, Spdx3Parser, SpdxParser};
+use super::{CycloneDxParser, Spdx3Parser, SpdxParser, strip_bom};
 use crate::model::NormalizedSbom;
-use std::io::BufRead;
+use std::io::{BufRead, Read};
+
+/// Read a reader into a string, rejecting streams over
+/// [`MAX_SBOM_FILE_SIZE`](super::MAX_SBOM_FILE_SIZE).
+///
+/// Reads incrementally and bails the moment the accumulated length would
+/// exceed the cap, so a hostile multi-GB stream is rejected without buffering
+/// its tail, and a small input never over-allocates. Errors on the overrun
+/// rather than silently truncating.
+fn read_to_string_capped<R: Read>(reader: &mut R) -> Result<String, ParseError> {
+    let limit = super::MAX_SBOM_FILE_SIZE as usize;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|e| ParseError::IoError(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > limit {
+            return Err(ParseError::IoError(format!(
+                "SBOM stream exceeds the {} MB limit",
+                super::MAX_SBOM_FILE_SIZE / (1024 * 1024),
+            )));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    String::from_utf8(buf)
+        .map_err(|e| ParseError::IoError(format!("SBOM stream is not valid UTF-8: {e}")))
+}
 
 /// Minimum confidence threshold for accepting a format detection.
 /// This is LOW confidence (0.25) - the parser believes it might be able to handle the content.
@@ -144,28 +174,16 @@ impl FormatDetector {
 
     /// Detect format from full content string.
     ///
-    /// This performs full detection using each parser's `detect()` method.
-    /// SPDX 3.0 is checked first since its JSON-LD markers are more distinctive.
+    /// This performs full detection using each parser's `detect()` method
+    /// and picks the single strict winner (see [`Self::select_best_of_three`]).
     #[must_use]
     pub fn detect_from_content(&self, content: &str) -> DetectionResult {
-        // Check SPDX 3.0 first - its markers (@context, type: SpdxDocument) are distinctive
-        let spdx3_detection = self.spdx3.detect(content);
-        if spdx3_detection.confidence.value() >= FormatConfidence::HIGH.value() {
-            return DetectionResult::spdx3(spdx3_detection);
-        }
-
+        let content = strip_bom(content);
         let cdx_detection = self.cyclonedx.detect(content);
         let spdx_detection = self.spdx.detect(content);
+        let spdx3_detection = self.spdx3.detect(content);
 
-        // If SPDX 3.0 had medium confidence but beat others, use it
-        if spdx3_detection.confidence.value() >= self.min_confidence
-            && spdx3_detection.confidence.value() > cdx_detection.confidence.value()
-            && spdx3_detection.confidence.value() > spdx_detection.confidence.value()
-        {
-            return DetectionResult::spdx3(spdx3_detection);
-        }
-
-        self.select_best_parser(cdx_detection, spdx_detection)
+        self.select_best_of_three(cdx_detection, spdx_detection, spdx3_detection)
     }
 
     /// Detect format from peeked bytes (for streaming).
@@ -174,94 +192,121 @@ impl FormatDetector {
     /// streaming parsers that can only peek at the beginning of a file.
     #[must_use]
     pub fn detect_from_peek(&self, peek: &[u8]) -> DetectionResult {
-        // Find first non-whitespace byte
+        // Find first non-whitespace, non-BOM byte. A UTF-8 BOM (EF BB BF) is
+        // not ASCII whitespace, so without skipping it explicitly it would
+        // become "first_char" and fail every match arm below.
+        let peek = if peek.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            &peek[3..]
+        } else {
+            peek
+        };
         let first_char = peek.iter().find(|&&b| !b.is_ascii_whitespace());
 
         match first_char {
             Some(b'{' | b'<') => {
                 // Convert peek to string for detection
                 let preview = String::from_utf8_lossy(peek);
-
-                // Check SPDX 3.0 first (distinctive JSON-LD markers)
-                let spdx3_detection = self.spdx3.detect(&preview);
-                if spdx3_detection.confidence.value() >= FormatConfidence::HIGH.value() {
-                    return DetectionResult::spdx3(spdx3_detection);
-                }
-
-                // Use actual parser detection methods for consistency
                 let cdx_detection = self.cyclonedx.detect(&preview);
                 let spdx_detection = self.spdx.detect(&preview);
+                let spdx3_detection = self.spdx3.detect(&preview);
 
-                // Check if SPDX 3.0 beat others
-                if spdx3_detection.confidence.value() >= self.min_confidence
-                    && spdx3_detection.confidence.value() > cdx_detection.confidence.value()
-                    && spdx3_detection.confidence.value() > spdx_detection.confidence.value()
-                {
-                    return DetectionResult::spdx3(spdx3_detection);
-                }
-
-                self.select_best_parser(cdx_detection, spdx_detection)
+                self.select_best_of_three(cdx_detection, spdx_detection, spdx3_detection)
             }
             Some(c) if c.is_ascii_alphabetic() => {
                 // Might be tag-value format (starts with letters like "SPDXVersion:")
                 let preview = String::from_utf8_lossy(peek);
                 let cdx_detection = self.cyclonedx.detect(&preview);
                 let spdx_detection = self.spdx.detect(&preview);
+                // SPDX 3.0 is JSON-LD only; detect() itself no-matches
+                // content that doesn't start with '{', so this is just for
+                // a single unified selection call, not a real candidate.
+                let spdx3_detection = self.spdx3.detect(&preview);
 
-                self.select_best_parser(cdx_detection, spdx_detection)
+                self.select_best_of_three(cdx_detection, spdx_detection, spdx3_detection)
             }
             Some(_) => DetectionResult::unknown("Unrecognized content format"),
             None => DetectionResult::unknown("Empty content"),
         }
     }
 
-    /// Select the best parser based on detection results.
+    /// Select the best parser among all three candidate detections.
     ///
     /// Uses consistent threshold checking and returns an error-like result
-    /// instead of defaulting to a specific parser when ambiguous.
-    fn select_best_parser(
+    /// instead of defaulting to a specific parser when ambiguous. Unlike a
+    /// short-circuit (e.g. "return SPDX 3.0 immediately if its confidence is
+    /// HIGH"), all three detections are computed and compared BEFORE any
+    /// selection, so a document that also satisfies another format's markers
+    /// as strongly cannot silently misroute or empty-parse: a genuine tie at
+    /// the top confidence is reported as ambiguous rather than resolved by
+    /// an arbitrary priority order.
+    fn select_best_of_three(
         &self,
         cdx_detection: FormatDetection,
         spdx_detection: FormatDetection,
+        spdx3_detection: FormatDetection,
     ) -> DetectionResult {
         let cdx_conf = cdx_detection.confidence.value();
         let spdx_conf = spdx_detection.confidence.value();
+        let spdx3_conf = spdx3_detection.confidence.value();
 
-        // Log detection for debugging
         tracing::debug!(
-            "Format detection: CycloneDX={:.2}, SPDX={:.2}, threshold={:.2}",
+            "Format detection: CycloneDX={:.2}, SPDX={:.2}, SPDX3={:.2}, threshold={:.2}",
             cdx_conf,
             spdx_conf,
+            spdx3_conf,
             self.min_confidence
         );
 
-        // Apply consistent threshold and select best parser
-        if cdx_conf >= self.min_confidence && cdx_conf > spdx_conf {
-            DetectionResult::cyclonedx(cdx_detection)
-        } else if spdx_conf >= self.min_confidence {
-            DetectionResult::spdx(spdx_detection)
-        } else {
-            // No default bias - return unknown if neither meets threshold
+        let max_conf = cdx_conf.max(spdx_conf).max(spdx3_conf);
+
+        if max_conf < self.min_confidence {
+            // No default bias - return unknown if nobody meets threshold
             let mut result =
                 DetectionResult::unknown("Could not detect SBOM format with sufficient confidence");
-
-            // Add helpful context about what was detected
-            if cdx_conf > 0.0 {
-                result.warnings.push(format!(
-                    "CycloneDX detection: {:.0}% confidence (threshold: {:.0}%)",
-                    cdx_conf * 100.0,
-                    self.min_confidence * 100.0
-                ));
+            for (name, conf) in [
+                ("CycloneDX", cdx_conf),
+                ("SPDX", spdx_conf),
+                ("SPDX 3.0", spdx3_conf),
+            ] {
+                if conf > 0.0 {
+                    result.warnings.push(format!(
+                        "{name} detection: {:.0}% confidence (threshold: {:.0}%)",
+                        conf * 100.0,
+                        self.min_confidence * 100.0
+                    ));
+                }
             }
-            if spdx_conf > 0.0 {
-                result.warnings.push(format!(
-                    "SPDX detection: {:.0}% confidence (threshold: {:.0}%)",
-                    spdx_conf * 100.0,
-                    self.min_confidence * 100.0
-                ));
-            }
+            return result;
+        }
 
-            result
+        // A tie at the top confidence between two or more formats is
+        // reported as ambiguous rather than resolved by priority order —
+        // this is what closes the misrouting/empty-parse class of bugs.
+        const EPSILON: f32 = 1e-6;
+        let winners: Vec<&str> = [
+            ("CycloneDX", cdx_conf),
+            ("SPDX", spdx_conf),
+            ("SPDX 3.0", spdx3_conf),
+        ]
+        .into_iter()
+        .filter(|&(_, conf)| (conf - max_conf).abs() < EPSILON)
+        .map(|(name, _)| name)
+        .collect();
+
+        if winners.len() > 1 {
+            return DetectionResult::unknown(&format!(
+                "Ambiguous format: {} are equally confident ({:.0}%) — refusing to guess",
+                winners.join(" and "),
+                max_conf * 100.0
+            ));
+        }
+
+        if (cdx_conf - max_conf).abs() < EPSILON {
+            DetectionResult::cyclonedx(cdx_detection)
+        } else if (spdx_conf - max_conf).abs() < EPSILON {
+            DetectionResult::spdx(spdx_detection)
+        } else {
+            DetectionResult::spdx3(spdx3_detection)
         }
     }
 
@@ -291,7 +336,11 @@ impl FormatDetector {
     /// Parse from a reader using streaming JSON parsing.
     ///
     /// Peeks at the content to detect format, then uses the appropriate
-    /// reader-based parser for memory-efficient parsing.
+    /// reader-based parser for memory-efficient parsing. All reads are
+    /// bounded by [`MAX_SBOM_FILE_SIZE`](super::MAX_SBOM_FILE_SIZE): unlike
+    /// the path-based `parse_sbom`, this entry point (used by the streaming
+    /// parser) has no up-front `metadata().len()` check, so an unbounded
+    /// `read_to_string` here was an OOM vector for a hostile stream.
     pub fn parse_reader<R: BufRead>(&self, mut reader: R) -> Result<NormalizedSbom, ParseError> {
         // Peek at the buffer to detect format
         let peek = reader
@@ -302,6 +351,12 @@ impl FormatDetector {
             return Err(ParseError::IoError("Empty content".to_string()));
         }
 
+        // detect_from_peek already skips a leading BOM for its own analysis;
+        // separately note its length so it can be consumed from the actual
+        // stream below — parse_json_reader reads straight from `reader` with
+        // no string-level strip_bom() pass, so the BOM must be physically
+        // skipped here or it reaches serde_json and fails to parse.
+        let bom_len = usize::from(peek.starts_with(&[0xEF, 0xBB, 0xBF])) * 3;
         let detection = self.detect_from_peek(peek);
 
         // Log any warnings
@@ -309,29 +364,34 @@ impl FormatDetector {
             tracing::warn!("{}", warning);
         }
 
+        reader.consume(bom_len);
+
+        // Cap every downstream read at the file-size limit (+1 to detect
+        // overrun). fill_buf only peeked, so the buffered bytes are preserved.
+        let mut reader = reader.take(super::MAX_SBOM_FILE_SIZE + 1);
+
         match detection.parser {
             Some(ParserKind::CycloneDx) if detection.can_parse() => {
                 // Check if it's XML (needs string-based parsing)
                 let is_xml = detection.variant.as_deref() == Some("XML");
                 if is_xml {
-                    let mut content = String::new();
-                    reader
-                        .read_to_string(&mut content)
-                        .map_err(|e| ParseError::IoError(e.to_string()))?;
+                    let content = read_to_string_capped(&mut reader)?;
                     self.cyclonedx.parse_str(&content)
                 } else {
                     self.cyclonedx.parse_json_reader(reader)
                 }
             }
             Some(ParserKind::Spdx) if detection.can_parse() => {
-                // Check variant - tag-value and RDF need string-based parsing
-                let needs_string =
-                    matches!(detection.variant.as_deref(), Some("tag-value" | "RDF"));
+                // Check variant - tag-value and RDF need string-based parsing.
+                // detect() reports the RDF variant as "RDF/XML"; the old
+                // bare-"RDF" match never fired, so RDF/XML streams were
+                // misrouted to the JSON reader and always failed.
+                let needs_string = matches!(
+                    detection.variant.as_deref(),
+                    Some("tag-value" | "RDF" | "RDF/XML")
+                );
                 if needs_string {
-                    let mut content = String::new();
-                    reader
-                        .read_to_string(&mut content)
-                        .map_err(|e| ParseError::IoError(e.to_string()))?;
+                    let content = read_to_string_capped(&mut reader)?;
                     self.spdx.parse_str(&content)
                 } else {
                     self.spdx.parse_json_reader(reader)
@@ -339,10 +399,7 @@ impl FormatDetector {
             }
             Some(ParserKind::Spdx3) if detection.can_parse() => {
                 // SPDX 3.0 is JSON-LD only - read full content and parse
-                let mut content = String::new();
-                reader
-                    .read_to_string(&mut content)
-                    .map_err(|e| ParseError::IoError(e.to_string()))?;
+                let content = read_to_string_capped(&mut reader)?;
                 self.spdx3.parse_str(&content)
             }
             _ => Err(ParseError::UnknownFormat(
@@ -433,5 +490,79 @@ mod tests {
         if result.confidence.value() < 0.5 {
             assert!(!result.can_parse());
         }
+    }
+
+    /// A UTF-8 BOM must not defeat detection: str::trim() does not strip
+    /// U+FEFF, so a BOM-prefixed valid document previously failed on the
+    /// content.trim().starts_with('{') check in every parser's detect().
+    #[test]
+    fn bom_prefixed_content_still_detects() {
+        let detector = FormatDetector::new();
+        let content = "\u{FEFF}{\"bomFormat\": \"CycloneDX\", \"specVersion\": \"1.5\"}";
+        let result = detector.detect_from_content(content);
+        assert_eq!(result.parser, Some(ParserKind::CycloneDx));
+        assert!(result.can_parse());
+    }
+
+    /// Same BOM guard on the peek/streaming path.
+    #[test]
+    fn bom_prefixed_peek_still_detects() {
+        let detector = FormatDetector::new();
+        let mut peek = vec![0xEF, 0xBB, 0xBF];
+        peek.extend_from_slice(br#"{"bomFormat": "CycloneDX", "specVersion": "1.5"}"#);
+        let result = detector.detect_from_peek(&peek);
+        assert_eq!(result.parser, Some(ParserKind::CycloneDx));
+        assert!(result.can_parse());
+    }
+
+    /// A component/property VALUE that happens to equal a marker word
+    /// ("SPDXID") must not trip SPDX detection on an unrelated CycloneDX
+    /// document — the marker must appear as an actual JSON key.
+    #[test]
+    fn marker_word_as_value_does_not_misroute() {
+        let detector = FormatDetector::new();
+        let content = r#"{"bomFormat": "CycloneDX", "specVersion": "1.5",
+            "components": [{"type": "library", "name": "spdxVersion", "version": "1.0"},
+                            {"type": "library", "name": "SPDXID", "version": "1.0"}]}"#;
+        let result = detector.detect_from_content(content);
+        assert_eq!(
+            result.parser,
+            Some(ParserKind::CycloneDx),
+            "a component merely NAMED 'spdxVersion'/'SPDXID' must not misroute to SPDX"
+        );
+    }
+
+    /// A CycloneDX document that also contains "@context"/"spdx3" as plain
+    /// text (e.g. in a description) must not be misrouted to the SPDX 3.0
+    /// parser and silently produce an empty SBOM.
+    #[test]
+    fn cyclonedx_with_spdx3_looking_text_is_not_misrouted() {
+        let detector = FormatDetector::new();
+        let content = r#"{"bomFormat": "CycloneDX", "specVersion": "1.5",
+            "components": [{"type": "library", "name": "lib", "version": "1.0",
+                "description": "migrated from spdx3 format; see @context notes"}]}"#;
+        let result = detector.detect_from_content(content);
+        assert_eq!(result.parser, Some(ParserKind::CycloneDx));
+        assert!(result.can_parse());
+    }
+
+    /// A genuine tie at the top confidence between two formats must be
+    /// reported as ambiguous, not silently resolved by an arbitrary
+    /// priority order (the previous SPDX3-short-circuit / SPDX-tie-break
+    /// bias).
+    #[test]
+    fn genuine_tie_is_reported_ambiguous_not_silently_resolved() {
+        let detector = FormatDetector::new();
+        // CERTAIN CycloneDX markers (bomFormat + CycloneDX) AND CERTAIN SPDX
+        // markers (spdxVersion + SPDXID keys) in the same document.
+        let content = r#"{"bomFormat": "CycloneDX", "specVersion": "1.5",
+            "spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT"}"#;
+        let result = detector.detect_from_content(content);
+        assert!(
+            result.parser.is_none(),
+            "a genuine tie must not silently pick a parser, got {:?}",
+            result.parser
+        );
+        assert!(!result.can_parse());
     }
 }

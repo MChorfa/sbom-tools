@@ -37,7 +37,7 @@ pub use cyclonedx::CycloneDxParser;
 pub use detection::{DetectionResult, FormatDetector, MIN_CONFIDENCE_THRESHOLD, ParserKind};
 pub use spdx::SpdxParser;
 pub use spdx3::Spdx3Parser;
-pub use streaming::{ParseEvent, ParseProgress, StreamingConfig, StreamingParser};
+pub use streaming::{ParseEvent, ParseProgress, ParsedMetadata, StreamingConfig, StreamingParser};
 pub use traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
 
 use crate::model::NormalizedSbom;
@@ -90,6 +90,66 @@ pub fn detect_format(content: &str) -> Option<DetectedFormat> {
 /// whole document into a string. Inputs larger than this are rejected.
 pub(crate) const MAX_SBOM_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
+/// Strip a leading UTF-8 BOM (U+FEFF), if present.
+///
+/// `str::trim()` does not remove U+FEFF (it is not `White_Space`), so a
+/// BOM-prefixed but otherwise valid SBOM file fails every parser's
+/// `content.trim().starts_with('{'/'<')` dispatch and is rejected as
+/// unknown format. Every parser's `detect()`/`parse_str()` calls this first.
+pub(crate) fn strip_bom(content: &str) -> &str {
+    content.strip_prefix('\u{FEFF}').unwrap_or(content)
+}
+
+/// Whether `content` contains `key` used as a JSON object key — i.e. a
+/// quoted `key` immediately followed by (optional whitespace, then) `:` —
+/// rather than merely appearing as, or inside, a string *value* anywhere in
+/// the document.
+///
+/// Format detection scans raw text for markers like `"spdxVersion"` without
+/// parsing JSON, so a document whose value happens to equal a marker word
+/// (e.g. a component literally named `"spdxVersion"`, or a property value of
+/// `"SPDXID"`) previously tripped detection for an unrelated format. This
+/// keeps detection allocation-free and streaming-peek-compatible while
+/// requiring the marker to be used as a key, not a coincidental value.
+pub(crate) fn contains_json_key(content: &str, key: &str) -> bool {
+    let quoted = format!("\"{key}\"");
+    let mut search_from = 0;
+    while let Some(rel) = content[search_from..].find(quoted.as_str()) {
+        let after = search_from + rel + quoted.len();
+        if content[after..].trim_start().starts_with(':') {
+            return true;
+        }
+        search_from = after;
+    }
+    false
+}
+
+/// Defensive cap on a single vulnerability description (64 KiB).
+///
+/// A vulnerability's description is attacker-controlled and attached to every
+/// component the vulnerability affects; without a cap, one huge description
+/// deep-cloned across thousands of `affects`/`to` targets is a memory-
+/// amplification DoS. Real CVE descriptions are a paragraph, so 64 KiB is
+/// ~100x headroom while bounding the per-target clone to a constant.
+pub(crate) const MAX_VULN_DESCRIPTION_BYTES: usize = 64 * 1024;
+
+/// Clone an optional description, truncated to [`MAX_VULN_DESCRIPTION_BYTES`]
+/// on a UTF-8 char boundary with a marker appended when truncated.
+pub(crate) fn capped_description(desc: &Option<String>) -> Option<String> {
+    desc.as_ref().map(|d| {
+        if d.len() <= MAX_VULN_DESCRIPTION_BYTES {
+            return d.clone();
+        }
+        let mut end = MAX_VULN_DESCRIPTION_BYTES;
+        while end > 0 && !d.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut truncated = d[..end].to_string();
+        truncated.push_str("… [truncated]");
+        truncated
+    })
+}
+
 /// Detect SBOM format from file content and parse accordingly
 ///
 /// Uses confidence-based detection to select the best parser.
@@ -140,6 +200,59 @@ pub fn is_spdx(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capped_description_truncates_on_char_boundary() {
+        assert_eq!(capped_description(&None), None);
+        assert_eq!(
+            capped_description(&Some("short".to_string())).as_deref(),
+            Some("short")
+        );
+        // Multi-byte char straddling the cap must not panic and must produce
+        // valid UTF-8.
+        let big = "é".repeat(MAX_VULN_DESCRIPTION_BYTES); // 2 bytes each
+        let out = capped_description(&Some(big)).unwrap();
+        assert!(out.len() <= MAX_VULN_DESCRIPTION_BYTES + 16);
+        assert!(out.ends_with("… [truncated]"));
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn strip_bom_removes_only_a_leading_marker() {
+        assert_eq!(strip_bom("\u{FEFF}{\"a\":1}"), "{\"a\":1}");
+        assert_eq!(strip_bom("{\"a\":1}"), "{\"a\":1}");
+        // A BOM elsewhere in the content (not at the start) is untouched.
+        assert_eq!(strip_bom("{\"a\":\"\u{FEFF}\"}"), "{\"a\":\"\u{FEFF}\"}");
+    }
+
+    #[test]
+    fn contains_json_key_requires_key_position() {
+        assert!(contains_json_key(
+            r#"{"spdxVersion":"SPDX-2.3"}"#,
+            "spdxVersion"
+        ));
+        assert!(contains_json_key(
+            r#"{"spdxVersion"   :   "SPDX-2.3"}"#,
+            "spdxVersion"
+        ));
+        // A value equal to the marker word must NOT count as a key.
+        assert!(!contains_json_key(
+            r#"{"name":"spdxVersion","other":1}"#,
+            "spdxVersion"
+        ));
+        assert!(!contains_json_key("no markers here", "spdxVersion"));
+    }
+
+    /// A BOM-prefixed CycloneDX document must parse successfully end to end,
+    /// not just detect correctly — the dispatch check and the actual
+    /// serde_json::from_str/quick_xml call must both see BOM-free content.
+    #[test]
+    fn bom_prefixed_document_parses_end_to_end() {
+        let content = "\u{FEFF}{\"bomFormat\": \"CycloneDX\", \"specVersion\": \"1.5\", \
+            \"components\": [{\"type\": \"library\", \"name\": \"lib\", \"version\": \"1.0\"}]}";
+        let sbom = parse_sbom_str(content).expect("BOM-prefixed document must parse");
+        assert_eq!(sbom.component_count(), 1);
+    }
 
     #[test]
     fn test_detect_cyclonedx_json() {

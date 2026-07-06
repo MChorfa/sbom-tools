@@ -25,7 +25,7 @@
 //!
 //! for event in stream {
 //!     match event {
-//!         Ok(ParseEvent::Metadata(doc)) => println!("Document: {:?}", doc.format),
+//!         Ok(ParseEvent::Metadata(meta)) => println!("Document: {:?}", meta.document.format),
 //!         Ok(ParseEvent::Component(comp)) => println!("Component: {}", comp.name),
 //!         Ok(ParseEvent::Dependency(edge)) => println!("Dependency: {} -> {}", edge.from, edge.to),
 //!         Ok(ParseEvent::Complete) => println!("Done!"),
@@ -36,7 +36,9 @@
 
 use super::detection::FormatDetector;
 use super::traits::ParseError;
-use crate::model::{Component, DependencyEdge, DocumentMetadata, NormalizedSbom};
+use crate::model::{
+    CanonicalId, Component, DependencyEdge, DocumentMetadata, FormatExtensions, NormalizedSbom,
+};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -158,14 +160,29 @@ impl std::fmt::Debug for StreamingConfig {
 /// Events emitted during streaming parsing
 #[derive(Debug, Clone)]
 pub enum ParseEvent {
-    /// Document metadata has been parsed
-    Metadata(DocumentMetadata),
+    /// Document metadata has been parsed.
+    ///
+    /// Carries `primary_component_id`/`extensions` alongside the document so
+    /// a consumer reconstructing a full `NormalizedSbom` from the event
+    /// stream (see [`StreamingIterator::collect_sbom`]) does not silently
+    /// lose them — both live on `NormalizedSbom` itself, not on
+    /// `DocumentMetadata`, and previously had no event to travel in at all.
+    /// Boxed to keep this variant from dominating `ParseEvent`'s size.
+    Metadata(Box<ParsedMetadata>),
     /// A component has been parsed
     Component(Box<Component>),
     /// A dependency relationship has been parsed
     Dependency(DependencyEdge),
     /// Parsing is complete
     Complete,
+}
+
+/// Payload for [`ParseEvent::Metadata`].
+#[derive(Debug, Clone)]
+pub struct ParsedMetadata {
+    pub document: DocumentMetadata,
+    pub primary_component_id: Option<CanonicalId>,
+    pub extensions: FormatExtensions,
 }
 
 /// Streaming parser for large SBOMs
@@ -287,12 +304,18 @@ impl StreamingIterator {
     /// Collect all events into a `NormalizedSbom`
     pub fn collect_sbom(&mut self) -> Result<NormalizedSbom, ParseError> {
         let mut metadata: Option<DocumentMetadata> = None;
+        let mut primary_component_id: Option<CanonicalId> = None;
+        let mut extensions: Option<FormatExtensions> = None;
         let mut components = Vec::new();
         let mut edges = Vec::new();
 
         for event in self.by_ref() {
             match event {
-                Ok(ParseEvent::Metadata(doc)) => metadata = Some(doc),
+                Ok(ParseEvent::Metadata(meta)) => {
+                    metadata = Some(meta.document);
+                    primary_component_id = meta.primary_component_id;
+                    extensions = Some(meta.extensions);
+                }
                 Ok(ParseEvent::Component(comp)) => components.push(*comp),
                 Ok(ParseEvent::Dependency(edge)) => edges.push(edge),
                 Ok(ParseEvent::Complete) => break,
@@ -302,6 +325,8 @@ impl StreamingIterator {
 
         let document = metadata.unwrap_or_default();
         let mut sbom = NormalizedSbom::new(document);
+        sbom.primary_component_id = primary_component_id;
+        sbom.extensions = extensions.unwrap_or_default();
 
         for comp in components {
             sbom.add_component(comp);
@@ -360,23 +385,33 @@ impl StreamingIterator {
             } => {
                 // Emit metadata first
                 if !metadata_emitted {
-                    let doc = sbom.document.clone();
+                    let document = sbom.document.clone();
+                    let primary_component_id = sbom.primary_component_id.clone();
+                    let extensions = sbom.extensions.clone();
                     self.state = StreamingState::Emitting {
                         sbom,
                         component_index,
                         dependency_index,
                         metadata_emitted: true,
                     };
-                    return Some(Ok(ParseEvent::Metadata(doc)));
+                    return Some(Ok(ParseEvent::Metadata(Box::new(ParsedMetadata {
+                        document,
+                        primary_component_id,
+                        extensions,
+                    }))));
                 }
 
-                // Collect components into a vec for indexed access
-                let components: Vec<_> = sbom.components.values().cloned().collect();
+                // IndexMap allows O(1) positional access; cloning the whole
+                // component map on every advance() (once per emitted event)
+                // was O(n²) time and allocation churn for a streaming parser.
                 let edges_len = sbom.edges.len();
 
                 // Emit components
-                if component_index < components.len() {
-                    let comp = components[component_index].clone();
+                if let Some(comp) = sbom
+                    .components
+                    .get_index(component_index)
+                    .map(|(_, c)| c.clone())
+                {
                     self.progress.components_parsed += 1;
                     if self.progress.components_parsed.is_multiple_of(100) {
                         self.report_progress();
@@ -435,10 +470,15 @@ pub fn estimate_component_count(path: &Path) -> Result<ComponentEstimate, ParseE
 
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    let reader = BufReader::new(file);
     let mut count = 0;
-    let mut bytes_sampled = 0;
+    let mut bytes_sampled = 0usize;
     let sample_limit = 1024 * 1024; // Sample first 1MB
+
+    // Cap the whole read at the sample limit (+1 to see we hit it) BEFORE
+    // splitting into lines. Minified SBOMs are single-line JSON, so
+    // `reader.lines()` on the raw file would allocate the ENTIRE file (e.g.
+    // 10 GB) into one String before the sample check could fire.
+    let reader = BufReader::new(file.take(sample_limit as u64 + 1));
 
     for line in reader.lines() {
         let line = line.map_err(|e| ParseError::IoError(e.to_string()))?;
@@ -528,5 +568,69 @@ mod tests {
     fn test_streaming_parser_creation() {
         let parser = StreamingParser::default_config();
         assert_eq!(parser.config.chunk_size, 64 * 1024);
+    }
+
+    /// The streaming path must not lose `primary_component_id`/`extensions`
+    /// relative to the non-streaming parse of the same input — both live on
+    /// `NormalizedSbom`, not `DocumentMetadata`, and previously had no event
+    /// to travel through at all, so `collect_sbom()` always produced `None`/
+    /// default regardless of what the source document actually declared.
+    #[test]
+    fn collect_sbom_preserves_primary_component_and_extensions() {
+        let cdx = r#"{
+            "bomFormat": "CycloneDX", "specVersion": "1.5",
+            "metadata": {
+                "component": {
+                    "type": "application", "bom-ref": "pkg:npm/app@1.0",
+                    "name": "app", "version": "1.0"
+                }
+            },
+            "components": [
+                {"type": "library", "bom-ref": "pkg:npm/lib@1.0", "name": "lib", "version": "1.0"}
+            ]
+        }"#;
+
+        let non_streaming = crate::parsers::parse_sbom_str(cdx).expect("non-streaming parse");
+        let mut stream = StreamingParser::default_config()
+            .parse_str(cdx)
+            .expect("stream start");
+        let streamed = stream.collect_sbom().expect("collect_sbom");
+
+        assert!(
+            non_streaming.primary_component_id.is_some(),
+            "fixture must actually exercise a primary component"
+        );
+        assert_eq!(
+            streamed.primary_component_id, non_streaming.primary_component_id,
+            "streaming must preserve primary_component_id"
+        );
+        assert_eq!(streamed.component_count(), non_streaming.component_count());
+    }
+
+    /// The no-primary-component case must round-trip as `None`, not panic
+    /// or silently become `Some(default)`.
+    #[test]
+    fn collect_sbom_preserves_absent_primary_component_as_none() {
+        let cdx = r#"{
+            "bomFormat": "CycloneDX", "specVersion": "1.5",
+            "components": [
+                {"type": "library", "bom-ref": "pkg:npm/lib@1.0", "name": "lib", "version": "1.0"}
+            ]
+        }"#;
+
+        let non_streaming = crate::parsers::parse_sbom_str(cdx).expect("non-streaming parse");
+        assert!(
+            non_streaming.primary_component_id.is_none(),
+            "fixture must have no metadata.component"
+        );
+
+        let mut stream = StreamingParser::default_config()
+            .parse_str(cdx)
+            .expect("stream start");
+        let streamed = stream.collect_sbom().expect("collect_sbom");
+        assert!(
+            streamed.primary_component_id.is_none(),
+            "absent primary component must round-trip as None, not Some(default)"
+        );
     }
 }

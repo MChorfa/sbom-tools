@@ -17,7 +17,7 @@ use crate::model::{
 use crate::parsers::traits::{ParseError, SbomParser};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Parser for `CycloneDX` SBOM format
 #[allow(dead_code)]
@@ -269,7 +269,13 @@ impl CycloneDxParser {
             .as_ref()
             .and_then(|m| m.timestamp.as_ref())
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-            .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
+            // Deterministic fallback: a document with a missing/invalid
+            // timestamp must hash identically on every parse (created is
+            // folded into the content hash; Utc::now() here made every
+            // parse of such a document content-unique, defeating diff
+            // identity and the incremental cache). Epoch is an honest
+            // "unknown" sentinel rather than a fabricated parse time.
+            .map_or(DateTime::UNIX_EPOCH, |dt| dt.with_timezone(&Utc));
 
         let mut creators = Vec::new();
         if let Some(meta) = &cdx.metadata {
@@ -853,15 +859,18 @@ impl CycloneDxParser {
         mat.format.clone_from(&cdx.format);
 
         if let Some(state) = cdx.state.as_deref() {
-            mat.state = Some(match state {
-                "pre-activation" => CryptoMaterialState::PreActivation,
-                "active" => CryptoMaterialState::Active,
-                "suspended" => CryptoMaterialState::Suspended,
-                "deactivated" => CryptoMaterialState::Deactivated,
-                "compromised" => CryptoMaterialState::Compromised,
-                "destroyed" => CryptoMaterialState::Destroyed,
-                _ => CryptoMaterialState::Active,
-            });
+            // Unknown/unrecognized state stays None: defaulting to Active
+            // asserts key material is live/usable, a dangerous claim to
+            // fabricate from a typo or hostile value.
+            mat.state = match state {
+                "pre-activation" => Some(CryptoMaterialState::PreActivation),
+                "active" => Some(CryptoMaterialState::Active),
+                "suspended" => Some(CryptoMaterialState::Suspended),
+                "deactivated" => Some(CryptoMaterialState::Deactivated),
+                "compromised" => Some(CryptoMaterialState::Compromised),
+                "destroyed" => Some(CryptoMaterialState::Destroyed),
+                _ => None,
+            };
         }
 
         if let Some(sb) = &cdx.secured_by {
@@ -948,36 +957,57 @@ impl CycloneDxParser {
         });
 
         let mut vuln_ref = VulnerabilityRef::new(vuln.id.clone(), source);
-        vuln_ref.description.clone_from(&vuln.description);
+        vuln_ref.description = super::capped_description(&vuln.description);
 
         // Parse CVSS scores
         if let Some(ratings) = &vuln.ratings {
             for rating in ratings {
+                // Only CVSS methods produce a CVSS score; OWASP/SSVC/etc. are
+                // different scoring systems and must not be mislabeled as CVSS.
                 let version = match rating.method.as_deref() {
-                    Some("CVSSv2") => CvssVersion::V2,
-                    Some("CVSSv3") => CvssVersion::V3,
-                    Some("CVSSv4") => CvssVersion::V4,
-                    _ => CvssVersion::V31,
+                    Some("CVSSv2") => Some(CvssVersion::V2),
+                    Some("CVSSv3") => Some(CvssVersion::V3),
+                    Some("CVSSv31") => Some(CvssVersion::V31),
+                    Some("CVSSv4") => Some(CvssVersion::V4),
+                    // Unmethoded ratings historically defaulted to v3.1.
+                    None => Some(CvssVersion::V31),
+                    Some(_) => None,
                 };
-                if let Some(score) = rating.score {
+                if let (Some(version), Some(score)) = (version, rating.score)
+                    // The XML path parses score text with str::parse, which
+                    // accepts NaN/inf; reject non-finite so a hostile score
+                    // can't reach Severity::from_cvss and forge Critical.
+                    && score.is_finite()
+                {
                     let mut cvss = CvssScore::new(version, score);
                     cvss.vector.clone_from(&rating.vector);
                     vuln_ref.cvss.push(cvss);
                 }
-                if vuln_ref.severity.is_none() {
-                    vuln_ref.severity =
-                        rating
-                            .severity
-                            .as_ref()
-                            .map(|s| match s.to_lowercase().as_str() {
-                                "critical" => Severity::Critical,
-                                "high" => Severity::High,
-                                "medium" => Severity::Medium,
-                                "low" => Severity::Low,
-                                "info" | "informational" => Severity::Info,
-                                "none" => Severity::None,
-                                _ => Severity::Unknown,
-                            });
+                // Take the HIGHEST severity across ratings, not the first:
+                // otherwise a leading rating with severity "none"/"low" freezes
+                // the value and suppresses a higher CVSS score in a later one.
+                // (priority() is lower-is-more-severe.)
+                if let Some(sev) =
+                    rating
+                        .severity
+                        .as_ref()
+                        .map(|s| match s.to_lowercase().as_str() {
+                            "critical" => Severity::Critical,
+                            "high" => Severity::High,
+                            "medium" => Severity::Medium,
+                            "low" => Severity::Low,
+                            "info" | "informational" => Severity::Info,
+                            "none" => Severity::None,
+                            _ => Severity::Unknown,
+                        })
+                {
+                    let more_severe = vuln_ref
+                        .severity
+                        .as_ref()
+                        .is_none_or(|cur| sev.priority() < cur.priority());
+                    if more_severe {
+                        vuln_ref.severity = Some(sev);
+                    }
                 }
             }
         }
@@ -1005,24 +1035,36 @@ impl CycloneDxParser {
 
         // Parse analysis (VEX)
         let vex_status = vuln.analysis.as_ref().map(|analysis| {
+            // CycloneDX impactAnalysisState. "exploitable" must NOT collapse
+            // to UnderInvestigation (that would understate a live threat);
+            // unknown states stay UnderInvestigation (an honest "we don't
+            // know", not a fabricated safe claim).
             let status = match analysis.state.as_deref() {
-                Some("not_affected") => VexState::NotAffected,
-                Some("affected") => VexState::Affected,
-                Some("fixed") => VexState::Fixed,
+                Some("not_affected") | Some("false_positive") => VexState::NotAffected,
+                Some("affected") | Some("exploitable") => VexState::Affected,
+                Some("fixed") | Some("resolved") | Some("resolved_with_pedigree") => {
+                    VexState::Fixed
+                }
                 _ => VexState::UnderInvestigation,
             };
 
-            let justification = analysis.justification.as_ref().map(|j| match j.as_str() {
-                "code_not_present" => VexJustification::VulnerableCodeNotPresent,
-                "code_not_reachable" => VexJustification::VulnerableCodeNotInExecutePath,
-                "requires_configuration" | "requires_dependency" | "requires_environment" => {
-                    VexJustification::VulnerableCodeCannotBeControlledByAdversary
-                }
-                "protected_by_mitigating_control" => {
-                    VexJustification::InlineMitigationsAlreadyExist
-                }
-                _ => VexJustification::ComponentNotPresent,
-            });
+            // Unknown/unrecognized justification must NOT fabricate a
+            // not-affected claim: an unrecognized string yields None, never
+            // ComponentNotPresent (the strongest "it isn't even here" claim).
+            let justification = analysis
+                .justification
+                .as_ref()
+                .and_then(|j| match j.as_str() {
+                    "code_not_present" => Some(VexJustification::VulnerableCodeNotPresent),
+                    "code_not_reachable" => Some(VexJustification::VulnerableCodeNotInExecutePath),
+                    "requires_configuration" | "requires_dependency" | "requires_environment" => {
+                        Some(VexJustification::VulnerableCodeCannotBeControlledByAdversary)
+                    }
+                    "protected_by_mitigating_control" => {
+                        Some(VexJustification::InlineMitigationsAlreadyExist)
+                    }
+                    _ => None,
+                });
 
             let responses: Vec<VexResponse> = analysis
                 .response
@@ -1050,10 +1092,15 @@ impl CycloneDxParser {
             }
         });
 
-        // Apply vulnerability to affected components
+        // Apply vulnerability to affected components. Dedup targets by
+        // canonical id: the same component listed twice in affects[] must not
+        // receive the vulnerability twice (and, with a capped description,
+        // caps this vuln's total memory at O(distinct components)).
         if let Some(affects) = &vuln.affects {
+            let mut seen: HashSet<&CanonicalId> = HashSet::new();
             for affect in affects {
                 if let Some(canonical_id) = id_map.get(&affect.ref_field)
+                    && seen.insert(canonical_id)
                     && let Some(comp) = sbom.components.get_mut(canonical_id)
                 {
                     let mut v = vuln_ref.clone();
@@ -1065,14 +1112,31 @@ impl CycloneDxParser {
                     }
                     if let Some(vex) = &vex_status {
                         v.vex_status = Some(vex.clone());
+                        // Component-level VEX is a single slot: keep the
+                        // HIGHEST-risk status across all vulns, so a trailing
+                        // fabricated `not_affected` cannot erase a real
+                        // `affected` from an earlier vulnerability.
+                        if comp.vex_status.as_ref().is_none_or(|cur| {
+                            vex_state_risk(&vex.status) > vex_state_risk(&cur.status)
+                        }) {
+                            comp.vex_status = Some(vex.clone());
+                        }
                     }
                     comp.vulnerabilities.push(v);
-                    if let Some(vex) = &vex_status {
-                        comp.vex_status = Some(vex.clone());
-                    }
                 }
             }
         }
+    }
+}
+
+/// Risk ordering for component-level VEX resolution: higher = more actionable.
+/// Affected outranks the uncertain state, which outranks the not-actionable
+/// states, so a later low-risk claim never overwrites a higher-risk one.
+const fn vex_state_risk(state: &VexState) -> u8 {
+    match state {
+        VexState::Affected => 3,
+        VexState::UnderInvestigation => 2,
+        VexState::NotAffected | VexState::Fixed => 1,
     }
 }
 
@@ -1084,6 +1148,7 @@ impl Default for CycloneDxParser {
 
 impl SbomParser for CycloneDxParser {
     fn parse_str(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
         if trimmed.starts_with('{') {
             self.parse_json(content)
@@ -1105,17 +1170,22 @@ impl SbomParser for CycloneDxParser {
     }
 
     fn detect(&self, content: &str) -> crate::parsers::traits::FormatDetection {
+        use crate::parsers::contains_json_key;
         use crate::parsers::traits::{FormatConfidence, FormatDetection};
 
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
 
         // Check for JSON CycloneDX
         if trimmed.starts_with('{') {
-            // Look for CycloneDX-specific markers
-            let has_bom_format = content.contains("\"bomFormat\"");
+            // Look for CycloneDX-specific markers. Marker keys (bomFormat,
+            // specVersion, $schema, components) must appear as actual JSON
+            // keys, not merely as a coincidental string VALUE elsewhere in
+            // the document (e.g. a component literally named "specVersion").
+            let has_bom_format = contains_json_key(content, "bomFormat");
             let has_cyclonedx = content.contains("CycloneDX") || content.contains("cyclonedx");
-            let has_spec_version = content.contains("\"specVersion\"");
-            let has_schema = content.contains("\"$schema\"") && content.contains("cyclonedx");
+            let has_spec_version = contains_json_key(content, "specVersion");
+            let has_schema = contains_json_key(content, "$schema") && content.contains("cyclonedx");
 
             // Extract version if possible
             let version = Self::extract_json_version(content);
@@ -1136,7 +1206,7 @@ impl SbomParser for CycloneDxParser {
                     detection = detection.version(&v);
                 }
                 return detection;
-            } else if has_spec_version && content.contains("\"components\"") {
+            } else if has_spec_version && contains_json_key(content, "components") {
                 // Might be CycloneDX JSON (missing bomFormat but has structure)
                 return FormatDetection::with_confidence(FormatConfidence::MEDIUM)
                     .variant("JSON")
@@ -2477,6 +2547,115 @@ mod tests {
             .values()
             .find(|c| c.name == name)
             .unwrap_or_else(|| panic!("component {name} not found"))
+    }
+
+    /// A hostile leading rating (severity "none") must not freeze severity and
+    /// suppress a later CVSS-10 rating — highest severity across ratings wins.
+    #[test]
+    fn severity_takes_max_across_ratings_not_first() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","bom-ref":"c","name":"libc","version":"1.0","purl":"pkg:npm/libc@1.0"}],
+                "vulnerabilities":[{"id":"CVE-1","affects":[{"ref":"c"}],
+                    "ratings":[{"severity":"none"},{"method":"CVSSv3","score":10.0,"severity":"critical"}]}]}"#,
+        );
+        let comp = component(&sbom, "libc");
+        assert_eq!(comp.vulnerabilities.len(), 1);
+        assert_eq!(comp.vulnerabilities[0].severity, Some(Severity::Critical));
+    }
+
+    /// An unknown/misspelled VEX justification must yield None, never fabricate
+    /// ComponentNotPresent (the strongest "it isn't even here" claim).
+    #[test]
+    fn unknown_vex_justification_is_none_not_component_not_present() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","bom-ref":"c","name":"libc","version":"1.0","purl":"pkg:npm/libc@1.0"}],
+                "vulnerabilities":[{"id":"CVE-1","affects":[{"ref":"c"}],
+                    "analysis":{"state":"not_affected","justification":"totally_made_up"}}]}"#,
+        );
+        let comp = component(&sbom, "libc");
+        let vex = comp.vulnerabilities[0].vex_status.as_ref().unwrap();
+        assert_eq!(vex.justification, None);
+    }
+
+    /// A trailing fabricated `not_affected` must not erase an earlier real
+    /// `affected` at the component-level VEX slot.
+    #[test]
+    fn component_vex_keeps_highest_risk_not_last_wins() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","bom-ref":"c","name":"libc","version":"1.0","purl":"pkg:npm/libc@1.0"}],
+                "vulnerabilities":[
+                    {"id":"CVE-REAL","affects":[{"ref":"c"}],"analysis":{"state":"affected"}},
+                    {"id":"CVE-FAKE","affects":[{"ref":"c"}],"analysis":{"state":"not_affected"}}]}"#,
+        );
+        let comp = component(&sbom, "libc");
+        assert_eq!(
+            comp.vex_status.as_ref().map(|v| &v.status),
+            Some(&VexState::Affected),
+            "a fabricated not_affected must not override a real affected"
+        );
+    }
+
+    /// `exploitable` must map to Affected, not collapse to UnderInvestigation.
+    #[test]
+    fn exploitable_state_maps_to_affected() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","bom-ref":"c","name":"libc","version":"1.0","purl":"pkg:npm/libc@1.0"}],
+                "vulnerabilities":[{"id":"CVE-1","affects":[{"ref":"c"}],"analysis":{"state":"exploitable"}}]}"#,
+        );
+        let comp = component(&sbom, "libc");
+        assert_eq!(
+            comp.vulnerabilities[0]
+                .vex_status
+                .as_ref()
+                .map(|v| &v.status),
+            Some(&VexState::Affected)
+        );
+    }
+
+    /// A huge vulnerability description must be capped, and repeated affects
+    /// targets deduped — bounding the memory-amplification fan-out.
+    #[test]
+    fn huge_description_is_capped_and_affects_deduped() {
+        let big = "A".repeat(2 * 1024 * 1024); // 2 MiB
+        let json = format!(
+            r#"{{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{{"type":"library","bom-ref":"c","name":"libc","version":"1.0","purl":"pkg:npm/libc@1.0"}}],
+                "vulnerabilities":[{{"id":"CVE-1","description":"{big}",
+                    "affects":[{{"ref":"c"}},{{"ref":"c"}},{{"ref":"c"}}]}}]}}"#
+        );
+        let sbom = parse_json(&json);
+        let comp = component(&sbom, "libc");
+        assert_eq!(
+            comp.vulnerabilities.len(),
+            1,
+            "duplicate affects must dedup"
+        );
+        let desc = comp.vulnerabilities[0].description.as_ref().unwrap();
+        assert!(
+            desc.len() <= super::super::MAX_VULN_DESCRIPTION_BYTES + 32,
+            "description must be capped, got {} bytes",
+            desc.len()
+        );
+    }
+
+    /// Non-CVSS rating methods (OWASP/SSVC) must not be mislabeled as CVSS.
+    #[test]
+    fn non_cvss_rating_method_produces_no_cvss_score() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","bom-ref":"c","name":"libc","version":"1.0","purl":"pkg:npm/libc@1.0"}],
+                "vulnerabilities":[{"id":"CVE-1","affects":[{"ref":"c"}],
+                    "ratings":[{"method":"OWASP","score":5.0}]}]}"#,
+        );
+        let comp = component(&sbom, "libc");
+        assert!(
+            comp.vulnerabilities[0].cvss.is_empty(),
+            "an OWASP rating must not become a CVSS score"
+        );
     }
 
     #[test]

@@ -770,12 +770,21 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
         ),
     ]));
 
-    let (age_str, age_color) = format_age(doc.created);
-    lines.push(Line::from(vec![
-        Span::styled("Created: ", label_style),
-        Span::raw(doc.created.format("%Y-%m-%d %H:%M:%S").to_string()),
-        Span::styled(format!("  ({age_str})"), Style::default().fg(age_color)),
-    ]));
+    // A missing timestamp is the epoch sentinel, not a genuine 1970 date —
+    // don't render a fabricated "~56 years ago" for it.
+    if doc.has_known_timestamp() {
+        let (age_str, age_color) = format_age(doc.created);
+        lines.push(Line::from(vec![
+            Span::styled("Created: ", label_style),
+            Span::raw(doc.created.format("%Y-%m-%d %H:%M:%S").to_string()),
+            Span::styled(format!("  ({age_str})"), Style::default().fg(age_color)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("Created: ", label_style),
+            Span::styled("unknown", Style::default().fg(scheme.warning)),
+        ]));
+    }
 
     // Creators (people and orgs)
     let authors: Vec<_> = doc
