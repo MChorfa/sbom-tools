@@ -15,6 +15,38 @@ use quick_xml::events::Event;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// Accumulate a possibly-multi-line SPDX `<text>…</text>` value.
+///
+/// If `first` opens a `<text>` block that doesn't close on the same line,
+/// consume subsequent lines from `rest` (joined with newlines) until the
+/// closing `</text>`, then strip both markers. A single-line value (or one
+/// with a matched `<text>…</text>`) is returned with markers stripped. This
+/// stops inner lines of a free-form field from being reparsed as tags.
+fn accumulate_text_block<'a, I: Iterator<Item = &'a str>>(first: &str, rest: &mut I) -> String {
+    let Some(after_open) = first.strip_prefix("<text>") else {
+        return first.to_string();
+    };
+    // Closes on the same line: strip both markers.
+    if let Some(inner) = after_open.strip_suffix("</text>") {
+        return inner.to_string();
+    }
+    if let Some(idx) = after_open.find("</text>") {
+        return after_open[..idx].to_string();
+    }
+    // Multi-line: keep raw lines until the closing tag.
+    let mut acc = String::from(after_open);
+    for line in rest.by_ref() {
+        if let Some(idx) = line.find("</text>") {
+            acc.push('\n');
+            acc.push_str(&line[..idx]);
+            break;
+        }
+        acc.push('\n');
+        acc.push_str(line);
+    }
+    acc
+}
+
 /// Parser for SPDX SBOM format
 #[allow(dead_code)]
 pub struct SpdxParser {
@@ -75,6 +107,11 @@ impl SpdxParser {
         };
 
         let mut current_package: Option<SpdxPackage> = None;
+        // Once a File section starts, its tags (including SPDXID) must not be
+        // attributed to the enclosing package — SPDX tag-value packages have
+        // no explicit terminator, so a File's SPDXID used to clobber the
+        // package's.
+        let mut in_file_section = false;
         let mut packages = Vec::new();
         let mut relationships = Vec::new();
         let mut creation_info = SpdxCreationInfo {
@@ -84,23 +121,40 @@ impl SpdxParser {
             comment: None,
         };
 
-        for line in content.lines() {
-            let line = line.trim();
+        let mut lines = content.lines();
+        while let Some(raw) = lines.next() {
+            let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
 
             if let Some((key, value)) = line.split_once(':') {
                 let key = key.trim();
-                let value = value.trim();
+                // Free-form fields may be wrapped in a multi-line
+                // <text>…</text> block. Accumulate until the closing tag so
+                // inner lines are NOT reparsed as top-level tags (which let a
+                // crafted description inject SPDXID/Created/etc.).
+                let value = accumulate_text_block(value.trim(), &mut lines);
+                let value = value.as_str();
 
                 match key {
                     "SPDXVersion" => doc.spdx_version = value.to_string(),
+                    "FileName" => {
+                        // A File section begins: close the current package so
+                        // subsequent File tags can't overwrite it.
+                        if let Some(pkg) = current_package.take() {
+                            packages.push(pkg);
+                        }
+                        in_file_section = true;
+                    }
                     "SPDXID" if current_package.is_some() => {
                         if let Some(ref mut pkg) = current_package {
                             pkg.spdx_id = value.to_string();
                         }
                     }
+                    // A File's SPDXID (or any SPDXID once we're past the header)
+                    // must not overwrite the document SPDXID.
+                    "SPDXID" if in_file_section => {}
                     "SPDXID" => doc.spdx_id = value.to_string(),
                     "DocumentName" => doc.name = value.to_string(),
                     "DataLicense" => doc.data_license = value.to_string(),
@@ -115,6 +169,7 @@ impl SpdxParser {
                         if let Some(pkg) = current_package.take() {
                             packages.push(pkg);
                         }
+                        in_file_section = false;
                         current_package = Some(SpdxPackage {
                             spdx_id: String::new(),
                             name: value.to_string(),
@@ -1211,4 +1266,67 @@ struct SpdxExternalDocRef {
     external_document_id: String,
     spdx_document: String,
     checksum: SpdxChecksum,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parsers::traits::SbomParser;
+
+    fn parse_tv(content: &str) -> NormalizedSbom {
+        SpdxParser::new()
+            .parse_str(content)
+            .expect("tag-value should parse")
+    }
+
+    fn component<'a>(sbom: &'a NormalizedSbom, name: &str) -> &'a crate::model::Component {
+        sbom.components
+            .values()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("component {name} not found"))
+    }
+
+    /// A File section's SPDXID must not overwrite the enclosing package's
+    /// SPDXID (packages have no explicit terminator in tag-value).
+    #[test]
+    fn tag_value_file_spdxid_does_not_clobber_package() {
+        let sbom = parse_tv(
+            "SPDXVersion: SPDX-2.3\n\
+             SPDXID: SPDXRef-DOCUMENT\n\
+             DocumentName: test\n\
+             PackageName: libfoo\n\
+             SPDXID: SPDXRef-Package-libfoo\n\
+             PackageVersion: 1.0\n\
+             FileName: ./src/main.c\n\
+             SPDXID: SPDXRef-File-main\n",
+        );
+        let comp = component(&sbom, "libfoo");
+        assert_eq!(
+            comp.identifiers.format_id, "SPDXRef-Package-libfoo",
+            "the File SPDXID must not overwrite the package SPDXID"
+        );
+    }
+
+    /// A multi-line <text> block must be captured as one value; its inner
+    /// lines must NOT be reparsed as tags (SPDXID/Created injection).
+    #[test]
+    fn tag_value_multiline_text_block_is_not_reparsed() {
+        let sbom = parse_tv(
+            "SPDXVersion: SPDX-2.3\n\
+             SPDXID: SPDXRef-DOCUMENT\n\
+             DocumentName: test\n\
+             PackageName: libfoo\n\
+             SPDXID: SPDXRef-Package-libfoo\n\
+             PackageCopyrightText: <text>Copyright ACME\n\
+             SPDXID: SPDXRef-INJECTED\n\
+             Created: 1999-01-01T00:00:00Z</text>\n\
+             PackageVersion: 2.0\n",
+        );
+        let comp = component(&sbom, "libfoo");
+        // The injected SPDXID inside the <text> block must not have taken
+        // effect; the real package id survives and the version after the
+        // block still parses.
+        assert_eq!(comp.identifiers.format_id, "SPDXRef-Package-libfoo");
+        assert_eq!(comp.version.as_deref(), Some("2.0"));
+    }
 }
