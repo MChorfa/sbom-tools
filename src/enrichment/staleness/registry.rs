@@ -154,8 +154,9 @@ impl RegistryClient {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
+                let bytes = crate::enrichment::source::read_bounded(resp)
+                    .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+                let json: serde_json::Value = serde_json::from_slice(&bytes)
                     .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
                 let time = json.get("time").and_then(|t| t.as_object());
@@ -217,8 +218,9 @@ impl RegistryClient {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
+                let bytes = crate::enrichment::source::read_bounded(resp)
+                    .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+                let json: serde_json::Value = serde_json::from_slice(&bytes)
                     .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
                 let info = json.get("info");
@@ -299,8 +301,9 @@ impl RegistryClient {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
+                let bytes = crate::enrichment::source::read_bounded(resp)
+                    .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+                let json: serde_json::Value = serde_json::from_slice(&bytes)
                     .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
                 let krate = json.get("crate");
