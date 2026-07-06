@@ -1185,9 +1185,15 @@ pub struct ProvenanceMetrics {
     pub has_serial_number: bool,
     /// Whether the document has a name
     pub has_document_name: bool,
-    /// Age of the SBOM in days (since creation timestamp)
+    /// Age of the SBOM in days (since creation timestamp). Meaningful only
+    /// when `timestamp_known` is true; a missing timestamp is not "very old".
     pub timestamp_age_days: u32,
-    /// Whether the SBOM is considered fresh (< 90 days old)
+    /// Whether the document carries a real creation timestamp (vs. the epoch
+    /// sentinel parsers substitute for a missing/invalid one).
+    #[serde(default = "default_timestamp_known")]
+    pub timestamp_known: bool,
+    /// Whether the SBOM is considered fresh (< 90 days old). False when the
+    /// timestamp is unknown — a missing timestamp is not fresh.
     pub is_fresh: bool,
     /// Whether a primary/described component is identified
     pub has_primary_component: bool,
@@ -1205,6 +1211,13 @@ pub struct ProvenanceMetrics {
 
 /// Freshness threshold in days
 const FRESHNESS_THRESHOLD_DAYS: u32 = 90;
+
+/// serde default for `ProvenanceMetrics::timestamp_known` when deserializing
+/// older records that predate the field: assume the timestamp was known
+/// (the field only distinguishes the epoch-sentinel case introduced later).
+const fn default_timestamp_known() -> bool {
+    true
+}
 
 impl ProvenanceMetrics {
     /// Calculate provenance metrics from an SBOM
@@ -1226,6 +1239,7 @@ impl ProvenanceMetrics {
             .any(|c| c.creator_type == CreatorType::Organization);
         let has_contact_email = doc.creators.iter().any(|c| c.email.is_some());
 
+        let timestamp_known = doc.has_known_timestamp();
         let age_days = (chrono::Utc::now() - doc.created).num_days().max(0) as u32;
 
         Self {
@@ -1235,8 +1249,14 @@ impl ProvenanceMetrics {
             has_contact_email,
             has_serial_number: doc.serial_number.is_some(),
             has_document_name: doc.name.is_some(),
-            timestamp_age_days: age_days,
-            is_fresh: age_days < FRESHNESS_THRESHOLD_DAYS,
+            // Report 0 for an unknown timestamp rather than ~20000 days;
+            // consumers gate the display on timestamp_known.
+            timestamp_age_days: if timestamp_known { age_days } else { 0 },
+            timestamp_known,
+            // A missing timestamp is not fresh — this is the correctness fix:
+            // the old Utc::now() fallback silently granted freshness credit to
+            // every timestamp-less document.
+            is_fresh: timestamp_known && age_days < FRESHNESS_THRESHOLD_DAYS,
             has_primary_component: sbom.primary_component_id.is_some(),
             lifecycle_phase: doc.lifecycle_phase.clone(),
             completeness_declaration: doc.completeness_declaration.clone(),
@@ -2219,6 +2239,7 @@ mod tests {
             has_serial_number: true,
             has_document_name: true,
             timestamp_age_days: 10,
+            timestamp_known: true,
             is_fresh: true,
             has_primary_component: true,
             lifecycle_phase: Some("build".to_string()),
@@ -2241,6 +2262,7 @@ mod tests {
             has_serial_number: true,
             has_document_name: true,
             timestamp_age_days: 10,
+            timestamp_known: true,
             is_fresh: true,
             has_primary_component: true,
             lifecycle_phase: None,
@@ -2511,5 +2533,34 @@ mod tests {
     fn quantum_readiness_pct_zero_algorithms() {
         let m = CryptographyMetrics::default();
         assert!((m.quantum_readiness_pct() - 0.0).abs() < 0.01);
+    }
+
+    /// A document with no timestamp (epoch sentinel) must NOT be counted as
+    /// fresh, and its age must report as unknown (0), not ~20000 days — the
+    /// old Utc::now() fallback silently granted freshness credit.
+    #[test]
+    fn provenance_missing_timestamp_is_not_fresh() {
+        let cdx = r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+            "components":[{"type":"library","name":"a","version":"1.0"}]}"#;
+        let sbom = crate::parsers::parse_sbom_str(cdx).expect("parse");
+        assert!(
+            !sbom.document.has_known_timestamp(),
+            "fixture must have no timestamp"
+        );
+        let prov = ProvenanceMetrics::from_sbom(&sbom);
+        assert!(!prov.timestamp_known);
+        assert!(!prov.is_fresh, "a timestamp-less SBOM must not be fresh");
+        assert_eq!(
+            prov.timestamp_age_days, 0,
+            "unknown age must not leak a huge number"
+        );
+
+        // A timestamped document stays fresh.
+        let cdx_ts = r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+            "metadata":{"timestamp":"3999-01-01T00:00:00Z"},
+            "components":[{"type":"library","name":"a","version":"1.0"}]}"#;
+        let sbom_ts = crate::parsers::parse_sbom_str(cdx_ts).expect("parse");
+        let prov_ts = ProvenanceMetrics::from_sbom(&sbom_ts);
+        assert!(prov_ts.timestamp_known && prov_ts.is_fresh);
     }
 }

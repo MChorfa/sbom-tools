@@ -115,9 +115,10 @@ impl ComplianceChecker {
         }
 
         // Timestamp present (MUST). DocumentMetadata::created is DateTime<Utc>,
-        // always ISO-8601; the risk is the source SBOM not carrying one (which
-        // surfaces as a unix-epoch / pre-epoch fallback).
-        if doc.created.timestamp() <= 0 {
+        // always ISO-8601; the risk is the source SBOM not carrying one, which
+        // parsers surface as the UNIX_EPOCH sentinel (see
+        // DocumentMetadata::has_known_timestamp).
+        if !doc.has_known_timestamp() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,

@@ -1,0 +1,77 @@
+{
+ "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+ "type": "SpdxDocument",
+ "spdxId": "urn:doc",
+ "name": "seed",
+ "creationInfo": {
+  "specVersion": "3.0.1",
+  "created": "2024-01-01T00:00:00Z"
+ },
+ "rootElement": [
+  "urn:app"
+ ],
+ "element": [
+  {
+   "type": "software_Package",
+   "spdxId": "urn:app",
+   "name": "app",
+   "software_packageVersion": "1.0",
+   "software_packageUrl": "pkg:npm/app@1.0"
+  },
+  {
+   "type": "software_Package",
+   "spdxId": "urn:lib",
+   "name": "lib",
+   "software_packageVersion": "2.0",
+   "software_packageUrl": "pkg:npm/lib@2.0"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "urn:r1",
+   "relationshipType": "dependsOn",
+   "from": "urn:app",
+   "to": [
+    "urn:lib"
+   ]
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "urn:r2",
+   "relationshipType": "DEPENDENCY_OF",
+   "from": "urn:lib",
+   "to": [
+    "urn:app"
+   ]
+  },
+  {
+   "type": "security_Vulnerability",
+   "spdxId": "urn:v1",
+   "name": "CVE-2024-0001",
+   "description": "seed vuln"
+  },
+  {
+   "type": "Relationship",
+   "spdxId": "urn:r3",
+   "relationshipType": "AFFECTS",
+   "from": "urn:v1",
+   "to": [
+    "urn:lib"
+   ]
+  },
+  {
+   "type": "security_VexNotAffectedVulnAssessmentRelationship",
+   "spdxId": "urn:a1",
+   "from": "urn:v1",
+   "assessedElement": "urn:lib",
+   "security_justificationType": "vulnerableCodeNotPresent"
+  },
+  {
+   "type": "security_CvssV3VulnAssessmentRelationship",
+   "spdxId": "urn:a2",
+   "from": "urn:v1",
+   "assessedElement": "urn:lib",
+   "score": 7.5,
+   "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+  }
+ ]
+}

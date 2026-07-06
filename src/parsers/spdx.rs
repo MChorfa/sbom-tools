@@ -870,7 +870,13 @@ impl SpdxParser {
             .as_ref()
             .and_then(|ci| ci.created.as_ref())
             .and_then(|c| DateTime::parse_from_rfc3339(c).ok())
-            .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
+            // Deterministic fallback: a document with a missing/invalid
+            // timestamp must hash identically on every parse (created is
+            // folded into the content hash; Utc::now() here made every
+            // parse of such a document content-unique, defeating diff
+            // identity and the incremental cache). Epoch is an honest
+            // "unknown" sentinel rather than a fabricated parse time.
+            .map_or(DateTime::UNIX_EPOCH, |dt| dt.with_timezone(&Utc));
 
         let mut creators = Vec::new();
         if let Some(creation_info) = &spdx.creation_info {

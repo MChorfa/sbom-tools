@@ -931,17 +931,18 @@ fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) 
     ));
 
     // SBOM age
-    let age = prov.timestamp_age_days;
     let age_color = if prov.is_fresh {
         scheme.success
     } else {
         scheme.warning
     };
     line1.push(Span::styled("Age: ", Style::default().fg(scheme.muted)));
-    line1.push(Span::styled(
-        format!("{age}d"),
-        Style::default().fg(age_color),
-    ));
+    let age_text = if prov.timestamp_known {
+        format!("{}d", prov.timestamp_age_days)
+    } else {
+        "unknown".to_string()
+    };
+    line1.push(Span::styled(age_text, Style::default().fg(age_color)));
 
     // Complexity level
     if let Some(ref level) = dep.complexity_level {
@@ -1879,7 +1880,11 @@ fn render_integrity_provenance_details(frame: &mut Frame, area: Rect, report: &Q
         Line::from(vec![
             check(p.is_fresh),
             Span::styled(
-                format!("Fresh ({} days old)", p.timestamp_age_days),
+                if p.timestamp_known {
+                    format!("Fresh ({} days old)", p.timestamp_age_days)
+                } else {
+                    "Fresh (no timestamp)".to_string()
+                },
                 Style::default().fg(scheme.text_muted),
             ),
         ]),

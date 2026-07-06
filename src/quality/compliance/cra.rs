@@ -128,32 +128,48 @@ impl ComplianceChecker {
 
     /// CRA gap checks: Art. 13(3), 13(5), 13(9), Annex I Part III, Annex III
     pub(crate) fn check_cra_gaps(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        // B1: Art. 13(3) — Update frequency / SBOM freshness
-        let age_days = (chrono::Utc::now() - sbom.document.created).num_days();
-        if age_days > 90 {
+        // B1: Art. 13(3) — Update frequency / SBOM freshness. A missing
+        // timestamp (epoch sentinel) is a freshness gap in its own right, but
+        // must be reported as "missing", not as a bogus ~20000-day age.
+        if !sbom.document.has_known_timestamp() {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
-                message: format!(
-                    "[CRA Art. 13(3)] SBOM is {age_days} days old; CRA requires timely updates when components change"
-                ),
+                message: "[CRA Art. 13(3)] SBOM has no creation timestamp; \
+                          CRA requires timely updates when components change"
+                    .to_string(),
                 element: None,
                 requirement: "CRA Art. 13(3): SBOM update frequency".to_string(),
                 rule_id: "SBOM-CRA-ART-13-3",
                 standard_refs: Vec::new(),
             });
-        } else if age_days > 30 {
-            violations.push(Violation {
-                severity: ViolationSeverity::Info,
-                category: ViolationCategory::DocumentMetadata,
-                message: format!(
-                    "[CRA Art. 13(3)] SBOM is {age_days} days old; consider regenerating after component changes"
-                ),
-                element: None,
-                requirement: "CRA Art. 13(3): SBOM update frequency".to_string(),
-                rule_id: "SBOM-CRA-ART-13-3",
-                standard_refs: Vec::new(),
-            });
+        } else {
+            let age_days = (chrono::Utc::now() - sbom.document.created).num_days();
+            if age_days > 90 {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Warning,
+                    category: ViolationCategory::DocumentMetadata,
+                    message: format!(
+                        "[CRA Art. 13(3)] SBOM is {age_days} days old; CRA requires timely updates when components change"
+                    ),
+                    element: None,
+                    requirement: "CRA Art. 13(3): SBOM update frequency".to_string(),
+                    rule_id: "SBOM-CRA-ART-13-3",
+                    standard_refs: Vec::new(),
+                });
+            } else if age_days > 30 {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Info,
+                    category: ViolationCategory::DocumentMetadata,
+                    message: format!(
+                        "[CRA Art. 13(3)] SBOM is {age_days} days old; consider regenerating after component changes"
+                    ),
+                    element: None,
+                    requirement: "CRA Art. 13(3): SBOM update frequency".to_string(),
+                    rule_id: "SBOM-CRA-ART-13-3",
+                    standard_refs: Vec::new(),
+                });
+            }
         }
 
         // B2: Art. 13(5) — Licensed component tracking (all components should have license info)

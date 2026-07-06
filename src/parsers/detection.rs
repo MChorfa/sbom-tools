@@ -382,9 +382,14 @@ impl FormatDetector {
                 }
             }
             Some(ParserKind::Spdx) if detection.can_parse() => {
-                // Check variant - tag-value and RDF need string-based parsing
-                let needs_string =
-                    matches!(detection.variant.as_deref(), Some("tag-value" | "RDF"));
+                // Check variant - tag-value and RDF need string-based parsing.
+                // detect() reports the RDF variant as "RDF/XML"; the old
+                // bare-"RDF" match never fired, so RDF/XML streams were
+                // misrouted to the JSON reader and always failed.
+                let needs_string = matches!(
+                    detection.variant.as_deref(),
+                    Some("tag-value" | "RDF" | "RDF/XML")
+                );
                 if needs_string {
                     let content = read_to_string_capped(&mut reader)?;
                     self.spdx.parse_str(&content)

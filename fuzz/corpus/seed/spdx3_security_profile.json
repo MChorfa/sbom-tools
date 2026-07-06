@@ -1,0 +1,166 @@
+{
+  "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+  "type": "SpdxDocument",
+  "spdxId": "urn:spdx:doc:security-profile-test",
+  "name": "SPDX 3.0 Security Profile Test",
+  "creationInfo": {
+    "specVersion": "3.0.1",
+    "created": "2025-01-20T10:00:00Z",
+    "createdBy": ["urn:spdx:agent:scanner-tool"]
+  },
+  "profileConformance": ["core", "software", "security", "simpleLicensing"],
+  "rootElement": ["urn:spdx:pkg:webapp"],
+  "element": [
+    {
+      "type": "Tool",
+      "spdxId": "urn:spdx:agent:scanner-tool",
+      "name": "VulnScanner 3.0"
+    },
+    {
+      "type": "Organization",
+      "spdxId": "urn:spdx:agent:vendor-corp",
+      "name": "Vendor Corp"
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:spdx:pkg:webapp",
+      "name": "webapp",
+      "packageVersion": "2.1.0",
+      "packageUrl": "pkg:npm/webapp@2.1.0",
+      "primaryPurpose": "application",
+      "suppliedBy": ["urn:spdx:agent:vendor-corp"],
+      "verifiedUsing": [
+        {
+          "type": "Hash",
+          "algorithm": "sha256",
+          "hashValue": "aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb"
+        }
+      ]
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:spdx:pkg:logging-lib",
+      "name": "logging-lib",
+      "packageVersion": "1.5.2",
+      "packageUrl": "pkg:npm/logging-lib@1.5.2",
+      "primaryPurpose": "library"
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:spdx:pkg:crypto-lib",
+      "name": "crypto-lib",
+      "packageVersion": "3.0.1",
+      "packageUrl": "pkg:npm/crypto-lib@3.0.1",
+      "primaryPurpose": "library"
+    },
+    {
+      "type": "software_Snippet",
+      "spdxId": "urn:spdx:snippet:auth-handler",
+      "name": "auth-handler.js",
+      "byteRange": "1024:2048",
+      "lineRange": "45:89",
+      "snippetFromFile": "urn:spdx:file:main-js",
+      "copyrightText": "Copyright 2025 Vendor Corp"
+    },
+    {
+      "type": "Annotation",
+      "spdxId": "urn:spdx:annotation:review-note",
+      "subject": "urn:spdx:pkg:logging-lib",
+      "annotationType": "REVIEW",
+      "statement": "Reviewed for security compliance on 2025-01-18"
+    },
+    {
+      "type": "Annotation",
+      "spdxId": "urn:spdx:annotation:other-note",
+      "subject": "urn:spdx:pkg:webapp",
+      "annotationType": "OTHER",
+      "statement": "Primary application component"
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:webapp-depends-logging",
+      "relationshipType": "DEPENDS_ON",
+      "from": "urn:spdx:pkg:webapp",
+      "to": ["urn:spdx:pkg:logging-lib"]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:webapp-depends-crypto",
+      "relationshipType": "DEPENDS_ON",
+      "from": "urn:spdx:pkg:webapp",
+      "to": ["urn:spdx:pkg:crypto-lib"]
+    },
+    {
+      "type": "simplelicensing_LicenseExpression",
+      "spdxId": "urn:spdx:lic:mit",
+      "licenseExpression": "MIT"
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:webapp-license",
+      "relationshipType": "HAS_DECLARED_LICENSE",
+      "from": "urn:spdx:pkg:webapp",
+      "to": ["urn:spdx:lic:mit"]
+    },
+    {
+      "type": "security_Vulnerability",
+      "spdxId": "urn:spdx:vuln:cve-2025-0001",
+      "name": "CVE-2025-0001",
+      "description": "Remote code execution in logging-lib < 1.6.0",
+      "publishedTime": "2025-01-10T08:00:00Z",
+      "modifiedTime": "2025-01-12T10:00:00Z",
+      "externalIdentifier": [
+        {
+          "externalIdentifierType": "cve",
+          "identifier": "CVE-2025-0001"
+        }
+      ]
+    },
+    {
+      "type": "security_Vulnerability",
+      "spdxId": "urn:spdx:vuln:cve-2025-0002",
+      "name": "CVE-2025-0002",
+      "description": "Timing side-channel in crypto-lib < 3.1.0",
+      "publishedTime": "2025-01-15T12:00:00Z",
+      "externalIdentifier": [
+        {
+          "externalIdentifierType": "cve",
+          "identifier": "CVE-2025-0002"
+        }
+      ]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:vuln1-affects-logging",
+      "relationshipType": "AFFECTS",
+      "from": "urn:spdx:vuln:cve-2025-0001",
+      "to": ["urn:spdx:pkg:logging-lib"]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:spdx:rel:vuln2-affects-crypto",
+      "relationshipType": "AFFECTS",
+      "from": "urn:spdx:vuln:cve-2025-0002",
+      "to": ["urn:spdx:pkg:crypto-lib"]
+    },
+    {
+      "type": "security_CvssV3VulnAssessmentRelationship",
+      "spdxId": "urn:spdx:assessment:cvss-vuln1",
+      "from": "urn:spdx:vuln:cve-2025-0001",
+      "assessedElement": "urn:spdx:pkg:logging-lib",
+      "score": 9.8,
+      "severity": "critical",
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      "publishedTime": "2025-01-10T08:00:00Z"
+    },
+    {
+      "type": "security_VexNotAffectedVulnAssessmentRelationship",
+      "spdxId": "urn:spdx:assessment:vex-vuln2",
+      "from": "urn:spdx:vuln:cve-2025-0002",
+      "assessedElement": "urn:spdx:pkg:crypto-lib",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impactStatement": "The affected code path is not reachable in our configuration",
+      "statusNotes": "Verified by security team audit on 2025-01-16"
+    }
+  ]
+}

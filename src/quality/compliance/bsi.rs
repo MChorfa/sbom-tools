@@ -56,10 +56,11 @@ impl ComplianceChecker {
         // §5.2 — ISO-8601 timestamp (mandatory).
         // Our `DocumentMetadata::created` is `DateTime<Utc>`, always ISO-8601
         // when serialised; the practical risk is the `created` field being
-        // unset in the source SBOM. NormalizedSbom default is Utc::now(), so
-        // we look for tell-tale unix-epoch / very-old fallback values.
-        let created = sbom.document.created;
-        if created.timestamp() <= 0 {
+        // unset in the source SBOM. Parsers substitute the UNIX_EPOCH sentinel
+        // for a missing/invalid timestamp (see
+        // `DocumentMetadata::has_known_timestamp`), so a non-positive
+        // timestamp means "missing".
+        if !sbom.document.has_known_timestamp() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,

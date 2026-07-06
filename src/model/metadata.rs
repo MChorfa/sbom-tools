@@ -98,6 +98,21 @@ pub struct SignatureInfo {
     pub has_value: bool,
 }
 
+impl DocumentMetadata {
+    /// Whether the document carries a real creation timestamp.
+    ///
+    /// Parsers substitute [`DateTime::UNIX_EPOCH`] when the source document
+    /// has no (or an unparseable) timestamp, so the content hash stays
+    /// deterministic. Consumers that compute an AGE or gate on freshness
+    /// must use this to distinguish "no timestamp" from a document that
+    /// genuinely claims 1970 — otherwise a missing timestamp reads as a
+    /// ~55-year-old SBOM.
+    #[must_use]
+    pub fn has_known_timestamp(&self) -> bool {
+        self.created.timestamp() > 0
+    }
+}
+
 impl Default for DocumentMetadata {
     fn default() -> Self {
         Self {

@@ -1,0 +1,66 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.5",
+ "metadata": {
+  "timestamp": "2024-01-01T00:00:00Z"
+ },
+ "components": [
+  {
+   "type": "library",
+   "bom-ref": "pkg:npm/liba@1.0",
+   "name": "liba",
+   "version": "1.0",
+   "purl": "pkg:npm/liba@1.0"
+  }
+ ],
+ "vulnerabilities": [
+  {
+   "id": "CVE-2024-0001",
+   "description": "seed",
+   "source": {
+    "name": "NVD"
+   },
+   "ratings": [
+    {
+     "method": "CVSSv3",
+     "score": 9.8,
+     "severity": "critical",
+     "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    },
+    {
+     "severity": "low"
+    },
+    {
+     "method": "OWASP",
+     "score": 5.0
+    }
+   ],
+   "cwes": [
+    79,
+    89
+   ],
+   "recommendation": "upgrade",
+   "analysis": {
+    "state": "not_affected",
+    "justification": "code_not_reachable",
+    "response": [
+     "will_not_fix"
+    ],
+    "detail": "seed detail"
+   },
+   "affects": [
+    {
+     "ref": "pkg:npm/liba@1.0",
+     "versions": [
+      {
+       "version": "1.0"
+      },
+      {
+       "range": "vers:npm/>=1.0|<2.0"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

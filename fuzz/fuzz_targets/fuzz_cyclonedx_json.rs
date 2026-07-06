@@ -22,6 +22,22 @@ fuzz_target!(|data: &[u8]| {
                 r#"{{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{s}]}}"#,
             );
             let _ = parser.parse_str(&wrapped);
+
+            // Wrap as a vulnerability so apply_vulnerability — the most
+            // security-sensitive conversion path (ratings/severity, VEX
+            // analysis, affects fan-out) — is reachable. A fixed component
+            // gives affects[].ref a resolvable target.
+            let vuln_wrapped = format!(
+                r#"{{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{{"type":"library","bom-ref":"c","name":"c","version":"1.0"}}],"vulnerabilities":[{s}]}}"#,
+            );
+            let _ = parser.parse_str(&vuln_wrapped);
+
+            // And as fields INSIDE a vulnerability object, so fuzz bytes
+            // land directly in ratings/analysis/affects structures.
+            let vuln_fields_wrapped = format!(
+                r#"{{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{{"type":"library","bom-ref":"c","name":"c","version":"1.0"}}],"vulnerabilities":[{{"id":"CVE-0-0",{s}"affects":[{{"ref":"c"}}]}}]}}"#,
+            );
+            let _ = parser.parse_str(&vuln_fields_wrapped);
         }
     }
 });
