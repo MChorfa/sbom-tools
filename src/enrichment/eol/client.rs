@@ -293,11 +293,9 @@ impl EolClient {
     }
 }
 
-/// Filesystem-safe cache file name for an EOL key (e.g. `eol_python` →
-/// `eol_python.json`).
+/// Collision-free cache file name for an EOL key (SHA256 of the key).
 fn cache_filename(key: &str) -> String {
-    let safe_key = key.replace(['/', ':'], "_");
-    format!("{safe_key}.json")
+    crate::enrichment::source::key_to_filename(key)
 }
 
 // ============================================================================
