@@ -74,6 +74,24 @@ impl OsvClient {
 
         for chunk in queries.chunks(self.config.batch_size) {
             let response = self.query_batch_internal(chunk)?;
+            // OSV querybatch returns exactly one result per query, in query
+            // order (https://google.github.io/osv.dev/post-v1-querybatch/).
+            // Attachment downstream is purely positional, so a response whose
+            // result count does not match the query count would silently
+            // misattribute vulnerabilities to the wrong components (or drop
+            // them). Reject the contract violation instead — fail-safe: no
+            // enrichment beats wrong enrichment.
+            if response.results.len() != chunk.len() {
+                return Err(SbomDiffError::enrichment(
+                    "parsing response",
+                    EnrichmentErrorKind::InvalidResponse(format!(
+                        "OSV querybatch returned {} results for {} queries \
+                         (expected one result per query, in order)",
+                        response.results.len(),
+                        chunk.len()
+                    )),
+                ));
+            }
             results.push(response);
         }
 
