@@ -90,6 +90,32 @@ pub fn detect_format(content: &str) -> Option<DetectedFormat> {
 /// whole document into a string. Inputs larger than this are rejected.
 pub(crate) const MAX_SBOM_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
+/// Defensive cap on a single vulnerability description (64 KiB).
+///
+/// A vulnerability's description is attacker-controlled and attached to every
+/// component the vulnerability affects; without a cap, one huge description
+/// deep-cloned across thousands of `affects`/`to` targets is a memory-
+/// amplification DoS. Real CVE descriptions are a paragraph, so 64 KiB is
+/// ~100x headroom while bounding the per-target clone to a constant.
+pub(crate) const MAX_VULN_DESCRIPTION_BYTES: usize = 64 * 1024;
+
+/// Clone an optional description, truncated to [`MAX_VULN_DESCRIPTION_BYTES`]
+/// on a UTF-8 char boundary with a marker appended when truncated.
+pub(crate) fn capped_description(desc: &Option<String>) -> Option<String> {
+    desc.as_ref().map(|d| {
+        if d.len() <= MAX_VULN_DESCRIPTION_BYTES {
+            return d.clone();
+        }
+        let mut end = MAX_VULN_DESCRIPTION_BYTES;
+        while end > 0 && !d.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut truncated = d[..end].to_string();
+        truncated.push_str("… [truncated]");
+        truncated
+    })
+}
+
 /// Detect SBOM format from file content and parse accordingly
 ///
 /// Uses confidence-based detection to select the best parser.
@@ -140,6 +166,22 @@ pub fn is_spdx(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capped_description_truncates_on_char_boundary() {
+        assert_eq!(capped_description(&None), None);
+        assert_eq!(
+            capped_description(&Some("short".to_string())).as_deref(),
+            Some("short")
+        );
+        // Multi-byte char straddling the cap must not panic and must produce
+        // valid UTF-8.
+        let big = "é".repeat(MAX_VULN_DESCRIPTION_BYTES); // 2 bytes each
+        let out = capped_description(&Some(big)).unwrap();
+        assert!(out.len() <= MAX_VULN_DESCRIPTION_BYTES + 16);
+        assert!(out.ends_with("… [truncated]"));
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
 
     #[test]
     fn test_detect_cyclonedx_json() {

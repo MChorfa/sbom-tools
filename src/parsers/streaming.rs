@@ -370,13 +370,17 @@ impl StreamingIterator {
                     return Some(Ok(ParseEvent::Metadata(doc)));
                 }
 
-                // Collect components into a vec for indexed access
-                let components: Vec<_> = sbom.components.values().cloned().collect();
+                // IndexMap allows O(1) positional access; cloning the whole
+                // component map on every advance() (once per emitted event)
+                // was O(n²) time and allocation churn for a streaming parser.
                 let edges_len = sbom.edges.len();
 
                 // Emit components
-                if component_index < components.len() {
-                    let comp = components[component_index].clone();
+                if let Some(comp) = sbom
+                    .components
+                    .get_index(component_index)
+                    .map(|(_, c)| c.clone())
+                {
                     self.progress.components_parsed += 1;
                     if self.progress.components_parsed.is_multiple_of(100) {
                         self.report_progress();
@@ -435,10 +439,15 @@ pub fn estimate_component_count(path: &Path) -> Result<ComponentEstimate, ParseE
 
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    let reader = BufReader::new(file);
     let mut count = 0;
-    let mut bytes_sampled = 0;
+    let mut bytes_sampled = 0usize;
     let sample_limit = 1024 * 1024; // Sample first 1MB
+
+    // Cap the whole read at the sample limit (+1 to see we hit it) BEFORE
+    // splitting into lines. Minified SBOMs are single-line JSON, so
+    // `reader.lines()` on the raw file would allocate the ENTIRE file (e.g.
+    // 10 GB) into one String before the sample check could fire.
+    let reader = BufReader::new(file.take(sample_limit as u64 + 1));
 
     for line in reader.lines() {
         let line = line.map_err(|e| ParseError::IoError(e.to_string()))?;

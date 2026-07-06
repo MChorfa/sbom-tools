@@ -7,7 +7,37 @@
 use super::traits::{FormatConfidence, FormatDetection, ParseError, SbomParser};
 use super::{CycloneDxParser, Spdx3Parser, SpdxParser};
 use crate::model::NormalizedSbom;
-use std::io::BufRead;
+use std::io::{BufRead, Read};
+
+/// Read a reader into a string, rejecting streams over
+/// [`MAX_SBOM_FILE_SIZE`](super::MAX_SBOM_FILE_SIZE).
+///
+/// Reads incrementally and bails the moment the accumulated length would
+/// exceed the cap, so a hostile multi-GB stream is rejected without buffering
+/// its tail, and a small input never over-allocates. Errors on the overrun
+/// rather than silently truncating.
+fn read_to_string_capped<R: Read>(reader: &mut R) -> Result<String, ParseError> {
+    let limit = super::MAX_SBOM_FILE_SIZE as usize;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut chunk)
+            .map_err(|e| ParseError::IoError(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > limit {
+            return Err(ParseError::IoError(format!(
+                "SBOM stream exceeds the {} MB limit",
+                super::MAX_SBOM_FILE_SIZE / (1024 * 1024),
+            )));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    String::from_utf8(buf)
+        .map_err(|e| ParseError::IoError(format!("SBOM stream is not valid UTF-8: {e}")))
+}
 
 /// Minimum confidence threshold for accepting a format detection.
 /// This is LOW confidence (0.25) - the parser believes it might be able to handle the content.
@@ -291,7 +321,11 @@ impl FormatDetector {
     /// Parse from a reader using streaming JSON parsing.
     ///
     /// Peeks at the content to detect format, then uses the appropriate
-    /// reader-based parser for memory-efficient parsing.
+    /// reader-based parser for memory-efficient parsing. All reads are
+    /// bounded by [`MAX_SBOM_FILE_SIZE`](super::MAX_SBOM_FILE_SIZE): unlike
+    /// the path-based `parse_sbom`, this entry point (used by the streaming
+    /// parser) has no up-front `metadata().len()` check, so an unbounded
+    /// `read_to_string` here was an OOM vector for a hostile stream.
     pub fn parse_reader<R: BufRead>(&self, mut reader: R) -> Result<NormalizedSbom, ParseError> {
         // Peek at the buffer to detect format
         let peek = reader
@@ -309,15 +343,16 @@ impl FormatDetector {
             tracing::warn!("{}", warning);
         }
 
+        // Cap every downstream read at the file-size limit (+1 to detect
+        // overrun). fill_buf only peeked, so the buffered bytes are preserved.
+        let mut reader = reader.take(super::MAX_SBOM_FILE_SIZE + 1);
+
         match detection.parser {
             Some(ParserKind::CycloneDx) if detection.can_parse() => {
                 // Check if it's XML (needs string-based parsing)
                 let is_xml = detection.variant.as_deref() == Some("XML");
                 if is_xml {
-                    let mut content = String::new();
-                    reader
-                        .read_to_string(&mut content)
-                        .map_err(|e| ParseError::IoError(e.to_string()))?;
+                    let content = read_to_string_capped(&mut reader)?;
                     self.cyclonedx.parse_str(&content)
                 } else {
                     self.cyclonedx.parse_json_reader(reader)
@@ -328,10 +363,7 @@ impl FormatDetector {
                 let needs_string =
                     matches!(detection.variant.as_deref(), Some("tag-value" | "RDF"));
                 if needs_string {
-                    let mut content = String::new();
-                    reader
-                        .read_to_string(&mut content)
-                        .map_err(|e| ParseError::IoError(e.to_string()))?;
+                    let content = read_to_string_capped(&mut reader)?;
                     self.spdx.parse_str(&content)
                 } else {
                     self.spdx.parse_json_reader(reader)
@@ -339,10 +371,7 @@ impl FormatDetector {
             }
             Some(ParserKind::Spdx3) if detection.can_parse() => {
                 // SPDX 3.0 is JSON-LD only - read full content and parse
-                let mut content = String::new();
-                reader
-                    .read_to_string(&mut content)
-                    .map_err(|e| ParseError::IoError(e.to_string()))?;
+                let content = read_to_string_capped(&mut reader)?;
                 self.spdx3.parse_str(&content)
             }
             _ => Err(ParseError::UnknownFormat(

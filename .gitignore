@@ -51,3 +51,4 @@ memory/
 
 # Swift Package Manager build directories (all nested .build/ dirs)
 **/.build/
+.parsers-audit-findings.json

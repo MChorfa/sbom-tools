@@ -750,8 +750,9 @@ impl Spdx3Parser {
         // Use resolved VEX state from enum variant discrimination
         let vex_state = assessment.resolved_vex_state.clone();
 
-        // Extract CVSS score if present
-        let cvss_score = assessment.score.map(|score| {
+        // Extract CVSS score if present. Reject non-finite (NaN/inf) scores
+        // so a hostile value can't reach severity derivation.
+        let cvss_score = assessment.score.filter(|s| s.is_finite()).map(|score| {
             // Infer version from vector string (more precise), fallback to variant type
             let version = assessment.vector.as_deref().map_or_else(
                 || {
@@ -782,19 +783,23 @@ impl Spdx3Parser {
             cs
         });
 
-        // Map justification string to enum
-        let justification = assessment.justification.as_deref().map(|j| {
+        // Map justification string to enum. Unknown/unrecognized yields None,
+        // never fabricating a strong not-affected justification from hostile
+        // or malformed input.
+        let justification = assessment.justification.as_deref().and_then(|j| {
             match j.to_lowercase().replace(['-', '_'], "").as_str() {
-                "componentnotpresent" => VexJustification::ComponentNotPresent,
-                "vulnerablecodenotpresent" => VexJustification::VulnerableCodeNotPresent,
+                "componentnotpresent" => Some(VexJustification::ComponentNotPresent),
+                "vulnerablecodenotpresent" => Some(VexJustification::VulnerableCodeNotPresent),
                 "vulnerablecodenotinexecutepath" => {
-                    VexJustification::VulnerableCodeNotInExecutePath
+                    Some(VexJustification::VulnerableCodeNotInExecutePath)
                 }
                 "vulnerablecodecannotbecontrolledbyadversary" => {
-                    VexJustification::VulnerableCodeCannotBeControlledByAdversary
+                    Some(VexJustification::VulnerableCodeCannotBeControlledByAdversary)
                 }
-                "inlinemitigationsalreadyexist" => VexJustification::InlineMitigationsAlreadyExist,
-                _ => VexJustification::VulnerableCodeNotPresent, // fallback
+                "inlinemitigationsalreadyexist" => {
+                    Some(VexJustification::InlineMitigationsAlreadyExist)
+                }
+                _ => None,
             }
         });
 
@@ -987,12 +992,18 @@ impl Spdx3Parser {
                     && let Some(vuln) = vuln_map.get(from_ref)
                     && let Some(to_refs) = &rel.to
                 {
+                    // Convert ONCE (capped description) and clone per target,
+                    // deduped: rebuilding per `to` entry re-clones the
+                    // attacker-controlled description — a memory-amplification
+                    // DoS from one relationship with a huge `to` array.
+                    let vuln_ref = self.convert_vulnerability(vuln);
+                    let mut seen: HashSet<&CanonicalId> = HashSet::new();
                     for to_ref in to_refs {
-                        if let Some(canonical_id) = id_map.get(to_ref) {
-                            let vuln_ref = self.convert_vulnerability(vuln);
-                            if let Some(comp) = sbom.components.get_mut(canonical_id) {
-                                comp.vulnerabilities.push(vuln_ref);
-                            }
+                        if let Some(canonical_id) = id_map.get(to_ref)
+                            && seen.insert(canonical_id)
+                            && let Some(comp) = sbom.components.get_mut(canonical_id)
+                        {
+                            comp.vulnerabilities.push(vuln_ref.clone());
                         }
                     }
                 }
@@ -1004,10 +1015,23 @@ impl Spdx3Parser {
                     && let Some(vuln) = vuln_map.get(from_ref)
                     && let Some(to_refs) = &rel.to
                 {
+                    let mut base = self.convert_vulnerability(vuln);
+                    base.vex_status = Some(VexStatus {
+                        status: VexState::Fixed,
+                        justification: None,
+                        action_statement: None,
+                        impact_statement: None,
+                        responses: Vec::new(),
+                        detail: None,
+                    });
+                    let mut seen: HashSet<&CanonicalId> = HashSet::new();
                     for to_ref in to_refs {
-                        if let Some(canonical_id) = id_map.get(to_ref) {
-                            let mut vuln_ref = self.convert_vulnerability(vuln);
-                            vuln_ref.vex_status = Some(VexStatus {
+                        if let Some(canonical_id) = id_map.get(to_ref)
+                            && seen.insert(canonical_id)
+                            && let Some(comp) = sbom.components.get_mut(canonical_id)
+                        {
+                            comp.vulnerabilities.push(base.clone());
+                            comp.vex_status = Some(VexStatus {
                                 status: VexState::Fixed,
                                 justification: None,
                                 action_statement: None,
@@ -1015,17 +1039,6 @@ impl Spdx3Parser {
                                 responses: Vec::new(),
                                 detail: None,
                             });
-                            if let Some(comp) = sbom.components.get_mut(canonical_id) {
-                                comp.vulnerabilities.push(vuln_ref);
-                                comp.vex_status = Some(VexStatus {
-                                    status: VexState::Fixed,
-                                    justification: None,
-                                    action_statement: None,
-                                    impact_statement: None,
-                                    responses: Vec::new(),
-                                    detail: None,
-                                });
-                            }
                         }
                     }
                 }
@@ -1133,7 +1146,7 @@ impl Spdx3Parser {
         };
 
         let mut vuln_ref = VulnerabilityRef::new(id, source);
-        vuln_ref.description.clone_from(&vuln.description);
+        vuln_ref.description = super::capped_description(&vuln.description);
 
         // Parse published/modified times
         if let Some(t) = &vuln.published_time {
@@ -1942,6 +1955,65 @@ mod tests {
             ds.sensitivity_classifications
                 .contains(&"amber".to_string())
         );
+    }
+
+    fn spdx3_lib(elements: &str) -> NormalizedSbom {
+        let doc = format!(
+            r#"{{
+              "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+              "type": "SpdxDocument", "spdxId": "urn:doc",
+              "element": [
+                {{"type": "software_Package", "spdxId": "urn:pkg:lib", "name": "lib",
+                 "software_packageVersion": "1.0",
+                 "software_packageUrl": "pkg:npm/lib@1.0"}},
+                {{"type": "security_Vulnerability", "spdxId": "urn:vuln:cve",
+                 "name": "CVE-2025-9999", "description": "boom"}},
+                {elements}
+              ]
+            }}"#
+        );
+        Spdx3Parser::new().parse_str(&doc).expect("parse")
+    }
+
+    fn spdx3_component<'a>(sbom: &'a NormalizedSbom, name: &str) -> &'a Component {
+        sbom.components
+            .values()
+            .find(|c| c.name == name)
+            .expect("component present")
+    }
+
+    /// An AFFECTS relationship with a duplicated `to` target must attach the
+    /// vuln once (dedup, bounding the memory-amplification fan-out).
+    #[test]
+    fn spdx3_affects_dedups_duplicate_targets() {
+        let sbom = spdx3_lib(
+            r#"{"type": "Relationship", "spdxId": "urn:rel:affects",
+                "relationshipType": "AFFECTS", "from": "urn:vuln:cve",
+                "to": ["urn:pkg:lib", "urn:pkg:lib", "urn:pkg:lib"]}"#,
+        );
+        assert_eq!(
+            spdx3_component(&sbom, "lib").vulnerabilities.len(),
+            1,
+            "duplicated AFFECTS targets must dedup, not attach N times"
+        );
+    }
+
+    /// An unknown VEX justification must yield None, never fabricate the
+    /// strong VulnerableCodeNotPresent not-affected claim.
+    #[test]
+    fn spdx3_unknown_vex_justification_is_none() {
+        let sbom = spdx3_lib(
+            r#"{"type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "urn:assess:vex", "from": "urn:vuln:cve",
+                "assessedElement": "urn:pkg:lib",
+                "security_justificationType": "totally_made_up"}"#,
+        );
+        if let Some(vex) = &spdx3_component(&sbom, "lib").vex_status {
+            assert_eq!(
+                vex.justification, None,
+                "unknown justification must not fabricate a strong claim"
+            );
+        }
     }
 
     #[test]
