@@ -763,6 +763,12 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             remediation: REMEDIATION_GENERIC,
         },
         // ---- CNSA 2.0 ----------------------------------------------------
+        "SBOM-CNSA2-000" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-000",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_GENERIC,
+        },
         "SBOM-CNSA2-ALG-001" => RuleMeta {
             sarif_id: "SBOM-CNSA2-ALG-001",
             default_severity: ViolationSeverity::Error,
@@ -806,6 +812,12 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             remediation: REMEDIATION_GENERIC,
         },
         // ---- NIST PQC ----------------------------------------------------
+        "SBOM-PQC-000" => RuleMeta {
+            sarif_id: "SBOM-PQC-000",
+            default_severity: ViolationSeverity::Error,
+            refs: &[],
+            remediation: REMEDIATION_GENERIC,
+        },
         "SBOM-PQC-001" => RuleMeta {
             sarif_id: "SBOM-PQC-001",
             default_severity: ViolationSeverity::Error,

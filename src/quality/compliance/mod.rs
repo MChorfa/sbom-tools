@@ -1029,6 +1029,88 @@ mod tests {
         );
     }
 
+    /// A plain SBOM with NO cryptographic inventory must NOT pass PQC/CNSA2 —
+    /// that was a vacuous false-pass. It now fails with an "inventory absent"
+    /// Error.
+    #[test]
+    fn crypto_standards_fail_on_empty_inventory() {
+        let mut sbom = NormalizedSbom::default();
+        sbom.add_component(crate::model::Component::new(
+            "lodash".to_string(),
+            "lodash@4.17.21".to_string(),
+        ));
+        for level in [ComplianceLevel::NistPqc, ComplianceLevel::Cnsa2] {
+            let result = ComplianceChecker::new(level).check(&sbom);
+            assert!(
+                !result.is_compliant,
+                "{level:?} must not report compliant with no crypto inventory"
+            );
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error
+                        && v.message.contains("No cryptographic inventory")),
+                "{level:?} must emit an inventory-absent error"
+            );
+        }
+    }
+
+    /// A classical quantum-vulnerable algorithm (RSA/ECDSA/DH) must fail NIST
+    /// PQC even when nistQuantumSecurityLevel is UNSET (real CBOMs rarely set
+    /// it to an explicit 0).
+    #[test]
+    fn pqc_flags_classical_crypto_with_unset_quantum_level() {
+        for family in ["RSA", "ECDSA", "ECDH", "DH", "DSA"] {
+            let sbom = make_crypto_sbom(&[("classical", family, None, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                !result.is_compliant,
+                "{family} with unset quantum level must fail PQC"
+            );
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-PQC-001"),
+                "{family} must raise the quantum-vulnerable error"
+            );
+        }
+    }
+
+    /// SHA-224 and SHA-256 must fail CNSA 2.0 whether the size is in the family
+    /// string or the parameter (previously only family "SHA-2"/param "256"
+    /// was caught).
+    #[test]
+    fn cnsa2_flags_weak_sha2_in_either_encoding() {
+        for (family, param) in [
+            ("SHA-256", None),
+            ("SHA-224", None),
+            ("SHA-2", Some("256")),
+            ("SHA-2", Some("224")),
+        ] {
+            let sbom = make_crypto_sbom(&[("hash", family, param, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+                "{family}/{param:?} must fail CNSA 2.0 hash gate"
+            );
+        }
+        // SHA-384 passes the hash gate.
+        let ok = make_crypto_sbom(&[("hash", "SHA-384", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+            "SHA-384 must not trip the hash gate"
+        );
+    }
+
     #[test]
     fn test_pqc_approved_algorithm_info() {
         let sbom = make_crypto_sbom(&[("ML-DSA-65", "ML-DSA", Some("65"), Some(3))]);

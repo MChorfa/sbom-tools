@@ -1619,11 +1619,15 @@ impl CryptographyMetrics {
             if comp.component_type != ComponentType::Cryptographic {
                 continue;
             }
-            m.total_crypto_components += 1;
-
             let Some(cp) = &comp.crypto_properties else {
+                // A Cryptographic component with no cryptoProperties carries no
+                // evaluable crypto data. Counting it toward total_crypto_
+                // components would make has_data() true and let the CBOM
+                // sub-scores return 100 on empty denominators (grade A for
+                // undocumented crypto), so only count documented assets.
                 continue;
             };
+            m.total_crypto_components += 1;
 
             match cp.asset_type {
                 CryptoAssetType::Algorithm => {
@@ -1643,10 +1647,16 @@ impl CryptographyMetrics {
                         {
                             m.algorithms_with_security_level += 1;
                         }
-                        if algo.is_quantum_safe() {
-                            m.quantum_safe_count += 1;
-                        } else if algo.nist_quantum_security_level == Some(0) {
+                        // A classical public-key family (RSA/ECDSA/DH/…) is
+                        // quantum-vulnerable on the family alone — real CBOMs
+                        // rarely set nistQuantumSecurityLevel=0, so counting
+                        // only Some(0) let classical crypto escape the penalty.
+                        if algo.is_classical_quantum_vulnerable()
+                            || algo.nist_quantum_security_level == Some(0)
+                        {
                             m.quantum_vulnerable_count += 1;
+                        } else if algo.is_quantum_safe() {
+                            m.quantum_safe_count += 1;
                         }
                         if algo.is_weak_by_name(&comp.name) {
                             m.weak_algorithm_count += 1;
@@ -1691,14 +1701,35 @@ impl CryptographyMetrics {
                         if mat.state == Some(CryptoMaterialState::Compromised) {
                             m.compromised_keys += 1;
                         }
-                        // Flag inadequate key sizes
+                        // Flag inadequate key sizes. A key size is a BIT-LENGTH,
+                        // and its adequacy is key-type-dependent: an ECC curve
+                        // bit-length (P-256 → 256) provides ~size/2-bit security,
+                        // so 256-bit ECC is strong, whereas RSA/finite-field
+                        // needs ≥2048. The old flat `<2048` rule false-failed
+                        // every standard ECC key. Recognize the strong ECC curve
+                        // sizes; otherwise apply the finite-field ≥2048 rule.
                         if let Some(size) = mat.size {
                             let is_symmetric = matches!(
                                 mat.material_type,
                                 crate::model::CryptoMaterialType::SymmetricKey
                                     | crate::model::CryptoMaterialType::SecretKey
                             );
-                            if (is_symmetric && size < 128) || (!is_symmetric && size < 2048) {
+                            // Curve bit-lengths giving ≥128-bit security:
+                            // Curve25519(255), P-256, P-384, Curve448, P-521.
+                            // 512 is deliberately EXCLUDED: a 512-bit RSA/DSA key
+                            // is trivially factorable, and matching it here would
+                            // false-PASS it; a 512-bit ECC curve (brainpoolP512r1,
+                            // rare) instead takes the finite-field path and is
+                            // flagged — an acceptable over-caution vs. a false pass.
+                            const STRONG_ECC_SIZES: &[u32] = &[255, 256, 384, 448, 521];
+                            let inadequate = if is_symmetric {
+                                size < 128
+                            } else if STRONG_ECC_SIZES.contains(&size) {
+                                false
+                            } else {
+                                size < 2048
+                            };
+                            if inadequate {
                                 m.inadequate_key_sizes += 1;
                             }
                         }
@@ -1993,6 +2024,65 @@ fn is_restrictive_license(expr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Cryptographic component with NO cryptoProperties must not count as
+    /// crypto inventory — otherwise has_data() is true and the CBOM sub-scores
+    /// return 100 (grade A) for undocumented crypto.
+    #[test]
+    fn property_less_crypto_component_is_not_crypto_inventory() {
+        use crate::model::{Component, ComponentType, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("mystery-crypto".to_string(), "mc@1".to_string());
+        c.component_type = ComponentType::Cryptographic;
+        // No crypto_properties set.
+        sbom.add_component(c);
+
+        let m = CryptographyMetrics::from_sbom(&sbom);
+        assert_eq!(
+            m.total_crypto_components, 0,
+            "undocumented crypto is not inventory"
+        );
+        assert!(
+            !m.has_data(),
+            "has_data must be false → CBOM scores are N/A, not 100"
+        );
+    }
+
+    /// Standard ECC keys (P-256/384/etc.) must NOT be flagged as inadequate —
+    /// their size is the curve bit-length, giving ~size/2-bit security. The old
+    /// flat `<2048` rule false-failed every ECC key. RSA-1024 stays flagged.
+    #[test]
+    fn ecc_key_sizes_are_not_falsely_inadequate() {
+        use crate::model::{
+            Component, ComponentType, CryptoAssetType, CryptoMaterialType, CryptoProperties,
+            NormalizedSbom, RelatedCryptoMaterialProperties,
+        };
+        let key = |name: &str, mtype: CryptoMaterialType, size: u32| {
+            let mut c = Component::new(name.to_string(), format!("{name}@1"));
+            c.component_type = ComponentType::Cryptographic;
+            let mat = RelatedCryptoMaterialProperties::new(mtype).with_size(size);
+            c.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+                    .with_related_crypto_material_properties(mat),
+            );
+            c
+        };
+        let mut sbom = NormalizedSbom::default();
+        sbom.add_component(key("ecc-p256", CryptoMaterialType::PublicKey, 256));
+        sbom.add_component(key("ecc-p384", CryptoMaterialType::PublicKey, 384));
+        sbom.add_component(key("ecc-p521", CryptoMaterialType::PublicKey, 521));
+        sbom.add_component(key("rsa-1024", CryptoMaterialType::PublicKey, 1024));
+        // A 512-bit key must be inadequate — it would be a factorable RSA/DSA
+        // key; 512 must NOT be treated as a "strong ECC" size.
+        sbom.add_component(key("weak-512", CryptoMaterialType::PublicKey, 512));
+        sbom.add_component(key("aes-256", CryptoMaterialType::SymmetricKey, 256));
+
+        let m = CryptographyMetrics::from_sbom(&sbom);
+        assert_eq!(
+            m.inadequate_key_sizes, 2,
+            "RSA-1024 and the 512-bit key are inadequate; strong ECC (256/384/521) is not"
+        );
+    }
 
     #[test]
     fn test_purl_validation() {
