@@ -1142,6 +1142,7 @@ impl Default for CycloneDxParser {
 
 impl SbomParser for CycloneDxParser {
     fn parse_str(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
         if trimmed.starts_with('{') {
             self.parse_json(content)
@@ -1163,17 +1164,22 @@ impl SbomParser for CycloneDxParser {
     }
 
     fn detect(&self, content: &str) -> crate::parsers::traits::FormatDetection {
+        use crate::parsers::contains_json_key;
         use crate::parsers::traits::{FormatConfidence, FormatDetection};
 
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
 
         // Check for JSON CycloneDX
         if trimmed.starts_with('{') {
-            // Look for CycloneDX-specific markers
-            let has_bom_format = content.contains("\"bomFormat\"");
+            // Look for CycloneDX-specific markers. Marker keys (bomFormat,
+            // specVersion, $schema, components) must appear as actual JSON
+            // keys, not merely as a coincidental string VALUE elsewhere in
+            // the document (e.g. a component literally named "specVersion").
+            let has_bom_format = contains_json_key(content, "bomFormat");
             let has_cyclonedx = content.contains("CycloneDX") || content.contains("cyclonedx");
-            let has_spec_version = content.contains("\"specVersion\"");
-            let has_schema = content.contains("\"$schema\"") && content.contains("cyclonedx");
+            let has_spec_version = contains_json_key(content, "specVersion");
+            let has_schema = contains_json_key(content, "$schema") && content.contains("cyclonedx");
 
             // Extract version if possible
             let version = Self::extract_json_version(content);
@@ -1194,7 +1200,7 @@ impl SbomParser for CycloneDxParser {
                     detection = detection.version(&v);
                 }
                 return detection;
-            } else if has_spec_version && content.contains("\"components\"") {
+            } else if has_spec_version && contains_json_key(content, "components") {
                 // Might be CycloneDX JSON (missing bomFormat but has structure)
                 return FormatDetection::with_confidence(FormatConfidence::MEDIUM)
                     .variant("JSON")

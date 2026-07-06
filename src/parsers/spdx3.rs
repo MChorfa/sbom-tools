@@ -35,6 +35,7 @@ impl Spdx3Parser {
 
     /// Parse SPDX 3.0 JSON-LD content
     fn parse_json_ld(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
+        let content = super::strip_bom(content);
         let doc: Spdx3Document =
             serde_json::from_str(content).map_err(|e| ParseError::JsonError(e.to_string()))?;
 
@@ -1252,23 +1253,31 @@ impl SbomParser for Spdx3Parser {
     }
 
     fn detect(&self, content: &str) -> FormatDetection {
+        use crate::parsers::contains_json_key;
+
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
 
         if !trimmed.starts_with('{') {
             return FormatDetection::no_match();
         }
 
-        // SPDX 3.0 indicators
-        let has_context = content.contains("\"@context\"");
-        let has_spdx3_context = content.contains("spdx.org/rdf/3")
-            || content.contains("spdx.org/rdf/v3")
-            || content.contains("spdx3");
+        // SPDX 3.0 indicators. Marker keys must appear as actual JSON keys
+        // (see contains_json_key), not a coincidental string value elsewhere.
+        // The bare "spdx3" substring (no namespace URL, no quoting) was
+        // dropped: real SPDX 3.0 JSON-LD documents always carry one of the
+        // two spdx.org/rdf/{3,v3} context URLs below, and the bare word was
+        // the exact vector for an unrelated document (e.g. one that mentions
+        // "spdx3" in a description or property) to be misrouted here.
+        let has_context = contains_json_key(content, "@context");
+        let has_spdx3_context =
+            content.contains("spdx.org/rdf/3") || content.contains("spdx.org/rdf/v3");
         let has_type_spdx_document =
-            content.contains("\"type\"") && content.contains("\"SpdxDocument\"");
-        let has_spdx_id = content.contains("\"spdxId\"");
-        let has_creation_info = content.contains("\"creationInfo\"");
-        let has_element = content.contains("\"element\"");
-        let has_root_element = content.contains("\"rootElement\"");
+            contains_json_key(content, "type") && content.contains("\"SpdxDocument\"");
+        let has_spdx_id = contains_json_key(content, "spdxId");
+        let has_creation_info = contains_json_key(content, "creationInfo");
+        let has_element = contains_json_key(content, "element");
+        let has_root_element = contains_json_key(content, "rootElement");
 
         // Extract version
         let version = Self::extract_spec_version(content);

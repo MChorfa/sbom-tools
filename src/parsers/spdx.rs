@@ -1040,6 +1040,7 @@ impl Default for SpdxParser {
 
 impl SbomParser for SpdxParser {
     fn parse_str(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
         if trimmed.starts_with('{') {
             self.parse_json(content)
@@ -1067,16 +1068,21 @@ impl SbomParser for SpdxParser {
     }
 
     fn detect(&self, content: &str) -> crate::parsers::traits::FormatDetection {
+        use crate::parsers::contains_json_key;
         use crate::parsers::traits::{FormatConfidence, FormatDetection};
 
+        let content = super::strip_bom(content);
         let trimmed = content.trim();
 
-        // Check for JSON SPDX
+        // Check for JSON SPDX. Marker keys must appear as actual JSON keys,
+        // not a coincidental string VALUE elsewhere (e.g. a CycloneDX
+        // component or property literally named/valued "spdxVersion" or
+        // "SPDXID" previously tripped SPDX detection for an unrelated file).
         if trimmed.starts_with('{') {
-            let has_spdx_version = content.contains("\"spdxVersion\"");
-            let has_spdx_id = content.contains("\"SPDXID\"");
-            let has_data_license = content.contains("\"dataLicense\"");
-            let has_packages = content.contains("\"packages\"");
+            let has_spdx_version = contains_json_key(content, "spdxVersion");
+            let has_spdx_id = contains_json_key(content, "SPDXID");
+            let has_data_license = contains_json_key(content, "dataLicense");
+            let has_packages = contains_json_key(content, "packages");
 
             // Extract version if possible
             let version = Self::extract_spdx_version(content);
