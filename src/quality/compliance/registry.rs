@@ -499,6 +499,12 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
             remediation: REMEDIATION_GENERIC,
         },
+        "SBOM-NTIA-TIMESTAMP" => RuleMeta {
+            sarif_id: "SBOM-NTIA-TIMESTAMP",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
+            remediation: REMEDIATION_GENERIC,
+        },
         "SBOM-NTIA-SUPPLIER" => RuleMeta {
             sarif_id: "SBOM-NTIA-SUPPLIER",
             default_severity: ViolationSeverity::Error,
@@ -721,7 +727,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         },
         "SBOM-EO14028-SUPPLIER" => RuleMeta {
             sarif_id: "SBOM-EO14028-SUPPLIER",
-            default_severity: ViolationSeverity::Warning,
+            default_severity: ViolationSeverity::Error,
             refs: &[(K::Eo14028, "EO 14028 §4")],
             remediation: REMEDIATION_EO14028,
         },
@@ -740,7 +746,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         },
         "SBOM-BSI-TR-03183-2-5-3" => RuleMeta {
             sarif_id: "SBOM-BSI-TR-03183-2-5-3",
-            default_severity: ViolationSeverity::Warning,
+            default_severity: ViolationSeverity::Error,
             refs: &[(K::BsiTr03183_2, "§5.3")],
             remediation: REMEDIATION_GENERIC,
         },

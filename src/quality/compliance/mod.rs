@@ -884,6 +884,103 @@ impl Default for ComplianceChecker {
 mod tests {
     use super::*;
 
+    /// NTIA lists Timestamp as a required data field; it must gate. A
+    /// timestamp-less SBOM (epoch sentinel) now fails NtiaMinimum.
+    #[test]
+    fn ntia_gates_on_missing_timestamp() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let comp = |sbom: &mut NormalizedSbom| {
+            let c = Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string());
+            sbom.add_component(c);
+        };
+
+        // No real timestamp (epoch sentinel) → NTIA timestamp error.
+        let mut no_ts = NormalizedSbom::new(DocumentMetadata::default());
+        no_ts.document.created = chrono::DateTime::UNIX_EPOCH;
+        comp(&mut no_ts);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&no_ts);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-TIMESTAMP"
+                    && v.severity == ViolationSeverity::Error),
+            "missing timestamp must fail NTIA"
+        );
+
+        // A real timestamp → no timestamp error.
+        let mut with_ts = NormalizedSbom::new(DocumentMetadata::default()); // now()
+        comp(&mut with_ts);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&with_ts);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-TIMESTAMP")
+        );
+    }
+
+    /// EO 14028 §4(e) requires Supplier Name (an NTIA element); a missing
+    /// supplier must be a gating Error, not a sub-threshold Warning.
+    #[test]
+    fn eo14028_gates_on_missing_supplier() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        // Component with version + id but NO supplier.
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-SUPPLIER"
+                    && v.severity == ViolationSeverity::Error),
+            "missing supplier must be a gating Error under EO 14028"
+        );
+    }
+
+    /// BSI TR-03183-2 §5.3 makes component name mandatory; the dedicated BSI
+    /// checker must enforce it (it does not run the generic component check).
+    #[test]
+    fn bsi_gates_on_nameless_component() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c =
+            Component::new(String::new(), "ref-1".to_string()).with_version("1.0".to_string());
+        c.identifiers.purl = Some("pkg:cargo/x@1.0".to_string());
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-3"),
+            "a nameless component must fail BSI §5.3"
+        );
+    }
+
+    /// CRA Art. 24 steward vuln-handling is satisfied by a DOCUMENT-level
+    /// disclosure URL — the check previously ignored doc fields (false-fail).
+    #[test]
+    fn cra_art24_honors_document_level_disclosure() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.vulnerability_disclosure_url =
+            Some("https://example.org/security".to_string());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
+        assert!(
+            !r.violations.iter().any(|v| v.rule_id == "SBOM-CRA-ART-24"),
+            "a document-level disclosure URL must satisfy the Art.24 vuln-handling gate"
+        );
+    }
+
     #[test]
     fn test_compliance_level_names() {
         assert_eq!(ComplianceLevel::Minimum.name(), "Minimum");
