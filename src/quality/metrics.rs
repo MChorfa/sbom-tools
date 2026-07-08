@@ -104,7 +104,9 @@ impl CompletenessMetrics {
             components_with_licenses: pct(with_licenses),
             components_with_description: pct(with_description),
             has_creator_info: !sbom.document.creators.is_empty(),
-            has_timestamp: true, // Always set in our model
+            // A missing/invalid source timestamp is stored as the epoch
+            // sentinel — report it as absent, not hardcoded true.
+            has_timestamp: sbom.document.has_known_timestamp(),
             has_serial_number: sbom.document.serial_number.is_some(),
             total_components: total,
         }
@@ -726,6 +728,13 @@ impl VulnerabilityMetrics {
     /// category should be excluded from the weighted score (N/A-aware).
     /// This prevents inflating the overall score when vulnerability assessment
     /// was not performed.
+    ///
+    /// Disclosing vulnerabilities at all earns a 40-point baseline; the
+    /// remaining 60 points reward per-vulnerability documentation quality
+    /// (CVSS 24, CWE 18, remediation 18). Without the baseline, a bare
+    /// disclosure scored 0 — LOWER than saying nothing (N/A redistributes the
+    /// category weight), which punished transparency: an author was better
+    /// off stripping vulnerability data than disclosing it undocumented.
     #[must_use]
     pub fn documentation_score(&self) -> Option<f32> {
         if self.total_vulnerabilities == 0 {
@@ -736,11 +745,8 @@ impl VulnerabilityMetrics {
         let cwe_ratio = self.with_cwe as f32 / self.total_vulnerabilities as f32;
         let remediation_ratio = self.with_remediation as f32 / self.total_vulnerabilities as f32;
 
-        Some(
-            remediation_ratio
-                .mul_add(30.0, cvss_ratio.mul_add(40.0, cwe_ratio * 30.0))
-                .min(100.0),
-        )
+        let quality = remediation_ratio.mul_add(18.0, cvss_ratio.mul_add(24.0, cwe_ratio * 18.0));
+        Some((40.0 + quality).min(100.0))
     }
 }
 
@@ -949,9 +955,12 @@ impl DependencyMetrics {
             return 0.0;
         }
 
-        // Score based on how many components have dependency info
+        // Score based on how many components have dependency info. Clamp to
+        // 100 BEFORE subtracting penalties: with an N/(N-1) denominator a
+        // fully-cyclic graph reaches ~125% coverage, which silently absorbed
+        // the cycle/orphan penalties below.
         let coverage = if total_components > 1 {
-            (self.components_with_deps as f32 / (total_components - 1) as f32) * 100.0
+            ((self.components_with_deps as f32 / (total_components - 1) as f32) * 100.0).min(100.0)
         } else {
             100.0 // Single component SBOM
         };
@@ -1306,7 +1315,9 @@ impl ProvenanceMetrics {
         let has_contact_email = doc.creators.iter().any(|c| c.email.is_some());
 
         let timestamp_known = doc.has_known_timestamp();
-        let age_days = (chrono::Utc::now() - doc.created).num_days().max(0) as u32;
+        // Signed age: negative means the document is dated in the future.
+        let age_days_signed = (chrono::Utc::now() - doc.created).num_days();
+        let age_days = age_days_signed.max(0) as u32;
 
         Self {
             has_tool_creator,
@@ -1319,10 +1330,12 @@ impl ProvenanceMetrics {
             // consumers gate the display on timestamp_known.
             timestamp_age_days: if timestamp_known { age_days } else { 0 },
             timestamp_known,
-            // A missing timestamp is not fresh — this is the correctness fix:
-            // the old Utc::now() fallback silently granted freshness credit to
-            // every timestamp-less document.
-            is_fresh: timestamp_known && age_days < FRESHNESS_THRESHOLD_DAYS,
+            // A missing timestamp is not fresh, and neither is a FUTURE-dated
+            // document (negative signed age): a bogus forward date must not
+            // read as "recently generated". Display-only — freshness is
+            // deliberately NOT part of quality_score (see below).
+            is_fresh: timestamp_known
+                && (0..i64::from(FRESHNESS_THRESHOLD_DAYS)).contains(&age_days_signed),
             has_primary_component: sbom.primary_component_id.is_some(),
             lifecycle_phase: doc.lifecycle_phase.clone(),
             completeness_declaration: doc.completeness_declaration.clone(),
@@ -1335,9 +1348,14 @@ impl ProvenanceMetrics {
     /// Calculate provenance quality score (0-100)
     ///
     /// Weighted checklist: tool creator (15%), tool version (5%), org creator (12%),
-    /// contact email (8%), serial number (8%), document name (5%), freshness (12%),
+    /// contact email (8%), serial number (8%), document name (5%),
     /// primary component (12%), completeness declaration (8%), signature (5%),
     /// lifecycle phase (10% CDX-only).
+    ///
+    /// Freshness (`is_fresh`) is deliberately NOT scored: it is computed from
+    /// the live wall clock, so identical SBOM bytes would score differently
+    /// across days (and flip at midnight). It remains available as display
+    /// metadata; the score itself is a pure function of the document.
     #[must_use]
     pub fn quality_score(&self, is_cyclonedx: bool) -> f32 {
         let mut score = 0.0;
@@ -1353,7 +1371,6 @@ impl ProvenanceMetrics {
             (self.has_contact_email, 8.0),
             (self.has_serial_number, 8.0),
             (self.has_document_name, 5.0),
-            (self.is_fresh, 12.0),
             (self.has_primary_component, 12.0),
             (completeness_declared, 8.0),
             (self.has_signature, 5.0),
@@ -2235,6 +2252,106 @@ mod tests {
         );
     }
 
+    /// Disclosing a bare vulnerability (no CVSS/CWE/remediation) earns the
+    /// 40-point disclosure baseline, not 0 — scoring 0 made an SBOM better
+    /// off stripping vulnerability data than disclosing it (non-monotonic).
+    #[test]
+    fn bare_vuln_disclosure_earns_baseline_credit() {
+        use crate::model::{Component, NormalizedSbom, VulnerabilityRef, VulnerabilitySource};
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("app".to_string(), "app@1".to_string());
+        c.vulnerabilities.push(VulnerabilityRef::new(
+            "CVE-2024-0001".to_string(),
+            VulnerabilitySource::Osv,
+        ));
+        sbom.add_component(c);
+
+        let vm = VulnerabilityMetrics::from_sbom(&sbom);
+        let score = vm.documentation_score().expect("vuln data present");
+        assert!(
+            (score - 40.0).abs() < 0.01,
+            "bare disclosure must earn the 40-pt baseline, got {score}"
+        );
+
+        // No vulnerability data at all stays N/A (None), not 40.
+        let empty = NormalizedSbom::default();
+        assert!(
+            VulnerabilityMetrics::from_sbom(&empty)
+                .documentation_score()
+                .is_none()
+        );
+    }
+
+    /// The provenance score must be a pure function of the document — no
+    /// wall-clock term. Freshness is display-only metadata.
+    #[test]
+    fn provenance_score_has_no_wall_clock_term() {
+        let fresh = ProvenanceMetrics {
+            is_fresh: true,
+            ..base_provenance()
+        };
+        let stale = ProvenanceMetrics {
+            is_fresh: false,
+            ..base_provenance()
+        };
+        assert!(
+            (fresh.quality_score(true) - stale.quality_score(true)).abs() < f32::EPSILON,
+            "is_fresh must not affect the score"
+        );
+    }
+
+    fn base_provenance() -> ProvenanceMetrics {
+        ProvenanceMetrics {
+            has_tool_creator: true,
+            has_tool_version: false,
+            has_org_creator: false,
+            has_contact_email: false,
+            has_serial_number: false,
+            has_document_name: false,
+            timestamp_age_days: 0,
+            timestamp_known: true,
+            is_fresh: false,
+            has_primary_component: false,
+            lifecycle_phase: None,
+            completeness_declaration: CompletenessDeclaration::Unknown,
+            has_signature: false,
+            has_citations: false,
+            citations_count: 0,
+        }
+    }
+
+    /// A fully-cyclic dependency graph reaches >100% raw coverage via the
+    /// N/(N-1) denominator; the clamp must land BEFORE the penalties so the
+    /// cycle penalty is not silently absorbed.
+    #[test]
+    fn cyclic_graph_coverage_does_not_absorb_cycle_penalty() {
+        use crate::model::{Component, DependencyEdge, DependencyType, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let n = 5;
+        let mut ids = Vec::new();
+        for i in 0..n {
+            let c = Component::new(format!("c{i}"), format!("c{i}@1"));
+            ids.push(c.canonical_id.clone());
+            sbom.add_component(c);
+        }
+        // Ring: c0→c1→...→c4→c0 — every node has an outgoing edge.
+        for i in 0..n {
+            sbom.add_edge(DependencyEdge::new(
+                ids[i].clone(),
+                ids[(i + 1) % n].clone(),
+                DependencyType::DependsOn,
+            ));
+        }
+        let dm = DependencyMetrics::from_sbom(&sbom);
+        assert!(dm.cycle_count >= 1, "ring must be detected as a cycle");
+        let score = dm.quality_score(n);
+        assert!(
+            score <= 95.0,
+            "cycle penalty must survive the clamp (raw coverage 125% \
+             previously absorbed it), got {score}"
+        );
+    }
+
     #[test]
     fn test_purl_validation() {
         assert!(is_valid_purl("pkg:npm/@scope/name@1.0.0"));
@@ -2807,12 +2924,25 @@ mod tests {
             "unknown age must not leak a huge number"
         );
 
-        // A timestamped document stays fresh.
-        let cdx_ts = r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
-            "metadata":{"timestamp":"3999-01-01T00:00:00Z"},
-            "components":[{"type":"library","name":"a","version":"1.0"}]}"#;
-        let sbom_ts = crate::parsers::parse_sbom_str(cdx_ts).expect("parse");
+        // A recently-timestamped document is fresh.
+        let now = chrono::Utc::now().to_rfc3339();
+        let cdx_ts = format!(
+            r#"{{"bomFormat":"CycloneDX","specVersion":"1.5",
+            "metadata":{{"timestamp":"{now}"}},
+            "components":[{{"type":"library","name":"a","version":"1.0"}}]}}"#
+        );
+        let sbom_ts = crate::parsers::parse_sbom_str(&cdx_ts).expect("parse");
         let prov_ts = ProvenanceMetrics::from_sbom(&sbom_ts);
         assert!(prov_ts.timestamp_known && prov_ts.is_fresh);
+
+        // A FUTURE-dated document is known but must NOT read as fresh —
+        // a bogus forward date is not "recently generated".
+        let cdx_future = r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+            "metadata":{"timestamp":"3999-01-01T00:00:00Z"},
+            "components":[{"type":"library","name":"a","version":"1.0"}]}"#;
+        let sbom_future = crate::parsers::parse_sbom_str(cdx_future).expect("parse");
+        let prov_future = ProvenanceMetrics::from_sbom(&sbom_future);
+        assert!(prov_future.timestamp_known);
+        assert!(!prov_future.is_fresh, "future-dated must not be fresh");
     }
 }
