@@ -70,7 +70,22 @@ impl CompletenessMetrics {
             if !comp.hashes.is_empty() {
                 with_hashes += 1;
             }
-            if !comp.licenses.declared.is_empty() || comp.licenses.concluded.is_some() {
+            // A NOASSERTION entry carries zero license information (the
+            // CycloneDX parser emits declared=["NOASSERTION"] for empty
+            // license objects), so it must not count as "has license".
+            // SPDX NONE *is* information (the author asserts no license
+            // exists) and still counts as documented.
+            let has_license_info = comp
+                .licenses
+                .declared
+                .iter()
+                .any(|l| l.expression != "NOASSERTION")
+                || comp
+                    .licenses
+                    .concluded
+                    .as_ref()
+                    .is_some_and(|c| c.expression != "NOASSERTION");
+            if has_license_info {
                 with_licenses += 1;
             }
             if comp.description.is_some() {
@@ -385,12 +400,17 @@ pub struct IdentifierMetrics {
     pub valid_purls: usize,
     /// Components with invalid/malformed PURLs
     pub invalid_purls: usize,
-    /// Components with valid CPEs
+    /// Components with at least one valid CPE
     pub valid_cpes: usize,
-    /// Components with invalid/malformed CPEs
+    /// Components with at least one invalid/malformed CPE
     pub invalid_cpes: usize,
     /// Components with SWID tags
     pub with_swid: usize,
+    /// Components with at least one valid identifier of any kind. This is the
+    /// coverage numerator: summing the per-type counts would let one
+    /// multi-identifier component mask components with no identifier at all.
+    #[serde(default)]
+    pub components_with_valid_id: usize,
     /// Unique ecosystems identified
     pub ecosystems: Vec<String>,
     /// Components missing all identifiers (only name)
@@ -406,6 +426,7 @@ impl IdentifierMetrics {
         let mut valid_cpes = 0;
         let mut invalid_cpes = 0;
         let mut with_swid = 0;
+        let mut with_valid_id = 0;
         let mut missing_all = 0;
         let mut ecosystems = std::collections::HashSet::new();
 
@@ -414,8 +435,10 @@ impl IdentifierMetrics {
             let has_cpe = !comp.identifiers.cpe.is_empty();
             let has_swid = comp.identifiers.swid.is_some();
 
+            let mut purl_valid = false;
             if let Some(ref purl) = comp.identifiers.purl {
                 if is_valid_purl(purl) {
+                    purl_valid = true;
                     valid_purls += 1;
                     // Extract ecosystem from PURL
                     if let Some(eco) = extract_ecosystem_from_purl(purl) {
@@ -426,16 +449,23 @@ impl IdentifierMetrics {
                 }
             }
 
-            for cpe in &comp.identifiers.cpe {
-                if is_valid_cpe(cpe) {
-                    valid_cpes += 1;
-                } else {
-                    invalid_cpes += 1;
-                }
+            // Per-COMPONENT, not per-entry: a component with several CPEs
+            // counts once, so it cannot mask components with no identifier.
+            let any_cpe_valid = comp.identifiers.cpe.iter().any(|c| is_valid_cpe(c));
+            let any_cpe_invalid = comp.identifiers.cpe.iter().any(|c| !is_valid_cpe(c));
+            if any_cpe_valid {
+                valid_cpes += 1;
+            }
+            if any_cpe_invalid {
+                invalid_cpes += 1;
             }
 
             if has_swid {
                 with_swid += 1;
+            }
+
+            if purl_valid || any_cpe_valid || has_swid {
+                with_valid_id += 1;
             }
 
             if !has_purl && !has_cpe && !has_swid {
@@ -452,6 +482,7 @@ impl IdentifierMetrics {
             valid_cpes,
             invalid_cpes,
             with_swid,
+            components_with_valid_id: with_valid_id,
             ecosystems: ecosystem_list,
             missing_all_identifiers: missing_all,
         }
@@ -464,9 +495,12 @@ impl IdentifierMetrics {
             return 0.0;
         }
 
-        let with_valid_id = self.valid_purls + self.valid_cpes + self.with_swid;
-        let coverage =
-            (with_valid_id.min(total_components) as f32 / total_components as f32) * 100.0;
+        // Coverage over components with at least one valid identifier — NOT
+        // the sum of per-type counts, which a single PURL+CPE+SWID component
+        // would inflate 3x (masking identifier-less components).
+        let coverage = (self.components_with_valid_id.min(total_components) as f32
+            / total_components as f32)
+            * 100.0;
 
         // Penalize invalid identifiers
         let invalid_count = self.invalid_purls + self.invalid_cpes;
@@ -479,17 +513,19 @@ impl IdentifierMetrics {
 /// License quality metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseMetrics {
-    /// Components with declared licenses
+    /// Components with at least one real (non-NOASSERTION) declared license
     pub with_declared: usize,
     /// Components with concluded licenses
     pub with_concluded: usize,
-    /// Components with valid SPDX expressions
+    /// Components whose declared licenses are all valid SPDX expressions
+    /// (subset of `with_declared`)
     pub valid_spdx_expressions: usize,
-    /// Components with non-standard license names
+    /// Components with at least one non-standard declared license name
+    /// (subset of `with_declared`; disjoint with `valid_spdx_expressions`)
     pub non_standard_licenses: usize,
-    /// Components with NOASSERTION license
+    /// Components with at least one NOASSERTION declared entry
     pub noassertion_count: usize,
-    /// Components with deprecated SPDX license identifiers
+    /// Components with at least one deprecated SPDX license identifier
     pub deprecated_licenses: usize,
     /// Components with restrictive/copyleft licenses (GPL family)
     pub restrictive_licenses: usize,
@@ -513,28 +549,58 @@ impl LicenseMetrics {
         let mut licenses = HashSet::new();
         let mut copyleft_ids = HashSet::new();
 
+        // All counters are PER-COMPONENT (matching the field docs). The old
+        // per-entry counting let a component with several declared licenses
+        // push valid_spdx_expressions above with_declared, blowing the SPDX
+        // ratio past 1.0 — and a NOASSERTION-only component counted as
+        // license-documented.
         for comp in sbom.components.values() {
-            if !comp.licenses.declared.is_empty() {
+            let mut has_real_entry = false;
+            let mut has_noassertion = false;
+            let mut all_valid = true;
+            let mut any_deprecated = false;
+            let mut any_restrictive = false;
+
+            for lic in &comp.licenses.declared {
+                let expr = &lic.expression;
+                licenses.insert(expr.clone());
+
+                if expr == "NOASSERTION" {
+                    has_noassertion = true;
+                    continue;
+                }
+                has_real_entry = true;
+
+                // is_valid_spdx is computed at construction via the `spdx`
+                // crate (real expression parsing), unlike the old substring
+                // heuristic that accepted any string containing " OR ".
+                if !lic.is_valid_spdx {
+                    all_valid = false;
+                }
+                if is_deprecated_spdx_license(expr) {
+                    any_deprecated = true;
+                }
+                if is_restrictive_license(expr) {
+                    any_restrictive = true;
+                    copyleft_ids.insert(expr.clone());
+                }
+            }
+
+            if has_noassertion {
+                noassertion += 1;
+            }
+            if has_real_entry {
                 with_declared += 1;
-                for lic in &comp.licenses.declared {
-                    let expr = &lic.expression;
-                    licenses.insert(expr.clone());
-
-                    if expr == "NOASSERTION" {
-                        noassertion += 1;
-                    } else if is_valid_spdx_license(expr) {
-                        valid_spdx += 1;
-                    } else {
-                        non_standard += 1;
-                    }
-
-                    if is_deprecated_spdx_license(expr) {
-                        deprecated += 1;
-                    }
-                    if is_restrictive_license(expr) {
-                        restrictive += 1;
-                        copyleft_ids.insert(expr.clone());
-                    }
+                if all_valid {
+                    valid_spdx += 1;
+                } else {
+                    non_standard += 1;
+                }
+                if any_deprecated {
+                    deprecated += 1;
+                }
+                if any_restrictive {
+                    restrictive += 1;
                 }
             }
 
@@ -1472,16 +1538,20 @@ impl LifecycleMetrics {
             }
 
             if let Some(ref stale_info) = comp.staleness {
-                match stale_info.level {
-                    StalenessLevel::Stale | StalenessLevel::Abandoned => stale += 1,
-                    StalenessLevel::Deprecated => deprecated += 1,
-                    StalenessLevel::Archived => archived += 1,
-                    _ => {}
+                if matches!(
+                    stale_info.level,
+                    StalenessLevel::Stale | StalenessLevel::Abandoned
+                ) {
+                    stale += 1;
                 }
-                if stale_info.is_deprecated {
+                // The enrichment sets level=Deprecated AND is_deprecated=true
+                // together (same for Archived), so counting both branches
+                // double-counted every deprecated/archived component in the
+                // normal case. Count each component at most once per state.
+                if stale_info.level == StalenessLevel::Deprecated || stale_info.is_deprecated {
                     deprecated += 1;
                 }
-                if stale_info.is_archived {
+                if stale_info.level == StalenessLevel::Archived || stale_info.is_archived {
                     archived += 1;
                 }
                 if stale_info.latest_version.is_some() {
@@ -1934,44 +2004,6 @@ fn is_valid_cpe(cpe: &str) -> bool {
     cpe.starts_with("cpe:2.3:") || cpe.starts_with("cpe:/")
 }
 
-fn is_valid_spdx_license(expr: &str) -> bool {
-    // Common SPDX license identifiers
-    const COMMON_SPDX: &[&str] = &[
-        "MIT",
-        "Apache-2.0",
-        "GPL-2.0",
-        "GPL-3.0",
-        "BSD-2-Clause",
-        "BSD-3-Clause",
-        "ISC",
-        "MPL-2.0",
-        "LGPL-2.1",
-        "LGPL-3.0",
-        "AGPL-3.0",
-        "Unlicense",
-        "CC0-1.0",
-        "0BSD",
-        "EPL-2.0",
-        "CDDL-1.0",
-        "Artistic-2.0",
-        "GPL-2.0-only",
-        "GPL-2.0-or-later",
-        "GPL-3.0-only",
-        "GPL-3.0-or-later",
-        "LGPL-2.1-only",
-        "LGPL-2.1-or-later",
-        "LGPL-3.0-only",
-        "LGPL-3.0-or-later",
-    ];
-
-    // Check for common licenses or expressions
-    let trimmed = expr.trim();
-    COMMON_SPDX.contains(&trimmed)
-        || trimmed.contains(" AND ")
-        || trimmed.contains(" OR ")
-        || trimmed.contains(" WITH ")
-}
-
 /// Whether a license identifier is on the SPDX deprecated list.
 ///
 /// These are license IDs that SPDX has deprecated in favor of more specific
@@ -2084,6 +2116,125 @@ mod tests {
         );
     }
 
+    /// A NOASSERTION-only component must not count as "has license" — the
+    /// CycloneDX parser emits declared=["NOASSERTION"] for empty license
+    /// objects, which carries zero license information.
+    #[test]
+    fn noassertion_only_component_is_not_licensed() {
+        use crate::model::{Component, LicenseExpression, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("no-info".to_string(), "ni@1".to_string());
+        c.licenses
+            .add_declared(LicenseExpression::new("NOASSERTION".to_string()));
+        sbom.add_component(c);
+        let mut licensed = Component::new("real".to_string(), "real@1".to_string());
+        licensed
+            .licenses
+            .add_declared(LicenseExpression::new("MIT".to_string()));
+        sbom.add_component(licensed);
+
+        let completeness = CompletenessMetrics::from_sbom(&sbom);
+        assert!(
+            (completeness.components_with_licenses - 50.0).abs() < 0.01,
+            "1 of 2 components has real license info, got {}",
+            completeness.components_with_licenses
+        );
+
+        let lm = LicenseMetrics::from_sbom(&sbom);
+        assert_eq!(
+            lm.with_declared, 1,
+            "NOASSERTION-only must not count as declared"
+        );
+        assert_eq!(lm.noassertion_count, 1);
+        assert_eq!(lm.valid_spdx_expressions, 1);
+    }
+
+    /// spdx_ratio must never exceed 1.0: a component with several valid
+    /// declared licenses previously pushed the per-entry numerator above the
+    /// per-component denominator, blowing the 30-pt SPDX bonus past its cap.
+    #[test]
+    fn multi_license_component_does_not_inflate_spdx_bonus() {
+        use crate::model::{Component, LicenseExpression, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let mut multi = Component::new("multi".to_string(), "m@1".to_string());
+        for id in ["MIT", "Apache-2.0", "BSD-3-Clause"] {
+            multi
+                .licenses
+                .add_declared(LicenseExpression::new(id.to_string()));
+        }
+        sbom.add_component(multi);
+        // A second component with NO license at all.
+        sbom.add_component(Component::new("bare".to_string(), "b@1".to_string()));
+
+        let lm = LicenseMetrics::from_sbom(&sbom);
+        assert_eq!(lm.with_declared, 1);
+        assert_eq!(lm.valid_spdx_expressions, 1, "per-component, not per-entry");
+        assert!(
+            lm.valid_spdx_expressions <= lm.with_declared,
+            "spdx ratio numerator must not exceed its denominator"
+        );
+        // coverage 50% of 60 = 30, bonus 1.0*30 = 30 → 60. The old per-entry
+        // count gave ratio 3.0 → bonus 90 → clamped 100 despite 50% coverage.
+        let score = lm.quality_score(2);
+        assert!(
+            (score - 60.0).abs() < 0.01,
+            "expected 60 (half coverage + full SPDX bonus), got {score}"
+        );
+    }
+
+    /// One component with many CPEs must not mask components with no
+    /// identifier at all in the coverage score.
+    #[test]
+    fn multi_cpe_component_does_not_mask_identifierless_ones() {
+        use crate::model::{Component, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let mut multi = Component::new("multi-cpe".to_string(), "mc@1".to_string());
+        for i in 0..3 {
+            multi
+                .identifiers
+                .cpe
+                .push(format!("cpe:2.3:a:vendor:product{i}:1.0:*:*:*:*:*:*:*"));
+        }
+        sbom.add_component(multi);
+        sbom.add_component(Component::new("bare-1".to_string(), "b1@1".to_string()));
+        sbom.add_component(Component::new("bare-2".to_string(), "b2@1".to_string()));
+
+        let im = IdentifierMetrics::from_sbom(&sbom);
+        assert_eq!(im.components_with_valid_id, 1);
+        assert_eq!(im.valid_cpes, 1, "per-component CPE count");
+        assert_eq!(im.missing_all_identifiers, 2);
+        let score = im.quality_score(3);
+        assert!(
+            (score - 33.33).abs() < 0.1,
+            "1/3 coverage expected, got {score} (old per-entry count gave 100)"
+        );
+    }
+
+    /// Deprecated/archived components are counted once, not twice, when the
+    /// enrichment sets both the StalenessLevel and the boolean flag.
+    #[test]
+    fn lifecycle_does_not_double_count_deprecated() {
+        use crate::model::{Component, NormalizedSbom, StalenessInfo, StalenessLevel};
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("old-pkg".to_string(), "op@1".to_string());
+        c.staleness = Some(StalenessInfo {
+            level: StalenessLevel::Deprecated,
+            last_published: None,
+            is_deprecated: true, // enrichment sets both together
+            is_archived: false,
+            deprecation_message: None,
+            days_since_update: None,
+            latest_version: None,
+        });
+        sbom.add_component(c);
+
+        let lm = LifecycleMetrics::from_sbom(&sbom);
+        assert_eq!(
+            lm.deprecated_components, 1,
+            "one deprecated component must count once, not twice"
+        );
+    }
+
     #[test]
     fn test_purl_validation() {
         assert!(is_valid_purl("pkg:npm/@scope/name@1.0.0"));
@@ -2099,12 +2250,23 @@ mod tests {
         assert!(!is_valid_cpe("something:else"));
     }
 
+    /// License validity comes from the model's spdx-crate parse (stored in
+    /// `LicenseExpression.is_valid_spdx`), not the old substring heuristic
+    /// that accepted any string containing " OR "/" AND "/" WITH ".
     #[test]
     fn test_spdx_license_validation() {
-        assert!(is_valid_spdx_license("MIT"));
-        assert!(is_valid_spdx_license("Apache-2.0"));
-        assert!(is_valid_spdx_license("MIT AND Apache-2.0"));
-        assert!(is_valid_spdx_license("GPL-2.0 OR MIT"));
+        use crate::model::LicenseExpression;
+        let valid = |e: &str| LicenseExpression::new(e.to_string()).is_valid_spdx;
+        assert!(valid("MIT"));
+        assert!(valid("Apache-2.0"));
+        assert!(valid("MIT AND Apache-2.0"));
+        assert!(valid("GPL-2.0 OR MIT"));
+        assert!(valid("GPL-2.0-only WITH Classpath-exception-2.0"));
+        assert!(valid("Zlib"));
+        // The substring heuristic accepted these; real parsing must not.
+        assert!(!valid("GARBAGE OR NONSENSE"));
+        assert!(!valid("foo AND bar"));
+        assert!(!valid("NOASSERTION"));
     }
 
     #[test]

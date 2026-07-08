@@ -29,10 +29,9 @@ impl LicenseExpression {
     /// Create from an SPDX license ID
     #[must_use]
     pub fn from_spdx_id(id: &str) -> Self {
-        Self {
-            expression: id.to_string(),
-            is_valid_spdx: true,
-        }
+        // Validate rather than trusting the caller: scoring now relies on
+        // `is_valid_spdx`, so a hardcoded `true` would be a footgun.
+        Self::new(id.to_string())
     }
 
     /// Validate an SPDX expression using the spdx crate.
@@ -40,7 +39,13 @@ impl LicenseExpression {
     /// Uses lax parsing mode to accept common non-standard expressions
     /// (e.g., "Apache2" instead of "Apache-2.0", "/" instead of "OR").
     fn validate_spdx(expr: &str) -> bool {
-        if expr.is_empty() || expr.contains("NOASSERTION") || expr.contains("NONE") {
+        // Reject expressions with a NOASSERTION/NONE clause (no license
+        // information), matching whole tokens so that legitimate ids like
+        // `LicenseRef-NONEXCLUSIVE` are not caught by a substring test.
+        let has_no_info_token = expr
+            .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+            .any(|tok| tok == "NOASSERTION" || tok == "NONE");
+        if expr.is_empty() || has_no_info_token {
             return false;
         }
         spdx::Expression::parse_mode(expr, spdx::ParseMode::LAX).is_ok()
