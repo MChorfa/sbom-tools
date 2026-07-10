@@ -51,6 +51,15 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
             // Handle click on list items
             // Layout: header (2 rows) + filter bar (3 rows) + content
             // Content area starts around row 5, with 1-row header inside tables
+            // Clicks inside the Source detail strip must not fall through
+            // to the tree-list index math below it.
+            if app.active_tab == crate::tui::TabKind::Source
+                && let Some(top) = app.source_state().detail_strip_top
+                && y >= top
+            {
+                return;
+            }
+
             let content_start_row = 6u16; // After tabs + filter bar + table header
 
             if y >= content_start_row {

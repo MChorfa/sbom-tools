@@ -12,23 +12,27 @@ use std::fmt::Write;
 pub fn render_source(frame: &mut Frame, area: Rect, source: &mut SourceDiffState) {
     let show_detail = source.show_detail;
 
-    // When detail panel is visible: 38% / 38% / 24%
-    let main_area = if show_detail {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(38),
-                Constraint::Percentage(38),
-                Constraint::Percentage(24),
-            ])
+    // Detail is a bottom strip: the old side-column squeezed both source
+    // panels to ~30 cols for six one-line facts; a horizontal strip keeps the
+    // panels full-width and fits the detail lines comfortably.
+    let panels_area = if show_detail {
+        let vchunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(10), Constraint::Length(8)])
             .split(area);
-        render_detail_panel(frame, chunks[2], source);
-        (chunks[0], chunks[1])
+        render_detail_panel(frame, vchunks[1], source);
+        source.detail_strip_top = Some(vchunks[1].y);
+        vchunks[0]
     } else {
+        source.detail_strip_top = None;
+        area
+    };
+
+    let main_area = {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
+            .split(panels_area);
         (chunks[0], chunks[1])
     };
 

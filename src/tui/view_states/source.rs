@@ -131,6 +131,16 @@ impl ViewState for SourceView {
                 self.inner.toggle_detail();
                 EventResult::Consumed
             }
+            // Scroll the detail strip while it is open (its scrollbar was
+            // previously unreachable: nothing wrote detail_scroll).
+            KeyCode::Char(']') if self.inner.show_detail => {
+                self.inner.detail_scroll = self.inner.detail_scroll.saturating_add(1);
+                EventResult::Consumed
+            }
+            KeyCode::Char('[') if self.inner.show_detail => {
+                self.inner.detail_scroll = self.inner.detail_scroll.saturating_sub(1);
+                EventResult::Consumed
+            }
             // Filter type cycle (tree mode)
             KeyCode::Char('f') => {
                 if self.inner.active_panel_mut().view_mode == SourceViewMode::Tree {
