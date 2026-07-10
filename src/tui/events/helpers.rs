@@ -15,18 +15,16 @@ pub(super) fn get_selected_component_name(app: &App) -> Option<String> {
             None
         }
         AppMode::Timeline => {
-            // Get selected component from timeline view
+            // Resolve through the same filtered list the Components panel
+            // displays, so the name matches the highlighted row.
             if let Some(ref result) = app.data.timeline_result {
                 let idx = app.tabs.timeline.selected_component;
-                // Check in evolution_summary for component names
-                let all_components: Vec<_> = result
-                    .evolution_summary
-                    .components_added
-                    .iter()
-                    .chain(result.evolution_summary.components_removed.iter())
-                    .collect();
-                if idx < all_components.len() {
-                    return Some(all_components[idx].name.clone());
+                let entries = crate::tui::views::filtered_evolution_entries(
+                    result,
+                    app.tabs.timeline.component_filter,
+                );
+                if let Some((evo, _)) = entries.get(idx) {
+                    return Some(evo.name.clone());
                 }
             }
             None

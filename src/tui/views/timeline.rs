@@ -462,18 +462,18 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
     f.render_widget(table, area);
 }
 
-fn render_component_history(
-    f: &mut Frame,
-    area: Rect,
+/// The Components panel's display list: added+removed evolutions tagged with
+/// `is_removed`, filtered by the active component filter.
+///
+/// Single source of truth for every consumer that resolves
+/// `selected_component` — the panel render, the history modal, and the
+/// event-side name lookup — so a filtered display can never desync from the
+/// selection index again.
+pub(crate) fn filtered_evolution_entries(
     result: &TimelineResult,
-    state: &TimelineState,
-) {
-    let scheme = colors();
-    let is_active = matches!(state.active_panel, TimelinePanel::Components);
-    let selected = state.selected_component;
-
-    // Get component evolution data with filtering
-    let all_evolutions: Vec<_> = result
+    filter: TimelineComponentFilter,
+) -> Vec<(&crate::diff::ComponentEvolution, bool)> {
+    result
         .evolution_summary
         .components_added
         .iter()
@@ -485,30 +485,43 @@ fn render_component_history(
                 .iter()
                 .map(|e| (e, true)),
         )
-        .collect();
-
-    let filtered_evolutions: Vec<_> = all_evolutions
-        .iter()
-        .filter(|(evo, is_removed)| {
-            match state.component_filter {
-                TimelineComponentFilter::All => true,
-                TimelineComponentFilter::Added => !*is_removed,
-                TimelineComponentFilter::Removed => *is_removed,
-                TimelineComponentFilter::VersionChanged => {
-                    // Check if version changed
-                    evo.current_version.as_ref() != Some(&evo.first_seen_version)
-                }
-                TimelineComponentFilter::Stable => {
-                    !*is_removed && evo.current_version.as_ref() == Some(&evo.first_seen_version)
-                }
+        .filter(|(evo, is_removed)| match filter {
+            TimelineComponentFilter::All => true,
+            TimelineComponentFilter::Added => !*is_removed,
+            TimelineComponentFilter::Removed => *is_removed,
+            TimelineComponentFilter::VersionChanged => {
+                evo.current_version.as_ref() != Some(&evo.first_seen_version)
+            }
+            TimelineComponentFilter::Stable => {
+                !*is_removed && evo.current_version.as_ref() == Some(&evo.first_seen_version)
             }
         })
-        .collect();
+        .collect()
+}
 
+fn render_component_history(
+    f: &mut Frame,
+    area: Rect,
+    result: &TimelineResult,
+    state: &TimelineState,
+) {
+    let scheme = colors();
+    let is_active = matches!(state.active_panel, TimelinePanel::Components);
+    let selected = state.selected_component;
+
+    let filtered_evolutions = filtered_evolution_entries(result, state.component_filter);
+
+    // Window around the selection sized to the REAL panel height (borders +
+    // table header + spacing = 4 rows of chrome): with the selection bounds
+    // now populated, the cursor can travel past the fold and must stay
+    // visible at any terminal size.
+    let visible_rows = (area.height.saturating_sub(4) as usize).max(1);
+    let window_start = selected.saturating_sub(visible_rows - 1);
     let rows: Vec<Row> = filtered_evolutions
         .iter()
         .enumerate()
-        .take(20)
+        .skip(window_start)
+        .take(visible_rows)
         .map(|(i, (evo, is_removed))| {
             let style = if i == selected {
                 Style::default()
@@ -563,10 +576,12 @@ fn render_component_history(
         scheme.text
     };
 
+    let unfiltered_total = result.evolution_summary.components_added.len()
+        + result.evolution_summary.components_removed.len();
     let title = format!(
         " Component Evolution ({}/{}) [f: filter, Enter: detail] ",
         filtered_evolutions.len(),
-        all_evolutions.len()
+        unfiltered_total
     );
 
     let table = Table::new(rows, widths)
@@ -784,16 +799,12 @@ fn render_component_history_modal(
 
     f.render_widget(Clear, modal_area);
 
-    // Get selected component
-    let all_evolutions: Vec<_> = result
-        .evolution_summary
-        .components_added
-        .iter()
-        .chain(result.evolution_summary.components_removed.iter())
-        .collect();
-
-    let evo = match all_evolutions.get(state.selected_component) {
-        Some(e) => *e,
+    // Resolve the selection through the SAME filtered list the Components
+    // panel displays (the unfiltered list opened the wrong component's
+    // history whenever a filter was active).
+    let entries = filtered_evolution_entries(result, state.component_filter);
+    let evo = match entries.get(state.selected_component) {
+        Some((e, _)) => *e,
         None => return,
     };
 
