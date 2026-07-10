@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] ┌──────────────────── Keyboard Shortcuts (Diff) ─────────────────────┐│  [5
+[1] S┌──────────────────── Keyboard Shortcuts (Diff) ─────────────────────┐
      │Global                                                              │
 ─────│                                                                    │─────
 ┌ Sum│q  Quit application                                                 │────┐
@@ -19,10 +19,10 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │██12│y/Ctrl+C  Copy selected to clipboard                                │elta│
 └────│Shift+drag  Select text with mouse                                  │────┘
 ┌ All│b/Backspace  Navigate back                                          │────┐
-│── M│                                                                    │    │
-│ ~ M│Navigation                                                          │    │
-│ ~ M│                                                                    │    │
-│ ~ a│j/k  Up/Down                                                        │    │
+│── M│                                                                    │    ▲
+│ ~ M│Navigation                                                          │    █
+│ ~ M│                                                                    │    ║
+│ ~ a│j/k  Up/Down                                                        │    ▼
 └────└────────────────────────────────────────────────────────────────────┘────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
                   Tab switch  / search  e export  ? help  q quit

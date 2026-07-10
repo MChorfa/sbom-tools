@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  »
 
 ────────────────────────────────────────────────────────────────────────────────
 Transitive  Highlight  Cycles  │  Depth:5  Roots:50  Sort:Name
@@ -25,4 +25,4 @@ Transitive  Highlight  Cycles  │  Depth:5  Roots:50  Sort:Name
 │                                             │║│                              │
 └─────────────────────────────────────────────┘▼└──────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
- f filter  t transitive  h highlight  Enter expand  c component │  Tab switch  /
+   …  f filter  t transitive │  Tab switch  / search  e export  ? help  q quit

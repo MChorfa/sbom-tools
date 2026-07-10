@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
- [1] Overview   │  [2] Components   │  [3] Vulns   │  [4] Licenses   │  [5] Deps   │  [6] Quality   │  [7] Compliance
+[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License Details ───────────────────────────────────┐

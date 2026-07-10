@@ -31,6 +31,9 @@ pub struct ViewApp {
 
     /// Current tree filter
     pub(crate) tree_filter: TreeFilter,
+    /// Tab-bar window computed by the last render — shared with the mouse
+    /// hit-test so render geometry and click geometry cannot drift.
+    pub(crate) tab_window: crate::tui::shared::TabWindow,
 
     /// Tree search query (inline filter)
     pub(crate) tree_search_query: String,
@@ -190,6 +193,7 @@ impl ViewApp {
             tree_state,
             tree_group_by: TreeGroupBy::Ecosystem,
             tree_filter: TreeFilter::All,
+            tab_window: crate::tui::shared::TabWindow::default(),
             tree_search_query: String::new(),
             tree_search_active: false,
             cached_tree_nodes: Vec::new(),

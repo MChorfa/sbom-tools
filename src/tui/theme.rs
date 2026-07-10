@@ -974,14 +974,65 @@ impl FooterHints {
     pub const GLOBAL_COUNT: usize = 5;
 }
 
+/// Measured footer width of a hint list as rendered by
+/// [`render_footer_hints`]: per hint, a padded key badge (key width + 2),
+/// a space, and the description; 1-column gaps between hints; plus the
+/// 2-column "│ " section separator while any tab-specific hint remains.
+#[must_use]
+pub fn footer_hints_width(hints: &[(&str, &str)]) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    let mut w: u16 = 0;
+    for (i, (key, desc)) in hints.iter().enumerate() {
+        if i > 0 {
+            w += 1;
+        }
+        // Badge " {key} " (key + 2) immediately followed by the description.
+        w += UnicodeWidthStr::width(*key) as u16 + 2 + UnicodeWidthStr::width(*desc) as u16;
+    }
+    if hints.len() > FooterHints::GLOBAL_COUNT {
+        w += 2; // "│ " separator
+    }
+    w
+}
+
+/// Fit a hint list into `max_width` columns by dropping tab-specific hints
+/// from the END of the tab-specific block (the least-important,
+/// latest-inserted ones). The trailing `GLOBAL_COUNT` global hints — the
+/// always-valid `?`/`q` anchors — are never dropped.
+///
+/// Returns the kept hints and whether anything was elided (rendered as a
+/// leading "… ").
+#[must_use]
+pub fn fit_footer_hints<'a>(
+    hints: &[(&'a str, &'a str)],
+    max_width: u16,
+) -> (Vec<(&'a str, &'a str)>, bool) {
+    let mut kept: Vec<(&str, &str)> = hints.to_vec();
+    let mut elided = false;
+    // Once anything is elided, the "… " prefix costs 2 more columns.
+    while footer_hints_width(&kept) + if elided { 2 } else { 0 } > max_width
+        && kept.len() > FooterHints::GLOBAL_COUNT
+    {
+        let tab_count = kept.len() - FooterHints::GLOBAL_COUNT;
+        kept.remove(tab_count - 1);
+        elided = true;
+    }
+    (kept, elided)
+}
+
 /// Render footer hints as spans with badge-style keys.
 ///
 /// If the hint list contains more items than `FooterHints::GLOBAL_COUNT`,
-/// a `│` separator is inserted between tab-specific and global hints.
+/// a `│` separator is inserted between tab-specific and global hints. When
+/// `elided` is true (some hints were dropped by [`fit_footer_hints`]), a
+/// muted "… " prefix marks the omission.
 #[must_use]
-pub fn render_footer_hints(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
+pub fn render_footer_hints(hints: &[(&str, &str)], elided: bool) -> Vec<Span<'static>> {
     let scheme = colors();
     let mut spans = Vec::new();
+    if elided {
+        spans.push(Span::styled("\u{2026} ", Style::default().fg(scheme.muted)));
+    }
     let tab_count = hints.len().saturating_sub(FooterHints::GLOBAL_COUNT);
 
     for (i, (key, desc)) in hints.iter().enumerate() {
@@ -1074,5 +1125,31 @@ mod selection_contrast_tests {
         assert_selection_visible("dark", &ColorScheme::dark());
         assert_selection_visible("light", &ColorScheme::light());
         assert_selection_visible("high_contrast", &ColorScheme::high_contrast());
+    }
+}
+
+#[cfg(test)]
+mod footer_budget_tests {
+    use super::{FooterHints, fit_footer_hints, footer_hints_width};
+
+    /// The global ?/q tail must survive any width squeeze; tab-specific
+    /// hints drop from the end of their block first.
+    #[test]
+    fn fit_footer_hints_keeps_global_tail() {
+        let hints = FooterHints::for_diff_tab("dependencies");
+        let (kept, elided) = fit_footer_hints(&hints, 40);
+        assert!(elided, "a 40-col budget must drop something");
+        assert!(footer_hints_width(&kept) <= 40 || kept.len() == FooterHints::GLOBAL_COUNT);
+        let tail: Vec<&str> = kept.iter().rev().take(2).map(|(k, _)| *k).collect();
+        assert_eq!(tail, ["q", "?"], "the global tail must survive: {kept:?}");
+    }
+
+    /// Nothing is dropped when everything fits.
+    #[test]
+    fn fit_footer_hints_noop_when_fits() {
+        let hints = FooterHints::global();
+        let (kept, elided) = fit_footer_hints(&hints, 200);
+        assert_eq!(kept.len(), hints.len());
+        assert!(!elided);
     }
 }

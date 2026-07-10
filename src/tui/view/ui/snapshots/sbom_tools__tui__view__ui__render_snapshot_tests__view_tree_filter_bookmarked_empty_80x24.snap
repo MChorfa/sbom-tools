@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
- [1] Overview   │  [2] Components   │  [3] Vulns   │  [4] Licenses   │  [5] Deps
+« [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  »
 
 ────────────────────────────────────────────────────────────────────────────────
 Group:  Ecosystem   Filter:  Bookmarked  (0)┌ Component Overview ──────────────┐
@@ -25,4 +25,4 @@ Group:  Ecosystem   Filter:  Bookmarked  (0)┌ Component Overview ────�
 │└────────────────────────────────────────┘││                                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
  Components: 9 │ Vulns: 0 │ Licenses: 3 │ Group:  Ecosystem  Filter:  Bookmarked
- p panel  Enter select  1-4 detail tabs │  Tab switch  / search  e export  ? hel
+   …  p panel  Enter select │  Tab switch  / search  e export  ? help  q quit

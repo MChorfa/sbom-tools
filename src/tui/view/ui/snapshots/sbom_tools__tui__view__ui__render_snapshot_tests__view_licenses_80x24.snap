@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
- [1] Overview   │  [2] Components   │  [3] Vulns   │  [4] Licenses   │  [5] Deps
+« [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────
 Group:  License   │  [g] toggle  [Enter] ins┌ License Details ─────────────────┐
@@ -25,4 +25,4 @@ Group:  License   │  [g] toggle  [Enter] ins┌ License Details ────�
 │                                          ││Components: 6 (1/7)               ▼
 └──────────────────────────────────────────┘└──────────────────────────────────┘
  Components: 9 │ Vulns: 0 │ Licenses: 3
- g group  Enter inspect  K/J scroll │  Tab switch  / search  e export  ? help  q
+…  g group │  Tab switch  / search  e export  ? help  q quit [y] copy Apache-2.0

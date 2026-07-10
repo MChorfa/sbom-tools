@@ -42,8 +42,21 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
                     .iter()
                     .map(|(_, key, title)| crate::tui::ui::diff_tab_label(key, title))
                     .collect();
-                if let Some(idx) = crate::tui::shared::tab_bar_hit(&labels, 0, 3, x) {
-                    app.select_tab(entries[idx].0);
+                // Shared geometry with the last render: the stashed window
+                // makes marker clicks functional scroll affordances.
+                match crate::tui::shared::tab_bar_hit_windowed(&labels, app.tab_window, 0, 3, x) {
+                    crate::tui::shared::TabHit::Tab(idx) => app.select_tab(entries[idx].0),
+                    crate::tui::shared::TabHit::PrevMarker => {
+                        if app.tab_window.start > 0 {
+                            app.select_tab(entries[app.tab_window.start - 1].0);
+                        }
+                    }
+                    crate::tui::shared::TabHit::NextMarker => {
+                        if app.tab_window.end < entries.len() {
+                            app.select_tab(entries[app.tab_window.end].0);
+                        }
+                    }
+                    crate::tui::shared::TabHit::Miss => {}
                 }
                 return;
             }

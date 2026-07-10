@@ -1,11 +1,10 @@
 ---
 source: src/tui/ui/render_snapshot_tests.rs
-assertion_line: 89
 expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5] Vulnerabilities   │  [6] Quality   │
+[1] Summary  │ [2] Components  │ [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  »
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ Summary ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -33,13 +32,13 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 ┌ Changes by Ecosystem ────────────────────────────────────┐┌ SBOM Comparison ─────────────────────────────────────────┐
 │██12███    1                                              ││                   Old     New   Delta                    │
 └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
-┌ All Changes (15) — MAJOR:3 minor:1 patch:1 +4 -4 meta:2 ─────────────────────────────────────────────────────────────┐
-│── Metadata Changes ──                                                                                                │
-│ ~ META  created: 2024-01-15T10:00:00+00:00 → 2024-06-15T10:00:00+00:00                                               │
-│ ~ META  primary_component_version: 1.0.0 → 2.0.0                                                                     │
-│ ~ acme-webapp 1.0.0 → 2.0.0 MAJOR                                                                                    │
-│ ~ axios 0.21.1 → 1.4.0 MAJOR                                                                                         │
-│ ~ react 17.0.1 → 18.2.0 MAJOR                                                                                        │
+┌ All Changes (15) — MAJOR:3 minor:1 patch:1 +4 -4 meta:2 [1-6/16 j/k] ────────────────────────────────────────────────┐
+│── Metadata Changes ──                                                                                                ▲
+│ ~ META  created: 2024-01-15T10:00:00+00:00 → 2024-06-15T10:00:00+00:00                                               █
+│ ~ META  primary_component_version: 1.0.0 → 2.0.0                                                                     ║
+│ ~ acme-webapp 1.0.0 → 2.0.0 MAJOR                                                                                    ║
+│ ~ axios 0.21.1 → 1.4.0 MAJOR                                                                                         ║
+│ ~ react 17.0.1 → 18.2.0 MAJOR                                                                                        ▼
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
                                       Tab switch  / search  e export  ? help  q quit

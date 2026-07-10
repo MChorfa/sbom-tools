@@ -13,7 +13,7 @@ use super::widgets::{
 use crate::config::TuiPreferences;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::io::{self, stdout};
 
@@ -345,30 +345,10 @@ pub(crate) fn diff_tab_label(key: &str, title: &str) -> String {
     format!("[{key}] {title} ")
 }
 
-fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
+fn render_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
+    use unicode_width::UnicodeWidthStr;
+
     let tabs_data = diff_tab_entries(app);
-
-    let titles: Vec<Line> = tabs_data
-        .iter()
-        .map(|(kind, key, title)| {
-            let is_active = *kind == app.active_tab;
-            let key_style = if is_active {
-                Style::default().fg(colors().accent).bold()
-            } else {
-                Style::default().fg(colors().muted)
-            };
-            let title_style = if is_active {
-                Style::default().fg(colors().accent).bold()
-            } else {
-                Style::default().fg(colors().text_muted)
-            };
-
-            Line::from(vec![
-                Span::styled(format!("[{key}]"), key_style),
-                Span::styled(format!(" {title} "), title_style),
-            ])
-        })
-        .collect();
 
     // Derive selection from the actual entry order (handles the variable
     // GraphChanges/Source positions without a parallel index table).
@@ -377,15 +357,55 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         .position(|(kind, _, _)| *kind == app.active_tab)
         .unwrap_or(0);
 
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(colors().border)),
-        )
-        .highlight_style(Style::default().fg(colors().accent))
-        .select(selected_idx)
-        .divider(Span::styled(" │ ", Style::default().fg(colors().muted)));
+    // Window the entries against the real width. The ratatui Tabs widget
+    // truncated silently, hiding half the tabs at 80 cols with no indicator.
+    let widths: Vec<u16> = tabs_data
+        .iter()
+        .map(|(_, key, title)| UnicodeWidthStr::width(diff_tab_label(key, title).as_str()) as u16)
+        .collect();
+    let window = crate::tui::shared::tab_window(&widths, 3, selected_idx, area.width);
+    app.tab_window = window;
+
+    let mut spans: Vec<Span> = Vec::new();
+    if window.clipped_left {
+        spans.push(Span::styled(
+            "\u{ab} ",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+    for (i, (kind, key, title)) in tabs_data[window.start..window.end].iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(
+                " \u{2502} ",
+                Style::default().fg(colors().muted),
+            ));
+        }
+        let is_active = *kind == app.active_tab;
+        let key_style = if is_active {
+            Style::default().fg(colors().accent).bold()
+        } else {
+            Style::default().fg(colors().muted)
+        };
+        let title_style = if is_active {
+            Style::default().fg(colors().accent).bold()
+        } else {
+            Style::default().fg(colors().text_muted)
+        };
+        spans.push(Span::styled(format!("[{key}]"), key_style));
+        spans.push(Span::styled(format!(" {title} "), title_style));
+    }
+    if window.clipped_right {
+        spans.push(Span::styled(
+            " \u{bb}",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+
+    let tabs = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(colors().border)),
+    );
 
     frame.render_widget(tabs, area);
 }
@@ -543,16 +563,42 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let hints = FooterHints::for_diff_tab(tab_name);
-    let mut footer_spans = render_footer_hints(&hints);
 
-    // Append copy preview: [y] copy <value>
-    if let Some(yank_text) = super::events::get_yank_text(app) {
-        let truncated = if yank_text.len() > 30 {
-            let end = super::shared::floor_char_boundary(&yank_text, 27);
-            format!("{}...", &yank_text[..end])
+    // Budget the row: reserve the yank preview's width, keep the global
+    // ?/q tail intact by dropping tab-specific hints (marked with a leading
+    // ellipsis), and sacrifice the yank preview before the globals.
+    let yank_text = super::events::get_yank_text(app);
+    let yank_suffix = yank_text.map(|t| {
+        if t.len() > 30 {
+            let end = super::shared::floor_char_boundary(&t, 27);
+            format!("{}...", &t[..end])
         } else {
-            yank_text
+            t
+        }
+    });
+    let yank_width = yank_suffix.as_ref().map_or(0, |t| {
+        use unicode_width::UnicodeWidthStr;
+        // " [y] copy " + text
+        10 + UnicodeWidthStr::width(t.as_str()) as u16
+    });
+
+    let (mut kept, mut elided) =
+        crate::tui::theme::fit_footer_hints(&hints, area.width.saturating_sub(yank_width));
+    // If even the surviving hints plus the yank preview overflow, drop the
+    // yank FIRST and re-offer its width to the tab-specific hints.
+    let elision_w = if elided { 2 } else { 0 };
+    let yank_suffix =
+        if crate::tui::theme::footer_hints_width(&kept) + elision_w + yank_width > area.width {
+            let refit = crate::tui::theme::fit_footer_hints(&hints, area.width);
+            kept = refit.0;
+            elided = refit.1;
+            None
+        } else {
+            yank_suffix
         };
+    let mut footer_spans = render_footer_hints(&kept, elided);
+
+    if let Some(truncated) = yank_suffix {
         footer_spans.push(Span::styled(" ", Style::default()));
         footer_spans.push(Span::styled("[y]", Style::default().fg(colors().accent)));
         footer_spans.push(Span::styled(
