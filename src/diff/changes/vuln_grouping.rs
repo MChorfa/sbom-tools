@@ -101,6 +101,11 @@ impl VulnerabilityGroup {
             self.has_kev = true;
         }
 
+        // Propagate the ransomware-campaign flag to the group.
+        if vuln.is_ransomware {
+            self.has_ransomware_kev = true;
+        }
+
         self.vulnerabilities.push(vuln);
     }
 
@@ -278,6 +283,7 @@ mod tests {
             description: None,
             remediation: None,
             is_kev: false,
+            is_ransomware: false,
             epss_score: None,
             cwes: Vec::new(),
             component_depth: None,
@@ -337,6 +343,37 @@ mod tests {
         assert!(
             !lodash.has_kev,
             "group without KEV vulns must not report has_kev"
+        );
+    }
+
+    #[test]
+    fn test_group_propagates_ransomware_flag() {
+        let mut ransomware_vuln = make_vuln("CVE-2021-44228", "log4j", "Critical");
+        ransomware_vuln.is_kev = true;
+        ransomware_vuln.is_ransomware = true;
+        let vulns = vec![
+            ransomware_vuln,
+            make_vuln("CVE-2024-0009", "lodash", "High"),
+        ];
+
+        let groups = group_vulnerabilities(&vulns, VulnGroupStatus::Introduced);
+
+        let log4j = groups
+            .iter()
+            .find(|g| g.component_id == "log4j")
+            .expect("log4j group present");
+        assert!(
+            log4j.has_ransomware_kev,
+            "group with a ransomware-KEV vuln must report has_ransomware_kev"
+        );
+
+        let lodash = groups
+            .iter()
+            .find(|g| g.component_id == "lodash")
+            .expect("lodash group present");
+        assert!(
+            !lodash.has_ransomware_kev,
+            "group without ransomware vulns must not report has_ransomware_kev"
         );
     }
 

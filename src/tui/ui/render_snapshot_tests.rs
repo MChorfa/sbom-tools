@@ -185,6 +185,48 @@ fn detail_navigation_moves_component_selection() {
     );
 }
 
+/// The diff-mode detail panel must render the RANSOMWARE badge for an
+/// introduced ransomware-KEV vulnerability (the flag was previously dropped at
+/// the `VulnerabilityDetail` boundary, leaving the badge unreachable in diff
+/// mode).
+#[test]
+fn diff_vuln_detail_shows_ransomware_badge() {
+    pin_theme();
+    let (mut diff, old, new) = demo_diff();
+
+    let mut vuln = crate::model::VulnerabilityRef::new(
+        "CVE-2021-44228".to_string(),
+        crate::model::VulnerabilitySource::Osv,
+    );
+    vuln.is_kev = true;
+    let mut kev = crate::model::KevInfo::new(
+        chrono::Utc::now(),
+        chrono::Utc::now() + chrono::Duration::days(30),
+        "patch".to_string(),
+    );
+    kev.known_ransomware_use = true;
+    vuln.kev_info = Some(kev);
+
+    let comp = crate::model::Component::new(
+        "log4j-core".to_string(),
+        "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.0".to_string(),
+    );
+    diff.vulnerabilities
+        .introduced
+        .push(crate::diff::VulnerabilityDetail::from_ref(&vuln, &comp));
+
+    let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
+    app.active_tab = TabKind::Vulnerabilities;
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("RANSOMWARE"),
+        "diff-mode detail panel must render the RANSOMWARE badge:\n{text}"
+    );
+}
+
 #[test]
 fn help_overlay_toggles() {
     let mut app = demo_app(TabKind::Summary);
