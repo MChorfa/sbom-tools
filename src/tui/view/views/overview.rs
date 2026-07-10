@@ -227,6 +227,18 @@ fn render_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let eco_count = app.stats.ecosystem_counts.len();
     let eco_height = (eco_count + 2).min(12) as u16; // cap at 12 rows
 
+    // The stacked bordered panels need this much height; below it (e.g. the
+    // 80x24 minimum, where the severity panel rendered as an empty box) fall
+    // back to a single compact panel that keeps every section visible.
+    // License is a Min(6) constraint that degrades gracefully in the tall
+    // layout; treat its true minimum as 3 so borderline heights (e.g. an
+    // EOL-enriched SBOM at 120x40) keep the richer stacked panels.
+    let required = 8 + 8 + (if app.stats.eol_enriched { 8 } else { 0 }) + eco_height + 3;
+    if area.height < required {
+        render_stats_panel_compact(frame, area, app);
+        return;
+    }
+
     if app.stats.eol_enriched {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -239,7 +251,7 @@ fn render_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ])
             .split(area);
 
-        render_summary_cards(frame, chunks[0], app);
+        render_summary_cards(frame, chunks[0], app, false);
         render_eol_breakdown(frame, chunks[1], app);
         render_vuln_breakdown(frame, chunks[2], app);
         render_ecosystem_dist(frame, chunks[3], app);
@@ -255,14 +267,69 @@ fn render_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ])
             .split(area);
 
-        render_summary_cards(frame, chunks[0], app);
+        render_summary_cards(frame, chunks[0], app, false);
         render_vuln_breakdown(frame, chunks[1], app);
         render_ecosystem_dist(frame, chunks[2], app);
         render_license_dist(frame, chunks[3], app);
     }
 }
 
-fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp) {
+/// Compact stats layout for short terminals: summary cards on top, then ONE
+/// bordered panel interleaving section headers with the distribution lines,
+/// severity first (the highest-value signal always renders).
+fn render_stats_panel_compact(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = colors();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Min(0)])
+        .split(area);
+
+    render_summary_cards(frame, chunks[0], app, true);
+
+    let section_header = |title: &str| -> Line<'static> {
+        Line::from(Span::styled(
+            format!("\u{2500}\u{2500} {title} \u{2500}\u{2500}"),
+            Style::default().fg(scheme.border),
+        ))
+    };
+
+    let inner_height = chunks[1].height.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(section_header("Vulnerability Severity"));
+    lines.extend(vuln_breakdown_lines(app));
+    if app.stats.eol_enriched {
+        lines.push(section_header("End-of-Life Status"));
+        lines.extend(eol_breakdown_lines(app));
+    }
+
+    // Split whatever height remains between ecosystem and license sections
+    // (header + rows each); zero-row budgets still show the header so users
+    // know the content exists.
+    let rem = inner_height.saturating_sub(lines.len());
+    let eco_budget = rem / 2;
+    let lic_budget = rem.saturating_sub(eco_budget);
+    if eco_budget >= 1 {
+        lines.push(section_header("Ecosystems"));
+        // Budget counts the header; give every remaining row to data (the
+        // "Other" rollup line may nudge into the next section's budget).
+        lines.extend(ecosystem_dist_lines(app, eco_budget.saturating_sub(1)));
+    }
+    if lic_budget >= 1 {
+        lines.push(section_header("Licenses"));
+        lines.extend(license_dist_lines(app, lic_budget.saturating_sub(1)));
+    }
+
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .title(" Statistics ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(scheme.primary)),
+    );
+    frame.render_widget(para, chunks[1]);
+}
+
+fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp, compact: bool) {
     let scheme = colors();
     let stats = &app.stats;
 
@@ -276,22 +343,28 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .split(area);
 
     // Components card
-    let comp_content = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format_count(stats.component_count),
-            Style::default()
-                .fg(scheme.primary)
-                .bold()
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::styled("Components", Style::default().fg(scheme.muted)),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format!("{} ecosystems", stats.ecosystem_counts.len()),
-            Style::default().fg(scheme.muted),
-        )]),
-    ];
+    let mut comp_content = Vec::new();
+    if !compact {
+        comp_content.push(Line::from(""));
+    }
+    comp_content.push(Line::from(vec![Span::styled(
+        format_count(stats.component_count),
+        Style::default()
+            .fg(scheme.primary)
+            .bold()
+            .add_modifier(Modifier::BOLD),
+    )]));
+    comp_content.push(Line::styled(
+        "Components",
+        Style::default().fg(scheme.muted),
+    ));
+    if !compact {
+        comp_content.push(Line::from(""));
+    }
+    comp_content.push(Line::from(vec![Span::styled(
+        format!("{} ecosystems", stats.ecosystem_counts.len()),
+        Style::default().fg(scheme.muted),
+    )]));
 
     let comp_para = Paragraph::new(comp_content)
         .block(
@@ -315,25 +388,31 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp) {
         scheme.success
     };
 
-    let vuln_content = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format_count(stats.vuln_count),
-            Style::default()
-                .fg(vuln_color)
-                .bold()
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::styled("Vulnerabilities", Style::default().fg(scheme.muted)),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format!(
-                "{}C {}H {}M {}L",
-                stats.critical_count, stats.high_count, stats.medium_count, stats.low_count
-            ),
-            Style::default().fg(scheme.muted),
-        )]),
-    ];
+    let mut vuln_content = Vec::new();
+    if !compact {
+        vuln_content.push(Line::from(""));
+    }
+    vuln_content.push(Line::from(vec![Span::styled(
+        format_count(stats.vuln_count),
+        Style::default()
+            .fg(vuln_color)
+            .bold()
+            .add_modifier(Modifier::BOLD),
+    )]));
+    vuln_content.push(Line::styled(
+        "Vulnerabilities",
+        Style::default().fg(scheme.muted),
+    ));
+    if !compact {
+        vuln_content.push(Line::from(""));
+    }
+    vuln_content.push(Line::from(vec![Span::styled(
+        format!(
+            "{}C {}H {}M {}L",
+            stats.critical_count, stats.high_count, stats.medium_count, stats.low_count
+        ),
+        Style::default().fg(scheme.muted),
+    )]));
 
     let vuln_para = Paragraph::new(vuln_content)
         .block(
@@ -347,25 +426,31 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp) {
     frame.render_widget(vuln_para, card_chunks[1]);
 
     // Licenses card
-    let lic_content = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            stats.license_count.to_string(),
-            Style::default()
-                .fg(scheme.success)
-                .bold()
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::styled("Unique Licenses", Style::default().fg(scheme.muted)),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format!(
-                "{} unknown",
-                stats.license_counts.get("Unknown").unwrap_or(&0)
-            ),
-            Style::default().fg(scheme.muted),
-        )]),
-    ];
+    let mut lic_content = Vec::new();
+    if !compact {
+        lic_content.push(Line::from(""));
+    }
+    lic_content.push(Line::from(vec![Span::styled(
+        stats.license_count.to_string(),
+        Style::default()
+            .fg(scheme.success)
+            .bold()
+            .add_modifier(Modifier::BOLD),
+    )]));
+    lic_content.push(Line::styled(
+        "Unique Licenses",
+        Style::default().fg(scheme.muted),
+    ));
+    if !compact {
+        lic_content.push(Line::from(""));
+    }
+    lic_content.push(Line::from(vec![Span::styled(
+        format!(
+            "{} unknown",
+            stats.license_counts.get("Unknown").unwrap_or(&0)
+        ),
+        Style::default().fg(scheme.muted),
+    )]));
 
     let lic_para = Paragraph::new(lic_content)
         .block(
@@ -381,10 +466,22 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
 fn render_vuln_breakdown(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let scheme = colors();
+    let para = Paragraph::new(vuln_breakdown_lines(app)).block(
+        Block::default()
+            .title(" Vulnerability Severity ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(scheme.high)),
+    );
+
+    frame.render_widget(para, area);
+}
+
+fn vuln_breakdown_lines(app: &ViewApp) -> Vec<Line<'static>> {
+    let scheme = colors();
     let stats = &app.stats;
     let total = stats.vuln_count.max(1);
 
-    let mut lines = vec![Line::from("")];
+    let mut lines = Vec::new();
 
     // Severity bar
     let _bar = SeverityBar::new(
@@ -409,7 +506,7 @@ fn render_vuln_breakdown(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default().fg(scheme.muted),
             ),
             Span::styled(
-                format!(" {count:>5} ({pct:>2}%)"),
+                format!(" {count:>4} ({pct:>2}%)"),
                 Style::default().fg(scheme.text),
             ),
         ]));
@@ -425,22 +522,39 @@ fn render_vuln_breakdown(frame: &mut Frame, area: Rect, app: &ViewApp) {
     add_severity_line(&mut lines, "Medium", stats.medium_count, scheme.medium);
     add_severity_line(&mut lines, "Low", stats.low_count, scheme.low);
 
-    let para = Paragraph::new(lines).block(
-        Block::default()
-            .title(" Vulnerability Severity ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(scheme.high)),
-    );
-
-    frame.render_widget(para, area);
+    lines
 }
 
 fn render_eol_breakdown(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let scheme = colors();
     let stats = &app.stats;
+    let border_color = if stats.eol_count > 0 {
+        scheme.critical
+    } else if stats.eol_approaching_count > 0 {
+        scheme.high
+    } else {
+        scheme.success
+    };
+
+    let para = Paragraph::new(eol_breakdown_lines(app)).block(
+        Block::default()
+            .title(format!(
+                " End-of-Life Status ({} at risk) ",
+                stats.eol_count + stats.eol_approaching_count
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color)),
+    );
+
+    frame.render_widget(para, area);
+}
+
+fn eol_breakdown_lines(app: &ViewApp) -> Vec<Line<'static>> {
+    let scheme = colors();
+    let stats = &app.stats;
     let total = stats.component_count.max(1);
 
-    let mut lines = vec![Line::from("")];
+    let mut lines = Vec::new();
 
     let add_eol_line = |lines: &mut Vec<Line>, label: &str, count: usize, color: Color| {
         let pct = (count as f64 / total as f64 * 100.0) as usize;
@@ -456,7 +570,7 @@ fn render_eol_breakdown(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default().fg(scheme.muted),
             ),
             Span::styled(
-                format!(" {count:>5} ({pct:>2}%)"),
+                format!(" {count:>4} ({pct:>2}%)"),
                 Style::default().fg(scheme.text),
             ),
         ]));
@@ -482,28 +596,24 @@ fn render_eol_breakdown(frame: &mut Frame, area: Rect, app: &ViewApp) {
         scheme.success,
     );
 
-    let border_color = if stats.eol_count > 0 {
-        scheme.critical
-    } else if stats.eol_approaching_count > 0 {
-        scheme.high
-    } else {
-        scheme.success
-    };
+    lines
+}
 
-    let para = Paragraph::new(lines).block(
+fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = colors();
+    // Dynamic row count based on available area height
+    let max_eco_rows = area.height.saturating_sub(3) as usize; // subtract borders + "Other" line
+    let para = Paragraph::new(ecosystem_dist_lines(app, max_eco_rows)).block(
         Block::default()
-            .title(format!(
-                " End-of-Life Status ({} at risk) ",
-                stats.eol_count + stats.eol_approaching_count
-            ))
+            .title(" Ecosystem Distribution ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color)),
+            .border_style(Style::default().fg(scheme.primary)),
     );
 
     frame.render_widget(para, area);
 }
 
-fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
+fn ecosystem_dist_lines(app: &ViewApp, max_eco_rows: usize) -> Vec<Line<'static>> {
     let scheme = colors();
     let stats = &app.stats;
 
@@ -516,9 +626,6 @@ fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let mut lines = vec![];
 
     let palette = scheme.chart_palette();
-
-    // Dynamic row count based on available area height
-    let max_eco_rows = area.height.saturating_sub(3) as usize; // subtract borders + "Other" line
 
     for (i, (eco, count)) in ecosystems.iter().take(max_eco_rows).enumerate() {
         let pct = (**count as f64 / total as f64 * 100.0) as usize;
@@ -545,7 +652,7 @@ fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default().fg(scheme.muted),
             ),
             Span::styled(
-                format!(" {count:>5} ({pct:>2}%)"),
+                format!(" {count:>4} ({pct:>2}%)"),
                 Style::default().fg(scheme.text),
             ),
         ]));
@@ -565,17 +672,23 @@ fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
         ]));
     }
 
-    let para = Paragraph::new(lines).block(
+    lines
+}
+
+fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = colors();
+    let max_rows = area.height.saturating_sub(3) as usize; // borders + possible "Other" line
+    let para = Paragraph::new(license_dist_lines(app, max_rows)).block(
         Block::default()
-            .title(" Ecosystem Distribution ")
+            .title(" License Distribution ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(scheme.primary)),
+            .border_style(Style::default().fg(scheme.success)),
     );
 
     frame.render_widget(para, area);
 }
 
-fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
+fn license_dist_lines(app: &ViewApp, max_rows: usize) -> Vec<Line<'static>> {
     let scheme = colors();
     let stats = &app.stats;
 
@@ -593,8 +706,6 @@ fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let mut lines = vec![];
 
     let palette = scheme.chart_palette();
-
-    let max_rows = area.height.saturating_sub(3) as usize; // borders + possible "Other" line
 
     for (i, (lic, count)) in licenses.iter().take(max_rows).enumerate() {
         let pct = (**count as f64 / total as f64 * 100.0) as usize;
@@ -618,7 +729,7 @@ fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default().fg(scheme.muted),
             ),
             Span::styled(
-                format!(" {count:>5} ({pct:>2}%)"),
+                format!(" {count:>4} ({pct:>2}%)"),
                 Style::default().fg(scheme.text),
             ),
         ]));
@@ -643,14 +754,7 @@ fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
         }
     }
 
-    let para = Paragraph::new(lines).block(
-        Block::default()
-            .title(" License Distribution ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(scheme.success)),
-    );
-
-    frame.render_widget(para, area);
+    lines
 }
 
 fn render_details_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
