@@ -364,18 +364,6 @@ impl ColorScheme {
         }
     }
 
-    /// Get color for license category
-    #[must_use]
-    pub fn license_color(&self, category: &str) -> Color {
-        match category.to_lowercase().as_str() {
-            "permissive" => self.permissive,
-            "copyleft" | "strong copyleft" => self.copyleft,
-            "weak copyleft" => self.weak_copyleft,
-            "proprietary" | "commercial" => self.proprietary,
-            _ => self.unknown_license,
-        }
-    }
-
     /// Get appropriate foreground color for severity badges
     /// Returns light fg for dark backgrounds (critical, high, info) and dark fg for bright backgrounds
     #[must_use]

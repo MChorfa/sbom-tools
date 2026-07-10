@@ -406,3 +406,35 @@ fn no_raw_color_variants_in_themed_view_chrome() {
         }
     }
 }
+
+/// Regression: a GPL-licensed component must count into the copyleft (⚠)
+/// bucket of the Licenses risk summary, not "unknown" (the old string match
+/// compared against "Strong Copyleft", which the category never stringifies
+/// to, so GPL exposure was reported as unknown).
+#[test]
+fn gpl_risk_summary_renders_as_copyleft() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let mut comp = Component::new("readline".to_string(), "readline-ref".to_string())
+        .with_version("8.2".to_string());
+    comp.licenses
+        .add_declared(crate::model::LicenseExpression::new(
+            "GPL-3.0-only".to_string(),
+        ));
+    sbom.components
+        .insert(CanonicalId::from_name_version("readline", None), comp);
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Licenses;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("\u{26a0} 1"),
+        "GPL must count as copyleft in the risk summary:\n{text}"
+    );
+    assert!(
+        text.contains("? 0"),
+        "GPL must not fall into the unknown bucket:\n{text}"
+    );
+}

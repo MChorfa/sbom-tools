@@ -945,11 +945,3 @@ fn render_license_details(
 
     frame.render_widget(detail, area);
 }
-
-/// Categorize a license by type (legacy function for compatibility)
-pub fn categorize_license(license: &str) -> String {
-    LicenseInfo::from_spdx(license)
-        .category
-        .as_str()
-        .to_string()
-}

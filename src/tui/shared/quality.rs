@@ -453,7 +453,18 @@ pub fn priority_style(priority: u8) -> Style {
 
 /// Continuous RGB gradient bar color for better visual differentiation.
 /// Score 0 → dark red, 50 → yellow, 100 → green.
+///
+/// The gradient is dark-theme-tuned; other themes (light, and high-contrast,
+/// which `NO_COLOR` forces) get the discrete theme-derived score buckets so
+/// bars stay legible.
 fn bar_grade_style(score: f32) -> Style {
+    bar_grade_style_for(score, crate::tui::theme::current_theme_name())
+}
+
+fn bar_grade_style_for(score: f32, theme_name: &str) -> Style {
+    if theme_name != "dark" {
+        return score_style(score);
+    }
     let t = score.clamp(0.0, 100.0) / 100.0;
     let (r, g, b) = if t < 0.5 {
         // 0..50: dark red (180,40,40) → yellow (220,180,0)
@@ -626,7 +637,7 @@ pub fn render_quality_summary(
         )
         .bar_width(6)
         .bar_gap(1)
-        .value_style(Style::default().fg(Color::White).bold())
+        .value_style(Style::default().fg(scheme.text).bold())
         .data(BarGroup::default().bars(&bars));
     frame.render_widget(bar_chart, mid_chunks[0]);
 
@@ -2114,4 +2125,27 @@ pub fn render_quality_recommendations(
         )
         .scroll((scroll_offset as u16, 0));
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod bar_style_tests {
+    use super::*;
+
+    /// Off-dark themes (light, and high-contrast, which NO_COLOR forces) must
+    /// use the discrete theme-derived buckets, not the dark-tuned RGB ramp.
+    #[test]
+    fn bar_gradient_uses_discrete_buckets_off_dark() {
+        // Pin the global theme: score_style reads it, and both sides of the
+        // equality must evaluate under the same scheme.
+        crate::tui::test_support::pin_theme();
+        assert_eq!(bar_grade_style_for(85.0, "light"), score_style(85.0));
+        assert_eq!(
+            bar_grade_style_for(85.0, "high-contrast"),
+            score_style(85.0)
+        );
+        match bar_grade_style_for(85.0, "dark").fg {
+            Some(Color::Rgb(..)) => {}
+            other => panic!("dark theme keeps the RGB ramp, got {other:?}"),
+        }
+    }
 }
