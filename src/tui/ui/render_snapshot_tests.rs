@@ -227,6 +227,65 @@ fn diff_vuln_detail_shows_ransomware_badge() {
     );
 }
 
+/// The Graph Changes master table drops its Details column below 60 inner
+/// columns (at 80x24 the Min(30) Details column collapsed to zero width and
+/// squeezed Component into unreadability).
+#[test]
+fn graph_details_column_gated_by_width() {
+    pin_theme();
+
+    fn render_with_graph_change(width: u16, height: u16) -> String {
+        let (mut diff, old, new) = demo_diff();
+        diff.graph_changes.push(crate::diff::DependencyGraphChange {
+            component_id: crate::model::CanonicalId::from_name_version(
+                "acme-webapp",
+                Some("2.0.0"),
+            ),
+            component_name: "acme-webapp".to_string(),
+            change: crate::diff::DependencyChangeType::DependencyAdded {
+                dependency_id: crate::model::CanonicalId::from_name_version(
+                    "left-pad",
+                    Some("1.3.0"),
+                ),
+                dependency_name: "left-pad".to_string(),
+            },
+            impact: crate::diff::GraphChangeImpact::Medium,
+        });
+        let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
+        app.active_tab = TabKind::GraphChanges;
+        render_to_text(width, height, |frame| {
+            app.prepare_render();
+            render(frame, &mut app);
+        })
+    }
+
+    // Assert on the table header row (the line containing both Impact and
+    // Type) — "Details" also appears in the " Change Details " pane title, so
+    // a whole-buffer check would false-positive.
+    let header_line = |text: &str| -> String {
+        text.lines()
+            .find(|l| l.contains("Impact") && l.contains("Type"))
+            .expect("graph changes table header must render")
+            .to_string()
+    };
+
+    let narrow = render_with_graph_change(80, 24);
+    assert!(
+        !header_line(&narrow).contains("Details"),
+        "at 80 cols the Details column must be dropped"
+    );
+    assert!(
+        header_line(&narrow).contains("Component"),
+        "Component column must survive at 80 cols"
+    );
+
+    let wide = render_with_graph_change(120, 40);
+    assert!(
+        header_line(&wide).contains("Details"),
+        "at 120 cols the Details column must render"
+    );
+}
+
 #[test]
 fn help_overlay_toggles() {
     let mut app = demo_app(TabKind::Summary);
