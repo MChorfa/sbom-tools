@@ -884,6 +884,103 @@ impl Default for ComplianceChecker {
 mod tests {
     use super::*;
 
+    /// NTIA lists Timestamp as a required data field; it must gate. A
+    /// timestamp-less SBOM (epoch sentinel) now fails NtiaMinimum.
+    #[test]
+    fn ntia_gates_on_missing_timestamp() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let comp = |sbom: &mut NormalizedSbom| {
+            let c = Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string());
+            sbom.add_component(c);
+        };
+
+        // No real timestamp (epoch sentinel) → NTIA timestamp error.
+        let mut no_ts = NormalizedSbom::new(DocumentMetadata::default());
+        no_ts.document.created = chrono::DateTime::UNIX_EPOCH;
+        comp(&mut no_ts);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&no_ts);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-TIMESTAMP"
+                    && v.severity == ViolationSeverity::Error),
+            "missing timestamp must fail NTIA"
+        );
+
+        // A real timestamp → no timestamp error.
+        let mut with_ts = NormalizedSbom::new(DocumentMetadata::default()); // now()
+        comp(&mut with_ts);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&with_ts);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-TIMESTAMP")
+        );
+    }
+
+    /// EO 14028 §4(e) requires Supplier Name (an NTIA element); a missing
+    /// supplier must be a gating Error, not a sub-threshold Warning.
+    #[test]
+    fn eo14028_gates_on_missing_supplier() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        // Component with version + id but NO supplier.
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-SUPPLIER"
+                    && v.severity == ViolationSeverity::Error),
+            "missing supplier must be a gating Error under EO 14028"
+        );
+    }
+
+    /// BSI TR-03183-2 §5.3 makes component name mandatory; the dedicated BSI
+    /// checker must enforce it (it does not run the generic component check).
+    #[test]
+    fn bsi_gates_on_nameless_component() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c =
+            Component::new(String::new(), "ref-1".to_string()).with_version("1.0".to_string());
+        c.identifiers.purl = Some("pkg:cargo/x@1.0".to_string());
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-3"),
+            "a nameless component must fail BSI §5.3"
+        );
+    }
+
+    /// CRA Art. 24 steward vuln-handling is satisfied by a DOCUMENT-level
+    /// disclosure URL — the check previously ignored doc fields (false-fail).
+    #[test]
+    fn cra_art24_honors_document_level_disclosure() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.vulnerability_disclosure_url =
+            Some("https://example.org/security".to_string());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
+        assert!(
+            !r.violations.iter().any(|v| v.rule_id == "SBOM-CRA-ART-24"),
+            "a document-level disclosure URL must satisfy the Art.24 vuln-handling gate"
+        );
+    }
+
     #[test]
     fn test_compliance_level_names() {
         assert_eq!(ComplianceLevel::Minimum.name(), "Minimum");
@@ -1026,6 +1123,88 @@ mod tests {
                 .any(|v| v.severity == ViolationSeverity::Error
                     && v.message.contains("quantum-vulnerable")),
             "PQC should flag RSA-2048 as quantum-vulnerable"
+        );
+    }
+
+    /// A plain SBOM with NO cryptographic inventory must NOT pass PQC/CNSA2 —
+    /// that was a vacuous false-pass. It now fails with an "inventory absent"
+    /// Error.
+    #[test]
+    fn crypto_standards_fail_on_empty_inventory() {
+        let mut sbom = NormalizedSbom::default();
+        sbom.add_component(crate::model::Component::new(
+            "lodash".to_string(),
+            "lodash@4.17.21".to_string(),
+        ));
+        for level in [ComplianceLevel::NistPqc, ComplianceLevel::Cnsa2] {
+            let result = ComplianceChecker::new(level).check(&sbom);
+            assert!(
+                !result.is_compliant,
+                "{level:?} must not report compliant with no crypto inventory"
+            );
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error
+                        && v.message.contains("No cryptographic inventory")),
+                "{level:?} must emit an inventory-absent error"
+            );
+        }
+    }
+
+    /// A classical quantum-vulnerable algorithm (RSA/ECDSA/DH) must fail NIST
+    /// PQC even when nistQuantumSecurityLevel is UNSET (real CBOMs rarely set
+    /// it to an explicit 0).
+    #[test]
+    fn pqc_flags_classical_crypto_with_unset_quantum_level() {
+        for family in ["RSA", "ECDSA", "ECDH", "DH", "DSA"] {
+            let sbom = make_crypto_sbom(&[("classical", family, None, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                !result.is_compliant,
+                "{family} with unset quantum level must fail PQC"
+            );
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-PQC-001"),
+                "{family} must raise the quantum-vulnerable error"
+            );
+        }
+    }
+
+    /// SHA-224 and SHA-256 must fail CNSA 2.0 whether the size is in the family
+    /// string or the parameter (previously only family "SHA-2"/param "256"
+    /// was caught).
+    #[test]
+    fn cnsa2_flags_weak_sha2_in_either_encoding() {
+        for (family, param) in [
+            ("SHA-256", None),
+            ("SHA-224", None),
+            ("SHA-2", Some("256")),
+            ("SHA-2", Some("224")),
+        ] {
+            let sbom = make_crypto_sbom(&[("hash", family, param, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+                "{family}/{param:?} must fail CNSA 2.0 hash gate"
+            );
+        }
+        // SHA-384 passes the hash gate.
+        let ok = make_crypto_sbom(&[("hash", "SHA-384", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+            "SHA-384 must not trip the hash gate"
         );
     }
 

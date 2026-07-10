@@ -941,24 +941,27 @@ impl ComplianceChecker {
         // a vulnerability-disclosure URL on the document or a SecurityContact
         // / Advisories external reference on at least one component, OR
         // sidecar-supplied PSIRT URL.
-        let has_vuln_handling = sbom.components.values().any(|c| {
-            c.external_refs.iter().any(|r| {
-                matches!(
-                    r.ref_type,
-                    crate::model::ExternalRefType::SecurityContact
-                        | crate::model::ExternalRefType::Advisories
-                        | crate::model::ExternalRefType::VulnerabilityAssertion
-                )
+        let has_vuln_handling = sbom.document.vulnerability_disclosure_url.is_some()
+            || sbom.document.security_contact.is_some()
+            || sbom.components.values().any(|c| {
+                c.external_refs.iter().any(|r| {
+                    matches!(
+                        r.ref_type,
+                        crate::model::ExternalRefType::SecurityContact
+                            | crate::model::ExternalRefType::Advisories
+                            | crate::model::ExternalRefType::VulnerabilityAssertion
+                    )
+                })
             })
-        }) || self
-            .sidecar
-            .as_ref()
-            .is_some_and(|s| s.psirt_url.is_some() || s.vulnerability_disclosure_url.is_some());
+            || self
+                .sidecar
+                .as_ref()
+                .is_some_and(|s| s.psirt_url.is_some() || s.vulnerability_disclosure_url.is_some());
         if !has_vuln_handling {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::SecurityInfo,
-                message: "[CRA Art. 24 / Annex I Part II] OSS steward must operate a vulnerability-handling process — declare a SecurityContact / Advisories external reference, or set psirt_url / vulnerability_disclosure_url in the sidecar".to_string(),
+                message: "[CRA Art. 24 / Annex I Part II] OSS steward must operate a vulnerability-handling process — set a document-level security contact or vulnerability-disclosure URL, declare a SecurityContact / Advisories external reference, or set psirt_url / vulnerability_disclosure_url in the sidecar".to_string(),
                 element: None,
                 requirement: "CRA Art. 24: Vulnerability-handling process (steward floor)"
                     .to_string(),
