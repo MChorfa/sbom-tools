@@ -47,6 +47,8 @@ struct VulnDetailInfo {
     vex_state: Option<crate::model::VexState>,
     vex_justification: Option<crate::model::VexJustification>,
     vex_impact_statement: Option<String>,
+    kev_due_date: Option<String>,
+    days_until_due: Option<i64>,
 }
 
 /// Render item for grouped vulnerability display.
@@ -252,6 +254,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             };
             if let Some(stats) = combined
                 && stats.total_vulns_found > 0
+                && area.width >= 100
             {
                 spans.extend(vec![
                     Span::styled("  │ ", Style::default().fg(scheme.border)),
@@ -265,14 +268,29 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         }
     }
 
-    // Add grouped mode indicator
+    // Second row: VEX transition summary (diff mode), View badge, key hints.
+    // The bar previously packed everything into one unwrapped line that
+    // hard-truncated from "View:" onward at 80 cols while its reserved second
+    // row sat blank.
+    let mut row2: Vec<Span<'static>> = Vec::new();
+
+    if ctx.mode == AppMode::Diff
+        && let Some(result) = ctx.diff_result
+        && !result.vulnerabilities.vex_changes.is_empty()
+    {
+        row2.extend(vex_transition_spans(
+            &result.vulnerabilities.vex_changes,
+            &colors(),
+        ));
+        row2.push(Span::styled("  │  ", Style::default().fg(colors().border)));
+    }
+
     let grouped_label = if ctx.vulnerabilities.group_by_component {
         "Grouped"
     } else {
         "List"
     };
-    spans.extend(vec![
-        Span::styled("  │  ", Style::default().fg(colors().border)),
+    row2.extend(vec![
         Span::styled("View: ", Style::default().fg(colors().text_muted)),
         Span::styled(
             format!(" {grouped_label} "),
@@ -287,8 +305,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         ),
     ]);
 
-    // Add hints
-    spans.extend(vec![
+    row2.extend(vec![
         Span::styled("  │  ", Style::default().fg(colors().border)),
         Span::styled("[f]", Style::default().fg(colors().accent)),
         Span::styled(" filter  ", Style::default().fg(colors().text_muted)),
@@ -298,13 +315,55 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         Span::styled(" group", Style::default().fg(colors().text_muted)),
     ]);
 
-    let paragraph = Paragraph::new(Line::from(spans)).block(
+    let paragraph = Paragraph::new(vec![Line::from(spans), Line::from(row2)]).block(
         Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(colors().border)),
     );
 
     frame.render_widget(paragraph, area);
+}
+
+/// Summarize VEX status transitions for the filter bar, bucketed by new
+/// state and colored by the same conventions as the detail panel.
+fn vex_transition_spans(
+    changes: &[crate::diff::VexStatusChange],
+    scheme: &crate::tui::theme::ColorScheme,
+) -> Vec<Span<'static>> {
+    use std::collections::BTreeMap;
+
+    let mut buckets: BTreeMap<String, usize> = BTreeMap::new();
+    for c in changes {
+        // Human-readable labels matching the detail panel's VEX section.
+        let label = c.new_state.as_ref().map_or("None", |s| match s {
+            crate::model::VexState::NotAffected => "Not Affected",
+            crate::model::VexState::Fixed => "Fixed",
+            crate::model::VexState::Affected => "Affected",
+            crate::model::VexState::UnderInvestigation => "Under Investigation",
+        });
+        *buckets.entry(label.to_string()).or_insert(0) += 1;
+    }
+
+    let mut spans = vec![Span::styled(
+        "VEX \u{394}: ",
+        Style::default().fg(scheme.text_muted),
+    )];
+    for (i, (state, count)) in buckets.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let color = match state.as_str() {
+            "Not Affected" | "Fixed" => scheme.success,
+            "Affected" => scheme.critical,
+            "Under Investigation" => scheme.warning,
+            _ => scheme.text_muted,
+        };
+        spans.push(Span::styled(
+            format!("{count}\u{2192}{state}"),
+            Style::default().fg(color),
+        ));
+    }
+    spans
 }
 
 fn filter_badge(filter: VulnFilter) -> Span<'static> {
@@ -359,12 +418,24 @@ fn render_vuln_table(
     // Use pre-built vulnerability list (state already updated in render_vulnerabilities)
     let cached_depths = &ctx.dependencies.cached_depths;
 
+    // Rows whose VEX status changed carry a scannable marker.
+    let vex_changed: std::collections::HashSet<&str> = ctx
+        .diff_result
+        .map(|r| {
+            r.vulnerabilities
+                .vex_changes
+                .iter()
+                .map(|c| c.vuln_id.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Build rows (flat or grouped)
     let rows: Vec<Row> = if let Some(items) = grouped_items {
-        build_grouped_rows(ctx, vuln_data, cached_depths, items)
+        build_grouped_rows(ctx, vuln_data, cached_depths, items, &vex_changed)
     } else {
         match vuln_data {
-            VulnListData::Diff(items) => get_diff_vuln_rows(items),
+            VulnListData::Diff(items) => get_diff_vuln_rows(items, &vex_changed),
             VulnListData::Empty => vec![],
         }
     };
@@ -529,6 +600,7 @@ fn build_grouped_rows(
     vuln_data: &VulnListData<'_>,
     _cached_depths: &std::collections::HashMap<String, usize>,
     render_items: &[VulnRenderItem],
+    vex_changed: &std::collections::HashSet<&str>,
 ) -> Vec<Row<'static>> {
     let scheme = colors();
 
@@ -588,7 +660,13 @@ fn build_grouped_rows(
             VulnRenderItem::VulnRow(idx) => match vuln_data {
                 VulnListData::Diff(items) => items.get(*idx).map_or_else(
                     || Row::new(vec![Cell::from("")]),
-                    |row| build_single_diff_row(row, &scheme),
+                    |row| {
+                        build_single_diff_row(
+                            row,
+                            &scheme,
+                            vex_changed.contains(row.vuln.id.as_str()),
+                        )
+                    },
                 ),
                 VulnListData::Empty => Row::new(vec![Cell::from("")]),
             },
@@ -600,6 +678,7 @@ fn build_grouped_rows(
 fn build_single_diff_row(
     item: &DiffVulnItem<'_>,
     scheme: &crate::tui::theme::ColorScheme,
+    vex_changed: bool,
 ) -> Row<'static> {
     use crate::tui::shared::vulnerabilities::{
         render_depth_badge_spans, render_kev_badge_spans, render_vex_badge_spans,
@@ -636,6 +715,14 @@ fn build_single_diff_row(
         scheme,
     ));
     id_spans.extend(render_vex_badge_spans(vuln.vex_state.as_ref(), scheme));
+    if vex_changed {
+        // VEX status transitioned between the two SBOMs (summarized in the
+        // filter bar); mark the row so the transition is scannable.
+        id_spans.push(Span::styled(
+            "\u{394} ",
+            Style::default().fg(scheme.modified),
+        ));
+    }
     id_spans.push(Span::raw(vuln.id.clone()));
 
     let sla_cell = format_sla_cell(vuln.sla_status(), vuln.days_since_published, scheme);
@@ -737,6 +824,8 @@ fn render_detail_panel(
                     vex_state: None,
                     vex_justification: None,
                     vex_impact_statement: None,
+                    kev_due_date: None,
+                    days_until_due: None,
                 })
             }
             None => None,
@@ -850,6 +939,7 @@ fn render_detail_panel(
         if info.fixed_version.is_some()
             || info.remediation.is_some()
             || !info.affected_versions.is_empty()
+            || info.kev_due_date.is_some()
         {
             lines.push(Line::from(""));
             if let Some(ref fix_ver) = info.fixed_version {
@@ -869,6 +959,30 @@ fn render_detail_panel(
                 lines.push(Line::from(vec![
                     Span::styled("Affects: ", Style::default().fg(scheme.text_muted)),
                     Span::styled(versions_str, Style::default().fg(scheme.text)),
+                ]));
+            }
+            // CISA KEV remediation deadline — the single most actionable KEV
+            // fact, previously discarded before render.
+            if let Some(ref due) = info.kev_due_date {
+                let (urgency, style) = match info.days_until_due {
+                    Some(d) if d < 0 => (
+                        format!(" ({}d overdue)", -d),
+                        Style::default().fg(scheme.critical).bold(),
+                    ),
+                    Some(d) if d <= 3 => (
+                        format!(" ({d}d left)"),
+                        Style::default().fg(scheme.high).bold(),
+                    ),
+                    Some(d) => (
+                        format!(" ({d}d left)"),
+                        Style::default().fg(scheme.text_muted),
+                    ),
+                    None => (String::new(), Style::default().fg(scheme.text_muted)),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("KEV due: ", Style::default().fg(scheme.text_muted)),
+                    Span::styled(due.clone(), Style::default().fg(scheme.text)),
+                    Span::styled(urgency, style),
                 ]));
             }
         }
@@ -1106,21 +1220,30 @@ fn get_diff_vuln_at(
             is_kev: vuln.is_kev,
             epss_score: vuln.epss_score,
             is_ransomware: vuln.is_ransomware,
-            affected_versions: Vec::new(),
+            // The engine carries the affected version and the CISA deadline;
+            // both were discarded here before render.
+            affected_versions: vuln.version.clone().map_or_else(Vec::new, |v| vec![v]),
             cvss_vector: None,
             published_age_days: vuln.days_since_published,
             vex_state: vuln.vex_state.clone(),
             vex_justification: vuln.vex_justification.clone(),
             vex_impact_statement: vuln.vex_impact_statement.clone(),
+            kev_due_date: vuln.kev_due_date.clone(),
+            days_until_due: vuln.days_until_due,
         }
     })
 }
 
-fn get_diff_vuln_rows(items: &[crate::tui::app::DiffVulnItem<'_>]) -> Vec<Row<'static>> {
+fn get_diff_vuln_rows(
+    items: &[crate::tui::app::DiffVulnItem<'_>],
+    vex_changed: &std::collections::HashSet<&str>,
+) -> Vec<Row<'static>> {
     let scheme = colors();
     items
         .iter()
-        .map(|item| build_single_diff_row(item, &scheme))
+        .map(|item| {
+            build_single_diff_row(item, &scheme, vex_changed.contains(item.vuln.id.as_str()))
+        })
         .collect()
 }
 
