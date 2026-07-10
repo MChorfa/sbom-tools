@@ -214,6 +214,10 @@ pub struct SideBySideState {
     pub aligned_rows: Vec<AlignedRow>,
     /// Cached unified entries (rebuilt each frame in `App::prepare_render`)
     pub unified_entries: Vec<UnifiedEntry>,
+    /// Visible row count of the aligned panels (content height minus context
+    /// bar and borders; Unified subtracts 2 more for its header + separator).
+    /// Set by the render path each frame; defaults to 20 before first render.
+    pub viewport_rows: usize,
 }
 
 impl SideBySideState {
@@ -240,7 +244,43 @@ impl SideBySideState {
             detail_component_right: None,
             aligned_rows: Vec::new(),
             unified_entries: Vec::new(),
+            viewport_rows: 20,
         }
+    }
+
+    /// Record the panel viewport height (rows) measured by the render path.
+    pub const fn set_viewport_rows(&mut self, rows: usize) {
+        self.viewport_rows = if rows == 0 { 1 } else { rows };
+    }
+
+    /// Keep the selected row inside the visible window in row-selection
+    /// modes, whatever mutated it. Called at the end of every
+    /// `recompute_row_model` (i.e. every frame) so all paths self-heal.
+    fn clamp_scroll_to_selection(&mut self) {
+        if !self.alignment_mode.uses_row_selection() {
+            return;
+        }
+        // Unified draws a header + separator inside the panel; while search
+        // input is active the query overlay covers the bottom rows, so keep
+        // the target row clear of it.
+        let mut chrome = if self.alignment_mode == AlignmentMode::Unified {
+            2
+        } else {
+            0
+        };
+        if self.search_active {
+            chrome += 4;
+        }
+        let visible = self.viewport_rows.saturating_sub(chrome).max(1);
+        let min_scroll = self.selected_row.saturating_sub(visible - 1);
+        // Never start the window deeper than the list can fill.
+        let max_scroll = self
+            .total_rows
+            .saturating_sub(visible)
+            .max(min_scroll)
+            .min(self.selected_row);
+        self.left_scroll = self.left_scroll.clamp(min_scroll, max_scroll);
+        self.right_scroll = self.left_scroll;
     }
 
     /// Recompute the row-navigation model (`total_rows`, `change_indices`) from
@@ -292,10 +332,21 @@ impl SideBySideState {
             self.left_total = total;
             self.right_total = total;
         }
+
+        // Self-heal the scroll window around the selection every frame.
+        self.clamp_scroll_to_selection();
     }
 
     /// Scroll the currently focused panel up
     pub fn scroll_up(&mut self) {
+        // Row-selection modes move the selection cursor; the scroll window
+        // follows it regardless of which panel is focused (routing movement
+        // through the focused panel's offset walked the cursor off-screen).
+        if self.alignment_mode.uses_row_selection() {
+            self.selected_row = self.selected_row.saturating_sub(1);
+            self.clamp_scroll_to_selection();
+            return;
+        }
         match self.sync_mode {
             ScrollSyncMode::Independent => {
                 if self.focus_right {
@@ -308,14 +359,17 @@ impl SideBySideState {
                 self.scroll_both_up();
             }
         }
-        // Update selected row in aligned/unified mode
-        if self.alignment_mode.uses_row_selection() {
-            self.selected_row = self.selected_row.saturating_sub(1);
-        }
     }
 
     /// Scroll the currently focused panel down
     pub fn scroll_down(&mut self) {
+        if self.alignment_mode.uses_row_selection() {
+            if self.total_rows > 0 {
+                self.selected_row = (self.selected_row + 1).min(self.total_rows.saturating_sub(1));
+            }
+            self.clamp_scroll_to_selection();
+            return;
+        }
         match self.sync_mode {
             ScrollSyncMode::Independent => {
                 if self.focus_right {
@@ -334,15 +388,16 @@ impl SideBySideState {
                 self.scroll_both_down();
             }
         }
-        // Update selected row in aligned/unified mode
-        if self.alignment_mode.uses_row_selection() && self.total_rows > 0 {
-            self.selected_row = (self.selected_row + 1).min(self.total_rows.saturating_sub(1));
-        }
     }
 
     /// Page up on currently focused panel
     pub fn page_up(&mut self) {
         let page_size = crate::tui::constants::PAGE_SIZE;
+        if self.alignment_mode.uses_row_selection() {
+            self.selected_row = self.selected_row.saturating_sub(page_size);
+            self.clamp_scroll_to_selection();
+            return;
+        }
         match self.sync_mode {
             ScrollSyncMode::Independent => {
                 if self.focus_right {
@@ -356,14 +411,19 @@ impl SideBySideState {
                 self.right_scroll = self.right_scroll.saturating_sub(page_size);
             }
         }
-        if self.alignment_mode.uses_row_selection() {
-            self.selected_row = self.selected_row.saturating_sub(page_size);
-        }
     }
 
     /// Page down on currently focused panel
     pub fn page_down(&mut self) {
         let page_size = crate::tui::constants::PAGE_SIZE;
+        if self.alignment_mode.uses_row_selection() {
+            if self.total_rows > 0 {
+                self.selected_row =
+                    (self.selected_row + page_size).min(self.total_rows.saturating_sub(1));
+            }
+            self.clamp_scroll_to_selection();
+            return;
+        }
         match self.sync_mode {
             ScrollSyncMode::Independent => {
                 if self.focus_right {
@@ -380,10 +440,6 @@ impl SideBySideState {
                 self.right_scroll =
                     (self.right_scroll + page_size).min(self.right_total.saturating_sub(1));
             }
-        }
-        if self.alignment_mode.uses_row_selection() && self.total_rows > 0 {
-            self.selected_row =
-                (self.selected_row + page_size).min(self.total_rows.saturating_sub(1));
         }
     }
 
@@ -426,25 +482,31 @@ impl SideBySideState {
 
     /// Go to top of focused panel
     pub fn go_to_top(&mut self) {
+        if self.alignment_mode.uses_row_selection() {
+            self.selected_row = 0;
+            self.clamp_scroll_to_selection();
+            return;
+        }
         if self.focus_right {
             self.right_scroll = 0;
         } else {
             self.left_scroll = 0;
         }
-        if self.alignment_mode.uses_row_selection() {
-            self.selected_row = 0;
-        }
     }
 
     /// Go to bottom of focused panel
     pub fn go_to_bottom(&mut self) {
+        if self.alignment_mode.uses_row_selection() {
+            if self.total_rows > 0 {
+                self.selected_row = self.total_rows - 1;
+            }
+            self.clamp_scroll_to_selection();
+            return;
+        }
         if self.focus_right {
             self.right_scroll = self.right_total.saturating_sub(1);
         } else {
             self.left_scroll = self.left_total.saturating_sub(1);
-        }
-        if self.alignment_mode.uses_row_selection() && self.total_rows > 0 {
-            self.selected_row = self.total_rows - 1;
         }
     }
 
@@ -491,17 +553,11 @@ impl SideBySideState {
     }
 
     /// Scroll to a specific row
-    pub const fn scroll_to_row(&mut self, row: usize) {
+    pub fn scroll_to_row(&mut self, row: usize) {
+        // The clamp uses the real measured viewport height; the previous
+        // hardcoded 20-row assumption landed jumps below the fold at 80x24.
         self.selected_row = row;
-        // Adjust scroll to keep row visible (assuming ~20 visible rows)
-        let visible_rows = 20;
-        if row < self.left_scroll {
-            self.left_scroll = row;
-            self.right_scroll = row;
-        } else if row >= self.left_scroll + visible_rows {
-            self.left_scroll = row.saturating_sub(visible_rows / 2);
-            self.right_scroll = row.saturating_sub(visible_rows / 2);
-        }
+        self.clamp_scroll_to_selection();
     }
 
     /// Start search mode
@@ -767,5 +823,103 @@ mod tests {
         s.prev_change();
         assert_eq!(s.current_change_idx, None);
         assert_eq!(s.change_position(), "0/0");
+    }
+}
+
+#[cfg(test)]
+mod viewport_clamp_tests {
+    use super::*;
+    use crate::diff::ChangeType;
+
+    fn state_with_rows(n: usize, mode: AlignmentMode) -> SideBySideState {
+        let mut s = SideBySideState::new();
+        s.alignment_mode = mode;
+        s.aligned_rows = (0..n)
+            .map(|_| AlignedRow {
+                left_name: Some("a".to_string()),
+                left_version: None,
+                right_name: Some("a".to_string()),
+                right_version: None,
+                change_type: ChangeType::Modified,
+                component_id: None,
+            })
+            .collect();
+        s.recompute_row_model();
+        s
+    }
+
+    /// Regression for the off-screen cursor: with the RIGHT panel focused,
+    /// repeated scroll_down must keep the selection inside the scroll window
+    /// (movement previously routed through the focused panel's offset only).
+    #[test]
+    fn row_scroll_follows_selection_regardless_of_focus() {
+        let mut s = state_with_rows(30, AlignmentMode::Aligned);
+        s.set_viewport_rows(10);
+        s.focus_right = true;
+
+        for _ in 0..15 {
+            s.scroll_down();
+        }
+        assert_eq!(s.selected_row, 15);
+        assert!(
+            (s.left_scroll..s.left_scroll + 10).contains(&s.selected_row),
+            "selection {} must be inside the window starting at {}",
+            s.selected_row,
+            s.left_scroll
+        );
+        assert_eq!(s.right_scroll, s.left_scroll, "panels stay in lockstep");
+    }
+
+    /// Regression for the hardcoded 20-row assumption: jumps use the real
+    /// measured viewport height.
+    #[test]
+    fn scroll_to_row_respects_viewport_rows() {
+        // 13 visible rows (the real 80x24 height): row 15 needs scrolling.
+        let mut s = state_with_rows(30, AlignmentMode::Aligned);
+        s.set_viewport_rows(13);
+        s.scroll_to_row(15);
+        assert!(
+            s.left_scroll >= 3,
+            "row 15 must be scrolled into a 13-row window, scroll={}",
+            s.left_scroll
+        );
+
+        // 34 visible rows (120x40): row 15 is already visible, no scrolling.
+        let mut s = state_with_rows(30, AlignmentMode::Aligned);
+        s.set_viewport_rows(34);
+        s.scroll_to_row(15);
+        assert_eq!(s.left_scroll, 0, "no needless jump when already visible");
+    }
+
+    /// Every frame self-heals: recompute_row_model clamps a stale scroll.
+    #[test]
+    fn recompute_row_model_clamps_scroll() {
+        let mut s = state_with_rows(30, AlignmentMode::Aligned);
+        s.set_viewport_rows(10);
+        s.selected_row = 25;
+        s.left_scroll = 0;
+        s.recompute_row_model();
+        assert!(
+            (s.left_scroll..s.left_scroll + 10).contains(&s.selected_row),
+            "selection must be inside the window after recompute"
+        );
+        assert_eq!(s.right_scroll, s.left_scroll);
+    }
+
+    /// Unified reserves 2 rows of panel chrome (header + separator).
+    #[test]
+    fn unified_viewport_accounts_for_chrome() {
+        let mut s = SideBySideState::new();
+        s.alignment_mode = AlignmentMode::Unified;
+        s.unified_entries = Vec::new();
+        s.set_viewport_rows(10);
+        s.selected_row = 20;
+        s.clamp_scroll_to_selection();
+        // visible = 10 - 2 = 8, so the window must start at >= 13.
+        assert!(
+            s.left_scroll >= 13,
+            "Unified window must subtract its chrome, scroll={}",
+            s.left_scroll
+        );
     }
 }

@@ -123,6 +123,14 @@ fn render(frame: &mut Frame, app: &mut App) {
     // Render tabs with shortcuts
     render_tabs(frame, chunks[1], app);
 
+    // Record the side-by-side panel viewport height before the read-only
+    // RenderContext is built: content area minus context bar (2) and panel
+    // borders (2). The scroll clamp keeps the selected row inside this window.
+    if app.active_tab == TabKind::SideBySide {
+        let rows = chunks[2].height.saturating_sub(4) as usize;
+        app.side_by_side_state_mut().set_viewport_rows(rows);
+    }
+
     // Render content based on active tab.
     // Migrated tabs use RenderContext (read-only); unmigrated tabs still use &mut App.
     match app.active_tab {

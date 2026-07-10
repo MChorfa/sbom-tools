@@ -61,10 +61,15 @@ impl ViewState for SideBySideView {
 
         match key.code {
             // Toggle focus between panels. `Tab` is reserved for global tab
-            // switching; `p`/arrows toggle panel focus here.
+            // switching; `p`/arrows toggle panel focus here. Unified renders
+            // a single panel, so there is nothing to focus-toggle.
             KeyCode::Char('p') | KeyCode::Left | KeyCode::Right => {
-                self.inner.toggle_focus();
-                EventResult::Consumed
+                if self.inner.alignment_mode == AlignmentMode::Unified {
+                    EventResult::status("Unified view is a single panel")
+                } else {
+                    self.inner.toggle_focus();
+                    EventResult::Consumed
+                }
             }
             // Scroll
             KeyCode::Up | KeyCode::Char('k') => {
@@ -91,13 +96,23 @@ impl ViewState for SideBySideView {
                 self.inner.go_to_bottom();
                 EventResult::Consumed
             }
-            // Synchronized scroll
+            // Synchronized scroll. In row-selection modes the panels already
+            // move in lockstep with the selection (raw offset nudges would be
+            // snapped back by the per-frame clamp), so J/K move the cursor.
             KeyCode::Char('K') => {
-                self.inner.scroll_both_up();
+                if self.inner.alignment_mode.uses_row_selection() {
+                    self.inner.scroll_up();
+                } else {
+                    self.inner.scroll_both_up();
+                }
                 EventResult::Consumed
             }
             KeyCode::Char('J') => {
-                self.inner.scroll_both_down();
+                if self.inner.alignment_mode.uses_row_selection() {
+                    self.inner.scroll_down();
+                } else {
+                    self.inner.scroll_both_down();
+                }
                 EventResult::Consumed
             }
             // Toggle alignment mode
