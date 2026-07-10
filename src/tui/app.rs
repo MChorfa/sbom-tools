@@ -145,6 +145,9 @@ impl AppOverlays {
         self.show_legend = false;
         self.search.active = false;
         self.threshold_tuning.visible = false;
+        self.shortcuts.visible = false;
+        self.component_deep_dive.visible = false;
+        self.view_switcher.visible = false;
     }
 
     pub const fn has_active(&self) -> bool {
@@ -153,6 +156,11 @@ impl AppOverlays {
             || self.show_legend
             || self.search.active
             || self.threshold_tuning.visible
+            // The cross-view modals must be visible to the mouse subsystem,
+            // or a click while one is painted falls through to the tab bar.
+            || self.shortcuts.visible
+            || self.component_deep_dive.visible
+            || self.view_switcher.visible
     }
 }
 

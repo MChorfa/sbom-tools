@@ -185,6 +185,13 @@ fn render(frame: &mut Frame, app: &mut App) {
     if app.overlays.threshold_tuning.visible {
         super::views::render_threshold_tuning(frame, &app.overlays.threshold_tuning);
     }
+
+    // Cross-view overlays (K shortcuts, D deep-dive). The K/D handlers set
+    // these visible in Diff/View mode too, but only the multi-mode render
+    // branches painted them — leaving an invisible modal swallowing input.
+    // Safe unconditionally: each inner renderer self-gates on .visible, and
+    // the view switcher's V key is mode-gated to Multi/Timeline/Matrix.
+    render_cross_view_overlays(frame, app);
 }
 
 /// Build a human-readable label for an SBOM: "name@version" or just "name".
