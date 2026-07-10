@@ -1042,17 +1042,33 @@ fn render_sidebyside_context_bar(frame: &mut Frame, area: Rect, ctx: &RenderCont
         "search ",
         Style::default().fg(scheme.text_muted),
     ));
-    spans.push(Span::styled("[n/N]", Style::default().fg(scheme.accent)));
-    spans.push(Span::styled(
-        "ext/prev",
-        Style::default().fg(scheme.text_muted),
-    ));
+    // n/N only navigate in row-selection modes; Grouped gates them behind a
+    // hint, so don't advertise keys the same screen refuses to execute.
+    if state.alignment_mode.uses_row_selection() {
+        spans.push(Span::styled("[n/N]", Style::default().fg(scheme.accent)));
+        spans.push(Span::styled(
+            "ext/prev",
+            Style::default().fg(scheme.text_muted),
+        ));
+    } else {
+        spans.push(Span::styled("[a]", Style::default().fg(scheme.accent)));
+        spans.push(Span::styled(
+            " for row actions",
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
 
     let context_line = Line::from(spans);
 
     let paragraph = Paragraph::new(context_line).style(Style::default().fg(scheme.text_muted));
 
     frame.render_widget(paragraph, area);
+}
+
+/// Line count a Grouped-mode section contributes above the Modified section:
+/// its rows plus title and trailing blank, or 0 when hidden/empty.
+pub(crate) const fn grouped_section_lines(shown: bool, len: usize) -> usize {
+    if shown && len > 0 { len + 2 } else { 0 }
 }
 
 fn render_old_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext, name: &str, focused: bool) {
@@ -1091,6 +1107,14 @@ fn render_old_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext, name: &s
                     Span::styled(format!(" {version}"), Style::default().fg(scheme.muted)),
                 ]));
             }
+            lines.push(Line::raw(""));
+        }
+
+        // Pad so the Modified sections start on the same row in both panels
+        // (the opposite panel's Added/Removed section may be taller).
+        let own = grouped_section_lines(filter.show_removed, result.components.removed.len());
+        let other = grouped_section_lines(filter.show_added, result.components.added.len());
+        for _ in 0..other.saturating_sub(own) {
             lines.push(Line::raw(""));
         }
 
@@ -1210,6 +1234,14 @@ fn render_new_panel(frame: &mut Frame, area: Rect, ctx: &RenderContext, name: &s
                     Span::styled(format!(" {version}"), Style::default().fg(scheme.muted)),
                 ]));
             }
+            lines.push(Line::raw(""));
+        }
+
+        // Pad so the Modified sections start on the same row in both panels
+        // (mirrors render_old_panel).
+        let own = grouped_section_lines(filter.show_added, result.components.added.len());
+        let other = grouped_section_lines(filter.show_removed, result.components.removed.len());
+        for _ in 0..other.saturating_sub(own) {
             lines.push(Line::raw(""));
         }
 
@@ -1573,5 +1605,24 @@ mod tests {
     fn test_highlight_search_no_match() {
         let spans = highlight_search_matches("lodash", "xyz", Color::White, Color::Yellow);
         assert_eq!(spans.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod grouped_padding_tests {
+    use super::grouped_section_lines;
+
+    /// Padding math for aligning the two Grouped panels' Modified sections.
+    #[test]
+    fn grouped_section_lines_counts_title_and_trailing_blank() {
+        assert_eq!(grouped_section_lines(true, 4), 6, "4 rows + title + blank");
+        assert_eq!(grouped_section_lines(false, 4), 0, "hidden section");
+        assert_eq!(grouped_section_lines(true, 0), 0, "empty section");
+
+        // 2 removed vs 5 added: the old panel pads by the difference so both
+        // Modified headers land on the same row.
+        let own = grouped_section_lines(true, 2);
+        let other = grouped_section_lines(true, 5);
+        assert_eq!(other.saturating_sub(own), 3);
     }
 }

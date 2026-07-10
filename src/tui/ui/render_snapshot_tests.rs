@@ -334,8 +334,9 @@ fn sidebyside_aligned_navigation_wired_via_prepare_render() {
 fn sidebyside_grouped_scroll_totals_unchanged() {
     use crate::tui::app_states::AlignmentMode;
 
-    // demo_app leaves the side-by-side view in its default Grouped mode.
+    // Grouped is no longer the default (Aligned is); force it explicitly.
     let mut app = demo_app(TabKind::SideBySide);
+    app.side_by_side_state_mut().alignment_mode = AlignmentMode::Grouped;
     app.prepare_render();
 
     let (diff, _, _) = demo_diff();

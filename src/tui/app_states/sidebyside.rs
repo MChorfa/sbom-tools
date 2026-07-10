@@ -40,9 +40,13 @@ pub enum UnifiedChangeType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AlignmentMode {
     /// Group by change type (removed, modified, added) - original behavior
-    #[default]
     Grouped,
-    /// Align matched components on same row for easy comparison
+    /// Align matched components on same row for easy comparison.
+    ///
+    /// The default: it is the only opening mode where row selection, the
+    /// detail modal, yank, search highlighting, and change navigation all
+    /// work. Grouped is an explicit opt-in via `a`.
+    #[default]
     Aligned,
     /// Unified upgrade view matching removed+added by name to show version upgrades
     Unified,
@@ -666,9 +670,19 @@ mod tests {
     }
 
     #[test]
+    fn default_alignment_is_aligned() {
+        // Regression for the default flip: Aligned is the only opening mode
+        // where selection/detail/yank/search-highlight all work.
+        assert_eq!(
+            SideBySideState::new().alignment_mode,
+            AlignmentMode::Aligned
+        );
+    }
+
+    #[test]
     fn recompute_row_model_grouped_preserves_grouped_totals() {
         let mut s = SideBySideState::new();
-        assert_eq!(s.alignment_mode, AlignmentMode::Grouped);
+        s.alignment_mode = AlignmentMode::Grouped;
         s.set_totals(5, 7);
         s.recompute_row_model();
         assert_eq!(s.total_rows, 0);
@@ -746,6 +760,7 @@ mod tests {
     #[test]
     fn next_prev_change_noop_when_grouped_or_empty() {
         let mut s = SideBySideState::new();
+        s.alignment_mode = AlignmentMode::Grouped;
         s.recompute_row_model();
         s.next_change();
         assert_eq!(s.current_change_idx, None);

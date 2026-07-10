@@ -439,6 +439,15 @@ fn handle_global_fallback(app: &mut super::App, key: KeyEvent) {
 pub fn get_yank_text(app: &super::App) -> Option<String> {
     match app.active_tab {
         super::TabKind::Components => helpers::get_selected_component_name(app),
+        // Ctrl+C shares the same row resolution as the tab-local 'y' (in
+        // Grouped mode there is no row cursor, so nothing to copy).
+        super::TabKind::SideBySide => {
+            if app.side_by_side_state().alignment_mode.uses_row_selection() {
+                sidebyside::get_current_row_info(app)
+            } else {
+                None
+            }
+        }
         super::TabKind::Vulnerabilities => {
             let idx = app.vulnerabilities_state().selected;
             let result = app.data.diff_result.as_ref()?;
