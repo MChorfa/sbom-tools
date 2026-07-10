@@ -324,7 +324,10 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
         "Off"
     };
 
-    let mut spans = vec![
+    // Two-row bar into the already-reserved 2-row area: state badges on row 1,
+    // key hints on row 2. The previous single ~185-col line clipped roughly
+    // half its controls at 80/120 cols while row 2 sat blank.
+    let mut state_spans = vec![
         Span::styled("Filter: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {filter_label} "),
@@ -333,7 +336,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .bg(scheme.accent)
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("KEV: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(
@@ -353,7 +356,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 })
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("Sort: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {} ", app.vuln_state.sort_by.label()),
@@ -362,7 +365,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .bg(scheme.primary)
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("Dedupe: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {dedupe_label} "),
@@ -375,7 +378,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 })
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("Group: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {group_label} "),
@@ -384,44 +387,44 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .bg(scheme.secondary)
                 .bold(),
         ),
-        Span::raw("  │  "),
-        Span::styled("[f]", Style::default().fg(scheme.accent)),
-        Span::raw(" filter  "),
-        Span::styled("[k]", Style::default().fg(scheme.accent)),
-        Span::raw(" kev  "),
-        Span::styled("[s]", Style::default().fg(scheme.accent)),
-        Span::raw(" sort  "),
-        Span::styled("[d]", Style::default().fg(scheme.accent)),
-        Span::raw(" dedupe  "),
-        Span::styled("[g]", Style::default().fg(scheme.accent)),
-        Span::raw(" group  "),
-        Span::styled("[/]", Style::default().fg(scheme.accent)),
-        Span::raw(" search  "),
-        Span::styled("[E]", Style::default().fg(scheme.accent)),
-        Span::raw(" expand  "),
-        Span::styled("[C]", Style::default().fg(scheme.accent)),
-        Span::raw(" collapse  "),
-        Span::styled("[Tab]", Style::default().fg(scheme.accent)),
-        Span::raw(" next group"),
     ];
 
-    // Show active search query
+    // Show active search query on the state row
     if app.vuln_state.search_active {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
+        state_spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
+        state_spans.push(Span::styled(
             format!("/{}", app.vuln_state.search_query),
             Style::default().fg(scheme.accent).bold(),
         ));
-        spans.push(Span::styled("█", Style::default().fg(scheme.accent)));
+        state_spans.push(Span::styled("█", Style::default().fg(scheme.accent)));
     } else if !app.vuln_state.search_query.is_empty() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
+        state_spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
+        state_spans.push(Span::styled(
             format!("\"{}\"", app.vuln_state.search_query),
             Style::default().fg(scheme.accent),
         ));
     }
 
-    let para = Paragraph::new(Line::from(spans));
+    // Hint row: 78 cols measured, so nothing clips at the 80-col minimum.
+    // "[/] search" lives in the global footer already.
+    let hint_spans = vec![
+        Span::styled("[f]", Style::default().fg(scheme.accent)),
+        Span::raw(" filter "),
+        Span::styled("[k]", Style::default().fg(scheme.accent)),
+        Span::raw(" kev "),
+        Span::styled("[s]", Style::default().fg(scheme.accent)),
+        Span::raw(" sort "),
+        Span::styled("[d]", Style::default().fg(scheme.accent)),
+        Span::raw(" dedupe "),
+        Span::styled("[g]", Style::default().fg(scheme.accent)),
+        Span::raw(" group "),
+        Span::styled("[E/C]", Style::default().fg(scheme.accent)),
+        Span::raw(" fold "),
+        Span::styled("[Tab]", Style::default().fg(scheme.accent)),
+        Span::raw(" next group"),
+    ];
+
+    let para = Paragraph::new(vec![Line::from(state_spans), Line::from(hint_spans)]);
     frame.render_widget(para, area);
 }
 
