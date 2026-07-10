@@ -18,6 +18,7 @@ mod vulnerabilities;
 pub use components::render_components;
 pub use dependencies::render_dependencies;
 pub(crate) use dependencies::update_graph_cache;
+pub(crate) use diff_compliance::nth_diff_violation;
 pub use diff_compliance::{
     diff_compliance_violation_count, render_diff_compliance, resolve_selected_group_element,
 };
