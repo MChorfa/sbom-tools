@@ -438,3 +438,48 @@ fn gpl_risk_summary_renders_as_copyleft() {
         "GPL must not fall into the unknown bucket:\n{text}"
     );
 }
+
+/// Esc must never quit the viewer: it backs out one level (right panel ->
+/// left, breadcrumb -> back) and otherwise no-ops; only 'q' quits.
+#[test]
+fn esc_never_quits_view_app() {
+    let mut app = demo_view_app(ViewTab::Tree);
+
+    handle_key_event(&mut app, key(KeyCode::Esc));
+    assert!(!app.should_quit, "Esc at top level must not quit");
+
+    // Backing out of the right detail panel.
+    app.focus_panel = crate::tui::view::app::FocusPanel::Right;
+    handle_key_event(&mut app, key(KeyCode::Esc));
+    assert!(!app.should_quit);
+    assert_eq!(
+        app.focus_panel,
+        crate::tui::view::app::FocusPanel::Left,
+        "Esc backs out of the right panel"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::Char('q')));
+    assert!(app.should_quit, "'q' still quits");
+}
+
+/// A filter with zero matches must render an explanatory empty state, not a
+/// silent blank panel. Bookmarked is deterministically empty (the bookmark
+/// set starts empty); Critical would NOT be — the demo fixture carries a
+/// critical vuln on axios@1.4.0.
+#[test]
+fn view_tree_filter_empty_state() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    app.tree_filter = crate::tui::view::app::TreeFilter::Bookmarked;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("No components match filter 'Bookmarked'"),
+        "empty tree must explain the active filter:\n{text}"
+    );
+    assert!(
+        text.contains("[f] to change filter"),
+        "empty state must offer the recovery hint:\n{text}"
+    );
+    insta::assert_snapshot!("view_tree_filter_bookmarked_empty_80x24", text);
+}

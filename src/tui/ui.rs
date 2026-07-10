@@ -710,8 +710,12 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, tab_count: usize) {
             Span::styled("Toggle this help", Style::default().fg(colors().text)),
         ]),
         Line::from(vec![
-            Span::styled("  q / Esc        ", Style::default().fg(colors().accent)),
-            Span::styled("Quit / Close overlay", Style::default().fg(colors().text)),
+            Span::styled("  q              ", Style::default().fg(colors().accent)),
+            Span::styled("Quit", Style::default().fg(colors().text)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Esc            ", Style::default().fg(colors().accent)),
+            Span::styled("Close overlay / cancel", Style::default().fg(colors().text)),
         ]),
         Line::from(""),
         Line::styled(

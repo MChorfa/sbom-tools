@@ -370,6 +370,13 @@ fn handle_global_fallback(app: &mut super::App, key: KeyEvent) {
                 app.next_tab();
             }
         }
+        // Real terminals report Shift+Tab as BackTab (never Tab+SHIFT), so
+        // the modifier check above only serves synthetic events. Gated to the
+        // tabbed modes: the multi-mode handlers consume Tab as a panel toggle
+        // and BackTab must not mutate their hidden diff active_tab.
+        KeyCode::BackTab if matches!(app.mode, super::AppMode::Diff | super::AppMode::View) => {
+            app.prev_tab();
+        }
         KeyCode::Char('/') => app.start_search(),
         KeyCode::Char('1') => app.select_tab(super::TabKind::Summary),
         KeyCode::Char('2') => app.select_tab(super::TabKind::Components),
@@ -683,6 +690,10 @@ mod dispatch_precedence_tests {
             assert!(
                 !dispatch_tab_key(&mut diff_app(tab), k(KeyCode::Tab)),
                 "'Tab' must fall through to global tab-switching on {tab:?}"
+            );
+            assert!(
+                !dispatch_tab_key(&mut diff_app(tab), k(KeyCode::BackTab)),
+                "'BackTab' must fall through to global tab-switching on {tab:?}"
             );
             assert!(
                 !dispatch_tab_key(&mut diff_app(tab), k(KeyCode::Char('q'))),

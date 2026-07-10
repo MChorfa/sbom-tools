@@ -846,7 +846,8 @@ impl FooterHints {
                 hints.insert(1, ("s", "sort"));
                 hints.insert(2, ("r", "risk"));
                 hints.insert(3, ("c", "compat"));
-                hints.insert(4, ("Tab", "panel"));
+                // The real panel-toggle key is `p`; Tab always switches tabs.
+                hints.insert(4, ("p", "panel"));
             }
             "vulnerabilities" | "vulns" => {
                 hints.insert(0, ("f", "filter"));

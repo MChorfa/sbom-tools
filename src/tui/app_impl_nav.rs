@@ -120,6 +120,7 @@ impl App {
         match self.active_tab {
             TabKind::Components => self.components_state_mut().go_last(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().go_last(),
+            TabKind::Licenses => self.licenses_state_mut().go_last(),
             TabKind::Source => self.source_state_mut().select_last(),
             _ => {}
         }
@@ -130,6 +131,7 @@ impl App {
         match self.active_tab {
             TabKind::Components => self.components_state_mut().page_up(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().page_up(),
+            TabKind::Licenses => self.licenses_state_mut().page_up(),
             TabKind::Source => self.source_state_mut().page_up(),
             _ => {}
         }
@@ -140,6 +142,7 @@ impl App {
         match self.active_tab {
             TabKind::Components => self.components_state_mut().page_down(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().page_down(),
+            TabKind::Licenses => self.licenses_state_mut().page_down(),
             TabKind::Source => self.source_state_mut().page_down(),
             _ => {}
         }

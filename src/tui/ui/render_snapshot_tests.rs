@@ -614,3 +614,278 @@ fn diff_tab_click_selects_the_rendered_tab_including_source() {
         assert_eq!(app.active_tab, expected, "click on {needle} @col {col}");
     }
 }
+
+/// Shift+Tab arrives from real terminals as `KeyCode::BackTab`; it must
+/// reverse-cycle tabs (previously only the synthetic Tab+SHIFT combination
+/// was handled, so BackTab was silently dropped).
+#[test]
+fn backtab_cycles_to_previous_tab_in_diff() {
+    let mut app = demo_app(TabKind::Components);
+    handle_key_event(&mut app, key(KeyCode::BackTab));
+    assert_eq!(app.active_tab, TabKind::Summary);
+}
+
+/// End/G, PageUp and PageDown must navigate the Licenses tab (they were
+/// documented but dead: the view returned Ignored and the global fallback
+/// had no Licenses arm).
+#[test]
+fn licenses_end_and_paging_keys_navigate() {
+    let mut app = demo_app(TabKind::Licenses);
+    app.prepare_render();
+    // The diff Licenses tab lists CHANGED licenses; the all-MIT demo fixture
+    // yields at most one, so seed a synthetic bound — the wiring under test
+    // is the global-fallback arms, which read this state directly.
+    app.licenses_state_mut().total = 25;
+    let total = app.licenses_state().total;
+
+    handle_key_event(&mut app, key(KeyCode::End));
+    assert_eq!(
+        app.licenses_state().selected,
+        total - 1,
+        "End jumps to the last license row"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::PageUp));
+    assert_eq!(
+        app.licenses_state().selected,
+        (total - 1).saturating_sub(crate::tui::constants::PAGE_SIZE),
+        "PageUp moves the selection up by exactly one page"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::Home));
+    assert_eq!(app.licenses_state().selected, 0, "Home returns to the top");
+}
+
+/// K (shortcuts) and D (deep dive) previously set their overlay visible in
+/// Diff mode without any render path painting it — an invisible modal that
+/// swallowed all input. The overlays must now actually render.
+#[test]
+fn shortcuts_overlay_renders_in_diff_mode() {
+    let mut app = demo_app(TabKind::Summary);
+    handle_key_event(&mut app, key(KeyCode::Char('K')));
+    assert!(
+        app.overlays.shortcuts.visible,
+        "'K' opens the shortcuts overlay"
+    );
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Keyboard Shortcuts (Diff)"),
+        "the shortcuts overlay must be painted in diff mode:\n{text}"
+    );
+    insta::assert_snapshot!("diff_shortcuts_overlay_80x24", text);
+}
+
+#[test]
+fn deep_dive_overlay_renders_in_diff_mode() {
+    let mut app = demo_app(TabKind::Components);
+    app.prepare_render();
+    handle_key_event(&mut app, key(KeyCode::Char('D')));
+    assert!(
+        app.overlays.component_deep_dive.visible,
+        "'D' opens the deep-dive overlay for the selected component"
+    );
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    let expected = app.overlays.component_deep_dive.component_name.clone();
+    assert!(
+        text.contains(&format!("Component Deep Dive: {expected}")),
+        "the deep-dive overlay must be painted with the selected component:\n{text}"
+    );
+}
+
+/// Lock the Grouped layout (including the Modified-section alignment padding)
+/// now that it is opt-in rather than the default.
+#[test]
+fn snapshot_sidebyside_grouped() {
+    use crate::tui::app_states::AlignmentMode;
+
+    let mut app = demo_app(TabKind::SideBySide);
+    app.side_by_side_state_mut().alignment_mode = AlignmentMode::Grouped;
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    insta::assert_snapshot!("diff_sidebyside_grouped_80x24", text);
+}
+
+// ============================================================================
+// Multi-comparison modes: baseline snapshots + navigation regression tests
+// ============================================================================
+
+/// Baseline snapshots for the three multi-comparison full-screen renders.
+/// None existed before (DIFF_TABS deliberately excludes these modes); later
+/// multi-mode PRs update these baselines.
+#[test]
+fn snapshot_multi_modes() {
+    use crate::tui::test_support::{demo_matrix, demo_multi_diff, demo_timeline};
+
+    pin_theme();
+    let apps: [(&str, App); 3] = [
+        ("multidiff", App::new_multi_diff(demo_multi_diff())),
+        ("timeline", App::new_timeline(demo_timeline())),
+        ("matrix", App::new_matrix(demo_matrix())),
+    ];
+    for (name, mut app) in apps {
+        for (w, h) in SIZES {
+            let text = render_to_text(w, h, |frame| {
+                app.prepare_render();
+                render(frame, &mut app);
+            });
+            insta::assert_snapshot!(format!("{name}_{w}x{h}"), text);
+        }
+    }
+}
+
+/// Regression for the frozen multi-diff drill-down: total_variable_components
+/// was never populated, so the `total > 0` guard kept j/k stuck at index 0.
+#[test]
+fn multi_diff_drill_down_unfrozen() {
+    use crate::tui::test_support::demo_multi_diff;
+
+    pin_theme();
+    let mut app = App::new_multi_diff(demo_multi_diff());
+    assert!(
+        app.tabs.multi_diff.total_variable_components > 0,
+        "constructor must populate the variable-component bound"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::Char('v')));
+    assert!(app.tabs.multi_diff.show_variable_drill_down);
+    let total = app.tabs.multi_diff.total_variable_components;
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        app.tabs.multi_diff.selected_variable_component,
+        1.min(total - 1),
+        "j must advance the drill-down selection when more than one row exists"
+    );
+
+    // Guard-level regression independent of fixture size: with the bound set,
+    // navigation advances; with the old bound of 0 it froze at index 0.
+    app.tabs.multi_diff.total_variable_components = 3;
+    app.tabs.multi_diff.selected_variable_component = 0;
+    app.tabs.multi_diff.select_next_variable_component();
+    app.tabs.multi_diff.select_next_variable_component();
+    assert_eq!(app.tabs.multi_diff.selected_variable_component, 2);
+}
+
+/// Regression for the frozen Timeline Components panel (total_components
+/// never populated).
+#[test]
+fn timeline_components_panel_navigable() {
+    use crate::tui::test_support::demo_timeline;
+
+    pin_theme();
+    let mut app = App::new_timeline(demo_timeline());
+    assert!(
+        app.tabs.timeline.total_components > 0,
+        "constructor must populate the component bound"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::Tab)); // Versions -> Components
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        app.tabs.timeline.selected_component, 1,
+        "j must advance the component selection"
+    );
+}
+
+/// Regression for the frozen Matrix clustering navigation (total_clusters
+/// never populated).
+#[test]
+fn matrix_cluster_navigation_unfrozen() {
+    use crate::tui::test_support::demo_matrix;
+
+    pin_theme();
+    let app = App::new_matrix(demo_matrix());
+    assert!(
+        app.tabs.matrix.total_clusters > 0,
+        "constructor must populate the cluster bound (threshold 0.5 clusters the fixtures)"
+    );
+
+    let mut app = app;
+    app.tabs.matrix.select_next_cluster();
+    assert_eq!(
+        app.tabs.matrix.selected_cluster,
+        1.min(app.tabs.matrix.total_clusters - 1),
+        "cluster selection must move once the bound is set"
+    );
+}
+
+/// Regression for the filtered-list desync: under a component filter, the
+/// history modal and the event-side name lookup must resolve the SAME entry
+/// the Components panel highlights.
+#[test]
+fn timeline_selection_resolves_through_filtered_list() {
+    use crate::tui::app::TimelineComponentFilter;
+    use crate::tui::test_support::demo_timeline;
+    use crate::tui::views::filtered_evolution_entries;
+
+    pin_theme();
+    let result = demo_timeline();
+
+    let removed = filtered_evolution_entries(&result, TimelineComponentFilter::Removed);
+    assert!(
+        !removed.is_empty(),
+        "fixture must have removed components (v2 -> v3 is a near-total replacement)"
+    );
+    assert!(
+        removed.iter().all(|(_, is_removed)| *is_removed),
+        "Removed filter must only yield removed components"
+    );
+
+    // The first REMOVED component differs from the first UNFILTERED entry
+    // (which is an added one) — the old unfiltered lookup returned the wrong
+    // component under a filter.
+    let unfiltered = filtered_evolution_entries(&result, TimelineComponentFilter::All);
+    assert!(
+        !unfiltered.is_empty() && !unfiltered[0].1,
+        "unfiltered list starts with added components"
+    );
+    assert_ne!(
+        removed[0].0.name, unfiltered[0].0.name,
+        "filtered index 0 must not resolve to the unfiltered head"
+    );
+}
+
+/// Regression for the filter resync: narrowing the filter must clamp the
+/// selection and update the navigation bound.
+#[test]
+fn timeline_filter_resync_clamps_selection() {
+    use crate::tui::app::TimelineComponentFilter;
+    use crate::tui::test_support::demo_timeline;
+    use crate::tui::views::filtered_evolution_entries;
+
+    pin_theme();
+    let mut app = App::new_timeline(demo_timeline());
+    // Park the selection on the last unfiltered component.
+    app.tabs.timeline.selected_component = app.tabs.timeline.total_components - 1;
+
+    // Cycle 'f' until a narrower filter than All is active.
+    for _ in 0..4 {
+        handle_key_event(&mut app, key(KeyCode::Char('f')));
+        if app.tabs.timeline.component_filter != TimelineComponentFilter::All {
+            break;
+        }
+    }
+    let filter = app.tabs.timeline.component_filter;
+    assert_ne!(filter, TimelineComponentFilter::All);
+
+    let visible = filtered_evolution_entries(
+        app.data.timeline_result.as_ref().expect("timeline data"),
+        filter,
+    )
+    .len();
+    assert_eq!(
+        app.tabs.timeline.total_components, visible,
+        "'f' must resync the navigation bound to the filtered length"
+    );
+    assert!(
+        app.tabs.timeline.selected_component < visible.max(1),
+        "'f' must clamp the selection into the filtered list"
+    );
+}

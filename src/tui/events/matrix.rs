@@ -64,7 +64,7 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         // Navigation
-        KeyCode::Tab | KeyCode::Char('p') => app.tabs.matrix.toggle_panel(),
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => app.tabs.matrix.toggle_panel(),
         KeyCode::Up | KeyCode::Char('k') => app.tabs.matrix.move_up(),
         KeyCode::Down | KeyCode::Char('j') => app.tabs.matrix.move_down(),
         KeyCode::Left | KeyCode::Char('h') => app.tabs.matrix.move_left(),

@@ -59,7 +59,7 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         // Navigation
-        KeyCode::Tab | KeyCode::Char('p') => app.tabs.timeline.toggle_panel(),
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => app.tabs.timeline.toggle_panel(),
         KeyCode::Up | KeyCode::Char('k') => app.tabs.timeline.select_prev(),
         KeyCode::Down | KeyCode::Char('j') => app.tabs.timeline.select_next(),
 

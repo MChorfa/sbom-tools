@@ -42,7 +42,7 @@ pub(super) fn handle_multi_diff_keys(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         // Navigation
-        KeyCode::Tab | KeyCode::Char('p') => app.tabs.multi_diff.toggle_panel(),
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => app.tabs.multi_diff.toggle_panel(),
         KeyCode::Up | KeyCode::Char('k') => app.tabs.multi_diff.select_prev(),
         KeyCode::Down | KeyCode::Char('j') => app.tabs.multi_diff.select_next(),
 
