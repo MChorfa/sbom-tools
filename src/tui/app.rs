@@ -232,6 +232,10 @@ pub struct App {
     // ========================================================================
     // Each view handles its own key events via the ViewState trait.
     // State is synced back to `tabs.*` after each event for rendering.
+    /// Tab-bar window computed by the last render — shared with the mouse
+    /// hit-test so render geometry and click geometry cannot drift.
+    pub(crate) tab_window: crate::tui::shared::TabWindow,
+    pub(crate) summary_view: crate::tui::view_states::SummaryView,
     pub(crate) components_view: crate::tui::view_states::ComponentsView,
     pub(crate) dependencies_view: crate::tui::view_states::DependenciesView,
     pub(crate) licenses_view: crate::tui::view_states::LicensesView,
@@ -827,6 +831,12 @@ impl App {
         self.quality_view.inner_mut()
     }
 
+    pub(crate) fn summary_state(&self) -> &super::app_states::SummaryState {
+        self.summary_view.inner()
+    }
+    pub(crate) fn summary_state_mut(&mut self) -> &mut super::app_states::SummaryState {
+        self.summary_view.inner_mut()
+    }
     pub(crate) fn graph_changes_state(&self) -> &super::app_states::GraphChangesState {
         self.graph_changes_view.inner()
     }
@@ -915,6 +925,14 @@ impl App {
 
         // 5. Vulnerability totals (was inline in render_vulnerabilities)
         self.prepare_vulnerability_totals();
+
+        // 5b. Summary All Changes total (drives the scroll bound)
+        let summary_total = self
+            .data
+            .diff_result
+            .as_ref()
+            .map_or(0, crate::tui::views::all_changes_line_count);
+        self.summary_state_mut().set_total(summary_total);
 
         // 6. Graph changes total (was inline in render_graph_changes)
         let graph_total = self

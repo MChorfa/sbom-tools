@@ -16,6 +16,7 @@ pub mod quality;
 pub mod search;
 pub mod sidebyside;
 pub mod source;
+pub mod summary;
 pub mod timeline;
 pub mod vulnerabilities;
 
@@ -47,6 +48,7 @@ pub use sidebyside::{
     UnifiedChangeType, UnifiedEntry,
 };
 pub use source::{SourceDiffState, SourcePanelState, SourceSide, SourceViewMode};
+pub use summary::SummaryState;
 pub use timeline::{TimelineComponentFilter, TimelineSortBy, TimelineState};
 pub use vulnerabilities::{
     DiffVulnItem, DiffVulnStatus, VulnFilter, VulnSort, VulnerabilitiesState,

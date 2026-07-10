@@ -1673,10 +1673,29 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     } else {
         String::new()
     };
+    // Scroll window: the list was previously pinned at .scroll((0,0)) with no
+    // key handling, silently hiding everything below the fold — users read
+    // the visible handful as the complete change set.
+    let visible = area.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(visible);
+    let offset = ctx.summary.scroll_offset.min(max_scroll);
+
+    let window_suffix = if lines.len() > visible {
+        format!(
+            "[{}-{}/{} j/k] ",
+            offset + 1,
+            (offset + visible).min(lines.len()),
+            lines.len()
+        )
+    } else {
+        String::new()
+    };
     let title = format!(
-        " All Changes ({total}) \u{2014} MAJOR:{major} minor:{minor} patch:{patch} +{added} -{removed} {meta_suffix}"
+        " All Changes ({total}) \u{2014} MAJOR:{major} minor:{minor} patch:{patch} +{added} -{removed} {meta_suffix}{window_suffix}"
     );
 
+    let overflows = lines.len() > visible;
+    let total_lines = lines.len();
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
@@ -1684,9 +1703,53 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(scheme.border)),
         )
-        .scroll((0, 0));
+        .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0));
 
     frame.render_widget(paragraph, area);
+
+    if overflows {
+        crate::tui::widgets::render_scrollbar(
+            frame,
+            area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            total_lines,
+            offset,
+        );
+    }
+}
+
+/// Number of lines `render_all_changes` builds for this diff — drives the
+/// Summary scroll bound set in `App::prepare_render`. Mirrors the render
+/// exactly: metadata section (header + rows) when non-empty, plus the
+/// priority-sorted entries (introduced Critical/High vulns, modified,
+/// removed, added), or the single empty-state line.
+pub(crate) fn all_changes_line_count(result: &crate::diff::DiffResult) -> usize {
+    let crit = result
+        .vulnerabilities
+        .introduced
+        .iter()
+        .filter(|v| v.severity == "Critical")
+        .count();
+    let high = result
+        .vulnerabilities
+        .introduced
+        .iter()
+        .filter(|v| v.severity == "High")
+        .count();
+    let entries = crit
+        + high
+        + result.components.modified.len()
+        + result.components.removed.len()
+        + result.components.added.len();
+    let meta = result.metadata_changes.len();
+    let meta_lines = if meta > 0 { meta + 1 } else { 0 };
+    if entries == 0 && meta_lines == 0 {
+        1
+    } else {
+        entries + meta_lines
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
