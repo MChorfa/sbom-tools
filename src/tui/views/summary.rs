@@ -1989,6 +1989,7 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     frame.render_widget(paragraph, area);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VersionLevel {
     Patch,
     Minor,
@@ -1997,29 +1998,81 @@ enum VersionLevel {
     Unknown,
 }
 
+/// Classify a version change via the diff engine's lenient classifier, which
+/// handles v-prefixes (Go), short versions (`1.2`), 4-segment versions, and
+/// pre-release promotion — strict `semver::Version::parse` classified all of
+/// those as Unknown, silently undercounting major bumps and the Risk level.
 fn version_change_level(old: Option<&str>, new: Option<&str>) -> VersionLevel {
-    match (old, new) {
-        (Some(o), Some(n)) => {
-            if let (Ok(old_v), Ok(new_v)) = (semver::Version::parse(o), semver::Version::parse(n)) {
-                if new_v.major > old_v.major {
-                    VersionLevel::Major
-                } else if new_v.major < old_v.major {
-                    VersionLevel::Downgrade
-                } else if new_v.minor > old_v.minor {
-                    VersionLevel::Minor
-                } else if new_v.minor < old_v.minor {
-                    VersionLevel::Downgrade
-                } else if new_v.patch > old_v.patch {
-                    VersionLevel::Patch
-                } else if new_v.patch < old_v.patch {
-                    VersionLevel::Downgrade
-                } else {
-                    VersionLevel::Unknown
-                }
-            } else {
-                VersionLevel::Unknown
-            }
-        }
+    use crate::diff::VersionChangeType;
+
+    let (Some(o), Some(n)) = (old, new) else {
+        return VersionLevel::Unknown;
+    };
+    match crate::diff::classify_version_strings(o, n) {
+        VersionChangeType::MajorUpgrade => VersionLevel::Major,
+        VersionChangeType::MinorUpgrade => VersionLevel::Minor,
+        VersionChangeType::PatchUpgrade => VersionLevel::Patch,
+        VersionChangeType::Downgrade => VersionLevel::Downgrade,
         _ => VersionLevel::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod version_level_tests {
+    use super::*;
+
+    /// Regression: non-strict-semver ecosystems (Go v-prefix, 2-component,
+    /// 4-segment, pre-release promotion) previously all classified as Unknown,
+    /// undercounting major bumps and the Summary Risk level.
+    #[test]
+    fn version_level_classifies_non_semver_ecosystems() {
+        // Go-style v-prefix.
+        assert_eq!(
+            version_change_level(Some("v1.2.3"), Some("v2.0.0")),
+            VersionLevel::Major
+        );
+        // Two-component version.
+        assert_eq!(
+            version_change_level(Some("1.2"), Some("1.3")),
+            VersionLevel::Minor
+        );
+        // Four-segment version must not fall to Unknown.
+        assert_ne!(
+            version_change_level(Some("1.2.3.4"), Some("1.2.3.5")),
+            VersionLevel::Unknown
+        );
+        // Downgrade detection.
+        assert_eq!(
+            version_change_level(Some("2.0.0"), Some("1.9.0")),
+            VersionLevel::Downgrade
+        );
+        // Pre-release promotion within the same triple is a patch-level step.
+        assert_eq!(
+            version_change_level(Some("1.0.0-alpha"), Some("1.0.0")),
+            VersionLevel::Patch
+        );
+        // Honestly unknown: non-numeric schemes and missing versions.
+        assert_eq!(
+            version_change_level(Some("abc"), Some("def")),
+            VersionLevel::Unknown
+        );
+        assert_eq!(
+            version_change_level(None, Some("1.0.0")),
+            VersionLevel::Unknown
+        );
+    }
+
+    /// Go pseudo-versions must classify deterministically without panicking.
+    #[test]
+    fn version_level_go_pseudo_version() {
+        let level = version_change_level(
+            Some("v0.0.0-20200101000000-abcdef123456"),
+            Some("v0.0.0-20210101000000-fedcba654321"),
+        );
+        assert_eq!(
+            level,
+            VersionLevel::Patch,
+            "pseudo-version timestamp bump orders as a pre-release (patch) step"
+        );
     }
 }

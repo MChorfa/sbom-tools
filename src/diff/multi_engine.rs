@@ -939,7 +939,7 @@ fn classify_version_change(old: Option<&String>, new: Option<&String>) -> Versio
     }
 }
 
-fn classify_version_strings(old: &str, new: &str) -> VersionChangeType {
+pub(crate) fn classify_version_strings(old: &str, new: &str) -> VersionChangeType {
     use std::cmp::Ordering;
 
     if let (Some(old_v), Some(new_v)) = (parse_semver_lenient(old), parse_semver_lenient(new)) {
