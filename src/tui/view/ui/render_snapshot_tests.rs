@@ -374,3 +374,35 @@ fn aibom_tab_click_selects_a_profile_specific_tab() {
     );
     assert_eq!(app.active_tab, target, "click on {needle} @col {col}");
 }
+
+/// Temporary literal-guard for the four files fixed by the CBOM/tree theme
+/// routing: no raw `Color::` variants may be reintroduced (they bypass the
+/// active theme and break light/high-contrast/NO_COLOR rendering).
+///
+/// Scoped to exactly these files — the six dedicated CBOM tab files still
+/// carry raw literals and are fixed by a later theming PR, whose repo-wide CI
+/// grep supersedes this test.
+#[test]
+fn no_raw_color_variants_in_themed_view_chrome() {
+    let sources = [
+        ("view/ui.rs", include_str!("../ui.rs")),
+        (
+            "view/views/overview.rs",
+            include_str!("../views/overview.rs"),
+        ),
+        (
+            "view/views/dependencies.rs",
+            include_str!("../views/dependencies.rs"),
+        ),
+        ("widgets/tree.rs", include_str!("../../widgets/tree.rs")),
+    ];
+    for (name, src) in sources {
+        for (i, line) in src.lines().enumerate() {
+            assert!(
+                !line.contains("Color::"),
+                "{name}:{}: raw Color:: literal bypasses the theme: {line}",
+                i + 1
+            );
+        }
+    }
+}

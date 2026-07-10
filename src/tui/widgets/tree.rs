@@ -481,9 +481,10 @@ impl StatefulWidget for Tree<'_> {
             let depth_color = if item.is_group {
                 scheme.primary
             } else {
+                // Depth 2+ merges into text_muted: a dedicated light-gray RGB
+                // step was near-invisible on the light theme's background.
                 match item.depth {
                     0 | 1 => scheme.text,
-                    2 => Color::Rgb(180, 180, 180),
                     _ => scheme.text_muted,
                 }
             };

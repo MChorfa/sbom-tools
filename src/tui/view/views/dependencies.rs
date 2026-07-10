@@ -296,12 +296,12 @@ fn render_dependency_tree(
             }
         }
 
-        // P1: Depth-based color gradient for node names
+        // P1: Depth-based color gradient for node names. Depth 2+ merges into
+        // text_muted: a dedicated light-gray RGB step was near-invisible on
+        // the light theme's background (matches widgets/tree.rs).
         let depth_color = match node.depth {
-            0 => scheme.text,               // Root: bold white
-            1 => scheme.text,               // Direct deps: white
-            2 => Color::Rgb(180, 180, 180), // Depth 2: light gray
-            _ => scheme.text_muted,         // Depth 3+: muted gray
+            0 | 1 => scheme.text,   // Root and direct deps
+            _ => scheme.text_muted, // Depth 2+: muted
         };
         let name_style = if is_selected {
             Style::default().bg(scheme.selection).fg(scheme.text).bold()

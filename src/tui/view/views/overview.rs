@@ -35,6 +35,7 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
     use crate::quality::CryptographyMetrics;
 
     let metrics = CryptographyMetrics::from_sbom(&app.sbom);
+    let scheme = colors();
 
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -42,13 +43,15 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .split(area);
 
     // ── Left: asset summary ──
+    // Gauge thresholds keep green/yellow/red semantics via the theme's
+    // success/warning/error slots (error, not critical, preserves the red hue).
     let readiness = metrics.quantum_readiness_score();
     let readiness_color = if readiness >= 80.0 {
-        Color::Green
+        scheme.success
     } else if readiness >= 40.0 {
-        Color::Yellow
+        scheme.warning
     } else {
-        Color::Red
+        scheme.error
     };
 
     let bar_filled = ((readiness / 100.0) * 20.0) as usize;
@@ -91,15 +94,16 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
     ];
 
     if metrics.weak_algorithm_count > 0 {
+        // Weak/broken crypto aligns with the SBOM screens' critical severity.
         left_lines.push(Line::styled(
             format!("   Weak/broken   {}", metrics.weak_algorithm_count),
-            Style::default().fg(Color::Red),
+            Style::default().fg(scheme.critical),
         ));
     }
     if metrics.hybrid_pqc_count > 0 {
         left_lines.push(Line::styled(
             format!("   Hybrid PQC    {}", metrics.hybrid_pqc_count),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(scheme.info),
         ));
     }
 
@@ -111,13 +115,13 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
     if metrics.expired_certificates > 0 {
         left_lines.push(Line::styled(
             format!("   Expired       {}", metrics.expired_certificates),
-            Style::default().fg(Color::Red),
+            Style::default().fg(scheme.error),
         ));
     }
     if metrics.expiring_soon_certificates > 0 {
         left_lines.push(Line::styled(
             format!("   Expiring      {}", metrics.expiring_soon_certificates),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(scheme.warning),
         ));
     }
 
@@ -129,7 +133,7 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
     if metrics.compromised_keys > 0 {
         left_lines.push(Line::styled(
             format!("   Compromised   {}", metrics.compromised_keys),
-            Style::default().fg(Color::Red),
+            Style::default().fg(scheme.critical),
         ));
     }
 
@@ -175,14 +179,14 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
             .and_then(|cp| cp.algorithm_properties.as_ref());
         let (icon, color) = if let Some(a) = algo {
             if a.is_weak_by_name(&comp.name) {
-                ("!", Color::Red)
+                ("!", scheme.critical)
             } else if a.is_quantum_safe() {
-                ("\u{2713}", Color::Green)
+                ("\u{2713}", scheme.success)
             } else {
-                ("\u{2717}", Color::Yellow)
+                ("\u{2717}", scheme.warning)
             }
         } else {
-            ("?", Color::DarkGray)
+            ("?", scheme.muted)
         };
         right_lines.push(Line::from(vec![
             Span::raw("  "),
@@ -196,12 +200,14 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
         right_lines.push(Line::raw(""));
         right_lines.push(Line::styled(
             " Weak Algorithms",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(scheme.critical)
+                .add_modifier(Modifier::BOLD),
         ));
         for name in &metrics.weak_algorithm_names {
             right_lines.push(Line::styled(
                 format!("  ! {name}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(scheme.critical),
             ));
         }
     }
