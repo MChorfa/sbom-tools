@@ -26,10 +26,40 @@ use std::time::Duration;
 /// Default HuggingFace Hub API base URL (no trailing slash).
 pub const HUGGINGFACE_API_URL: &str = "https://huggingface.co";
 
-/// Filesystem-safe cache file name for a model id (`org/name` → `org_name.json`).
+/// Whether `model_id` is a well-formed HuggingFace repo id.
+///
+/// A repo id is one or two `/`-separated segments (`name` or `namespace/name`);
+/// each segment is non-empty, not `.`/`..`, and drawn from `[A-Za-z0-9._-]`.
+/// `model_id` is derived from untrusted SBOM fields and is interpolated both
+/// into the request URL path and the cache filename, so anything outside this
+/// grammar (`..`, extra `/`, `?`, `#`, `%`, whitespace, control chars) is
+/// rejected — it neutralizes path traversal / URL injection while accepting
+/// every real HuggingFace id.
+fn is_valid_hf_model_id(model_id: &str) -> bool {
+    let mut segments = model_id.split('/');
+    let ok = |seg: &str| {
+        !seg.is_empty()
+            && seg != "."
+            && seg != ".."
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some(a), None, _) => ok(a),
+        (Some(a), Some(b), None) => ok(a) && ok(b),
+        _ => false,
+    }
+}
+
+/// Collision-free cache file name for a model id (SHA256 of the id).
+///
+/// A separator-replacement scheme is non-injective — `EleutherAI/gpt-neo` and
+/// `EleutherAI_gpt-neo` are both valid ids but would collapse to one file, so
+/// weight hashes / license / task fetched for one model could be served for
+/// another. Hashing the full id keeps distinct ids distinct.
 fn cache_filename(model_id: &str) -> String {
-    let safe = model_id.replace(['/', ':', '@'], "_");
-    format!("{safe}.json")
+    crate::enrichment::source::key_to_filename(model_id)
 }
 
 /// HuggingFace enrichment client configuration.
@@ -180,6 +210,12 @@ impl HuggingFaceClient {
         model_id: &str,
         stats: &mut HuggingFaceEnrichmentStats,
     ) -> Result<Option<HfModelInfo>, EnrichmentError> {
+        // Guard the single choke point: a malformed/hostile model_id must not
+        // reach the request URL or the cache filename.
+        if !is_valid_hf_model_id(model_id) {
+            tracing::debug!(model_id, "skipping malformed HuggingFace model id");
+            return Ok(None);
+        }
         if let Some(cached) = self.load_from_cache(model_id) {
             stats.cache_hits += 1;
             return Ok(Some(cached));
@@ -341,10 +377,14 @@ fn apply_model_info(
 ) -> bool {
     let mut changed = false;
 
-    // 1. Weight hashes (integrity / AI-010). De-dupe against existing hashes so a
-    //    re-run is idempotent.
+    // 1. Weight hashes (integrity / AI-010). Marked ENRICHED: these come from
+    //    the HuggingFace API/cache, so `verify --model-dir` must not treat
+    //    them as an author-attested baseline (that would be circular). They
+    //    still satisfy AI-010 "weight hashes present". De-dupe against
+    //    existing hashes (by algorithm+value) so a re-run is idempotent and an
+    //    author-provided hash is never downgraded.
     for sha in info.weight_sha256s() {
-        let hash = Hash::new(HashAlgorithm::Sha256, sha.to_lowercase());
+        let hash = Hash::enriched(HashAlgorithm::Sha256, sha.to_lowercase());
         if !component.hashes.contains(&hash) {
             component.hashes.push(hash);
             stats.hashes_added += 1;
@@ -395,6 +435,68 @@ fn apply_model_info(
 mod tests {
     use super::*;
     use crate::model::{ExternalRefType, ExternalReference, MlModelInfo};
+
+    /// Two DISTINCT valid model ids must map to distinct cache files — a
+    /// separator-replacement scheme collapsed `a/b` and `a_b` (both valid)
+    /// into one, mis-attributing one model's fetched hashes to another.
+    #[test]
+    fn distinct_valid_model_ids_do_not_share_a_cache_file() {
+        assert!(is_valid_hf_model_id("EleutherAI/gpt-neo"));
+        assert!(is_valid_hf_model_id("EleutherAI_gpt-neo"));
+        assert_ne!(
+            cache_filename("EleutherAI/gpt-neo"),
+            cache_filename("EleutherAI_gpt-neo"),
+            "distinct valid model ids must not collide in the cache"
+        );
+    }
+
+    #[test]
+    fn valid_hf_model_id_accepts_repo_ids_rejects_injection() {
+        // Real HuggingFace repo ids.
+        assert!(is_valid_hf_model_id("bert-base-uncased"));
+        assert!(is_valid_hf_model_id("google-bert/bert-base-uncased"));
+        assert!(is_valid_hf_model_id("org.name/model_v1.2"));
+        // Path traversal / URL injection / malformed.
+        assert!(!is_valid_hf_model_id("../../etc/passwd"));
+        assert!(!is_valid_hf_model_id("a/../b"));
+        assert!(!is_valid_hf_model_id("org/model/extra"));
+        assert!(!is_valid_hf_model_id("model?blobs=true"));
+        assert!(!is_valid_hf_model_id("model#frag"));
+        assert!(!is_valid_hf_model_id("model%2e%2e"));
+        assert!(!is_valid_hf_model_id("has space"));
+        assert!(!is_valid_hf_model_id("/leading"));
+        assert!(!is_valid_hf_model_id(""));
+    }
+
+    /// Enriched (network-sourced) hashes must NOT be trusted as a verify
+    /// integrity baseline, but must still satisfy AI-010 (present on the
+    /// component).
+    #[test]
+    fn hf_enriched_hashes_are_marked_enriched() {
+        use crate::enrichment::huggingface::api::{HfLfs, HfSibling};
+        use crate::model::HashProvenance;
+        let mut component = Component::new("m".to_string(), "m".to_string());
+        let info = HfModelInfo {
+            siblings: vec![HfSibling {
+                filename: Some("model.safetensors".to_string()),
+                lfs: Some(HfLfs {
+                    sha256: Some("ABCDEF0123".to_string()),
+                    size: Some(1),
+                }),
+            }],
+            ..Default::default()
+        };
+        let mut stats = HuggingFaceEnrichmentStats::default();
+        apply_model_info(&mut component, &info, &mut stats);
+
+        assert_eq!(component.hashes.len(), 1, "hash present for AI-010");
+        assert_eq!(
+            component.hashes[0].provenance,
+            HashProvenance::Enriched,
+            "network-sourced hash must be marked Enriched, not a verify baseline"
+        );
+        assert_eq!(component.hashes[0].value, "abcdef0123");
+    }
 
     fn ml_component(purl: Option<&str>) -> Component {
         let mut c = Component::new("bert".to_string(), "ml-1".to_string());

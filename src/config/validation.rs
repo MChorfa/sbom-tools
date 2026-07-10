@@ -182,8 +182,57 @@ impl Validatable for EnrichmentConfig {
             });
         }
 
+        // Every URL override must be a well-formed http(s) URL with a host.
+        // These point the enricher at a network endpoint that supplies
+        // SECURITY data (which CVEs affect you); an unvalidated override could
+        // otherwise be a non-http scheme (file://, etc.) or a malformed URL.
+        // Private/self-hosted hosts are intentionally allowed (legitimate
+        // internal mirrors); only scheme + host well-formedness is enforced.
+        for (field, url) in [
+            ("enrichment.api_base", &self.api_base),
+            ("enrichment.kev_url", &self.kev_url),
+            ("enrichment.epss_url", &self.epss_url),
+            ("enrichment.huggingface_url", &self.huggingface_url),
+        ] {
+            if let Some(url) = url
+                && !is_valid_http_url(url)
+            {
+                errors.push(ConfigError {
+                    field: field.to_string(),
+                    message: format!(
+                        "'{url}' is not a valid http(s) URL with a host; \
+                         enrichment endpoints must use http:// or https://"
+                    ),
+                });
+            }
+        }
+
         errors
     }
+}
+
+/// Whether `url` is a syntactically valid `http`/`https` URL with a non-empty
+/// host. Deliberately lightweight (no `url` crate — config validation runs
+/// without the enrichment feature): rejects non-http schemes, empty hosts, and
+/// whitespace/control characters, which is enough to stop scheme abuse and
+/// malformed overrides.
+fn is_valid_http_url(url: &str) -> bool {
+    let rest = match url.strip_prefix("https://") {
+        Some(r) => r,
+        None => match url.strip_prefix("http://") {
+            Some(r) => r,
+            None => return false,
+        },
+    };
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    // Authority = everything up to the first '/', '?' or '#'.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Strip optional userinfo and port; a non-empty host must remain.
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host);
+    !host.is_empty()
 }
 
 impl Validatable for DiffConfig {
@@ -344,6 +393,42 @@ impl Validatable for MatrixConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_valid_http_url_accepts_and_rejects() {
+        // Valid http(s) URLs with a host.
+        assert!(is_valid_http_url("https://api.osv.dev"));
+        assert!(is_valid_http_url("http://localhost:8080/v1"));
+        assert!(is_valid_http_url(
+            "https://user@internal.mirror:443/path?q=1"
+        ));
+        // Rejected: non-http scheme, missing host, malformed, whitespace.
+        assert!(!is_valid_http_url("file:///etc/passwd"));
+        assert!(!is_valid_http_url("ftp://example.com"));
+        assert!(!is_valid_http_url("https://"));
+        assert!(!is_valid_http_url("https:///path-only"));
+        assert!(!is_valid_http_url("api.osv.dev"));
+        assert!(!is_valid_http_url("https://exa mple.com"));
+        assert!(!is_valid_http_url(""));
+    }
+
+    #[test]
+    fn enrichment_config_rejects_bad_url_override() {
+        let mut config = EnrichmentConfig {
+            api_base: Some("file:///etc/passwd".to_string()),
+            ..Default::default()
+        };
+        let errors = config.validate();
+        assert!(
+            errors.iter().any(|e| e.field == "enrichment.api_base"),
+            "a non-http api_base override must be a config error"
+        );
+
+        // A valid override passes (this field, at least).
+        config.api_base = Some("https://osv.example.internal/v1".to_string());
+        let errors = config.validate();
+        assert!(!errors.iter().any(|e| e.field == "enrichment.api_base"));
+    }
 
     #[test]
     fn test_matching_config_validation() {
