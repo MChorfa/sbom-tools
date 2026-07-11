@@ -76,7 +76,7 @@ impl App {
     /// Create a new app for diff mode
     #[must_use]
     pub fn new_diff(
-        diff_result: DiffResult,
+        mut diff_result: DiffResult,
         old_sbom: NormalizedSbom,
         new_sbom: NormalizedSbom,
         old_raw: &str,
@@ -102,6 +102,14 @@ impl App {
         // Build indexes for fast lookups (O(1) instead of O(n))
         let old_sbom_index = Some(old_sbom.build_index());
         let new_sbom_index = Some(new_sbom.build_index());
+
+        // Backfill the engine's QualityDelta for TUI-only construction paths
+        // (only the pipeline sets it today); pipeline-provided values win.
+        if diff_result.quality_delta.is_none()
+            && let (Some(oldq), Some(newq)) = (old_quality.as_ref(), new_quality.as_ref())
+        {
+            diff_result.quality_delta = Some(crate::diff::QualityDelta::from_reports(oldq, newq));
+        }
 
         let mut app = Self::base(AppMode::Diff);
         let mut source = SourceDiffState::new(old_raw, new_raw);

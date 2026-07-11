@@ -575,6 +575,73 @@ mod diff_alignment {
             "training-dataset removal must carry a provenance-loss risk badge:\n{text}"
         );
     }
+
+    /// App::new_diff must backfill the engine QualityDelta when the pipeline
+    /// didn't provide one (TUI-only construction paths previously saw None,
+    /// hiding the Quality Impact card and the regression chips).
+    #[test]
+    fn new_diff_backfills_quality_delta() {
+        let app = app_with_result(DiffResult::default(), TabKind::Quality);
+        assert!(
+            app.data
+                .diff_result
+                .as_ref()
+                .is_some_and(|r| r.quality_delta.is_some()),
+            "constructor must backfill quality_delta from the scored reports"
+        );
+    }
+
+    /// The Quality tab renders the engine's regressed/improved chips, the
+    /// violation delta, and ALL category transitions (the previous 4-category
+    /// recompute silently omitted Integrity/Provenance regressions).
+    #[test]
+    fn quality_tab_renders_engine_delta() {
+        let mut result = DiffResult::default();
+        // overall_score_delta 0.0: both fixture SBOMs are empty, so the tab
+        // only trusts the engine delta when it matches the displayed 0-point
+        // transition (profile-mismatch guard in render_diff_quality).
+        result.quality_delta = Some(crate::diff::QualityDelta {
+            overall_score_delta: 0.0,
+            old_grade: None,
+            new_grade: None,
+            category_deltas: vec![
+                crate::diff::CategoryDelta {
+                    category: "Integrity".to_string(),
+                    old_score: 80.0,
+                    new_score: 60.0,
+                    delta: -20.0,
+                },
+                crate::diff::CategoryDelta {
+                    category: "Licenses".to_string(),
+                    old_score: 50.0,
+                    new_score: 70.0,
+                    delta: 20.0,
+                },
+            ],
+            regressions: vec!["Provenance".to_string(), "Integrity".to_string()],
+            improvements: vec!["Licenses".to_string()],
+            violation_count_delta: 2,
+        });
+        let mut app = app_with_result(result, TabKind::Quality);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("Regressed: Provenance, Integrity"),
+            "regression chips must render:\n{text}"
+        );
+        assert!(
+            text.contains("Improved: Licenses"),
+            "improvement chips must render:\n{text}"
+        );
+        assert!(
+            text.contains("Compliance violations: +2"),
+            "violation delta must render:\n{text}"
+        );
+        assert!(
+            text.contains("Integrity: 80% → 60%"),
+            "Integrity transition (previously invisible) must render:\n{text}"
+        );
+    }
+
 }
 
 #[test]
