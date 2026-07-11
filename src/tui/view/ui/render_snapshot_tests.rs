@@ -299,6 +299,124 @@ fn crypto_list_scrolls_the_selection_into_view() {
     );
 }
 
+/// Regression: the component-detail scroll was an unbounded saturating_add —
+/// over-scrolling emptied the panel. The render-side clamp must write back.
+#[test]
+fn component_detail_scroll_clamps_to_content() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    // First render builds the tree cache the key handler navigates over.
+    render_to_text(80, 24, |frame| render(frame, &mut app));
+    handle_key_event(&mut app, key(KeyCode::Down));
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.get_selected_component().is_some(),
+        "Down+Enter must select the first leaf component"
+    );
+    app.component_detail_scroll = 999;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        app.component_detail_scroll < 999,
+        "render must clamp the over-scrolled offset, got {}",
+        app.component_detail_scroll
+    );
+    assert!(
+        text.contains("fields"),
+        "clamped panel must still show content (the completeness line):
+{text}"
+    );
+}
+
+/// Regression: the Overview tab buried vulns/EOL/staleness below PURL/hash
+/// plumbing; risk must render first and the hash lives on the [2] tab only.
+#[test]
+fn overview_tab_orders_risk_before_identifiers() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let mut comp = Component::new("kev-lib".to_string(), "kev-ref".to_string())
+        .with_version("1.0.0".to_string());
+    let mut v = VulnerabilityRef::new("CVE-2024-0001".to_string(), VulnerabilitySource::Nvd);
+    v.severity = Some(Severity::Critical);
+    comp.vulnerabilities.push(v);
+    comp.eol = Some(crate::model::EolInfo {
+        status: crate::model::EolStatus::EndOfLife,
+        product: "kev-lib".to_string(),
+        cycle: "1.0".to_string(),
+        eol_date: None,
+        support_end_date: None,
+        is_lts: false,
+        latest_in_cycle: None,
+        latest_release_date: None,
+        days_until_eol: Some(-30),
+    });
+    comp.staleness = Some(crate::model::StalenessInfo {
+        level: crate::model::StalenessLevel::Stale,
+        last_published: None,
+        is_deprecated: false,
+        is_archived: false,
+        deprecation_message: None,
+        days_since_update: Some(700),
+        latest_version: None,
+    });
+    comp.identifiers.purl = Some("pkg:npm/kev-lib@1.0.0".to_string());
+    comp.hashes.push(crate::model::Hash {
+        algorithm: crate::model::HashAlgorithm::Sha256,
+        value: "abc123".to_string(),
+    });
+    let id = CanonicalId::from_name_version("kev-lib", None);
+    sbom.components.insert(id.clone(), comp);
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Tree;
+    app.selected_component = Some(id.value().to_string());
+    app.focus_panel = crate::tui::view::app::FocusPanel::Right;
+    // 120x40: the EOL block is tall enough that PURL would fall below the
+    // fold at 80x24, making the ordering assertions vacuous.
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    // Risk-summary badges under the name: vulns + EOL + staleness.
+    assert!(text.contains("1 vulns"), "vuln badge must render:\n{text}");
+    assert!(
+        text.contains(crate::model::EolStatus::EndOfLife.label()),
+        "EOL badge must render:\n{text}"
+    );
+    assert!(
+        text.contains(crate::model::StalenessLevel::Stale.label()),
+        "staleness badge must render:\n{text}"
+    );
+    assert!(
+        !text.contains("no known risk signals"),
+        "all-clear line must not render alongside risk badges:\n{text}"
+    );
+    let vulns_at = text.find("Vulns:").expect("Vulns section must render");
+    let eol_at = text.find("End-of-Life:").expect("EOL section must render");
+    let purl_at = text.find("PURL:").expect("PURL must render");
+    assert!(
+        vulns_at < purl_at && eol_at < purl_at,
+        "risk sections must precede identifier plumbing:\n{text}"
+    );
+    assert!(
+        !text.contains("Hash:"),
+        "the hash belongs to the Identifiers tab, not Overview:\n{text}"
+    );
+}
+
+/// Lock the risk-first component detail panel (badge line, reordered
+/// sections, scrollbar) at the minimum supported size.
+#[test]
+fn view_tree_component_detail_80x24() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    render_to_text(80, 24, |frame| render(frame, &mut app));
+    handle_key_event(&mut app, key(KeyCode::Down));
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    insta::assert_snapshot!("view_tree_component_detail_80x24", text);
+}
+
 #[test]
 fn pqc_selection_scrolls_into_view() {
     let (sbom, profile) = crate::tui::test_support::cbom_single();
