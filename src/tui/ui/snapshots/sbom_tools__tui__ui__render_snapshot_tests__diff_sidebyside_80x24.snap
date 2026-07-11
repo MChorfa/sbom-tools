@@ -7,7 +7,7 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 « [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
-Mode: Aligned │ Focus:  ◄ Old │ New  │ Sync: Independent │ Change: -/13 │ [a]lig
+Mode: Aligned │ Change: -/13 │ [a]lign [/]search [n/N]ext/prev
 
 ┌ acme-webapp (Old) ──────────────────┐ ┬┌ acme-webapp (New) ──────────────────┐
 │- jquery 3.5.1                       │ ◄│  ...                                │

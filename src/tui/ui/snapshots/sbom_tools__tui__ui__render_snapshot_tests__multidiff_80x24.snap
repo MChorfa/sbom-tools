@@ -17,12 +17,12 @@ expression: text
 │                          │┌ Variable Components (1 total) [v: drill-down] ───┐
 │                          ││Component         Baseline   Spread     Impact    │
 │                          ││                                                  │
-│                          ││[L] acme-webapp   1.0.0      2 versions low       │
+│                          ││ L  acme-webapp   1.0.0      2 versions low       │
 │                          ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
 │                          ││                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Universal: 0  Variable: 1  Inconsistent: 20  │  /: search  f: filter  s: sort │
+│Universal: 0  Variable: 1  Inconsistent: 20  │  …  V views  K keys  q quit    │
 └──────────────────────────────────────────────────────────────────────────────┘

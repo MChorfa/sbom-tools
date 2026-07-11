@@ -23,6 +23,6 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │                                  ││Format:     X.509                         │
 │                                  ││Sig Algo:   crypto/algorithm/ml-dsa-87    │
 │                                  ││Public Key: crypto/key/pqc-pubkey         │
-└──────────────────────────────────┘└──────────────────────────────────────────┘
+└ ✓ valid  ! expiring  X expired ──┘└──────────────────────────────────────────┘
  Algo: 11 │ Certs: 1 │ Keys: 2 │ Quantum: 82%
      …  Tab switch  / search  e export  ? help  q quit [y] copy ML-KEM-1024

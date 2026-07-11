@@ -3,7 +3,7 @@ source: src/tui/ui/render_snapshot_tests.rs
 expression: text
 ---
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Multi-SBOM Comparison: baseline vs 2 targets  │ Filter: All │ Sort: Name ↑                                           │
+│ Multi-SBOM Comparison: baseline vs 2 targets  │ Filter: All │ Sort: Name ↑ │ Heat Map                                │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Baseline ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │Baseline: baseline  Format: CycloneDX                                                                                 │
@@ -13,14 +13,14 @@ expression: text
 ┌ Targets (2/2) ─────────────────────────┐┌ ai-service Details ────────────────────────────────────────────────────────┐
 │Target        Componen Deviatio Changes ││Target: ai-service                                                          │
 │                                        ││                                                                            │
-│ai-service    3        10000.0% 17      ││+ Added: 3  - Removed: 9  ~ Modified: 0                                     │
-│webapp        9        4651.2%  15      ││                                                                            │
+│ai-service    3        35.0% ▅  17      ││+ Added: 3  - Removed: 9  ~ Modified: 0                                     │
+│webapp        9        35.0% ▅  15      ││                                                                            │
 │                                        ││Vulnerabilities: +0 / -0                                                    │
 │                                        ││                                                                            │
 │                                        ││Semantic Score: 0.0                                                         │
 │                                        │└────────────────────────────────────────────────────────────────────────────┘
 │                                        │┌ Deviation ─────────────────────────────────────────────────────────────────┐
-│                                        ││██████████████████████████████████10000.0% █████████████████████████████████│
+│                                        ││███████████████████████████        35.0%                                    │
 │                                        │└────────────────────────────────────────────────────────────────────────────┘
 │                                        │┌ Variable Components (1 total) [v: drill-down] ─────────────────────────────┐
 │                                        ││Component                   Baseline         Spread          Impact         │

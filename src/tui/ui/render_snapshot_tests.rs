@@ -1464,3 +1464,842 @@ fn snapshot_summary_100x31() {
     );
     insta::assert_snapshot!("diff_summary_100x31", text);
 }
+
+/// Regression: the Matrix 's' key changed the Sort label but never reordered
+/// anything. Sort is a symmetric axis permutation; all consumers of
+/// selected_row/col resolve raw indices through it.
+#[test]
+fn matrix_sort_reorders_axes_symmetrically() {
+    use crate::tui::test_support::demo_matrix;
+    use crate::tui::views::ordered_sbom_indices;
+
+    pin_theme();
+    let mut app = App::new_matrix(demo_matrix());
+    // Default Name sort under the default Ascending direction: A -> Z.
+    {
+        let result = app.data.matrix_result.as_ref().unwrap();
+        let order = ordered_sbom_indices(result, &app.tabs.matrix);
+        let names: Vec<&str> = order
+            .iter()
+            .map(|&i| result.sboms[i].name.as_str())
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted, "Name ascending must be A->Z");
+        let mut perm = order.clone();
+        perm.sort_unstable();
+        assert_eq!(perm, (0..result.sboms.len()).collect::<Vec<_>>());
+    }
+
+    // Name DESCENDING is a deterministic non-identity permutation
+    // (gamma, beta, alpha) — the old inert sort rendered alpha first.
+    app.tabs.matrix.sort_by = crate::tui::app::MatrixSortBy::Name;
+    app.tabs.matrix.sort_direction = crate::tui::app::SortDirection::Descending;
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    let gamma_row = text
+        .lines()
+        .position(|l| l.trim_start().starts_with("│gamma"))
+        .expect("gamma must be a row label");
+    let alpha_row = text
+        .lines()
+        .position(|l| l.trim_start().starts_with("│alpha"))
+        .expect("alpha must be a row label");
+    assert!(
+        gamma_row < alpha_row,
+        "Name descending must render gamma's row above alpha's:\n{text}"
+    );
+}
+
+/// Cluster sort must group every cluster's members contiguously (the
+/// block-diagonal heatmap property).
+#[test]
+fn cluster_sort_groups_members_contiguously() {
+    use crate::tui::test_support::demo_matrix_large;
+    use crate::tui::views::ordered_sbom_indices;
+
+    pin_theme();
+    // 8 SBOMs alternating between two identical contents: clustering yields
+    // interleaved members ({v1,v3,..} vs {v2,v4,..}), so raw order is NOT
+    // contiguous and an identity (no-op) sort fails this test.
+    let mut app = App::new_matrix(demo_matrix_large());
+    app.tabs.matrix.sort_by = crate::tui::app::MatrixSortBy::Cluster;
+    app.tabs.matrix.sort_direction = crate::tui::app::SortDirection::Descending;
+    let result = app.data.matrix_result.as_ref().unwrap();
+    let order = ordered_sbom_indices(result, &app.tabs.matrix);
+    let mut perm = order.clone();
+    perm.sort_unstable();
+    assert_eq!(perm, (0..result.sboms.len()).collect::<Vec<_>>());
+    let clustering = result.clustering.as_ref().expect("fixture clusters");
+    let mut multi_member = 0;
+    let mut non_trivial = false;
+    for cluster in &clustering.clusters {
+        let positions: Vec<usize> = cluster
+            .members
+            .iter()
+            .map(|m| order.iter().position(|&x| x == *m).unwrap())
+            .collect();
+        let (min, max) = (
+            *positions.iter().min().unwrap(),
+            *positions.iter().max().unwrap(),
+        );
+        assert_eq!(
+            max - min + 1,
+            positions.len(),
+            "cluster members must occupy a contiguous run of the display order"
+        );
+        if cluster.members.len() > 1 {
+            multi_member += 1;
+            // Raw-order contiguity would make this test vacuous.
+            let mut sorted_members = cluster.members.clone();
+            sorted_members.sort_unstable();
+            if sorted_members.windows(2).any(|w| w[1] != w[0] + 1) {
+                non_trivial = true;
+            }
+        }
+    }
+    assert!(multi_member >= 2, "fixture must produce multiple clusters");
+    assert!(
+        non_trivial,
+        "at least one cluster must be raw-discontiguous or the test can't discriminate"
+    );
+}
+
+/// Regression: search matches were raw indices; under a sort Enter selected
+/// a different SBOM than the one highlighted.
+#[test]
+fn matrix_search_selects_display_row_under_sort() {
+    use crate::tui::test_support::demo_matrix;
+    use crate::tui::views::ordered_sbom_indices;
+
+    pin_theme();
+    let mut app = App::new_matrix(demo_matrix());
+    handle_key_event(&mut app, key(KeyCode::Char('s'))); // AvgSimilarity sort
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    for c in "gamma".chars() {
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+    }
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    let result = app.data.matrix_result.as_ref().unwrap();
+    let order = ordered_sbom_indices(result, &app.tabs.matrix);
+    let raw = order[app.tabs.matrix.selected_row];
+    assert!(
+        result.sboms[raw].name.contains("gamma"),
+        "Enter must select the row whose SBOM matched the query, got {}",
+        result.sboms[raw].name
+    );
+}
+
+/// New snapshots: sorted matrix, column focus dimming, and the 8-SBOM column
+/// viewport at 80 cols.
+#[test]
+fn snapshot_matrix_interactions() {
+    use crate::tui::test_support::{demo_matrix, demo_matrix_large};
+
+    pin_theme();
+    let mut app = App::new_matrix(demo_matrix());
+    handle_key_event(&mut app, key(KeyCode::Char('s')));
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    insta::assert_snapshot!("matrix_sort_avg_80x24", text);
+
+    let mut app = App::new_matrix(demo_matrix());
+    handle_key_event(&mut app, key(KeyCode::Char('c'))); // column focus
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    insta::assert_snapshot!("matrix_col_focus_80x24", text);
+
+    let mut app = App::new_matrix(demo_matrix_large());
+    for _ in 0..7 {
+        handle_key_event(&mut app, key(KeyCode::Right));
+    }
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    insta::assert_snapshot!("matrix_viewport_8sboms_80x24", text);
+}
+
+/// Regression: comparing v1 against any non-adjacent version reported "no
+/// diff available" even though cumulative_from_first holds exactly that data.
+#[test]
+fn baseline_pair_resolves_cumulative_diff() {
+    use crate::tui::test_support::demo_timeline;
+    use crate::tui::views::resolve_version_diff;
+
+    let result = demo_timeline();
+    let diff = resolve_version_diff(&result, 0, 2).expect("baseline pair must resolve");
+    let expected = &result.cumulative_from_first[1];
+    assert_eq!(
+        diff.summary.total_changes, expected.summary.total_changes,
+        "0->2 must be the cumulative 0->2 diff"
+    );
+    // Symmetric: the same diff regardless of endpoint order.
+    let rev = resolve_version_diff(&result, 2, 0).expect("reversed pair must resolve");
+    assert_eq!(rev.summary.total_changes, expected.summary.total_changes);
+
+    // Adjacent pairs still resolve incrementally.
+    let adj = resolve_version_diff(&result, 1, 2).expect("adjacent pair must resolve");
+    assert_eq!(
+        adj.summary.total_changes,
+        result.incremental_diffs[1].summary.total_changes
+    );
+    // Same version: nothing to diff.
+    assert!(resolve_version_diff(&result, 1, 1).is_none());
+}
+
+/// The Sort control was inert under Changes/ComponentCount/Name.
+#[test]
+fn ordered_version_indices_is_truthful() {
+    use crate::tui::app::{SortDirection, TimelineSortBy};
+    use crate::tui::test_support::demo_timeline;
+    use crate::tui::views::ordered_version_indices;
+
+    pin_theme();
+    let result = demo_timeline();
+    let mut app = App::new_timeline(demo_timeline());
+
+    // Chronological = identity.
+    assert_eq!(
+        ordered_version_indices(&result, &app.tabs.timeline),
+        vec![0, 1, 2]
+    );
+
+    // Name ascending is A->Z (identity for v1/v2/v3); Descending must be the
+    // reverse — the discriminating case an inert sort would fail.
+    app.tabs.timeline.sort_by = TimelineSortBy::Name;
+    app.tabs.timeline.sort_direction = SortDirection::Ascending;
+    let order = ordered_version_indices(&result, &app.tabs.timeline);
+    let names: Vec<&str> = order
+        .iter()
+        .map(|&i| result.sboms[i].name.as_str())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted);
+    app.tabs.timeline.sort_direction = SortDirection::Descending;
+    assert_eq!(
+        ordered_version_indices(&result, &app.tabs.timeline),
+        vec![2, 1, 0],
+        "Name descending is Z->A"
+    );
+
+    // Chronological honors the direction too ('S' was inert).
+    app.tabs.timeline.sort_by = TimelineSortBy::Chronological;
+    assert_eq!(
+        ordered_version_indices(&result, &app.tabs.timeline),
+        vec![2, 1, 0],
+        "Chronological descending is newest-first"
+    );
+    app.tabs.timeline.sort_direction = SortDirection::Ascending;
+
+    // Changes descending puts the largest incremental diff first.
+    app.tabs.timeline.sort_by = TimelineSortBy::Changes;
+    app.tabs.timeline.sort_direction = SortDirection::Descending;
+    let order = ordered_version_indices(&result, &app.tabs.timeline);
+    let changes = |i: usize| {
+        if i == 0 {
+            0
+        } else {
+            result.incremental_diffs[i - 1].summary.total_changes
+        }
+    };
+    assert!(
+        changes(order[0]) >= changes(order[1]) && changes(order[1]) >= changes(order[2]),
+        "Changes descending must be monotone"
+    );
+    let mut perm = order.clone();
+    perm.sort_unstable();
+    assert_eq!(perm, vec![0, 1, 2], "always a permutation");
+}
+
+/// Regression: 'g 1 Enter' after a sort selected whatever row sat at display
+/// position 0 instead of version 1.
+#[test]
+fn jump_maps_raw_to_display_under_sort() {
+    use crate::tui::app::{SortDirection, TimelineSortBy};
+    use crate::tui::test_support::demo_timeline;
+    use crate::tui::views::ordered_version_indices;
+
+    pin_theme();
+    let mut app = App::new_timeline(demo_timeline());
+    // Name DESCENDING: v3,v2,v1 — a non-identity permutation, so an unmapped
+    // jump (raw 0 as display 0) would select the WRONG row and fail.
+    app.tabs.timeline.sort_by = TimelineSortBy::Name;
+    app.tabs.timeline.sort_direction = SortDirection::Descending;
+    {
+        let result = app.data.timeline_result.as_ref().unwrap();
+        let order = ordered_version_indices(result, &app.tabs.timeline);
+        assert_ne!(
+            order[0], 0,
+            "precondition: permutation must be non-identity"
+        );
+    }
+
+    handle_key_event(&mut app, key(KeyCode::Char('g')));
+    handle_key_event(&mut app, key(KeyCode::Char('1')));
+    handle_key_event(&mut app, key(KeyCode::Enter));
+
+    let result = app.data.timeline_result.as_ref().unwrap();
+    let order = ordered_version_indices(result, &app.tabs.timeline);
+    assert_eq!(
+        order[app.tabs.timeline.selected_version], 0,
+        "the display selection must resolve to raw version 1"
+    );
+
+    // A rejected jump (out-of-range) must leave the selection untouched.
+    let before = app.tabs.timeline.selected_version;
+    handle_key_event(&mut app, key(KeyCode::Char('g')));
+    handle_key_event(&mut app, key(KeyCode::Char('9')));
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.tabs.timeline.selected_version, before,
+        "rejected jump must not move the selection"
+    );
+}
+
+/// 'm' cycles the chart metric and falls back to Components when a series is
+/// missing.
+#[test]
+fn chart_metric_cycles_and_falls_back() {
+    use crate::tui::app::TimelineChartMetric;
+    use crate::tui::test_support::demo_timeline;
+
+    pin_theme();
+    let mut app = App::new_timeline(demo_timeline());
+    assert_eq!(
+        app.tabs.timeline.chart_metric,
+        TimelineChartMetric::Components
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('m')));
+    assert_eq!(
+        app.tabs.timeline.chart_metric,
+        TimelineChartMetric::Vulnerabilities
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('m')));
+    assert_eq!(
+        app.tabs.timeline.chart_metric,
+        TimelineChartMetric::Dependencies
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('m')));
+    assert_eq!(
+        app.tabs.timeline.chart_metric,
+        TimelineChartMetric::Components
+    );
+
+    // Fallback: strip the dependency series and the render must not panic
+    // (falls back to component counts).
+    let mut app = App::new_timeline(demo_timeline());
+    app.data
+        .timeline_result
+        .as_mut()
+        .unwrap()
+        .evolution_summary
+        .dependency_trend
+        .clear();
+    app.tabs.timeline.chart_metric = TimelineChartMetric::Dependencies;
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Components Evolution"),
+        "missing series must fall back to the Components metric:\n{text}"
+    );
+}
+
+/// New snapshots: sorted versions table, stats with license churn, and the
+/// baseline cumulative diff modal.
+#[test]
+fn snapshot_timeline_interactions() {
+    use crate::tui::test_support::demo_timeline;
+
+    pin_theme();
+    let mut app = App::new_timeline(demo_timeline());
+    handle_key_event(&mut app, key(KeyCode::Char('s'))); // -> Changes sort
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    insta::assert_snapshot!("timeline_sort_changes_80x24", text);
+
+    // 120x40: at 80x24 the squeezed Statistics panel clips the second stats
+    // line, hiding exactly the License Δ figure this snapshot exists to lock.
+    let mut app = App::new_timeline(demo_timeline());
+    handle_key_event(&mut app, key(KeyCode::Char('t'))); // stats panel
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        text.contains("License \u{394}:"),
+        "stats must show the license churn figure:\n{text}"
+    );
+    insta::assert_snapshot!("timeline_stats_120x40", text);
+
+    // The figure must read the per-step diffs (the old evolution_summary
+    // field is never populated): inject one component license change and one
+    // conflict and both must surface.
+    let mut app = App::new_timeline(demo_timeline());
+    {
+        let result = app.data.timeline_result.as_mut().unwrap();
+        result.incremental_diffs[0].licenses.component_changes.push(
+            crate::diff::ComponentLicenseChange {
+                component_id: "libx".to_string(),
+                component_name: "libx".to_string(),
+                old_licenses: vec!["MIT".to_string()],
+                new_licenses: vec!["GPL-3.0-only".to_string()],
+            },
+        );
+    }
+    handle_key_event(&mut app, key(KeyCode::Char('t')));
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        text.contains("License \u{394}: 1"),
+        "the churn figure must read the per-step diffs:\n{text}"
+    );
+
+    // Select v3, open the diff modal, move compare to v1: the baseline
+    // cumulative diff must render instead of "No precomputed diff".
+    let mut app = App::new_timeline(demo_timeline());
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    handle_key_event(&mut app, key(KeyCode::Char('j'))); // select v3
+    handle_key_event(&mut app, key(KeyCode::Char('d'))); // modal (compare defaults)
+    handle_key_event(&mut app, key(KeyCode::Left));
+    handle_key_event(&mut app, key(KeyCode::Left)); // compare -> v1
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        !text.contains("No precomputed diff"),
+        "v1<->v3 must resolve the cumulative diff:\n{text}"
+    );
+    insta::assert_snapshot!("timeline_modal_baseline_diff_80x24", text);
+}
+
+/// Regression: diff-tab clicks assumed 6 rows of chrome; every tab whose
+/// chrome differs (or whose list is scrolled) selected the wrong row. The
+/// click must land on the row under the cursor, located from the buffer.
+#[test]
+fn diff_list_click_selects_the_item_under_the_cursor() {
+    use crate::tui::events::mouse::handle_mouse_event;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    pin_theme();
+    let mut app = demo_app(TabKind::Components);
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    let row = text
+        .lines()
+        .position(|line| line.contains("axios"))
+        .expect("axios must render") as u16;
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row,
+            modifiers: KeyModifiers::empty(),
+        },
+    );
+    assert_eq!(
+        app.components_state().selected,
+        1,
+        "axios is index 1 under the Name sort (click landed at row {row})"
+    );
+}
+
+/// Same contract for the other mapped tabs: the demo diff has no vulns or
+/// dependency changes, so build synthetic results.
+#[test]
+fn diff_vuln_and_dependency_clicks_select_under_cursor() {
+    use crate::diff::DiffResult;
+    use crate::model::NormalizedSbom;
+    use crate::tui::events::mouse::handle_mouse_event;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    pin_theme();
+    // Vulnerabilities: three introduced vulns, click the second row.
+    let mut result = DiffResult::default();
+    for (i, name) in ["libv-a", "libv-b", "libv-c"].iter().enumerate() {
+        let vref = crate::model::VulnerabilityRef::new(
+            format!("CVE-2024-9{i:02}"),
+            crate::model::VulnerabilitySource::Osv,
+        );
+        let comp =
+            crate::model::Component::new((*name).to_string(), format!("pkg:npm/{name}@1.0.0"));
+        result
+            .vulnerabilities
+            .introduced
+            .push(crate::diff::VulnerabilityDetail::from_ref(&vref, &comp));
+    }
+    let mut app = App::new_diff(
+        result,
+        NormalizedSbom::default(),
+        NormalizedSbom::default(),
+        "{}",
+        "{}",
+    );
+    app.active_tab = TabKind::Vulnerabilities;
+    // Flat list: grouped rows have their own geometry.
+    app.vulnerabilities_state_mut().group_by_component = false;
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    let rows: Vec<usize> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("+ NEW"))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(rows.len() >= 2, "vuln rows must render:\n{text}");
+    let row = rows[1] as u16;
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row,
+            modifiers: KeyModifiers::empty(),
+        },
+    );
+    assert_eq!(
+        app.vulnerabilities_state().selected,
+        1,
+        "click must select the vuln under the cursor (row {row})"
+    );
+
+    // Dependencies: three added edges, click the third row.
+    let mut result = DiffResult::default();
+    for (i, to) in ["dep-a", "dep-b", "dep-c"].iter().enumerate() {
+        result
+            .dependencies
+            .added
+            .push(crate::diff::DependencyChange {
+                from: format!("root-{i}"),
+                to: (*to).to_string(),
+                relationship: "depends_on".to_string(),
+                scope: None,
+                change_type: crate::diff::ChangeType::Added,
+            });
+    }
+    let mut app = App::new_diff(
+        result,
+        NormalizedSbom::default(),
+        NormalizedSbom::default(),
+        "{}",
+        "{}",
+    );
+    app.active_tab = TabKind::Dependencies;
+    // Two frames: the first prepare_render builds the graph cache AFTER the
+    // visible-node list; the second sees the populated roots (production
+    // renders every frame, so this staleness self-corrects immediately).
+    render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    // The tree renders roots; its selectable line list starts with the
+    // "Changes:" header (0) and a spacer (1), so root-2 is index 4 — the
+    // same index the keyboard reaches.
+    let row = text
+        .lines()
+        .position(|line| line.contains("root-2"))
+        .unwrap_or_else(|| panic!("third root must render:\n{text}")) as u16;
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row,
+            modifiers: KeyModifiers::empty(),
+        },
+    );
+    assert_eq!(
+        app.dependencies_state().selected,
+        4,
+        "click must select the line under the cursor (row {row})"
+    );
+}
+
+/// Timeline clicks select the version row under the cursor, with and without
+/// the statistics panel shifting the layout.
+#[test]
+fn timeline_click_selects_version_under_cursor() {
+    use crate::tui::events::mouse::handle_mouse_event;
+    use crate::tui::test_support::demo_timeline;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    pin_theme();
+    for stats in [false, true] {
+        let mut app = App::new_timeline(demo_timeline());
+        if stats {
+            handle_key_event(&mut app, key(KeyCode::Char('t')));
+        }
+        let text = render_to_text(80, 24, |frame| {
+            app.prepare_render();
+            crate::tui::ui::render(frame, &mut app);
+        });
+        let row = text
+            .lines()
+            .position(|line| line.contains("v2"))
+            .expect("v2 must render") as u16;
+        handle_mouse_event(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 5,
+                row,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+        assert_eq!(
+            app.tabs.timeline.selected_version, 1,
+            "click must select v2 (stats={stats}, row {row})"
+        );
+    }
+}
+
+/// Regression: with the selection scrolled past the viewport, ratatui
+/// auto-scrolls the table but the click math ignored it.
+#[test]
+fn diff_click_accounts_for_scroll() {
+    use crate::tui::events::mouse::handle_mouse_event;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    pin_theme();
+    let mut app = demo_app(TabKind::Components);
+    // First render populates the navigation totals select_down clamps on.
+    render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    // Drive the selection past the 11-row viewport at 80x24.
+    for _ in 0..12 {
+        app.select_down();
+    }
+    render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    let visible_rows = 24 - 13;
+    let expected_offset = app
+        .components_state()
+        .selected
+        .saturating_sub(visible_rows - 1);
+    assert!(expected_offset > 0, "selection must be past the viewport");
+    // Click the FIRST visible data row (row 10): must select the offset item,
+    // not item 0.
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 10,
+            modifiers: KeyModifiers::empty(),
+        },
+    );
+    assert_eq!(
+        app.components_state().selected,
+        expected_offset,
+        "the first visible row is the auto-scroll offset item"
+    );
+}
+
+/// The wheel must move the selection in all three multi modes (previously a
+/// no-op or a mis-route into the diff tab logic).
+#[test]
+fn multi_mode_wheel_moves_selection() {
+    use crate::tui::events::mouse::handle_mouse_event;
+    use crate::tui::test_support::{demo_matrix, demo_multi_diff, demo_timeline};
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    pin_theme();
+    let wheel = |kind| MouseEvent {
+        kind,
+        column: 10,
+        row: 12,
+        modifiers: KeyModifiers::empty(),
+    };
+
+    let mut app = App::new_multi_diff(demo_multi_diff());
+    handle_mouse_event(&mut app, wheel(MouseEventKind::ScrollDown));
+    assert_eq!(app.tabs.multi_diff.selected_target, 1);
+    handle_mouse_event(&mut app, wheel(MouseEventKind::ScrollUp));
+    assert_eq!(app.tabs.multi_diff.selected_target, 0);
+
+    let mut app = App::new_timeline(demo_timeline());
+    handle_mouse_event(&mut app, wheel(MouseEventKind::ScrollDown));
+    assert_eq!(app.tabs.timeline.selected_version, 1);
+
+    let mut app = App::new_matrix(demo_matrix());
+    handle_mouse_event(&mut app, wheel(MouseEventKind::ScrollDown));
+    assert_eq!(app.tabs.matrix.selected_row, 1);
+    handle_mouse_event(&mut app, wheel(MouseEventKind::ScrollRight));
+    assert_eq!(app.tabs.matrix.selected_col, 2);
+}
+
+/// Clicks in the Multi-Diff targets list select the row under the cursor;
+/// clicks in the top rows must NOT fall through to the diff tab bar.
+#[test]
+fn multi_diff_click_selects_target() {
+    use crate::tui::events::mouse::handle_mouse_event;
+    use crate::tui::test_support::demo_multi_diff;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    pin_theme();
+    let mut app = App::new_multi_diff(demo_multi_diff());
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    // Under the Name sort ai-service is display index 0; webapp is 1. The
+    // details-panel title also contains "ai-service", so anchor on webapp.
+    let row = text
+        .lines()
+        .position(|line| line.contains("webapp"))
+        .expect("second target must render") as u16;
+    let tab_before = app.active_tab;
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row,
+            modifiers: KeyModifiers::empty(),
+        },
+    );
+    assert_eq!(
+        app.tabs.multi_diff.selected_target, 1,
+        "click must select the second target (row {row})"
+    );
+
+    // A click at y<=2 previously mis-routed into select_tab.
+    handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        },
+    );
+    assert_eq!(
+        app.active_tab, tab_before,
+        "multi-mode clicks must not reach the diff tab bar"
+    );
+}
+
+/// Multi-mode chrome: status feedback renders (previously silently dropped),
+/// shared footer hints, heatmap glyphs, and degenerate-state chrome.
+#[test]
+fn snapshot_multi_mode_chrome() {
+    use crate::tui::test_support::{demo_matrix, demo_multi_diff, demo_timeline};
+
+    pin_theme();
+    // Status message replaces the hints for the frame.
+    let mut app = App::new_matrix(demo_matrix());
+    app.set_status_message("Threshold: >= 90%".to_string());
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Threshold: >= 90%"),
+        "the status message must render:\n{text}"
+    );
+    insta::assert_snapshot!("matrix_status_message_80x24", text);
+
+    // Heatmap: the magnitude glyphs are text-visible at 120 cols (at 80 the
+    // Deviation column truncates them away; the digits keep priority).
+    let mut app = App::new_multi_diff(demo_multi_diff());
+    app.tabs.multi_diff.heat_map_mode = true;
+    // The demo's engine deviations are pathological (10000%); realistic
+    // magnitudes keep the glyph inside the Deviation column.
+    for v in app
+        .data
+        .multi_diff_result
+        .as_mut()
+        .unwrap()
+        .summary
+        .deviation_scores
+        .values_mut()
+    {
+        *v = 0.35;
+    }
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        text.contains('\u{2587}')
+            || text.contains('\u{2585}')
+            || text.contains('\u{2583}')
+            || text.contains('\u{2581}'),
+        "deviation magnitude glyphs must render at 120 cols:\n{text}"
+    );
+    insta::assert_snapshot!("multi_dashboard_heatmap_120x40", text);
+
+    // Single-SBOM matrix: enhanced empty state instead of a lone '-' table.
+    let mut single = demo_matrix();
+    single.sboms.truncate(1);
+    single.similarity_scores.clear();
+    single.diffs.clear();
+    single.clustering = None;
+    let mut app = App::new_matrix(single);
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Need at least 2 SBOMs"),
+        "degenerate matrix must explain itself:\n{text}"
+    );
+    insta::assert_snapshot!("matrix_single_sbom_80x24", text);
+
+    // Zero-match component filter: shared no-results state.
+    let mut app = App::new_timeline(demo_timeline());
+    // Cycle to a filter with no matches: Stable requires current == first
+    // version; if the fixture has stable components, fall back to asserting
+    // the no-results copy via an impossible filter by emptying the data.
+    app.data
+        .timeline_result
+        .as_mut()
+        .unwrap()
+        .evolution_summary
+        .components_added
+        .clear();
+    app.data
+        .timeline_result
+        .as_mut()
+        .unwrap()
+        .evolution_summary
+        .components_removed
+        .clear();
+    app.tabs.timeline.total_components = 0;
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        crate::tui::ui::render(frame, &mut app);
+    });
+    assert!(
+        text.contains("No results"),
+        "empty component history must use the shared no-results state:\n{text}"
+    );
+    insta::assert_snapshot!("timeline_filter_no_results_80x24", text);
+}

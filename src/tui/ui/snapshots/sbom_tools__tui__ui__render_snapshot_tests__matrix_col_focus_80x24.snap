@@ -3,14 +3,14 @@ source: src/tui/ui/render_snapshot_tests.rs
 expression: text
 ---
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ Matrix: 3×3 SBOMs (3 pairs)  │ Sort: Name ↑ │ Threshold: All │ Highlight     │
+│ Matrix: 3×3 SBOMs (3 pairs)  │ Sort: Name ↑ │ Threshold: All │ Focus Mode │ H│
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Similarity Matrix [z: focus, r: row, c: col, ┐┌ Pair Details ────────────────┐
 │          alpha  beta   gamma                 ││Comparing:                    │
 │                                              ││alpha ↔ beta                  │
-│alpha      -     53%    0%                    ││                              │
-│beta      53%     -     0%                    ││Similarity: 53.5%             │
-│gamma     0%     0%      -                    ││                              │
+│alpha      -     53%      ·                   ││                              │
+│beta        ·     -       ·                   ││Similarity: 53.5%             │
+│gamma       ·    0%      -                    ││                              │
 │                                              ││alpha: 9 components           │
 │                                              ││beta: 9 components            │
 │                                              ││                              │
@@ -24,5 +24,5 @@ expression: text
 │Algorithm: greedy  Threshold: 50%                                             │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Pairs: 3  Avg: 18%  │  …  Tab panel  / search  V views  K keys  q quit        │
+│Pairs: 3  Avg: 18%  │  ℹ Focused on column 2                                  │
 └──────────────────────────────────────────────────────────────────────────────┘
