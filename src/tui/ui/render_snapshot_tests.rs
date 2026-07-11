@@ -559,6 +559,88 @@ mod diff_alignment {
         result
     }
 
+    /// Build a modified model-a change with one ml_metric field change.
+    fn ml_metric_change(metric: &str, old_v: &str, new_v: &str) -> DiffResult {
+        let old = Component::new("model-a".to_string(), "model-a".to_string())
+            .with_version("1.0.0".to_string());
+        let new = old.clone();
+        let mut change = crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 0);
+        change.field_changes = vec![FieldChange {
+            field: format!("ml_metric:{metric}"),
+            old_value: Some(old_v.to_string()),
+            new_value: Some(new_v.to_string()),
+        }];
+        let mut result = DiffResult::new();
+        result.components.modified.push(change);
+        result.calculate_summary();
+        result
+    }
+
+    /// The CLI's --fail-on-ml-regression signal must be visible interactively:
+    /// the Summary names each regressed metric with its transition.
+    #[test]
+    fn summary_lists_ml_regressions() {
+        let mut result = DiffResult::default();
+        result.ml_regressions.push(crate::diff::MlRegression {
+            component: "model-a".to_string(),
+            metric: "accuracy".to_string(),
+            previous_value: 0.9,
+            new_value: 0.8,
+        });
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("ML REGRESSION"),
+            "summary must badge the regression:\n{text}"
+        );
+        assert!(
+            text.contains("model-a accuracy: 0.90 \u{2192} 0.80"),
+            "summary must name the component, metric and transition:\n{text}"
+        );
+    }
+
+    /// Regression for the inverted-color bug: a dropped accuracy previously
+    /// painted green (added). Text snapshots drop color, so the direction
+    /// arrow is the observable contract.
+    #[test]
+    fn component_detail_ml_metric_regression_shows_down_arrow() {
+        let mut result = ml_metric_change("accuracy", "0.9", "0.8");
+        // The CLI populates ml_regressions for regressed components; the
+        // detail panel must badge them.
+        result.ml_regressions.push(crate::diff::MlRegression {
+            component: "model-a".to_string(),
+            metric: "accuracy".to_string(),
+            previous_value: 0.9,
+            new_value: 0.8,
+        });
+        let mut app = app_with_result(result, TabKind::Components);
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("ML REGRESSION"),
+            "detail panel must badge the regressed component:\n{text}"
+        );
+        assert!(
+            text.contains("\u{25bc}"),
+            "regressed metric must carry a down arrow:\n{text}"
+        );
+        assert!(
+            !text.contains("\u{25b2}"),
+            "regressed metric must not carry an up arrow:\n{text}"
+        );
+
+        let mut app = app_with_result(
+            ml_metric_change("accuracy", "0.8", "0.9"),
+            TabKind::Components,
+        );
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("\u{25b2}"),
+            "improved metric must carry an up arrow:\n{text}"
+        );
+    }
+
     #[test]
     fn component_detail_flags_training_dataset_removal() {
         let mut app = app_with_result(training_dataset_removal_change(), TabKind::Components);

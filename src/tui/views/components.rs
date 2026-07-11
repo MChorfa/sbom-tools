@@ -394,6 +394,22 @@ fn render_diff_detail(
                 Span::styled(&comp.id, Style::default().fg(colors().text)),
             ]),
         ];
+        if ctx.diff_result.is_some_and(|r| {
+            r.ml_regressions
+                .iter()
+                .any(|reg| reg.component == comp.name)
+        }) {
+            lines.insert(
+                1,
+                Line::from(vec![Span::styled(
+                    " \u{25bc} ML REGRESSION ",
+                    Style::default()
+                        .fg(colors().badge_fg_light)
+                        .bg(colors().error)
+                        .bold(),
+                )]),
+            );
+        }
 
         // Version info with visual diff
         match (&comp.old_version, &comp.new_version) {
@@ -653,20 +669,64 @@ fn render_diff_detail(
                     Style::default().fg(field_color),
                 ));
                 lines.push(Line::from(field_line));
+
+                // ml_metric:* fields are direction-aware: a metric moving the
+                // adverse way must never paint green (the arrow is its own
+                // span so truncation can't eat the direction cue).
+                #[derive(Clone, Copy, PartialEq)]
+                enum MetricDirection {
+                    Regressed,
+                    Improved,
+                    Equal,
+                }
+                let ml_direction = change
+                    .field
+                    .strip_prefix("ml_metric:")
+                    .and_then(crate::diff::ml_metric_higher_is_better)
+                    .and_then(|hib| {
+                        let old: f64 = change.old_value.as_deref()?.parse().ok()?;
+                        let new: f64 = change.new_value.as_deref()?.parse().ok()?;
+                        // NaN/inf compare as "not regressed, not equal" and
+                        // would fall through to green "improved".
+                        if !old.is_finite() || !new.is_finite() {
+                            return None;
+                        }
+                        Some(if (hib && new < old) || (!hib && new > old) {
+                            MetricDirection::Regressed
+                        } else if new == old {
+                            MetricDirection::Equal
+                        } else {
+                            MetricDirection::Improved
+                        })
+                    });
+                let (old_color, new_color, arrow) = match ml_direction {
+                    Some(MetricDirection::Regressed) => {
+                        (scheme.text_muted, scheme.error, Some(" \u{25bc}"))
+                    }
+                    Some(MetricDirection::Improved) => {
+                        (scheme.text_muted, scheme.success, Some(" \u{25b2}"))
+                    }
+                    Some(MetricDirection::Equal) => (scheme.text_muted, scheme.text, None),
+                    None => (colors().removed, colors().added, None),
+                };
                 lines.push(Line::from(vec![
-                    Span::styled("    - ", Style::default().fg(colors().removed)),
+                    Span::styled("    - ", Style::default().fg(old_color)),
                     Span::styled(
                         widgets::truncate_str(old_val, area.width as usize - 8),
-                        Style::default().fg(colors().removed),
+                        Style::default().fg(old_color),
                     ),
                 ]));
-                lines.push(Line::from(vec![
-                    Span::styled("    + ", Style::default().fg(colors().added)),
+                let mut new_line = vec![
+                    Span::styled("    + ", Style::default().fg(new_color)),
                     Span::styled(
                         widgets::truncate_str(new_val, area.width as usize - 8),
-                        Style::default().fg(colors().added),
+                        Style::default().fg(new_color),
                     ),
-                ]));
+                ];
+                if let Some(arrow) = arrow {
+                    new_line.push(Span::styled(arrow, Style::default().fg(new_color)));
+                }
+                lines.push(Line::from(new_line));
             }
         }
 

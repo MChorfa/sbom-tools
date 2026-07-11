@@ -532,6 +532,9 @@ fn count_findings(result: &crate::diff::DiffResult) -> usize {
         count += 1;
     }
 
+    // ML regressions (up to 3 lines + one overflow line)
+    count += result.ml_regressions.len().min(3) + usize::from(result.ml_regressions.len() > 3);
+
     // Added components
     if !result.components.added.is_empty() {
         count += 1;
@@ -780,6 +783,35 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 Style::default().fg(scheme.warning),
             ),
         ]));
+    }
+    // ML performance regressions (CLI --fail-on-ml-regression gate data,
+    // previously invisible interactively)
+    for reg in result.ml_regressions.iter().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                " \u{25bc} ML REGRESSION ",
+                Style::default()
+                    .fg(scheme.badge_fg_light)
+                    .bg(scheme.error)
+                    .bold(),
+            ),
+            Span::styled(
+                format!(
+                    " {} {}: {:.2} \u{2192} {:.2}",
+                    reg.component, reg.metric, reg.previous_value, reg.new_value
+                ),
+                Style::default().fg(scheme.error),
+            ),
+        ]));
+    }
+    if result.ml_regressions.len() > 3 {
+        lines.push(Line::styled(
+            format!(
+                "   \u{2026} +{} more ML regressions",
+                result.ml_regressions.len() - 3
+            ),
+            Style::default().fg(scheme.muted),
+        ));
     }
     // Added/removed summaries
     let added_count = result.components.added.len();
