@@ -700,6 +700,50 @@ mod diff_alignment {
         );
     }
 
+    /// Multi-ecosystem diffs render grouped +/-/~ bars; single-ecosystem
+    /// diffs render a labelled tally row instead of a labelless bar.
+    #[test]
+    fn ecosystem_chart_is_semantic() {
+        fn comp(name: &str, eco: &str) -> crate::diff::ComponentChange {
+            let component = Component::new(name.to_string(), format!("pkg:{eco}/{name}@1.0.0"));
+            let mut c = crate::diff::ComponentChange::added(&component, 0);
+            c.ecosystem = Some(eco.to_string());
+            c
+        }
+        // Two ecosystems -> grouped bars with +/-/~ labels.
+        let mut result = DiffResult::default();
+        for i in 0..3 {
+            result.components.added.push(comp(&format!("np{i}"), "npm"));
+        }
+        result.components.removed.push(comp("py0", "pypi"));
+        result.components.modified.push(comp("py1", "pypi"));
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("npm") && text.contains("pypi"),
+            "both ecosystem groups must label:\n{text}"
+        );
+        // The semantic +/-/~ bar-label row is what distinguishes the grouped
+        // chart from the old flat per-ecosystem bars.
+        assert!(
+            text.contains(" +  -  ~"),
+            "grouped chart must label its +/-/~ bars:\n{text}"
+        );
+
+        // Single ecosystem -> tally row, no bar glyphs in that panel.
+        let mut result = DiffResult::default();
+        for i in 0..4 {
+            result.components.added.push(comp(&format!("np{i}"), "npm"));
+        }
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        // The full labelled tally row — "+4" alone also appears in the All
+        // Changes panel title, which would make this assertion vacuous.
+        assert!(
+            text.contains("npm          +4  -0  ~0"),
+            "single ecosystem must render the labelled tally row:\n{text}"
+        );
+    }
 }
 
 #[test]
@@ -1026,11 +1070,11 @@ fn summary_all_changes_scrolls_below_the_fold() {
         app.prepare_render();
         render(frame, &mut app);
     });
-    // '+ dayjs' is an added npm component, priority-sorted below the
-    // modified/removed entries and below the panel's fold.
+    // '~ lodash' is a patch-level bump, priority-sorted to the very end of
+    // the list and below the panel's fold.
     assert!(
-        !first.contains("+ dayjs"),
-        "precondition: the added entry starts below the fold:\n{first}"
+        !first.contains("~ lodash"),
+        "precondition: the patch entry starts below the fold:\n{first}"
     );
 
     handle_key_event(&mut app, key(KeyCode::End));
@@ -1043,7 +1087,7 @@ fn summary_all_changes_scrolls_below_the_fold() {
         render(frame, &mut app);
     });
     assert!(
-        scrolled.contains("+ dayjs"),
+        scrolled.contains("~ lodash"),
         "scrolling must reveal the entries below the fold:\n{scrolled}"
     );
 }
@@ -1207,4 +1251,38 @@ fn tab_marker_click_selects_adjacent_hidden_tab() {
         entries[before - 1].0,
         "« click must select the tab just left of the window"
     );
+}
+
+/// Regression: at 80x24 the Summary previously collapsed every box to ~1
+/// line (empty Matching/Security Policy shells, 3 visible changes). The
+/// compact strip + tall All Changes list must surface far more.
+#[test]
+fn compact_summary_shows_many_changes_at_80x24() {
+    let text = render_tab(TabKind::Summary, 80, 24);
+    assert!(
+        text.contains("axios") && text.contains("- jquery"),
+        "entries previously below the fold must be visible:\n{text}"
+    );
+    assert!(
+        text.contains("Comp +4 -4 ~5"),
+        "the dense stat strip must render:\n{text}"
+    );
+    assert!(
+        !text.contains(" Matching ") && !text.contains("Changes by Ecosystem"),
+        "compact mode must not render empty shells:\n{text}"
+    );
+}
+
+/// Lock the mid-tier degradation (charts dropped, stats+insights kept) so
+/// the cascade order cannot regress silently. Height 31 is the smallest that
+/// keeps insights (content 24 = demand with insights, without charts); at 30
+/// the insights row is dropped too and the tier would go unguarded.
+#[test]
+fn snapshot_summary_100x31() {
+    let text = render_tab(TabKind::Summary, 100, 31);
+    assert!(
+        text.contains(" Matching ") && !text.contains("Changes by Ecosystem"),
+        "100x31 must sit exactly in the charts-dropped, insights-kept tier:\n{text}"
+    );
+    insta::assert_snapshot!("diff_summary_100x31", text);
 }
