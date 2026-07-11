@@ -10,7 +10,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Row, Table};
 
 /// Render the PQC compliance tab (CBOM mode).
 pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
@@ -31,16 +31,14 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         .collect();
 
     if algorithms.is_empty() {
-        let msg = Paragraph::new(
-            "No algorithms found.\n\nCBOM data with cryptoProperties is required for PQC compliance assessment.",
-        )
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" PQC Compliance "),
-        )
-        .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No algorithms found",
+            Some("CBOM data with cryptoProperties is required for PQC assessment"),
+            None,
+        );
         return;
     }
     let Some(results) = app.compliance_results.as_ref() else {
