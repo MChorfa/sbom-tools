@@ -31,10 +31,10 @@ pub fn render_crypto(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
     let metrics = CryptographyMetrics::from_sbom(&app.sbom);
 
-    // Layout: header (3 lines) + main content
+    // Layout: header (2 text lines + borders) + main content
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([Constraint::Length(4), Constraint::Min(0)])
         .split(area);
 
     // ── Header: quantum readiness summary ──
@@ -61,7 +61,74 @@ fn render_header(frame: &mut Frame, area: Rect, metrics: &CryptographyMetrics) {
         scheme.error
     };
 
-    let mut spans = vec![
+    // Line 1: danger metrics, most severe first, zero counts omitted — leading
+    // with the worst signal guarantees it survives narrow-width truncation.
+    let mut danger: Vec<Span> = Vec::new();
+    let critical_bold = Style::default()
+        .fg(scheme.critical)
+        .add_modifier(Modifier::BOLD);
+    let push_danger = |spans: &mut Vec<Span<'static>>, label: &str, n: usize, style: Style| {
+        if n > 0 {
+            if !spans.is_empty() {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(format!("{label}:{n}"), style));
+        }
+    };
+    push_danger(
+        &mut danger,
+        "Compromised",
+        metrics.compromised_keys,
+        critical_bold,
+    );
+    push_danger(
+        &mut danger,
+        "Weak",
+        metrics.weak_algorithm_count,
+        critical_bold,
+    );
+    push_danger(
+        &mut danger,
+        "QVuln",
+        metrics.quantum_vulnerable_count,
+        Style::default().fg(scheme.error),
+    );
+    push_danger(
+        &mut danger,
+        "Expired",
+        metrics.expired_certificates,
+        Style::default().fg(scheme.error),
+    );
+    push_danger(
+        &mut danger,
+        "WeakKeys",
+        metrics.inadequate_key_sizes,
+        Style::default().fg(scheme.error),
+    );
+    push_danger(
+        &mut danger,
+        "Expiring",
+        metrics.expiring_soon_certificates,
+        Style::default().fg(scheme.warning),
+    );
+    push_danger(
+        &mut danger,
+        "HybridPQC",
+        metrics.hybrid_pqc_count,
+        Style::default().fg(scheme.primary),
+    );
+    let danger_line = if danger.is_empty() {
+        Line::from(Span::styled(
+            " No crypto risk flags",
+            Style::default().fg(scheme.success),
+        ))
+    } else {
+        danger.insert(0, Span::raw(" "));
+        Line::from(danger)
+    };
+
+    // Line 2: the neutral inventory counts + quantum readiness.
+    let counts_line = Line::from(vec![
         Span::raw(format!(
             " Algo:{} Cert:{} Key:{} Proto:{} ",
             metrics.algorithms_count,
@@ -80,32 +147,9 @@ fn render_header(frame: &mut Frame, area: Rect, metrics: &CryptographyMetrics) {
             " ({}/{}) ",
             metrics.quantum_safe_count, metrics.algorithms_count
         )),
-    ];
+    ]);
 
-    if metrics.weak_algorithm_count > 0 {
-        spans.push(Span::styled(
-            format!("| Weak:{} ", metrics.weak_algorithm_count),
-            Style::default()
-                .fg(scheme.critical)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    if metrics.expired_certificates > 0 {
-        spans.push(Span::styled(
-            format!("| Expired:{} ", metrics.expired_certificates),
-            Style::default().fg(scheme.error),
-        ));
-    }
-    if metrics.compromised_keys > 0 {
-        spans.push(Span::styled(
-            format!("| Compromised:{} ", metrics.compromised_keys),
-            Style::default()
-                .fg(scheme.critical)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    let header = Paragraph::new(Line::from(spans)).block(
+    let header = Paragraph::new(vec![danger_line, counts_line]).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Crypto Summary "),

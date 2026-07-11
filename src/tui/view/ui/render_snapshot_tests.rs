@@ -784,3 +784,84 @@ fn view_vuln_compact_80x24_shows_full_triage_line() {
     );
     insta::assert_snapshot!("view_vuln_compact_80x24", text);
 }
+
+/// Regression: at 80 cols the single-line crypto header clipped its most
+/// severe token (Compromised) and never rendered QVuln/WeakKeys/Expiring at
+/// all. The two-line danger-first header must surface every non-zero danger
+/// metric at the minimum supported width.
+#[test]
+fn crypto_header_surfaces_danger_counts_at_80_cols() {
+    use crate::model::{
+        AlgorithmProperties, CertificateProperties, CryptoAssetType, CryptoMaterialState,
+        CryptoMaterialType, CryptoPrimitive, CryptoProperties, RelatedCryptoMaterialProperties,
+    };
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let mut add = |name: &str, cp: CryptoProperties| {
+        let mut c = Component::new(name.to_string(), format!("{name}-ref"));
+        c.component_type = crate::model::ComponentType::Cryptographic;
+        c.crypto_properties = Some(cp);
+        sbom.components
+            .insert(CanonicalId::from_name_version(name, None), c);
+    };
+    add(
+        "MD5",
+        CryptoProperties::new(CryptoAssetType::Algorithm)
+            .with_algorithm_properties(AlgorithmProperties::new(CryptoPrimitive::Hash)),
+    );
+    add(
+        "RSA-2048",
+        CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+            AlgorithmProperties::new(CryptoPrimitive::Pke).with_nist_quantum_security_level(0),
+        ),
+    );
+    add(
+        "expired-cert",
+        CryptoProperties::new(CryptoAssetType::Certificate).with_certificate_properties(
+            CertificateProperties::new()
+                .with_not_valid_after(chrono::Utc::now() - chrono::Duration::days(30)),
+        ),
+    );
+    add(
+        "expiring-cert",
+        CryptoProperties::new(CryptoAssetType::Certificate).with_certificate_properties(
+            CertificateProperties::new()
+                .with_not_valid_after(chrono::Utc::now() + chrono::Duration::days(30)),
+        ),
+    );
+    add(
+        "compromised-key",
+        CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+            .with_related_crypto_material_properties(
+                RelatedCryptoMaterialProperties::new(CryptoMaterialType::PrivateKey)
+                    .with_state(CryptoMaterialState::Compromised),
+            ),
+    );
+    add(
+        "small-key",
+        CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+            .with_related_crypto_material_properties(
+                RelatedCryptoMaterialProperties::new(CryptoMaterialType::PrivateKey)
+                    .with_size(1024),
+            ),
+    );
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+    app.active_tab = ViewTab::Crypto;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    for token in [
+        "Compromised:1",
+        "Weak:1",
+        "QVuln:1",
+        "Expired:1",
+        "WeakKeys:1",
+        "Expiring:1",
+    ] {
+        assert!(
+            text.contains(token),
+            "danger header must surface {token}:\n{text}"
+        );
+    }
+}
