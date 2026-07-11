@@ -581,9 +581,15 @@ fn render_diff_detail(
         // Match confidence (item 1.5) — show how old/new components were correlated
         if let Some(match_info) = &comp.match_info {
             let scheme = colors();
-            let score_color = if match_info.score >= 0.9 {
+            // Band on the worst-case bound: a fuzzy 0.75 with a wide CI must
+            // not paint like a near-exact 0.75.
+            let banding = match_info
+                .confidence_interval
+                .as_ref()
+                .map_or(match_info.score, |ci| ci.lower);
+            let score_color = if banding >= 0.9 {
                 scheme.success
-            } else if match_info.score >= 0.7 {
+            } else if banding >= 0.7 {
                 scheme.warning
             } else {
                 scheme.error
@@ -603,6 +609,19 @@ fn render_diff_detail(
                 Span::styled(" via ", Style::default().fg(scheme.text_muted)),
                 Span::styled(&match_info.method, Style::default().fg(scheme.secondary)),
             ]));
+            if let Some(ci) = &match_info.confidence_interval
+                && ci.width() > 0.0
+            {
+                lines.push(Line::styled(
+                    format!(
+                        "CI: {:.2}\u{2013}{:.2} ({:.0}%)",
+                        ci.lower,
+                        ci.upper,
+                        ci.level * 100.0
+                    ),
+                    Style::default().fg(scheme.text_muted),
+                ));
+            }
             if !match_info.reason.is_empty() {
                 lines.push(Line::from(vec![
                     Span::styled("Reason: ", Style::default().fg(scheme.text_muted)),
@@ -619,6 +638,18 @@ fn render_diff_detail(
                     Span::styled(&sc.name, Style::default().fg(scheme.accent)),
                     Span::styled(
                         format!(" {:.2} (w={:.1})", sc.raw_score, sc.weight),
+                        Style::default().fg(scheme.text_muted),
+                    ),
+                ]));
+            }
+            if !match_info.normalizations.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("Normalized: ", Style::default().fg(scheme.text_muted)),
+                    Span::styled(
+                        widgets::truncate_str(
+                            &match_info.normalizations.join(", "),
+                            (area.width as usize).saturating_sub(14),
+                        ),
                         Style::default().fg(scheme.text_muted),
                     ),
                 ]));

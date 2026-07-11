@@ -230,7 +230,7 @@ fn render_insights_row(frame: &mut Frame, area: Rect, result: &crate::diff::Diff
 
     // --- 1.2: Match Metrics card ---
     if let Some(mm) = &result.match_metrics {
-        render_match_metrics_card(frame, chunks[col], mm);
+        render_match_metrics_card(frame, chunks[col], mm, result);
         col += 1;
     }
 
@@ -310,7 +310,12 @@ fn render_quality_delta_card(frame: &mut Frame, area: Rect, qd: &crate::diff::Qu
 }
 
 /// Render match metrics card (item 1.2).
-fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::MatchMetrics) {
+fn render_match_metrics_card(
+    frame: &mut Frame,
+    area: Rect,
+    mm: &crate::diff::MatchMetrics,
+    result: &crate::diff::DiffResult,
+) {
     let scheme = colors();
     let total_matched = mm.exact_matches + mm.fuzzy_matches + mm.rule_matches;
 
@@ -375,6 +380,29 @@ fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::Ma
                 }),
             ),
         ]));
+        // Name the shakiest pairing (the likeliest source of a bogus
+        // "modified" row) — but only when something is actually inexact:
+        // <0.995 keeps exact-only diffs from naming an arbitrary component.
+        if mm.min_match_score < 0.995
+            && let Some((_, name)) = result
+                .components
+                .modified
+                .iter()
+                .filter_map(|c| c.match_info.as_ref().map(|m| (m.score, c.name.as_str())))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+            && let Some(last) = lines.last_mut()
+        {
+            last.push_span(Span::styled(
+                format!(
+                    " ({})",
+                    crate::tui::widgets::truncate_str(
+                        name,
+                        (area.width as usize).saturating_sub(31)
+                    )
+                ),
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
     }
 
     let paragraph = Paragraph::new(lines).block(

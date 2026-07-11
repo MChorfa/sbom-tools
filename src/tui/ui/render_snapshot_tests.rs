@@ -641,6 +641,35 @@ mod diff_alignment {
         );
     }
 
+    /// A fuzzy match must expose its confidence interval and normalization
+    /// audit trail; previously a fuzzy 0.75 rendered identically to a
+    /// near-exact 0.75.
+    #[test]
+    fn match_panel_shows_ci_and_normalizations() {
+        let old = Component::new("fuzzy-lib".to_string(), "fuzzy-lib".to_string())
+            .with_version("1.0".to_string());
+        let new = old.clone();
+        let mut mi = crate::diff::MatchInfo::simple(0.75, "Fuzzy", "name similarity");
+        mi.normalizations = vec!["lowercase".to_string(), "suffix_stripped".to_string()];
+        let change =
+            crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 0).with_match_info(mi);
+        let mut result = DiffResult::new();
+        result.components.modified.push(change);
+        result.calculate_summary();
+
+        let mut app = app_with_result(result, TabKind::Components);
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("CI: 0.67\u{2013}0.83 (95%)"),
+            "Fuzzy tier margin is 0.08 -> CI 0.67-0.83:\n{text}"
+        );
+        assert!(
+            text.contains("Normalized: lowercase, suffix_stripped"),
+            "normalization audit trail must render:\n{text}"
+        );
+    }
+
     #[test]
     fn component_detail_flags_training_dataset_removal() {
         let mut app = app_with_result(training_dataset_removal_change(), TabKind::Components);

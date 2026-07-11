@@ -717,7 +717,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, tab_count: usize) {
         Line::from(vec![
             Span::styled("  s              ", Style::default().fg(colors().accent)),
             Span::styled(
-                "Cycle sort (Name→Version→Ecosystem)",
+                "Cycle sort (Name→Version→Ecosystem→MatchScore)",
                 Style::default().fg(colors().text),
             ),
         ]),
