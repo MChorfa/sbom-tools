@@ -943,126 +943,164 @@ fn render_sidebyside_context_bar(frame: &mut Frame, area: Rect, ctx: &RenderCont
     let scheme = colors();
     let state = &ctx.side_by_side;
 
-    let mut spans = vec![
-        // Mode indicator
-        Span::styled("Mode: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(
-            state.alignment_mode.name(),
-            Style::default().fg(scheme.accent).bold(),
-        ),
-        Span::styled(" │ ", Style::default().fg(scheme.muted)),
-    ];
+    // Ordered segments with drop priorities: when the bar overflows the
+    // width, the lowest-priority segments go first so the key hints the bar
+    // exists to teach survive at 80 cols. Mode and the hints never drop.
+    let mut segments: Vec<(u8, Vec<Span<'static>>)> = Vec::new();
 
-    // Focus indicator
-    spans.push(Span::styled(
+    segments.push((
+        u8::MAX,
+        vec![
+            Span::styled("Mode: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                state.alignment_mode.name(),
+                Style::default().fg(scheme.accent).bold(),
+            ),
+        ],
+    ));
+
+    let mut focus = vec![Span::styled(
         "Focus: ",
         Style::default().fg(scheme.text_muted),
-    ));
+    )];
     if state.focus_right {
-        spans.push(Span::styled(" Old ", Style::default().fg(scheme.removed)));
+        focus.push(Span::styled(" Old ", Style::default().fg(scheme.removed)));
     } else {
-        spans.push(Span::styled(
-            " ◄ Old ",
+        focus.push(Span::styled(
+            " \u{25c4} Old ",
             Style::default()
                 .fg(scheme.badge_fg_light)
                 .bg(scheme.removed)
                 .bold(),
         ));
     }
-    spans.push(Span::styled("│", Style::default().fg(scheme.muted)));
+    focus.push(Span::styled("\u{2502}", Style::default().fg(scheme.muted)));
     if state.focus_right {
-        spans.push(Span::styled(
-            " New ► ",
+        focus.push(Span::styled(
+            " New \u{25ba} ",
             Style::default()
                 .fg(scheme.badge_fg_dark)
                 .bg(scheme.added)
                 .bold(),
         ));
     } else {
-        spans.push(Span::styled(" New ", Style::default().fg(scheme.added)));
+        focus.push(Span::styled(" New ", Style::default().fg(scheme.added)));
     }
-    spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
+    segments.push((2, focus));
 
-    // Sync mode
-    spans.push(Span::styled(
-        "Sync: ",
-        Style::default().fg(scheme.text_muted),
+    segments.push((
+        1, // Sync goes first
+        vec![
+            Span::styled("Sync: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(state.sync_mode.name(), Style::default().fg(scheme.text)),
+        ],
     ));
-    spans.push(Span::styled(
-        state.sync_mode.name(),
-        Style::default().fg(scheme.text),
-    ));
-    spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
 
-    // Filter status
     if state.filter.is_filtered() {
-        spans.push(Span::styled(
-            "Filter: ",
-            Style::default().fg(scheme.text_muted),
+        segments.push((
+            3,
+            vec![
+                Span::styled("Filter: ", Style::default().fg(scheme.text_muted)),
+                Span::styled(state.filter.summary(), Style::default().fg(scheme.warning)),
+            ],
         ));
-        spans.push(Span::styled(
-            state.filter.summary(),
-            Style::default().fg(scheme.warning),
-        ));
-        spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
     }
 
-    // Change navigation position
-    spans.push(Span::styled(
-        "Change: ",
-        Style::default().fg(scheme.text_muted),
+    segments.push((
+        4,
+        vec![
+            Span::styled("Change: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                state.change_position(),
+                Style::default().fg(scheme.modified),
+            ),
+        ],
     ));
-    spans.push(Span::styled(
-        state.change_position(),
-        Style::default().fg(scheme.modified),
-    ));
-    spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
 
-    // Search status
     if state.search_query.is_some() {
-        spans.push(Span::styled(
-            "Search: ",
-            Style::default().fg(scheme.text_muted),
+        segments.push((
+            5,
+            vec![
+                Span::styled("Search: ", Style::default().fg(scheme.text_muted)),
+                Span::styled(state.match_position(), Style::default().fg(scheme.accent)),
+            ],
         ));
-        spans.push(Span::styled(
-            state.match_position(),
-            Style::default().fg(scheme.accent),
-        ));
-        spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
     }
 
-    // Key hints
-    spans.push(Span::styled("[a]", Style::default().fg(scheme.accent)));
-    spans.push(Span::styled(
-        "lign ",
-        Style::default().fg(scheme.text_muted),
-    ));
-    spans.push(Span::styled("[/]", Style::default().fg(scheme.accent)));
-    spans.push(Span::styled(
-        "search ",
-        Style::default().fg(scheme.text_muted),
-    ));
+    let mut hints = vec![
+        Span::styled("[a]", Style::default().fg(scheme.accent)),
+        Span::styled("lign ", Style::default().fg(scheme.text_muted)),
+        Span::styled("[/]", Style::default().fg(scheme.accent)),
+        Span::styled("search ", Style::default().fg(scheme.text_muted)),
+    ];
     // n/N only navigate in row-selection modes; Grouped gates them behind a
     // hint, so don't advertise keys the same screen refuses to execute.
     if state.alignment_mode.uses_row_selection() {
-        spans.push(Span::styled("[n/N]", Style::default().fg(scheme.accent)));
-        spans.push(Span::styled(
-            "ext/prev",
-            Style::default().fg(scheme.text_muted),
-        ));
+        hints.push(Span::styled("[n/N]", Style::default().fg(scheme.accent)));
+        // Truthful label: with a finished search that produced matches, n/N
+        // walk matches; otherwise they walk changes.
+        // Match-routing is Aligned-only (sxs-1): Unified's n/N always walk
+        // changes, so the label must not promise match navigation there.
+        let label = if state.alignment_mode == AlignmentMode::Aligned
+            && state.search_query.is_some()
+            && !state.search_active
+            && !state.search_matches.is_empty()
+        {
+            "match"
+        } else {
+            "ext/prev"
+        };
+        hints.push(Span::styled(label, Style::default().fg(scheme.text_muted)));
     } else {
-        spans.push(Span::styled("[a]", Style::default().fg(scheme.accent)));
-        spans.push(Span::styled(
+        hints.push(Span::styled("[a]", Style::default().fg(scheme.accent)));
+        hints.push(Span::styled(
             " for row actions",
             Style::default().fg(scheme.text_muted),
         ));
     }
+    segments.push((u8::MAX, hints));
 
-    let context_line = Line::from(spans);
-
+    let context_line = Line::from(fit_segments(segments, area.width));
     let paragraph = Paragraph::new(context_line).style(Style::default().fg(scheme.text_muted));
-
     frame.render_widget(paragraph, area);
+}
+
+/// Join segments with " \u{2502} " separators, dropping the lowest-priority
+/// segments until the line fits `width`. Pure for unit testing.
+fn fit_segments(mut segments: Vec<(u8, Vec<Span<'static>>)>, width: u16) -> Vec<Span<'static>> {
+    let scheme = colors();
+    let join = |segs: &[(u8, Vec<Span<'static>>)]| -> Vec<Span<'static>> {
+        let mut out: Vec<Span> = Vec::new();
+        for (i, (_, spans)) in segs.iter().enumerate() {
+            if i > 0 {
+                out.push(Span::styled(
+                    " \u{2502} ",
+                    Style::default().fg(scheme.muted),
+                ));
+            }
+            out.extend(spans.iter().cloned());
+        }
+        out
+    };
+
+    loop {
+        let joined = join(&segments);
+        if Line::from(joined.clone()).width() <= width as usize {
+            return joined;
+        }
+        // Drop the lowest-priority droppable segment; when only keep-always
+        // segments remain, return them and let the Paragraph clip.
+        let Some(pos) = segments
+            .iter()
+            .enumerate()
+            .filter(|(_, (p, _))| *p != u8::MAX)
+            .min_by_key(|(_, (p, _))| *p)
+            .map(|(i, _)| i)
+        else {
+            return joined;
+        };
+        segments.remove(pos);
+    }
 }
 
 /// Line count a Grouped-mode section contributes above the Modified section:
@@ -1624,5 +1662,40 @@ mod grouped_padding_tests {
         let own = grouped_section_lines(true, 2);
         let other = grouped_section_lines(true, 5);
         assert_eq!(other.saturating_sub(own), 3);
+    }
+}
+
+#[cfg(test)]
+mod context_bar_tests {
+    use super::fit_segments;
+    use ratatui::text::{Line, Span};
+
+    fn seg(priority: u8, text: &str) -> (u8, Vec<Span<'static>>) {
+        (priority, vec![Span::raw(text.to_string())])
+    }
+
+    /// The Sync then Focus segments drop first; the hint segment survives.
+    #[test]
+    fn fit_segments_drops_lowest_priority_first() {
+        crate::tui::test_support::pin_theme();
+        let segments = vec![
+            seg(u8::MAX, &"M".repeat(14)), // Mode
+            seg(2, &"F".repeat(21)),       // Focus
+            seg(1, &"S".repeat(18)),       // Sync
+            seg(4, &"C".repeat(13)),       // Change
+            seg(u8::MAX, &"H".repeat(29)), // hints
+        ];
+        // Total = 14+21+18+13+29 + 4*3 separators = 107.
+        let fitted = fit_segments(segments.clone(), 80);
+        let text: String = Line::from(fitted.clone()).to_string();
+        assert!(!text.contains('S'), "Sync must drop first: {text}");
+        assert!(!text.contains('F'), "Focus must drop second: {text}");
+        assert!(text.contains('H'), "hints must survive: {text}");
+        assert!(Line::from(fitted).width() <= 80);
+
+        // At 120 nothing drops.
+        let fitted = fit_segments(segments, 120);
+        let text: String = Line::from(fitted).to_string();
+        assert!(text.contains('S') && text.contains('F'));
     }
 }
