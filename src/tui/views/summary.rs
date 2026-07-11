@@ -48,14 +48,7 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // Determine height for insights + policy merged row
     let has_quality_delta = result.quality_delta.is_some();
     let has_match_metrics = result.match_metrics.is_some();
-    let has_vex_data = result
-        .vulnerabilities
-        .introduced
-        .iter()
-        .chain(&result.vulnerabilities.resolved)
-        .chain(&result.vulnerabilities.persistent)
-        .any(|v| v.vex_state.is_some())
-        || !result.vulnerabilities.vex_changes.is_empty();
+    let has_vex_data = diff_total_vulns(result) > 0;
     let insights_policy_h: u16 = if has_quality_delta || has_match_metrics || has_vex_data {
         5
     } else {
@@ -193,18 +186,7 @@ fn summary_layout_plan(
 fn render_insights_row(frame: &mut Frame, area: Rect, result: &crate::diff::DiffResult) {
     let has_quality = result.quality_delta.is_some();
     let has_matching = result.match_metrics.is_some();
-    let total_vulns = result.vulnerabilities.introduced.len()
-        + result.vulnerabilities.resolved.len()
-        + result.vulnerabilities.persistent.len();
-    let has_vex = total_vulns > 0
-        && (result
-            .vulnerabilities
-            .introduced
-            .iter()
-            .chain(&result.vulnerabilities.resolved)
-            .chain(&result.vulnerabilities.persistent)
-            .any(|v| v.vex_state.is_some())
-            || !result.vulnerabilities.vex_changes.is_empty());
+    let has_vex = diff_total_vulns(result) > 0;
 
     // Split row into columns for each present insight card
     let col_count = usize::from(has_quality) + usize::from(has_matching) + usize::from(has_vex);
@@ -414,6 +396,15 @@ fn render_match_metrics_card(
     frame.render_widget(paragraph, area);
 }
 
+/// Total vulnerability rows in the diff (introduced + resolved + persistent):
+/// the VEX card's visibility gate — a diff whose new vulns have ZERO VEX
+/// coverage (the pure gap case) must still show the card.
+fn diff_total_vulns(result: &crate::diff::DiffResult) -> usize {
+    result.vulnerabilities.introduced.len()
+        + result.vulnerabilities.resolved.len()
+        + result.vulnerabilities.persistent.len()
+}
+
 /// Render VEX coverage card (item 1.3).
 fn render_vex_coverage_card(frame: &mut Frame, area: Rect, result: &crate::diff::DiffResult) {
     let scheme = colors();
@@ -439,26 +430,62 @@ fn render_vex_coverage_card(frame: &mut Frame, area: Rect, result: &crate::diff:
         ),
     ])];
 
-    if vex.actionable > 0 {
+    // The security worklist: newly introduced vulns with no triage at all
+    // (computed by vex_summary, previously never rendered).
+    if vex.introduced_without_vex > 0 || vex.persistent_without_vex > 0 {
         lines.push(Line::from(vec![
+            Span::styled("Gaps: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!("{} new", vex.introduced_without_vex),
+                Style::default().fg(scheme.error).bold(),
+            ),
+            Span::styled(" \u{b7} ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!("{} ongoing", vex.persistent_without_vex),
+                Style::default().fg(scheme.warning),
+            ),
+            Span::styled(" (no VEX)", Style::default().fg(scheme.text_muted)),
+        ]));
+    }
+
+    if vex.actionable > 0
+        || !result.vulnerabilities.vex_changes.is_empty()
+        || !vex.by_state.is_empty()
+    {
+        let mut spans = vec![
             Span::styled("Actionable: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
                 format!("{}", vex.actionable),
                 Style::default().fg(scheme.warning).bold(),
             ),
-            Span::styled(" require attention", Style::default().fg(scheme.text_muted)),
-        ]));
-    }
-
-    let vex_changes_count = result.vulnerabilities.vex_changes.len();
-    if vex_changes_count > 0 {
-        lines.push(Line::from(vec![
-            Span::styled("VEX transitions: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
-                format!("{vex_changes_count}"),
-                Style::default().fg(scheme.accent).bold(),
+                format!(
+                    " \u{b7} \u{394}{}",
+                    result.vulnerabilities.vex_changes.len()
+                ),
+                Style::default().fg(scheme.accent),
             ),
-        ]));
+        ];
+        // Compact by_state tail, most-actionable-first so the important
+        // counts survive clipping in the ~26-col card (codes/colors match
+        // render_vex_badge_spans).
+        use crate::model::VexState;
+        for (state, code, color) in [
+            (VexState::Affected, "AF", scheme.critical),
+            (VexState::UnderInvestigation, "UI", scheme.medium),
+            (VexState::NotAffected, "NA", scheme.low),
+            (VexState::Fixed, "FX", scheme.low),
+        ] {
+            if let Some(n) = vex.by_state.get(&state)
+                && *n > 0
+            {
+                spans.push(Span::styled(
+                    format!(" {code}:{n}"),
+                    Style::default().fg(color),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
     }
 
     let paragraph = Paragraph::new(lines).block(
@@ -1125,18 +1152,7 @@ fn render_insights_policy_row(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
     let has_quality = result.quality_delta.is_some();
     let has_matching = result.match_metrics.is_some();
-    let total_vulns = result.vulnerabilities.introduced.len()
-        + result.vulnerabilities.resolved.len()
-        + result.vulnerabilities.persistent.len();
-    let has_vex = total_vulns > 0
-        && (result
-            .vulnerabilities
-            .introduced
-            .iter()
-            .chain(&result.vulnerabilities.resolved)
-            .chain(&result.vulnerabilities.persistent)
-            .any(|v| v.vex_state.is_some())
-            || !result.vulnerabilities.vex_changes.is_empty());
+    let has_vex = diff_total_vulns(result) > 0;
     let has_insights = has_quality || has_matching || has_vex;
 
     if has_insights {

@@ -670,6 +670,73 @@ mod diff_alignment {
         );
     }
 
+    fn vuln_detail(
+        id: &str,
+        vex: Option<crate::model::VexState>,
+    ) -> crate::diff::VulnerabilityDetail {
+        let vref = crate::model::VulnerabilityRef::new(
+            id.to_string(),
+            crate::model::VulnerabilitySource::Osv,
+        );
+        let comp =
+            crate::model::Component::new("libv".to_string(), "pkg:npm/libv@1.0.0".to_string());
+        let mut detail = crate::diff::VulnerabilityDetail::from_ref(&vref, &comp);
+        detail.vex_state = vex;
+        detail
+    }
+
+    /// introduced_without_vex is the security worklist; it is computed but was
+    /// never rendered. The card must show gap counts and the by_state tail.
+    #[test]
+    fn vex_card_lists_gap_counts() {
+        let mut result = DiffResult::default();
+        result
+            .vulnerabilities
+            .introduced
+            .push(vuln_detail("CVE-2024-0001", None));
+        result
+            .vulnerabilities
+            .introduced
+            .push(vuln_detail("CVE-2024-0002", None));
+        result
+            .vulnerabilities
+            .persistent
+            .push(vuln_detail("CVE-2024-0003", None));
+        result.vulnerabilities.introduced.push(vuln_detail(
+            "CVE-2024-0004",
+            Some(crate::model::VexState::Affected),
+        ));
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        for needle in ["Gaps:", "2 new", "1 ongoing", "AF:1"] {
+            assert!(
+                text.contains(needle),
+                "VEX card must render {needle}:\n{text}"
+            );
+        }
+    }
+
+    /// Regression for the gate relaxation: a diff whose vulns have ZERO VEX
+    /// coverage — the pure gap case — previously hid the card entirely.
+    #[test]
+    fn vex_card_renders_with_zero_coverage() {
+        let mut result = DiffResult::default();
+        result
+            .vulnerabilities
+            .introduced
+            .push(vuln_detail("CVE-2024-0001", None));
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("VEX: 0%"),
+            "zero-coverage card must render with 0%:\n{text}"
+        );
+        assert!(
+            text.contains("Gaps:") && text.contains("1 new"),
+            "gap line must render:\n{text}"
+        );
+    }
+
     #[test]
     fn component_detail_flags_training_dataset_removal() {
         let mut app = app_with_result(training_dataset_removal_change(), TabKind::Components);

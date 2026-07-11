@@ -22,13 +22,13 @@ Group:  License   │  [g] toggle  [Enter] ins┌ License Details ────�
 │                   │  © ■ Copyleft    (GPL, AGPL)         │                   █
 │                   │  ◐ ■ Weak Copyleft (LGPL, MPL)       │e-alike            █
 │                   │  ⊘ ■ Proprietary (Commercial)        │                   █
-│                   │                                      │1/7)               █
-│                   │Press any key to close                │ component  [K/J]  █
+│                   │                                      │                   █
+│                   │Press any key to close                │with 1 other       █
 │                   │                                      │                   ║
 │                   └──────────────────────────────────────┘                   ║
-│                                          ││L dayjs@1.11.7                    ║
-│                                          ││L express@4.18.2                  ║
-│                                          ││L lodash@4.17.21                  ▼
+│                                          ││Components: 6 (1/7)               ║
+│                                          ││[Enter] jump to component  [K/J]  ║
+│                                          ││scroll                            ▼
 └──────────────────────────────────────────┘└──────────────────────────────────┘
  Components: 9 │ Vulns: 0 │ Licenses: 3
 …  g group │  Tab switch  / search  e export  ? help  q quit [y] copy Apache-2.0

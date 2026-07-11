@@ -8,6 +8,7 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌ Crypto Summary ──────────────────────────────────────────────────────────────┐
+│ QVuln:2 WeakKeys:1 HybridPQC:1                                               │
 │ Algo:11 Cert:1 Key:2 Proto:2 | Quantum: 82% (9/11)                           │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Assets (16) ─────────────────────────┐┌ Detail ──────────────────────────────┐
@@ -22,7 +23,6 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │[ALG] Q X25519-ML-KEM-768             ││Security:  256 bits                   │
 │[ALG] V ECDSA-P521                    ││Quantum:   Level 5 SAFE               │
 │[ALG] Q XMSS                          ││Functions: keygen, encapsulate,       │
-│[CRT]   quantum-ready-app.example.com ││decapsulate                           │
 └──────────────────────────────────────┘└──────────────────────────────────────┘
  Algo: 11 │ Certs: 1 │ Keys: 2 │ Quantum: 82%
        Tab switch  / search  e export  ? help  q quit [y] copy ML-KEM-1024

@@ -19,10 +19,10 @@ Filter:  All   Sort: Name  │  [f] filter  [s] sort  [1/2/3/4/5/6/7/8] quick  [
 │   - REMOVED   jquery           3. —  n - █│                                  │
 │   ~ MODIFIED  lodash           4. 4. n 1 ║│━━━ Match ━━━                     │
 │   - REMOVED   moment           2. —  n - ║│Score: 1.00 via NameIdentity      │
-│   + ADDED     prisma           —  4. n - ║│Reason: Identical component nam...│
-│   ~ MODIFIED  react            17 18 n 1 ║│                                  │
-│   - REMOVED   request          2. —  n - ║│━━━ Security Analysis ━━━         │
-│   + ADDED     typescript       —  5. n - ▼│Risk Level:  Low                  │
+│   + ADDED     prisma           —  4. n - ║│CI: 0.97–1.00 (95%)               │
+│   ~ MODIFIED  react            17 18 n 1 ║│Reason: Identical component nam...│
+│   - REMOVED   request          2. —  n - ║│Normalized: case_insensitive_name │
+│   + ADDED     typescript       —  5. n - ▼│                                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
      …  Tab switch  / search  e export  ? help  q quit [y] copy acme-webapp

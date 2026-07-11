@@ -13,26 +13,19 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │ Algorithm-by-Algorithm Assessment                                                                                    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Algorithm                  Family                  Level        CNSA 2.0                 NIST PQC                     │
+│ Algorithm                 Family                   Level       CNSA 2.0                 NIST PQC                     │
 │                                                                                                                      │
-│ML-KEM-1024                ML-KEM                  5            PASS                     OK                           │
-│ML-KEM-768                 ML-KEM                  3            FAIL                     OK                           │
-│ML-DSA-87                  ML-DSA                  5            PASS                     OK                           │
-│ML-DSA-65                  ML-DSA                  3            FAIL                     OK                           │
-│SLH-DSA-SHAKE-256s         SLH-DSA                 5            PASS                     OK                           │
-│AES-256-GCM                AES                     1            PASS                     PASS                         │
-│SHA-384                    SHA-2                   2            PASS                     PASS                         │
-│X25519                     ECDH                    0            FAIL                     FAIL                         │
-│X25519-ML-KEM-768          Hybrid-KEM              3            FAIL                     OK                           │
-│ECDSA-P521                 ECDSA                   0            FAIL                     FAIL                         │
-│XMSS                       XMSS                    5            PASS                     PASS                         │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
+│▶ML-KEM-1024               ML-KEM                   5           PASS                     OK                           │
+│ ML-KEM-768                ML-KEM                   3           FAIL                     OK                           │
+│ ML-DSA-87                 ML-DSA                   5           PASS                     OK                           │
+│ ML-DSA-65                 ML-DSA                   3           FAIL                     OK                           │
+│ SLH-DSA-SHAKE-256s        SLH-DSA                  5           PASS                     OK                           │
+│ AES-256-GCM               AES                      1           PASS                     PASS                         │
+│ SHA-384                   SHA-2                    2           PASS                     PASS                         │
+│ X25519                    ECDH                     0           FAIL                     FAIL                         │
+│ X25519-ML-KEM-768         Hybrid-KEM               3           FAIL                     OK                           │
+│ ECDSA-P521                ECDSA                    0           FAIL                     FAIL                         │
+│ XMSS                      XMSS                     5           PASS                     PASS                         │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -40,5 +33,12 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ ML-KEM-1024 ─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│[NIST PQC] 'ML-KEM-1024' uses NIST-approved PQC algorithm (FIPS 203/204/205)                                          │
+│  Req: FIPS 203/204/205: approved                                                                                     │
+│  NIST PQC: NIST PQC                                                                                                  │
+│  Fix: Review the requirement and update the SBOM accordingly. Consult the EU CRA regulation (EU 2024/2847) for det...│
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  Algo: 11 │ Certs: 1 │ Keys: 2 │ Quantum: 82%
-                               ↑↓ scroll │  Tab switch  / search  e export  ? help  q quit
+                               ↑↓ select │  Tab switch  / search  e export  ? help  q quit
