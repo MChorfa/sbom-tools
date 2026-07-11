@@ -118,6 +118,11 @@ pub fn cvss_score_color(score: f32, scheme: &crate::tui::theme::ColorScheme) -> 
     }
 }
 
+/// EPSS probability at/above which a vulnerability counts as "likely
+/// exploited soon" — keeps the moderate color band, the row badge gate, and
+/// the triage header count in lockstep.
+pub const HIGH_EPSS_THRESHOLD: f64 = 0.1;
+
 /// Background color for an EPSS exploit-probability badge.
 ///
 /// Bands mirror the CLI markdown / diff-mode TUI: high (>=50%) red,
@@ -126,7 +131,7 @@ pub fn cvss_score_color(score: f32, scheme: &crate::tui::theme::ColorScheme) -> 
 pub fn epss_band_color(epss: f64, scheme: &crate::tui::theme::ColorScheme) -> Color {
     if epss >= 0.5 {
         scheme.critical
-    } else if epss >= 0.1 {
+    } else if epss >= HIGH_EPSS_THRESHOLD {
         scheme.warning
     } else {
         scheme.text_muted

@@ -627,3 +627,137 @@ fn cbom_selected_row_uses_theme_selection_bg() {
     );
 }
 
+/// Two-severity fixture: full-card path with the triage row underneath.
+fn triage_view_app(active_tab: ViewTab) -> ViewApp {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+
+    let mut kev_comp = Component::new("kev-lib".to_string(), "kev-ref".to_string())
+        .with_version("1.0.0".to_string());
+    let mut kev_vuln = VulnerabilityRef::new("CVE-2024-0001".to_string(), VulnerabilitySource::Nvd);
+    kev_vuln.severity = Some(Severity::Critical);
+    kev_vuln.is_kev = true;
+    kev_vuln.epss_score = Some(0.73);
+    kev_comp.vulnerabilities.push(kev_vuln);
+    sbom.components
+        .insert(CanonicalId::from_name_version("kev-lib", None), kev_comp);
+
+    let mut fix_comp = Component::new("fix-lib".to_string(), "fix-ref".to_string())
+        .with_version("2.0.0".to_string());
+    let mut fix_vuln = VulnerabilityRef::new("CVE-2024-0002".to_string(), VulnerabilitySource::Nvd);
+    fix_vuln.severity = Some(Severity::High);
+    fix_vuln.remediation = Some(crate::model::Remediation {
+        remediation_type: crate::model::RemediationType::Upgrade,
+        description: None,
+        fixed_version: Some("2.1.0".to_string()),
+    });
+    fix_comp.vulnerabilities.push(fix_vuln);
+    sbom.components
+        .insert(CanonicalId::from_name_version("fix-lib", None), fix_comp);
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = active_tab;
+    app
+}
+
+/// The triage row must render under the full severity cards, answering
+/// exploited/fixable/likely-exploited without touching a filter.
+#[test]
+fn view_vuln_triage_snapshots() {
+    for (w, h) in SIZES {
+        let mut app = triage_view_app(ViewTab::Vulnerabilities);
+        let text = render_to_text(w, h, |frame| {
+            render(frame, &mut app);
+        });
+        assert!(
+            text.contains("KEV 1") && text.contains("Fixable 1"),
+            "triage row must render at {w}x{h}:\n{text}"
+        );
+        insta::assert_snapshot!(format!("view_vuln_triage_{w}x{h}"), text);
+    }
+}
+
+/// Regression for the broadened compact trigger: an all-Critical SBOM must
+/// take the compact path instead of rows of empty '0' cards.
+#[test]
+fn all_critical_sbom_uses_compact_stats() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    for i in 0..2 {
+        let name = format!("crit-{i}");
+        let mut comp =
+            Component::new(name.clone(), format!("{name}-ref")).with_version("1.0.0".to_string());
+        let mut v = VulnerabilityRef::new(format!("CVE-2024-1{i:03}"), VulnerabilitySource::Nvd);
+        v.severity = Some(Severity::Critical);
+        comp.vulnerabilities.push(v);
+        sbom.components
+            .insert(CanonicalId::from_name_version(&name, None), comp);
+    }
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Vulnerabilities;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        !text.contains(" MEDIUM "),
+        "compact path must not render the empty MEDIUM card:\n{text}"
+    );
+    assert!(
+        text.contains("vulnerabilities"),
+        "compact summary must render:\n{text}"
+    );
+}
+
+/// Compact stats (single-severity SBOM) must show the full triage line —
+/// KEV, Fixable, and EPSS — as a full-width row even at 80 cols; embedded in
+/// the 35%-wide summary card the EPSS segment was clipped.
+#[test]
+fn view_vuln_compact_80x24_shows_full_triage_line() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    // Distinct vuln counts (3/2/1) keep the top-components bar order
+    // deterministic: ties preserve the SBOM map's arbitrary iteration order.
+    for i in 0..3 {
+        let name = format!("crit-{i}");
+        let mut comp =
+            Component::new(name.clone(), format!("{name}-ref")).with_version("1.0.0".to_string());
+        for j in 0..(3 - i) {
+            let mut v =
+                VulnerabilityRef::new(format!("CVE-2024-2{i}{j:02}"), VulnerabilitySource::Nvd);
+            v.severity = Some(Severity::Critical);
+            // Distinct CVSS scores: the table sorts severity -> cvss, and a
+            // full tie would surface the dedupe HashMap's random order.
+            v.cvss.push(crate::model::CvssScore {
+                version: crate::model::CvssVersion::V31,
+                base_score: 9.8 - (i as f32).mul_add(0.3, j as f32 * 0.1),
+                vector: None,
+                exploitability_score: None,
+                impact_score: None,
+            });
+            if i == 0 && j == 0 {
+                v.is_kev = true;
+                v.epss_score = Some(0.42);
+            }
+            if i == 1 && j == 0 {
+                v.remediation = Some(crate::model::Remediation {
+                    remediation_type: crate::model::RemediationType::Upgrade,
+                    description: None,
+                    fixed_version: Some("1.1.0".to_string()),
+                });
+            }
+            comp.vulnerabilities.push(v);
+        }
+        sbom.components
+            .insert(CanonicalId::from_name_version(&name, None), comp);
+    }
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Vulnerabilities;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("EPSS\u{2265}10% 1"),
+        "the EPSS triage count must survive 80 cols:\n{text}"
+    );
+    insta::assert_snapshot!("view_vuln_compact_80x24", text);
+}
