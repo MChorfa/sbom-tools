@@ -19,6 +19,30 @@ pub fn category_color(category: LicenseCategory) -> Color {
     }
 }
 
+/// Map a `LicenseCategory` to the redundant (colorblind-safe) glyph the legend
+/// overlay advertises. Keep in sync with `category_glyph_str`.
+pub fn category_glyph(category: LicenseCategory) -> &'static str {
+    match category {
+        LicenseCategory::Permissive | LicenseCategory::PublicDomain => "✓",
+        LicenseCategory::StrongCopyleft | LicenseCategory::NetworkCopyleft => "©",
+        LicenseCategory::WeakCopyleft => "◐",
+        LicenseCategory::Proprietary => "⊘",
+        LicenseCategory::Unknown => "?",
+    }
+}
+
+/// String-typed variant of [`category_glyph`] for the view path, keyed on
+/// `LicenseCategory::as_str()` names (case-insensitive).
+pub fn category_glyph_str(category: &str) -> &'static str {
+    match category.to_lowercase().as_str() {
+        "permissive" | "public domain" => "✓",
+        "copyleft" | "network copyleft" | "strong copyleft" => "©",
+        "weak copyleft" => "◐",
+        "proprietary" | "commercial" => "⊘",
+        _ => "?",
+    }
+}
+
 /// Map a `RiskLevel` to a theme color.
 pub fn risk_level_color(risk: RiskLevel) -> Color {
     let scheme = colors();
@@ -168,4 +192,37 @@ pub fn render_license_characteristics_lines(license: &str) -> Vec<Line<'static>>
     }
 
     lines
+}
+
+#[cfg(test)]
+mod glyph_tests {
+    use super::{category_glyph, category_glyph_str};
+    use crate::tui::license_utils::LicenseCategory;
+
+    /// Every category has a glyph, and the string-typed view path agrees with
+    /// the typed one for every variant (regression test for the legend
+    /// advertising a symbol system no list row rendered).
+    #[test]
+    fn category_glyph_covers_all_categories() {
+        let all = [
+            LicenseCategory::Permissive,
+            LicenseCategory::WeakCopyleft,
+            LicenseCategory::StrongCopyleft,
+            LicenseCategory::NetworkCopyleft,
+            LicenseCategory::Proprietary,
+            LicenseCategory::PublicDomain,
+            LicenseCategory::Unknown,
+        ];
+        for cat in all {
+            let glyph = category_glyph(cat);
+            assert!(!glyph.is_empty());
+            assert_eq!(
+                category_glyph_str(cat.as_str()),
+                glyph,
+                "string path disagrees for {:?} (as_str: {})",
+                cat,
+                cat.as_str()
+            );
+        }
+    }
 }

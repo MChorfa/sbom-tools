@@ -375,38 +375,6 @@ fn aibom_tab_click_selects_a_profile_specific_tab() {
     assert_eq!(app.active_tab, target, "click on {needle} @col {col}");
 }
 
-/// Temporary literal-guard for the four files fixed by the CBOM/tree theme
-/// routing: no raw `Color::` variants may be reintroduced (they bypass the
-/// active theme and break light/high-contrast/NO_COLOR rendering).
-///
-/// Scoped to exactly these files — the six dedicated CBOM tab files still
-/// carry raw literals and are fixed by a later theming PR, whose repo-wide CI
-/// grep supersedes this test.
-#[test]
-fn no_raw_color_variants_in_themed_view_chrome() {
-    let sources = [
-        ("view/ui.rs", include_str!("../ui.rs")),
-        (
-            "view/views/overview.rs",
-            include_str!("../views/overview.rs"),
-        ),
-        (
-            "view/views/dependencies.rs",
-            include_str!("../views/dependencies.rs"),
-        ),
-        ("widgets/tree.rs", include_str!("../../widgets/tree.rs")),
-    ];
-    for (name, src) in sources {
-        for (i, line) in src.lines().enumerate() {
-            assert!(
-                !line.contains("Color::"),
-                "{name}:{}: raw Color:: literal bypasses the theme: {line}",
-                i + 1
-            );
-        }
-    }
-}
-
 /// Regression: a GPL-licensed component must count into the copyleft (⚠)
 /// bucket of the Licenses risk summary, not "unknown" (the old string match
 /// compared against "Strong Copyleft", which the category never stringifies
@@ -706,6 +674,24 @@ fn all_critical_sbom_uses_compact_stats() {
         text.contains("vulnerabilities"),
         "compact summary must render:\n{text}"
     );
+}
+
+/// Lock the legend overlay vocabulary (severity letters, license glyphs) to
+/// the shared helpers: the legend and the list rows must not drift apart.
+/// 80x30 because the popup is 60% of frame height: at 80x24 the last legend
+/// rows (including the Proprietary glyph) are clipped and would go unlocked.
+#[test]
+fn view_legend_overlay_80x30() {
+    let mut app = demo_view_app(ViewTab::Licenses);
+    app.toggle_legend();
+    let text = render_to_text(80, 30, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("\u{2298}"),
+        "the full license vocabulary (incl. \u{2298} Proprietary) must be visible:\n{text}"
+    );
+    insta::assert_snapshot!("view_legend_overlay_80x30", text);
 }
 
 /// Compact stats (single-severity SBOM) must show the full triage line —

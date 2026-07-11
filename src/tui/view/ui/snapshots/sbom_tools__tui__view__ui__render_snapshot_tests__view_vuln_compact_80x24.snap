@@ -1,0 +1,28 @@
+---
+source: src/tui/view/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  VIEW  │ SBOM │ CycloneDX  │ [SBOM]
+
+« [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  »
+
+────────────────────────────────────────────────────────────────────────────────
+┌──────────────────────────┐┌ Top Affected ────────────────────────────────────┐
+│ Critical  6 vulnerabiliti││crit-0           3 ██████████████████████████████ │
+│                          ││crit-1           2 ████████████████████░░░░░░░░░░ │
+└──────────────────────────┘└──────────────────────────────────────────────────┘
+⚡  KEV 1 [k] · Fixable 1 · EPSS≥10% 1
+Filter:  All  KEV:  Off  Sort:  Severity  Dedupe:  On  Group:  Component
+[f] filter [k] kev [s] sort [d] dedupe [g] group [E/C] fold [Tab] next group
+┌ Vulnerabilities (1 of 6 Critical) ───────┐┌ Group Details ───────────────────┐
+│ Vuln ID              CV F CWE            ││crit-0  (3 vulnerabilities)       │
+│▶├─▶ crit-0 (3)  max:                     ││  Max CVSS: 9.8                   │
+│ ├─▶ crit-1 (2)  max:                     ││                                  │
+│ └─▶ crit-2 (1)  max:                     ││CVEs (3):                         │
+│                                          ││ C   9.8 CVE-2024-2000 KEV        │
+│                                          ││ C   9.7 CVE-2024-2001            │
+│                                          ││ C   9.6 CVE-2024-2002            │
+│                                          ││                                  │
+└──────────────────────────────────────────┘└──────────────────────────────────┘
+ Components: 3 │ Vulns: 6 (6C/0H) │ Licenses: 1
+    …  Tab switch  / search  e export  ? help  q quit [y] copy CVE-2024-2000

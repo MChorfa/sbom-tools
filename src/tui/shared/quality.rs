@@ -454,9 +454,9 @@ pub fn priority_style(priority: u8) -> Style {
 /// Continuous RGB gradient bar color for better visual differentiation.
 /// Score 0 → dark red, 50 → yellow, 100 → green.
 ///
-/// The gradient is dark-theme-tuned; other themes (light, and high-contrast,
-/// which `NO_COLOR` forces) get the discrete theme-derived score buckets so
-/// bars stay legible.
+/// The gradient is dark-theme-tuned; other themes (light, high-contrast, and
+/// monochrome, which `NO_COLOR` forces) get the discrete theme-derived score
+/// buckets so bars stay legible.
 fn bar_grade_style(score: f32) -> Style {
     bar_grade_style_for(score, crate::tui::theme::current_theme_name())
 }
@@ -2131,8 +2131,9 @@ pub fn render_quality_recommendations(
 mod bar_style_tests {
     use super::*;
 
-    /// Off-dark themes (light, and high-contrast, which NO_COLOR forces) must
-    /// use the discrete theme-derived buckets, not the dark-tuned RGB ramp.
+    /// Off-dark themes (light, high-contrast, and monochrome, which NO_COLOR
+    /// forces) must use the discrete theme-derived buckets, not the dark-tuned
+    /// RGB ramp.
     #[test]
     fn bar_gradient_uses_discrete_buckets_off_dark() {
         // Pin the global theme: score_style reads it, and both sides of the
@@ -2143,6 +2144,7 @@ mod bar_style_tests {
             bar_grade_style_for(85.0, "high-contrast"),
             score_style(85.0)
         );
+        assert_eq!(bar_grade_style_for(85.0, "monochrome"), score_style(85.0));
         match bar_grade_style_for(85.0, "dark").fg {
             Some(Color::Rgb(..)) => {}
             other => panic!("dark theme keeps the RGB ramp, got {other:?}"),

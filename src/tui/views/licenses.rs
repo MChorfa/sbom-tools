@@ -866,7 +866,11 @@ fn render_license_table(
                         Cell::from(license_display),
                         Cell::from(entry.components.len().to_string()),
                         Cell::from(Span::styled(
-                            entry.category.as_str(),
+                            format!(
+                                "{} {}",
+                                crate::tui::shared::licenses::category_glyph(entry.category),
+                                entry.category.as_str()
+                            ),
                             Style::default().fg(cat_color),
                         )),
                     ])

@@ -308,11 +308,19 @@ fn handle_global_fallback(app: &mut super::App, key: KeyEvent) {
         KeyCode::Char('e') => app.toggle_export(),
         KeyCode::Char('l') => app.toggle_legend(),
         KeyCode::Char('T') => {
-            // Toggle theme (dark -> light -> high-contrast) and save preference
+            // Toggle theme (dark -> light -> high-contrast) and save preference.
+            // Monochrome is sticky (NO_COLOR): the toggle is a no-op there, and
+            // skipping the save keeps the user's colored preference intact for
+            // sessions without NO_COLOR.
+            let before = crate::tui::theme::current_theme_name();
             let theme_name = toggle_theme();
-            let mut prefs = TuiPreferences::load();
-            prefs.theme = theme_name.parse().unwrap_or_default();
-            let _ = prefs.save();
+            if theme_name != before
+                && let Ok(parsed) = theme_name.parse()
+            {
+                let mut prefs = TuiPreferences::load();
+                prefs.theme = parsed;
+                let _ = prefs.save();
+            }
         }
         // View switcher (V key in multi-comparison modes)
         KeyCode::Char('V') => {

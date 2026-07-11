@@ -130,7 +130,11 @@ fn render_license_list(
                 Cell::from(Span::styled(license.as_str(), license_style)),
                 Cell::from(count_cell),
                 Cell::from(Span::styled(
-                    category.as_str(),
+                    format!(
+                        "{} {}",
+                        crate::tui::shared::licenses::category_glyph(*category),
+                        category.as_str()
+                    ),
                     Style::default().fg(cat_color),
                 )),
             ])
