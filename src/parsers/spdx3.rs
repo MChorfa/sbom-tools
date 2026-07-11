@@ -36,10 +36,33 @@ impl Spdx3Parser {
     /// Parse SPDX 3.0 JSON-LD content
     fn parse_json_ld(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
         let content = super::strip_bom(content);
-        let doc: Spdx3Document =
+        let mut doc: Spdx3Document =
             serde_json::from_str(content).map_err(|e| ParseError::JsonError(e.to_string()))?;
 
+        // The official 3.0.1 JSON schema also permits a document that IS a
+        // single bare element (no @graph, no element array — the schema's
+        // else-branch; e.g. the spdx-3-model person1/tool1 examples). Such
+        // a document deserializes above as an empty Spdx3Document; re-read
+        // it as the one element it is.
+        if Self::is_bare_element(&doc) {
+            let element: Spdx3Element = serde_json::from_str(content)
+                .map_err(|e| ParseError::JsonError(e.to_string()))?;
+            doc.element = Some(vec![element]);
+        }
+
         Ok(self.convert_to_normalized(doc))
+    }
+
+    /// Whether a parsed top-level document is actually a bare single
+    /// element (typed, but with no element/@graph payload and not an
+    /// SpdxDocument envelope).
+    fn is_bare_element(doc: &Spdx3Document) -> bool {
+        doc.element.is_none()
+            && doc.graph.is_none()
+            && doc
+                .type_
+                .as_deref()
+                .is_some_and(|t| t != "SpdxDocument")
     }
 
     /// Parse from a JSON reader (streaming)
@@ -47,8 +70,32 @@ impl Spdx3Parser {
         &self,
         reader: R,
     ) -> Result<NormalizedSbom, ParseError> {
-        let doc: Spdx3Document =
+        // Buffer into a Value so the rare bare-single-element form (see
+        // parse_json_ld) can be re-read as an element without a second
+        // pass over the stream. The clone below only happens for that form
+        // — a single element, so it stays small.
+        let value: serde_json::Value =
             serde_json::from_reader(reader).map_err(|e| ParseError::JsonError(e.to_string()))?;
+        let is_bare = value.get("element").is_none()
+            && value.get("@graph").is_none()
+            && value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| t != "SpdxDocument");
+        let bare_element = if is_bare {
+            Some(
+                serde_json::from_value::<Spdx3Element>(value.clone())
+                    .map_err(|e| ParseError::JsonError(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let mut doc: Spdx3Document =
+            serde_json::from_value(value).map_err(|e| ParseError::JsonError(e.to_string()))?;
+
+        if let Some(element) = bare_element {
+            doc.element = Some(vec![element]);
+        }
 
         Ok(self.convert_to_normalized(doc))
     }
@@ -241,6 +288,21 @@ impl Spdx3Parser {
                         if doc.description.is_none() {
                             doc.description = inner.description;
                         }
+                        if doc.profile_conformance.is_none() {
+                            doc.profile_conformance = inner.profile_conformance;
+                        }
+                        if doc.data_license.is_none() {
+                            doc.data_license = inner.data_license;
+                        }
+                        if doc.namespace_map.is_none() {
+                            doc.namespace_map = inner.namespace_map;
+                        }
+                        if doc.imports.is_none() {
+                            doc.imports = inner.imports;
+                        }
+                        if doc.verified_using.is_none() {
+                            doc.verified_using = inner.verified_using;
+                        }
                     }
                     _ => {} // Skip unknown element types
                 }
@@ -334,10 +396,15 @@ impl Spdx3Parser {
         // Store SPDX 3.0-specific data in extensions (Phases 2, 4)
         let mut spdx_ext = serde_json::Map::new();
         if let Some(data_license) = &doc.data_license {
-            spdx_ext.insert(
-                "dataLicense".to_string(),
-                serde_json::Value::String(data_license.clone()),
-            );
+            // Canonical 3.0.1 dataLicense is an IRI ref to a
+            // simplelicensing_LicenseExpression element — resolve it to the
+            // expression ("CC0-1.0"). Unresolvable values (inline literals,
+            // NoAssertion consts) keep the raw string.
+            let resolved = license_elements
+                .get(data_license)
+                .cloned()
+                .unwrap_or_else(|| data_license.clone());
+            spdx_ext.insert("dataLicense".to_string(), serde_json::Value::String(resolved));
         }
         if let Some(ns_map) = &doc.namespace_map
             && !ns_map.is_empty()
@@ -1695,6 +1762,15 @@ struct Spdx3DocumentMeta {
     creation_info: Option<Spdx3CreationInfoRef>,
     root_element: Option<Vec<String>>,
     description: Option<String>,
+    profile_conformance: Option<Vec<String>>,
+    /// AnyLicenseInfo reference — in canonical documents an IRI string
+    /// pointing at a simplelicensing_LicenseExpression element (resolved
+    /// against the graph when emitting extensions), not a bare literal.
+    data_license: Option<String>,
+    namespace_map: Option<Vec<Spdx3NamespaceMap>>,
+    #[serde(rename = "import")]
+    imports: Option<Vec<Spdx3ExternalMap>>,
+    verified_using: Option<Vec<Spdx3IntegrityMethod>>,
 }
 
 /// SPDX 3.0 Package (Software profile)
@@ -2563,7 +2639,7 @@ mod tests {
         assert_eq!(
             sbom.document.created,
             DateTime::parse_from_rfc3339("2026-07-10T15:23:05Z")
-                .unwrap()
+                .expect("valid RFC3339")
                 .with_timezone(&Utc)
         );
         assert!(
@@ -2589,6 +2665,46 @@ mod tests {
             Some("example-package"),
             "rootElement must resolve through the software_Sbom container"
         );
+        assert_eq!(
+            sbom.document.distribution_classification.as_deref(),
+            Some("core, software, simpleLicensing"),
+            "profileConformance must lift from the @graph SpdxDocument node"
+        );
+        let ext = sbom
+            .extensions
+            .spdx
+            .as_ref()
+            .expect("spdx extensions present");
+        assert_eq!(
+            ext.get("dataLicense").and_then(|v| v.as_str()),
+            Some("CC0-1.0"),
+            "dataLicense IRI ref must resolve through the LicenseExpression element"
+        );
+    }
+
+    /// A bare single-element document (no @graph, no element array) is
+    /// valid per the official 3.0.1 JSON schema's else-branch (e.g. the
+    /// spdx-3-model person1/tool1 examples) and must parse to that element
+    /// on both the string and reader paths.
+    #[test]
+    fn spdx3_bare_single_element_document_parses() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "type": "software_Package", "spdxId": "urn:pkg", "name": "solo",
+          "software_packageVersion": "3.2.1",
+          "creationInfo": {"specVersion": "3.0.1", "created": "2026-01-01T00:00:00Z"}
+        }"#;
+        let sbom = Spdx3Parser::new()
+            .parse_str(doc)
+            .expect("bare element must parse");
+        assert_eq!(sbom.component_count(), 1);
+        let pkg = spdx3_component(&sbom, "solo");
+        assert_eq!(pkg.version.as_deref(), Some("3.2.1"));
+
+        let sbom2 = Spdx3Parser::new()
+            .parse_json_reader(doc.as_bytes())
+            .expect("reader path must parse the bare element too");
+        assert_eq!(sbom2.component_count(), 1);
     }
 
     /// The other schema-valid creationInfo form — an inline object (the
