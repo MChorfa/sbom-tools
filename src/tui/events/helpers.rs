@@ -30,11 +30,12 @@ pub(super) fn get_selected_component_name(app: &App) -> Option<String> {
             None
         }
         AppMode::Matrix => {
-            // Get SBOM name from selected row in matrix
+            // Get SBOM name from selected row in matrix (display -> raw via
+            // the sort permutation)
             if let Some(ref result) = app.data.matrix_result {
-                let row = app.tabs.matrix.selected_row;
-                if row < result.sboms.len() {
-                    return Some(result.sboms[row].name.clone());
+                let order = crate::tui::views::ordered_sbom_indices(result, &app.tabs.matrix);
+                if let Some(&raw) = order.get(app.tabs.matrix.selected_row) {
+                    return Some(result.sboms[raw].name.clone());
                 }
             }
             None

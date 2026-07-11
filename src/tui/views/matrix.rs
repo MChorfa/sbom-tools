@@ -14,7 +14,13 @@ use ratatui::{
 };
 
 /// Render the matrix comparison view
-pub fn render_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, state: &MatrixState) {
+pub fn render_matrix(
+    f: &mut Frame,
+    area: Rect,
+    result: &MatrixResult,
+    state: &MatrixState,
+    status: Option<&str>,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -41,7 +47,7 @@ pub fn render_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, state: &M
     render_clustering(f, chunks[2], result, state);
 
     // Status bar
-    render_status_bar(f, chunks[3], result, state);
+    render_status_bar(f, chunks[3], result, state, status);
 
     // Render overlays
     if state.show_pair_diff {
@@ -107,18 +113,107 @@ fn render_header(f: &mut Frame, area: Rect, result: &MatrixResult, state: &Matri
     f.render_widget(header, area);
 }
 
+/// Display order of SBOM indices for BOTH matrix axes (the matrix stays
+/// symmetric: one permutation applied to rows and columns). Same
+/// descending-base + reverse-on-Ascending convention as
+/// `ordered_comparison_indices`. Cluster sort concatenates cluster members in
+/// order, then outliers, producing the block-diagonal heatmap; it is the
+/// identity when no clustering was computed.
+pub(crate) fn ordered_sbom_indices(result: &MatrixResult, state: &MatrixState) -> Vec<usize> {
+    use crate::tui::app::{MatrixSortBy, SortDirection};
+
+    let n = result.sboms.len();
+    let avg = |i: usize| -> f64 {
+        if n <= 1 {
+            return 0.0;
+        }
+        (0..n)
+            .filter(|&j| j != i)
+            .map(|j| result.get_similarity(i, j))
+            .sum::<f64>()
+            / (n - 1) as f64
+    };
+
+    let mut idx: Vec<usize> = (0..n).collect();
+    match state.sort_by {
+        MatrixSortBy::Name => {
+            idx.sort_by(|a, b| result.sboms[*b].name.cmp(&result.sboms[*a].name));
+        }
+        MatrixSortBy::AvgSimilarity => {
+            idx.sort_by(|a, b| {
+                avg(*b)
+                    .partial_cmp(&avg(*a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        MatrixSortBy::ComponentCount => {
+            idx.sort_by(|a, b| {
+                result.sboms[*b]
+                    .component_count
+                    .cmp(&result.sboms[*a].component_count)
+            });
+        }
+        MatrixSortBy::Cluster => {
+            if let Some(clustering) = &result.clustering {
+                let mut ordered: Vec<usize> = clustering
+                    .clusters
+                    .iter()
+                    .flat_map(|c| c.members.iter().copied())
+                    .chain(clustering.outliers.iter().copied())
+                    .filter(|&i| i < n)
+                    .collect();
+                // Guard against engine results that omit an index.
+                let mut seen = vec![false; n];
+                ordered.retain(|&i| !std::mem::replace(&mut seen[i], true));
+                ordered.extend((0..n).filter(|&i| !seen[i]));
+                idx = ordered;
+            }
+        }
+    }
+
+    if matches!(state.sort_direction, SortDirection::Ascending) {
+        idx.reverse();
+    }
+    idx
+}
+
 fn render_similarity_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, state: &MatrixState) {
+    if result.sboms.len() < 2 {
+        crate::tui::widgets::render_empty_state_enhanced(
+            f,
+            area,
+            "\u{2205}",
+            "Need at least 2 SBOMs for a matrix comparison",
+            None,
+            None,
+        );
+        return;
+    }
     let scheme = colors();
     let is_active = matches!(state.active_panel, MatrixPanel::Matrix);
+    // selected_row/selected_col/focus_row/focus_col are DISPLAY indices; the
+    // permutation maps display -> raw SBOM index for data lookups.
+    let order = ordered_sbom_indices(result, state);
+    let n = order.len();
     let selected_row = state.selected_row;
     let selected_col = state.selected_col;
 
-    // Create header row with SBOM names (truncated)
-    let mut header_cells = vec![Cell::from("").style(Style::default().fg(scheme.primary))];
-    for (j, sbom) in result.sboms.iter().enumerate() {
-        let name: String = sbom.name.chars().take(8).collect();
+    // Stateless column viewport: keep the selected column visible.
+    let name_width: u16 = 9;
+    let cell_width: u16 = 6;
+    let cols_fit =
+        usize::from((area.width.saturating_sub(2 + name_width)) / (cell_width + 1)).max(1);
+    let col_offset = selected_col.saturating_sub(cols_fit - 1);
+    let col_end = (col_offset + cols_fit).min(n);
 
-        // Highlight column header if in highlight mode
+    // Header row with SBOM names (display order, viewport window)
+    let mut header_cells = vec![Cell::from("").style(Style::default().fg(scheme.primary))];
+    for (j, &raw_j) in order.iter().enumerate().take(col_end).skip(col_offset) {
+        let name: String = result.sboms[raw_j]
+            .name
+            .chars()
+            .take(cell_width as usize)
+            .collect();
         let header_style = if state.highlight_row_col && j == selected_col {
             Style::default()
                 .fg(scheme.accent)
@@ -130,29 +225,26 @@ fn render_similarity_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, st
         } else {
             Style::default().fg(scheme.primary)
         };
-
         header_cells.push(Cell::from(name).style(header_style));
     }
     let header = Row::new(header_cells).bottom_margin(1);
 
-    // Create matrix rows with filtering based on threshold and focus mode
-    let rows: Vec<Row> = result
-        .sboms
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| {
-            // In focus mode, only show focused row
+    // Matrix rows in display order
+    let rows: Vec<Row> = (0..n)
+        .filter(|i| {
             if state.focus_mode
                 && let Some(focus_row) = state.focus_row
+                && state.focus_col.is_none()
             {
                 return *i == focus_row;
             }
             true
         })
-        .map(|(i, row_sbom)| {
+        .map(|i| {
+            let raw_i = order[i];
+            let row_sbom = &result.sboms[raw_i];
             let row_name: String = row_sbom.name.chars().take(8).collect();
 
-            // Highlight row name if in highlight mode
             let row_name_style = if state.highlight_row_col && i == selected_row {
                 Style::default()
                     .fg(scheme.accent)
@@ -169,50 +261,45 @@ fn render_similarity_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, st
 
             let mut cells = vec![Cell::from(row_name).style(row_name_style)];
 
-            for j in 0..result.sboms.len() {
-                // In focus mode with column focus, only show focused column
-                if state.focus_mode
-                    && let Some(focus_col) = state.focus_col
-                    && j != focus_col
-                    && i != selected_row
-                {
-                    // Skip this column in focus mode
-                }
-
-                let similarity = result.get_similarity(i, j);
+            for (j, &raw_j) in order.iter().enumerate().take(col_end).skip(col_offset) {
+                let similarity = result.get_similarity(raw_i, raw_j);
                 let is_selected = i == selected_row && j == selected_col;
                 let is_in_selected_row_or_col =
                     state.highlight_row_col && (i == selected_row || j == selected_col);
-
-                // Check threshold filter
                 let passes_threshold = state.passes_threshold(similarity);
 
+                // Column focus: dim every cell outside the focused column
+                // (except the focused row's cells, so the cross stays readable).
+                let focus_dimmed = state.focus_mode
+                    && state.focus_col.is_some_and(|fc| j != fc)
+                    && state.focus_row.is_none_or(|fr| i != fr);
+
+                let is_diagonal = raw_i == raw_j;
                 let cell_style = if is_selected {
                     Style::default()
                         .bg(scheme.accent)
                         .fg(scheme.badge_fg_dark)
                         .add_modifier(Modifier::BOLD)
-                } else if i == j {
-                    // Diagonal
-                    Style::default().fg(scheme.muted)
-                } else if !passes_threshold && i != j {
-                    // Dim cells that don't pass threshold
+                } else if is_diagonal || focus_dimmed || !passes_threshold {
                     Style::default().fg(scheme.muted)
                 } else if is_in_selected_row_or_col {
-                    // Highlight row/column
-                    let color = similarity_to_color(similarity);
+                    let bg = similarity_to_color(similarity);
                     Style::default()
-                        .fg(color)
+                        .bg(bg)
+                        .fg(scheme.badge_fg_for(bg))
                         .add_modifier(Modifier::UNDERLINED)
                 } else {
-                    // Color based on similarity
-                    let color = similarity_to_color(similarity);
-                    Style::default().fg(color)
+                    // Heatmap: bg carries the similarity; the % digits stay
+                    // the non-color magnitude cue.
+                    let bg = similarity_to_color(similarity);
+                    Style::default().bg(bg).fg(scheme.badge_fg_for(bg))
                 };
 
-                let cell_text = if i == j {
+                let cell_text = if is_diagonal {
                     " - ".to_string()
-                } else if !passes_threshold && !is_selected && !is_in_selected_row_or_col {
+                } else if focus_dimmed
+                    || (!passes_threshold && !is_selected && !is_in_selected_row_or_col)
+                {
                     "  ·  ".to_string()
                 } else {
                     format!("{:.0}%", similarity * 100.0)
@@ -225,13 +312,9 @@ fn render_similarity_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, st
         })
         .collect();
 
-    // Calculate column widths
-    let n = result.sboms.len();
-    let name_width = 9;
-    let cell_width = 6;
-    let mut constraints = vec![Constraint::Length(name_width as u16)];
-    for _ in 0..n {
-        constraints.push(Constraint::Length(cell_width as u16));
+    let mut constraints = vec![Constraint::Length(name_width)];
+    for _ in col_offset..col_end {
+        constraints.push(Constraint::Length(cell_width));
     }
 
     let border_color = if is_active {
@@ -239,7 +322,16 @@ fn render_similarity_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, st
     } else {
         scheme.text
     };
-    let title = " Similarity Matrix [z: zoom, r: row, c: col, Enter: diff] ".to_string();
+    let title = if n > cols_fit {
+        format!(
+            " Similarity Matrix ({}-{}/{}) [z: focus, r: row, c: col, Enter: diff] ",
+            col_offset + 1,
+            col_end,
+            n
+        )
+    } else {
+        " Similarity Matrix [z: focus, r: row, c: col, Enter: diff] ".to_string()
+    };
 
     let table = Table::new(rows, constraints).header(header).block(
         Block::default()
@@ -253,15 +345,24 @@ fn render_similarity_matrix(f: &mut Frame, area: Rect, result: &MatrixResult, st
 
 fn render_pair_details(f: &mut Frame, area: Rect, result: &MatrixResult, state: &MatrixState) {
     let scheme = colors();
-    let row = state.selected_row;
-    let col = state.selected_col;
-
-    let (sbom_a, sbom_b) = if row < result.sboms.len() && col < result.sboms.len() {
-        (&result.sboms[row], &result.sboms[col])
-    } else {
+    let order = ordered_sbom_indices(result, state);
+    let (Some(&row), Some(&col)) = (order.get(state.selected_row), order.get(state.selected_col))
+    else {
+        // Degenerate selection: keep the chrome instead of a borderless void.
+        let block = Block::default()
+            .title(" Pair Details ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(scheme.info));
+        let placeholder = Paragraph::new(Line::from(Span::styled(
+            "No pair selected",
+            Style::default().fg(scheme.text_muted),
+        )))
+        .block(block);
+        f.render_widget(placeholder, area);
         return;
     };
 
+    let (sbom_a, sbom_b) = (&result.sboms[row], &result.sboms[col]);
     let similarity = result.get_similarity(row, col);
 
     let mut text = vec![
@@ -445,7 +546,13 @@ fn render_clustering(f: &mut Frame, area: Rect, result: &MatrixResult, state: &M
     f.render_widget(paragraph, area);
 }
 
-fn render_status_bar(f: &mut Frame, area: Rect, result: &MatrixResult, _state: &MatrixState) {
+fn render_status_bar(
+    f: &mut Frame,
+    area: Rect,
+    result: &MatrixResult,
+    _state: &MatrixState,
+    status: Option<&str>,
+) {
     let scheme = colors();
     // Calculate average similarity
     let total_pairs = result.num_pairs();
@@ -455,7 +562,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, result: &MatrixResult, _state: &
         0.0
     };
 
-    let status = Line::from(vec![
+    let mut spans = vec![
         Span::styled("Pairs: ", Style::default().fg(scheme.text_muted)),
         Span::styled(total_pairs.to_string(), Style::default().fg(scheme.primary)),
         Span::raw("  "),
@@ -464,22 +571,52 @@ fn render_status_bar(f: &mut Frame, area: Rect, result: &MatrixResult, _state: &
             format!("{:.0}%", avg_similarity * 100.0),
             Style::default().fg(similarity_to_color(avg_similarity)),
         ),
-        Span::raw("  │  "),
-        Span::styled("/", Style::default().fg(scheme.primary)),
-        Span::raw(": search  "),
-        Span::styled("t", Style::default().fg(scheme.primary)),
-        Span::raw(": threshold  "),
-        Span::styled("z", Style::default().fg(scheme.primary)),
-        Span::raw(": focus  "),
-        Span::styled("H", Style::default().fg(scheme.primary)),
-        Span::raw(": highlight  "),
-        Span::styled("x", Style::default().fg(scheme.primary)),
-        Span::raw(": export"),
-    ]);
+        Span::raw("  \u{2502}  "),
+    ];
+    extend_with_status_or_hints(&mut spans, area, status, "matrix");
 
     let block = Block::default().borders(Borders::ALL);
-    let paragraph = Paragraph::new(status).block(block);
+    let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, area);
+}
+
+/// Shared status-bar tail for the multi modes: the pending status message
+/// (previously computed by every handler and silently dropped) or the shared
+/// footer hints, width-fitted after the count spans.
+pub(crate) fn extend_with_status_or_hints(
+    spans: &mut Vec<Span<'static>>,
+    area: Rect,
+    status: Option<&str>,
+    mode: &str,
+) {
+    let scheme = colors();
+    if let Some(msg) = status {
+        spans.push(Span::styled(
+            "\u{2139} ",
+            Style::default().fg(scheme.accent),
+        ));
+        spans.push(Span::styled(
+            msg.to_string(),
+            Style::default().fg(scheme.accent).bold(),
+        ));
+        return;
+    }
+    let hints = crate::tui::theme::FooterHints::for_multi_mode(mode);
+    let counts_width = Line::from(spans.clone()).width() as u16;
+    let budget = area
+        .width
+        .saturating_sub(2) // borders
+        .saturating_sub(counts_width);
+    let (mut kept, mut elided) = crate::tui::theme::fit_footer_hints(&hints, budget);
+    // fit_footer_hints never drops the global tail; on narrow status bars
+    // with wide counts (multi dashboard at 80 cols) even the globals
+    // overflow — degrade from the FRONT so "K keys" and "q quit" survive
+    // instead of being clipped mid-word by the border.
+    while kept.len() > 1 && crate::tui::theme::footer_hints_width(&kept) > budget {
+        kept.remove(0);
+        elided = true;
+    }
+    spans.extend(crate::tui::theme::render_footer_hints(&kept, elided));
 }
 
 /// Render pair diff modal
@@ -494,8 +631,11 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
 
     f.render_widget(Clear, modal_area);
 
-    let row = state.selected_row;
-    let col = state.selected_col;
+    let order = ordered_sbom_indices(result, state);
+    let (Some(&row), Some(&col)) = (order.get(state.selected_row), order.get(state.selected_col))
+    else {
+        return;
+    };
 
     let (Some(sbom_a), Some(sbom_b)) = (result.sboms.get(row), result.sboms.get(col)) else {
         return;
