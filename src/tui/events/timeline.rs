@@ -71,6 +71,8 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
         // Sort and filter
         KeyCode::Char('s') => {
             app.tabs.timeline.toggle_sort();
+            // Search matches are display positions; recompute under the new order.
+            update_timeline_search_matches(app);
             app.set_status_message(format!(
                 "Sort: {} {}",
                 app.tabs.timeline.sort_by.label(),
@@ -79,6 +81,7 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
         }
         KeyCode::Char('S') => {
             app.tabs.timeline.toggle_sort_direction();
+            update_timeline_search_matches(app);
         }
         KeyCode::Char('f') => {
             app.tabs.timeline.toggle_component_filter();
@@ -105,6 +108,15 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
         // Version diff modal
         KeyCode::Char('d') => {
             app.tabs.timeline.toggle_version_diff_modal();
+        }
+
+        // Chart metric
+        KeyCode::Char('m') => {
+            app.tabs.timeline.chart_metric = app.tabs.timeline.chart_metric.next();
+            app.set_status_message(format!(
+                "Chart metric: {}",
+                app.tabs.timeline.chart_metric.label()
+            ));
         }
 
         // Statistics panel
@@ -193,17 +205,18 @@ pub(super) fn update_timeline_search_matches(app: &mut App) {
         return;
     }
 
+    // Matches are DISPLAY positions so Enter selects the highlighted row
+    // under any sort (mirrors update_multi_diff_search_matches).
     let matches: Vec<usize> = app
         .data
         .timeline_result
         .as_ref()
         .map_or_else(Vec::new, |result| {
-            result
-                .sboms
+            crate::tui::views::ordered_version_indices(result, &app.tabs.timeline)
                 .iter()
                 .enumerate()
-                .filter(|(_, sbom)| sbom.name.to_lowercase().contains(&query))
-                .map(|(i, _)| i)
+                .filter(|(_, raw)| result.sboms[**raw].name.to_lowercase().contains(&query))
+                .map(|(display, _)| display)
                 .collect()
         });
 
@@ -216,11 +229,33 @@ pub(super) fn handle_timeline_jump(app: &mut App, key: KeyEvent) {
             app.tabs.timeline.cancel_jump_mode();
         }
         KeyCode::Enter => {
+            // Validate the input BEFORE execute_jump: a rejected jump leaves
+            // the (display-index) selection untouched, and remapping it as if
+            // it were a raw version would relocate the selection and lie.
+            let target = app
+                .tabs
+                .timeline
+                .jump_input
+                .parse::<usize>()
+                .ok()
+                .map(|v| v.saturating_sub(1))
+                .filter(|t| *t < app.tabs.timeline.total_versions);
             app.tabs.timeline.execute_jump();
-            app.set_status_message(format!(
-                "Jumped to version {}",
-                app.tabs.timeline.selected_version + 1
-            ));
+            if let Some(raw) = target {
+                // execute_jump sets a RAW (chronological) version; the
+                // selection is a display index — map through the permutation.
+                if let Some(result) = app.data.timeline_result.as_ref()
+                    && let Some(display) =
+                        crate::tui::views::ordered_version_indices(result, &app.tabs.timeline)
+                            .iter()
+                            .position(|&r| r == raw)
+                {
+                    app.tabs.timeline.selected_version = display;
+                }
+                app.set_status_message(format!("Jumped to version {}", raw + 1));
+            } else {
+                app.set_status_message("Invalid version number".to_string());
+            }
         }
         KeyCode::Backspace => {
             app.tabs.timeline.jump_pop();

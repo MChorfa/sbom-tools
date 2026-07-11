@@ -34,6 +34,8 @@ pub struct TimelineState {
     pub chart_zoom: u8,
     /// Scroll offset for bar chart
     pub chart_scroll: usize,
+    /// Which series the timeline bar chart plots
+    pub chart_metric: TimelineChartMetric,
 }
 
 impl TimelineState {
@@ -56,6 +58,7 @@ impl TimelineState {
             jump_input: String::new(),
             chart_zoom: 1,
             chart_scroll: 0,
+            chart_metric: TimelineChartMetric::default(),
         }
     }
 
@@ -78,6 +81,7 @@ impl TimelineState {
             jump_input: String::new(),
             chart_zoom: 1,
             chart_scroll: 0,
+            chart_metric: TimelineChartMetric::default(),
         }
     }
 
@@ -255,6 +259,33 @@ impl TimelineSortBy {
             Self::Changes => Self::ComponentCount,
             Self::ComponentCount => Self::Name,
             Self::Name => Self::Chronological,
+        }
+    }
+}
+
+/// Which series the timeline bar chart plots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimelineChartMetric {
+    #[default]
+    Components,
+    Vulnerabilities,
+    Dependencies,
+}
+
+impl TimelineChartMetric {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Components => "Components",
+            Self::Vulnerabilities => "Vulnerabilities",
+            Self::Dependencies => "Dependencies",
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Components => Self::Vulnerabilities,
+            Self::Vulnerabilities => Self::Dependencies,
+            Self::Dependencies => Self::Components,
         }
     }
 }
