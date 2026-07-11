@@ -2675,6 +2675,11 @@ pub(crate) struct LicenseViewState {
     pub component_scroll: usize,
     /// Total components for the selected license
     pub component_total: usize,
+    /// Cached pairwise SPDX compatibility report. The SBOM is immutable in
+    /// view mode, so this is computed once (lazily, on first Licenses render)
+    /// instead of running the O(unique_licenses squared) check per frame.
+    pub compat_report:
+        Option<std::sync::Arc<crate::tui::license_utils::LicenseCompatibilityReport>>,
 }
 
 impl LicenseViewState {
@@ -2686,6 +2691,7 @@ impl LicenseViewState {
             group_by: LicenseGroupBy::License,
             component_scroll: 0,
             component_total: 0,
+            compat_report: None,
         }
     }
 

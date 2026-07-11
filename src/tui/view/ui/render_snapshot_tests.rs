@@ -983,3 +983,34 @@ fn crypto_header_surfaces_danger_counts_at_80_cols() {
         );
     }
 }
+
+/// The single-SBOM License tab previously threw away the engine's pairwise
+/// SPDX conflicts; the list header must count them and the detail panel must
+/// name the clashing pair.
+#[test]
+fn license_tab_surfaces_compat_conflicts() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    for (name, lic) in [("gpl-lib", "GPL-2.0-only"), ("apache-lib", "Apache-2.0")] {
+        let mut comp =
+            Component::new(name.to_string(), format!("{name}-ref")).with_version("1.0".to_string());
+        comp.licenses
+            .add_declared(crate::model::LicenseExpression::new(lic.to_string()));
+        sbom.components
+            .insert(CanonicalId::from_name_version(name, None), comp);
+    }
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Licenses;
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("conflicts"),
+        "list header must count conflicts:\n{text}"
+    );
+    assert!(
+        text.contains("Compatibility"),
+        "detail panel must render the Compatibility section:\n{text}"
+    );
+    insta::assert_snapshot!("view_licenses_conflicts_120x40", text);
+}
