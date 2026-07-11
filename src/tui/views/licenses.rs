@@ -204,6 +204,16 @@ fn render_diff_licenses(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         return;
     }
 
+    // Scannable before→after risk posture header (Quality and Compliance
+    // both lead with one; Licenses was the only risk-bearing diff tab
+    // without it). Skipped entirely when the empty states above fire.
+    let header_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
+        .split(area);
+    render_license_delta_header(frame, header_chunks[0], result);
+    let area = header_chunks[1];
+
     // Per-component license churn can exist without any net new/removed license
     // across the whole SBOM (e.g. a component swaps MIT for GPL while another
     // adds MIT). Previously this view early-returned "No license changes" in
@@ -323,6 +333,82 @@ fn render_diff_licenses(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             );
         }
     }
+}
+
+/// Before→after license risk posture: counts of incoming/outgoing licenses,
+/// the High/Critical-risk transition, and the incoming risk distribution.
+fn render_license_delta_header(frame: &mut Frame, area: Rect, result: &crate::diff::DiffResult) {
+    use crate::tui::license_utils::{LicenseInfo, RiskLevel};
+
+    let scheme = colors();
+    // Counted over the RAW engine lists, not the risk-filtered build —
+    // the header must reflect the whole diff regardless of the active filter.
+    let hc = |lics: &[crate::diff::LicenseChange]| {
+        lics.iter()
+            .filter(|l| LicenseInfo::from_spdx(&l.license).risk_level >= RiskLevel::High)
+            .count()
+    };
+    let hc_removed = hc(&result.licenses.removed_licenses);
+    let hc_new = hc(&result.licenses.new_licenses);
+
+    let (label, tone) = match hc_new.cmp(&hc_removed) {
+        std::cmp::Ordering::Greater => ("regressed", scheme.removed),
+        std::cmp::Ordering::Less => ("improved", scheme.added),
+        std::cmp::Ordering::Equal => ("unchanged", scheme.border),
+    };
+
+    let title = format!(
+        " Licenses: +{} new  -{} removed  \u{2502}  High/Critical: {hc_removed} \u{2192} {hc_new}  {label} ",
+        result.licenses.new_licenses.len(),
+        result.licenses.removed_licenses.len(),
+    );
+
+    // Incoming risk distribution + component-change count.
+    let mut counts = [0usize; 4]; // [Critical, High, Medium, Low]
+    for l in &result.licenses.new_licenses {
+        match LicenseInfo::from_spdx(&l.license).risk_level {
+            RiskLevel::Critical => counts[0] += 1,
+            RiskLevel::High => counts[1] += 1,
+            RiskLevel::Medium => counts[2] += 1,
+            RiskLevel::Low => counts[3] += 1,
+        }
+    }
+    // Same mapping as the table rows below (risk_color): Critical=error,
+    // High=warning, Medium=info, Low=success — one color legend per screen.
+    let risk_colors = [scheme.error, scheme.warning, scheme.info, scheme.success];
+    let risk_labels = ["Critical", "High", "Medium", "Low"];
+    let mut spans = vec![Span::styled(
+        "Incoming risk: ",
+        Style::default().fg(scheme.text_muted),
+    )];
+    for i in 0..4 {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            format!("{} {}", risk_labels[i], counts[i]),
+            if counts[i] > 0 {
+                Style::default().fg(risk_colors[i]).bold()
+            } else {
+                Style::default().fg(scheme.muted)
+            },
+        ));
+    }
+    spans.push(Span::styled(
+        format!(
+            "  \u{2502}  Component changes: {}",
+            result.licenses.component_changes.len()
+        ),
+        Style::default().fg(scheme.text_muted),
+    ));
+
+    let para = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(tone)),
+    );
+    frame.render_widget(para, area);
 }
 
 /// Render the per-component license-change panel: one row per component whose

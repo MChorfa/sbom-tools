@@ -1030,13 +1030,18 @@ fn render_violation_table(
         .skip(scroll_offset)
         .take(visible_end - scroll_offset)
         .map(|(i, v)| {
-            let style = if i == selected {
-                Style::default().bg(colors().selection)
+            // Selection is conveyed by shape + weight as well as background,
+            // so it survives NO_COLOR / monochrome terminals.
+            let is_selected = i == selected;
+            let style = if is_selected {
+                Style::default().bg(colors().selection).bold()
             } else {
                 Style::default()
             };
+            let marker = if is_selected { "\u{25b6} " } else { "  " };
             Row::new(vec![
-                Cell::from(v.severity.as_str()).style(Style::default().fg(v.severity_color)),
+                Cell::from(format!("{marker}{}", v.severity))
+                    .style(Style::default().fg(v.severity_color)),
                 Cell::from(v.category.as_str()),
                 Cell::from(v.message.as_str()),
                 Cell::from(v.element.as_str()).style(Style::default().fg(colors().text_muted)),
@@ -1149,12 +1154,16 @@ fn render_grouped_violation_table(
         .skip(scroll_offset)
         .take(visible_end - scroll_offset)
         .map(|(i, item)| {
+            // Selection is conveyed by shape + weight as well as background,
+            // so it survives NO_COLOR / monochrome terminals. The \u{25bc}/\u{25b6}
+            // arrows in header text mark EXPANSION state and are kept as-is.
             let is_selected = i == selected;
             let base_style = if is_selected {
-                Style::default().bg(colors().selection)
+                Style::default().bg(colors().selection).bold()
             } else {
                 Style::default()
             };
+            let marker = if is_selected { "\u{25b6}" } else { " " };
 
             match item {
                 GroupedItem::Header {
@@ -1165,7 +1174,7 @@ fn render_grouped_violation_table(
                     let arrow = if *expanded { "\u{25bc}" } else { "\u{25b6}" };
                     let header_text = format!("{arrow} {element} ({count} issues)");
                     Row::new(vec![
-                        Cell::from(""),
+                        Cell::from(marker),
                         Cell::from(""),
                         Cell::from(header_text).style(
                             Style::default()
@@ -1179,7 +1188,7 @@ fn render_grouped_violation_table(
                 GroupedItem::Violation(v) => {
                     let cleaned = clean_message(&v.message, &v.element);
                     Row::new(vec![
-                        Cell::from(format!("  {}", v.severity))
+                        Cell::from(format!("{marker} {}", v.severity))
                             .style(Style::default().fg(v.severity_color)),
                         Cell::from(format!("  {}", v.category)),
                         Cell::from(format!("  {cleaned}")),

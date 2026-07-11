@@ -642,6 +642,64 @@ mod diff_alignment {
         );
     }
 
+    /// The Licenses tab leads with a before→after risk posture header.
+    #[test]
+    fn licenses_tab_renders_delta_header() {
+        let mut result = DiffResult::default();
+        result
+            .licenses
+            .new_licenses
+            .push(crate::diff::LicenseChange {
+                license: "GPL-3.0-only".to_string(),
+                components: vec!["libx".to_string()],
+                family: "GPL".to_string(),
+            });
+        result
+            .licenses
+            .removed_licenses
+            .push(crate::diff::LicenseChange {
+                license: "MIT".to_string(),
+                components: vec!["liby".to_string()],
+                family: "MIT".to_string(),
+            });
+        let mut app = app_with_result(result, TabKind::Licenses);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("Licenses: +1 new"),
+            "header title must render:\n{text}"
+        );
+        assert!(
+            text.contains("High/Critical: 0 \u{2192} 1"),
+            "risk transition must render (GPL is High risk):\n{text}"
+        );
+        assert!(
+            text.contains("regressed"),
+            "posture label must render:\n{text}"
+        );
+    }
+
+    /// Compliance selection must be visible without color: the selected row
+    /// carries a \u{25b6} marker.
+    #[test]
+    fn compliance_selection_marker_visible() {
+        let mut app = super::demo_app(TabKind::Compliance);
+        // Cycle Overview -> NewViolations so a violation table renders.
+        crate::tui::events::handle_key_event(
+            &mut app,
+            super::key(crossterm::event::KeyCode::Char('v')),
+        );
+        let text = render_to_text(120, 40, |frame| {
+            app.prepare_render();
+            render(frame, &mut app);
+        });
+        assert!(
+            text.contains("\u{25b6} ERROR")
+                || text.contains("\u{25b6} WARN")
+                || text.contains("\u{25b6} INFO"),
+            "selected violation row must carry the marker:\n{text}"
+        );
+    }
+
 }
 
 #[test]
