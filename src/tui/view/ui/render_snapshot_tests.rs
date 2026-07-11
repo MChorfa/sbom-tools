@@ -550,3 +550,80 @@ fn view_overview_eol_compact_snapshot() {
         insta::assert_snapshot!("view_overview_eol_80x24", text);
     });
 }
+
+/// Build a `ViewApp` on the CBOM fixture with a deterministic tab.
+fn cbom_view_app(active_tab: ViewTab) -> ViewApp {
+    pin_theme();
+    let (sbom, profile) = crate::tui::test_support::cbom_single();
+    let mut app = ViewApp::new(sbom, crate::tui::test_support::CBOM, profile);
+    app.active_tab = active_tab;
+    app
+}
+
+/// Baseline snapshots for all six CBOM tabs at both sizes. The theme-routing
+/// PR that introduces these is glyph-neutral (render_to_text strips styles),
+/// so they lock a clean baseline for the following data-surfacing PRs.
+#[test]
+fn snapshot_cbom_tabs() {
+    let tabs = [
+        ("crypto", ViewTab::Crypto),
+        ("algorithms", ViewTab::Algorithms),
+        ("certificates", ViewTab::Certificates),
+        ("keys", ViewTab::Keys),
+        ("protocols", ViewTab::Protocols),
+        ("pqc_compliance", ViewTab::PqcCompliance),
+    ];
+    for (name, tab) in tabs {
+        for (w, h) in SIZES {
+            let mut app = cbom_view_app(tab);
+            let text = render_to_text(w, h, |frame| {
+                render(frame, &mut app);
+            });
+            insta::assert_snapshot!(format!("cbom_{name}_{w}x{h}"), text);
+        }
+    }
+}
+
+/// Regression: selected CBOM list rows must take their background from the
+/// theme's selection slot (the hardcoded DarkGray defeated the high-contrast
+/// selection fix and lost contrast under the light theme).
+#[test]
+fn cbom_selected_row_uses_theme_selection_bg() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = cbom_view_app(ViewTab::Crypto);
+    app.crypto_list_selected = 0;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut app))
+        .expect("render");
+
+    let buffer = terminal.backend().buffer();
+    let expected = crate::tui::theme::colors().selection;
+    let found = (0..24u16).any(|y| {
+        (0..80u16).any(|x| {
+            buffer
+                .cell((x, y))
+                .is_some_and(|c| c.style().bg == Some(expected))
+        })
+    });
+    assert!(
+        found,
+        "some cell must carry the theme selection background {expected:?}"
+    );
+    let darkgray = (0..24u16).any(|y| {
+        (0..80u16).any(|x| {
+            buffer
+                .cell((x, y))
+                .is_some_and(|c| c.style().bg == Some(ratatui::style::Color::DarkGray))
+        })
+    });
+    assert!(
+        !darkgray,
+        "no cell may use the hardcoded DarkGray selection background"
+    );
+}
+

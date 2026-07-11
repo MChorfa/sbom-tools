@@ -6,12 +6,13 @@ use crate::model::{ComponentType, CryptoAssetType, CryptoMaterialState};
 use crate::tui::view::app::ViewApp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 /// Render the keys tab (CBOM mode).
 pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = crate::tui::theme::colors();
     let keys: Vec<_> = app
         .sbom
         .components
@@ -50,20 +51,18 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
             let (state_icon, state_color) = mat
                 .and_then(|m| m.state.as_ref())
                 .map(|s| match s {
-                    CryptoMaterialState::Active => ("●", Color::Green),
-                    CryptoMaterialState::Compromised => ("!", Color::Red),
-                    CryptoMaterialState::Deactivated => ("○", Color::DarkGray),
-                    CryptoMaterialState::Destroyed => ("X", Color::DarkGray),
-                    _ => ("?", Color::Yellow),
+                    CryptoMaterialState::Active => ("●", scheme.success),
+                    CryptoMaterialState::Compromised => ("!", scheme.critical),
+                    CryptoMaterialState::Deactivated => ("○", scheme.text_muted),
+                    CryptoMaterialState::Destroyed => ("X", scheme.text_muted),
+                    _ => ("?", scheme.warning),
                 })
-                .unwrap_or(("?", Color::DarkGray));
+                .unwrap_or(("?", scheme.text_muted));
 
             let type_label = mat.map(|m| m.material_type.to_string()).unwrap_or_default();
 
             let style = if i == app.keys_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                crate::tui::theme::Styles::selected()
             } else {
                 Style::default()
             };
@@ -73,7 +72,7 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Span::raw(&comp.name),
                 Span::styled(
                     format!("  ({type_label})"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(scheme.text_muted),
                 ),
             ]))
             .style(style)
@@ -117,10 +116,10 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
         lines.push(Line::from(format!("Type:   {}", mat.material_type)));
         if let Some(state) = &mat.state {
             let color = match state {
-                CryptoMaterialState::Active => Color::Green,
-                CryptoMaterialState::Compromised => Color::Red,
-                CryptoMaterialState::Deactivated => Color::DarkGray,
-                _ => Color::Yellow,
+                CryptoMaterialState::Active => scheme.success,
+                CryptoMaterialState::Compromised => scheme.critical,
+                CryptoMaterialState::Deactivated => scheme.text_muted,
+                _ => scheme.warning,
             };
             lines.push(Line::from(vec![
                 Span::raw("State:  "),
@@ -140,7 +139,7 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
             lines.push(Line::raw(""));
             lines.push(Line::styled(
                 "-- Secured By --",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             lines.push(Line::from(format!("Mechanism: {}", sb.mechanism)));
             if let Some(a) = &sb.algorithm_ref {

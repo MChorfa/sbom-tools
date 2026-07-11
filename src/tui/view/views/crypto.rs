@@ -8,7 +8,7 @@ use crate::quality::CryptographyMetrics;
 use crate::tui::view::app::ViewApp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
@@ -51,13 +51,14 @@ pub fn render_crypto(frame: &mut Frame, area: Rect, app: &ViewApp) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, metrics: &CryptographyMetrics) {
+    let scheme = crate::tui::theme::colors();
     let readiness = metrics.quantum_readiness_score();
     let readiness_color = if readiness >= 80.0 {
-        Color::Green
+        scheme.success
     } else if readiness >= 40.0 {
-        Color::Yellow
+        scheme.warning
     } else {
-        Color::Red
+        scheme.error
     };
 
     let mut spans = vec![
@@ -84,19 +85,23 @@ fn render_header(frame: &mut Frame, area: Rect, metrics: &CryptographyMetrics) {
     if metrics.weak_algorithm_count > 0 {
         spans.push(Span::styled(
             format!("| Weak:{} ", metrics.weak_algorithm_count),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(scheme.critical)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     if metrics.expired_certificates > 0 {
         spans.push(Span::styled(
             format!("| Expired:{} ", metrics.expired_certificates),
-            Style::default().fg(Color::Red),
+            Style::default().fg(scheme.error),
         ));
     }
     if metrics.compromised_keys > 0 {
         spans.push(Span::styled(
             format!("| Compromised:{} ", metrics.compromised_keys),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(scheme.critical)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -114,6 +119,7 @@ fn render_list(
     app: &ViewApp,
     crypto_components: &[&crate::model::Component],
 ) {
+    let scheme = crate::tui::theme::colors();
     let items: Vec<ListItem> = crypto_components
         .iter()
         .enumerate()
@@ -135,12 +141,14 @@ fn render_list(
                     if a.is_weak_by_name(&comp.name) {
                         Span::styled(
                             "!",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(scheme.critical)
+                                .add_modifier(Modifier::BOLD),
                         )
                     } else if a.is_quantum_safe() {
-                        Span::styled("Q", Style::default().fg(Color::Green))
+                        Span::styled("Q", Style::default().fg(scheme.success))
                     } else if a.nist_quantum_security_level == Some(0) {
-                        Span::styled("V", Style::default().fg(Color::Yellow))
+                        Span::styled("V", Style::default().fg(scheme.warning))
                     } else {
                         Span::raw(" ")
                     }
@@ -148,15 +156,16 @@ fn render_list(
                 .unwrap_or_else(|| Span::raw(" "));
 
             let style = if i == app.crypto_list_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                crate::tui::theme::Styles::selected()
             } else {
                 Style::default()
             };
 
             ListItem::new(Line::from(vec![
-                Span::styled(format!("[{type_label}] "), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("[{type_label}] "),
+                    Style::default().fg(scheme.primary),
+                ),
                 quantum_indicator,
                 Span::raw(" "),
                 Span::raw(&comp.name),
@@ -187,6 +196,7 @@ fn render_detail(
     app: &ViewApp,
     crypto_components: &[&crate::model::Component],
 ) {
+    let scheme = crate::tui::theme::colors();
     let selected = app
         .crypto_list_selected
         .min(crypto_components.len().saturating_sub(1));
@@ -221,7 +231,7 @@ fn render_detail(
         if let Some(algo) = &cp.algorithm_properties {
             lines.push(Line::styled(
                 "-- Algorithm Properties --",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             lines.push(Line::from(format!("Primitive: {}", algo.primitive)));
             if let Some(f) = &algo.algorithm_family {
@@ -241,11 +251,11 @@ fn render_detail(
             }
             if let Some(ql) = algo.nist_quantum_security_level {
                 let color = if ql == 0 {
-                    Color::Red
+                    scheme.error
                 } else if ql >= 3 {
-                    Color::Green
+                    scheme.success
                 } else {
-                    Color::Yellow
+                    scheme.warning
                 };
                 lines.push(Line::from(vec![
                     Span::raw("Quantum:   "),
@@ -254,22 +264,24 @@ fn render_detail(
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                     if ql == 0 {
-                        Span::styled(" VULNERABLE", Style::default().fg(Color::Red))
+                        Span::styled(" VULNERABLE", Style::default().fg(scheme.error))
                     } else {
-                        Span::styled(" SAFE", Style::default().fg(Color::Green))
+                        Span::styled(" SAFE", Style::default().fg(scheme.success))
                     },
                 ]));
             }
             if algo.is_weak_by_name(&comp.name) {
                 lines.push(Line::styled(
                     "WARNING: Weak/broken algorithm",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(scheme.critical)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             if algo.is_hybrid_pqc() {
                 lines.push(Line::styled(
                     "Hybrid PQC combiner",
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(scheme.primary),
                 ));
             }
             if !algo.crypto_functions.is_empty() {
@@ -299,7 +311,7 @@ fn render_detail(
         if let Some(cert) = &cp.certificate_properties {
             lines.push(Line::styled(
                 "-- Certificate Properties --",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             if let Some(s) = &cert.subject_name {
                 lines.push(Line::from(format!("Subject: {s}")));
@@ -312,11 +324,11 @@ fn render_detail(
             }
             if let Some(na) = &cert.not_valid_after {
                 let color = if cert.is_expired() {
-                    Color::Red
+                    scheme.error
                 } else if cert.is_expiring_soon(90) {
-                    Color::Yellow
+                    scheme.warning
                 } else {
-                    Color::Green
+                    scheme.success
                 };
                 lines.push(Line::from(vec![
                     Span::raw("Valid To:   "),
@@ -325,9 +337,9 @@ fn render_detail(
                         Style::default().fg(color),
                     ),
                     if cert.is_expired() {
-                        Span::styled(" EXPIRED", Style::default().fg(Color::Red))
+                        Span::styled(" EXPIRED", Style::default().fg(scheme.error))
                     } else if cert.is_expiring_soon(90) {
-                        Span::styled(" EXPIRING SOON", Style::default().fg(Color::Yellow))
+                        Span::styled(" EXPIRING SOON", Style::default().fg(scheme.warning))
                     } else {
                         Span::raw("")
                     },
@@ -341,15 +353,15 @@ fn render_detail(
         if let Some(mat) = &cp.related_crypto_material_properties {
             lines.push(Line::styled(
                 "-- Key Material Properties --",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             lines.push(Line::from(format!("Type:  {}", mat.material_type)));
             if let Some(state) = &mat.state {
                 let color = match state {
-                    crate::model::CryptoMaterialState::Active => Color::Green,
-                    crate::model::CryptoMaterialState::Compromised => Color::Red,
-                    crate::model::CryptoMaterialState::Deactivated => Color::DarkGray,
-                    _ => Color::Yellow,
+                    crate::model::CryptoMaterialState::Active => scheme.success,
+                    crate::model::CryptoMaterialState::Compromised => scheme.critical,
+                    crate::model::CryptoMaterialState::Deactivated => scheme.text_muted,
+                    _ => scheme.warning,
                 };
                 lines.push(Line::from(vec![
                     Span::raw("State: "),
@@ -370,7 +382,7 @@ fn render_detail(
         if let Some(proto) = &cp.protocol_properties {
             lines.push(Line::styled(
                 "-- Protocol Properties --",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             lines.push(Line::from(format!("Protocol: {}", proto.protocol_type)));
             if let Some(v) = &proto.version {

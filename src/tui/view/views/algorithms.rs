@@ -7,12 +7,13 @@ use crate::model::{ComponentType, CryptoAssetType};
 use crate::tui::view::app::{AlgorithmSortBy, ViewApp};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 /// Render the algorithms tab (CBOM mode).
 pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = crate::tui::theme::colors();
     let algorithms: Vec<_> = app
         .sbom
         .components
@@ -106,12 +107,14 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                     if a.is_weak_by_name(&comp.name) {
                         Span::styled(
                             "!",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(scheme.critical)
+                                .add_modifier(Modifier::BOLD),
                         )
                     } else if a.is_quantum_safe() {
-                        Span::styled("Q", Style::default().fg(Color::Green))
+                        Span::styled("Q", Style::default().fg(scheme.success))
                     } else {
-                        Span::styled("V", Style::default().fg(Color::Yellow))
+                        Span::styled("V", Style::default().fg(scheme.warning))
                     }
                 })
                 .unwrap_or_else(|| Span::raw(" "));
@@ -121,9 +124,7 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .unwrap_or("-");
 
             let style = if i == app.algorithms_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                crate::tui::theme::Styles::selected()
             } else {
                 Style::default()
             };
@@ -134,7 +135,7 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Span::raw(&comp.name),
                 Span::styled(
                     format!("  [{family}]"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(scheme.text_muted),
                 ),
             ]))
             .style(style)
@@ -199,11 +200,11 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
             }
             if let Some(ql) = algo.nist_quantum_security_level {
                 let color = if ql == 0 {
-                    Color::Red
+                    scheme.error
                 } else if ql >= 3 {
-                    Color::Green
+                    scheme.success
                 } else {
-                    Color::Yellow
+                    scheme.warning
                 };
                 lines.push(Line::from(vec![
                     Span::raw("Quantum:   "),
@@ -212,22 +213,24 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                     if ql == 0 {
-                        Span::styled(" VULNERABLE", Style::default().fg(Color::Red))
+                        Span::styled(" VULNERABLE", Style::default().fg(scheme.error))
                     } else {
-                        Span::styled(" SAFE", Style::default().fg(Color::Green))
+                        Span::styled(" SAFE", Style::default().fg(scheme.success))
                     },
                 ]));
             }
             if algo.is_weak_by_name(&comp.name) {
                 lines.push(Line::styled(
                     "WARNING: Weak/broken algorithm",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(scheme.critical)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             if algo.is_hybrid_pqc() {
                 lines.push(Line::styled(
                     "Hybrid PQC combiner",
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(scheme.primary),
                 ));
             }
             if !algo.crypto_functions.is_empty() {

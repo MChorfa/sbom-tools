@@ -8,12 +8,13 @@ use crate::quality::{ComplianceLevel, ViolationSeverity};
 use crate::tui::view::app::ViewApp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Wrap};
 
 /// Render the PQC compliance tab (CBOM mode).
 pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
+    let scheme = crate::tui::theme::colors();
     // Ensure compliance results are cached before borrowing sbom
     app.ensure_compliance_results();
 
@@ -74,14 +75,14 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         .count();
 
     let cnsa2_color = if cnsa2_errors == 0 {
-        Color::Green
+        scheme.success
     } else {
-        Color::Red
+        scheme.error
     };
     let pqc_color = if pqc_errors == 0 {
-        Color::Green
+        scheme.success
     } else {
-        Color::Red
+        scheme.error
     };
 
     let header_lines = vec![
@@ -150,22 +151,22 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                 .iter()
                 .any(|v| v.element.as_deref() == Some(&comp.name))
             {
-                Span::styled("FAIL", Style::default().fg(Color::Red))
+                Span::styled("FAIL", Style::default().fg(scheme.error))
             } else {
-                Span::styled("PASS", Style::default().fg(Color::Green))
+                Span::styled("PASS", Style::default().fg(scheme.success))
             };
 
             // Check NIST PQC status for this algorithm
             let pqc_status = if pqc_result.violations.iter().any(|v| {
                 v.element.as_deref() == Some(&comp.name) && v.severity == ViolationSeverity::Error
             }) {
-                Span::styled("FAIL", Style::default().fg(Color::Red))
+                Span::styled("FAIL", Style::default().fg(scheme.error))
             } else if pqc_result.violations.iter().any(|v| {
                 v.element.as_deref() == Some(&comp.name) && v.severity == ViolationSeverity::Info
             }) {
-                Span::styled("OK", Style::default().fg(Color::Green))
+                Span::styled("OK", Style::default().fg(scheme.success))
             } else {
-                Span::styled("PASS", Style::default().fg(Color::Green))
+                Span::styled("PASS", Style::default().fg(scheme.success))
             };
 
             Row::new(vec![
