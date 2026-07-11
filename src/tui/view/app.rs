@@ -125,6 +125,8 @@ pub struct ViewApp {
     pub(crate) keys_selected: usize,
     /// CBOM Protocols tab: selected index
     pub(crate) protocols_selected: usize,
+    /// CBOM PQC-Compliance tab: selected algorithm index
+    pub(crate) pqc_selected: usize,
 
     /// CBOM Algorithms tab: sort order
     pub(crate) algorithm_sort_by: AlgorithmSortBy,
@@ -133,6 +135,8 @@ pub struct ViewApp {
     pub(crate) models_selected: usize,
     /// AI-BOM Datasets tab: selected index
     pub(crate) datasets_selected: usize,
+    /// AI-BOM AI-Readiness tab: shared scroll offset for checks + recommendations
+    pub(crate) ai_readiness_scroll: usize,
 
     /// Bookmarked component canonical IDs (in-memory, no persistence)
     pub(crate) bookmarked: HashSet<String>,
@@ -226,9 +230,11 @@ impl ViewApp {
             certificates_selected: 0,
             keys_selected: 0,
             protocols_selected: 0,
+            pqc_selected: 0,
             algorithm_sort_by: AlgorithmSortBy::default(),
             models_selected: 0,
             datasets_selected: 0,
+            ai_readiness_scroll: 0,
             bookmarked: HashSet::new(),
             export_template: None,
             cra_sidecar: None,
@@ -294,6 +300,7 @@ impl ViewApp {
             ViewTab::Certificates => self.certificates_selected,
             ViewTab::Keys => self.keys_selected,
             ViewTab::Protocols => self.protocols_selected,
+            ViewTab::PqcCompliance => self.pqc_selected,
             _ => self.crypto_list_selected,
         }
     }
@@ -305,6 +312,7 @@ impl ViewApp {
             ViewTab::Certificates => &mut self.certificates_selected,
             ViewTab::Keys => &mut self.keys_selected,
             ViewTab::Protocols => &mut self.protocols_selected,
+            ViewTab::PqcCompliance => &mut self.pqc_selected,
             _ => &mut self.crypto_list_selected,
         }
     }
@@ -313,7 +321,7 @@ impl ViewApp {
     pub fn crypto_count_for_tab(&self) -> usize {
         use crate::model::{ComponentType, CryptoAssetType};
         let filter = match self.active_tab {
-            ViewTab::Algorithms => Some(CryptoAssetType::Algorithm),
+            ViewTab::Algorithms | ViewTab::PqcCompliance => Some(CryptoAssetType::Algorithm),
             ViewTab::Certificates => Some(CryptoAssetType::Certificate),
             ViewTab::Keys => Some(CryptoAssetType::RelatedCryptoMaterial),
             ViewTab::Protocols => Some(CryptoAssetType::Protocol),
@@ -346,6 +354,21 @@ impl ViewApp {
             .values()
             .filter(|c| c.component_type == ComponentType::MachineLearningModel)
             .count()
+    }
+
+    /// Max scroll offset for the AI-Readiness tab: one shared offset drives
+    /// both the checks table and the recommendations pane, so the bound is
+    /// the longer of the two lists.
+    #[must_use]
+    pub fn ai_readiness_max_scroll(&self) -> usize {
+        let checks = self
+            .quality_report
+            .ai_readiness_metrics
+            .as_ref()
+            .map_or(0, |m| m.checks.len());
+        checks
+            .max(self.quality_report.recommendations.len())
+            .saturating_sub(1)
     }
 
     /// Count `Data` components (Datasets tab).
@@ -881,7 +904,8 @@ impl ViewApp {
             | ViewTab::Algorithms
             | ViewTab::Certificates
             | ViewTab::Keys
-            | ViewTab::Protocols => {
+            | ViewTab::Protocols
+            | ViewTab::PqcCompliance => {
                 let sel = self.active_crypto_selected_mut();
                 *sel = sel.saturating_sub(1);
             }
@@ -891,7 +915,10 @@ impl ViewApp {
             ViewTab::Datasets => {
                 self.datasets_selected = self.datasets_selected.saturating_sub(1);
             }
-            ViewTab::Overview | ViewTab::PqcCompliance | ViewTab::AiReadiness => {}
+            ViewTab::AiReadiness => {
+                self.ai_readiness_scroll = self.ai_readiness_scroll.saturating_sub(1);
+            }
+            ViewTab::Overview => {}
         }
     }
 
@@ -913,7 +940,8 @@ impl ViewApp {
             | ViewTab::Algorithms
             | ViewTab::Certificates
             | ViewTab::Keys
-            | ViewTab::Protocols => {
+            | ViewTab::Protocols
+            | ViewTab::PqcCompliance => {
                 let max = self.crypto_count_for_tab().saturating_sub(1);
                 let sel = self.active_crypto_selected_mut();
                 *sel = sel.saturating_add(1).min(max);
@@ -926,7 +954,13 @@ impl ViewApp {
                 let max = self.dataset_count().saturating_sub(1);
                 self.datasets_selected = self.datasets_selected.saturating_add(1).min(max);
             }
-            ViewTab::Overview | ViewTab::PqcCompliance | ViewTab::AiReadiness => {}
+            ViewTab::AiReadiness => {
+                self.ai_readiness_scroll = self
+                    .ai_readiness_scroll
+                    .saturating_add(1)
+                    .min(self.ai_readiness_max_scroll());
+            }
+            ViewTab::Overview => {}
         }
     }
 
@@ -986,10 +1020,12 @@ impl ViewApp {
             | ViewTab::Algorithms
             | ViewTab::Certificates
             | ViewTab::Keys
-            | ViewTab::Protocols => *self.active_crypto_selected_mut() = 0,
+            | ViewTab::Protocols
+            | ViewTab::PqcCompliance => *self.active_crypto_selected_mut() = 0,
             ViewTab::Models => self.models_selected = 0,
             ViewTab::Datasets => self.datasets_selected = 0,
-            ViewTab::Overview | ViewTab::PqcCompliance | ViewTab::AiReadiness => {}
+            ViewTab::AiReadiness => self.ai_readiness_scroll = 0,
+            ViewTab::Overview => {}
         }
     }
 
@@ -1020,13 +1056,15 @@ impl ViewApp {
             | ViewTab::Algorithms
             | ViewTab::Certificates
             | ViewTab::Keys
-            | ViewTab::Protocols => {
+            | ViewTab::Protocols
+            | ViewTab::PqcCompliance => {
                 let max = self.crypto_count_for_tab();
                 *self.active_crypto_selected_mut() = max.saturating_sub(1);
             }
             ViewTab::Models => self.models_selected = self.ml_model_count().saturating_sub(1),
             ViewTab::Datasets => self.datasets_selected = self.dataset_count().saturating_sub(1),
-            ViewTab::Overview | ViewTab::PqcCompliance | ViewTab::AiReadiness => {}
+            ViewTab::AiReadiness => self.ai_readiness_scroll = self.ai_readiness_max_scroll(),
+            ViewTab::Overview => {}
         }
     }
 
@@ -3370,5 +3408,54 @@ mod tests {
         // Legacy Crypto tab counts all
         app.active_tab = ViewTab::Crypto;
         assert_eq!(app.crypto_count_for_tab(), 4);
+    }
+
+    /// Regression: PQC-Compliance previously fell through to the navigation
+    /// no-op arm while the footer advertised working arrow keys.
+    #[test]
+    fn pqc_compliance_navigation_clamps_selection() {
+        let mut sbom = NormalizedSbom::default();
+        for i in 0..5 {
+            let mut c = crate::model::Component::new(format!("algo-{i}"), format!("algo-{i}@1.0"));
+            c.component_type = crate::model::ComponentType::Cryptographic;
+            c.crypto_properties = Some(crate::model::CryptoProperties::new(
+                crate::model::CryptoAssetType::Algorithm,
+            ));
+            sbom.add_component(c);
+        }
+        let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+        app.active_tab = ViewTab::PqcCompliance;
+
+        app.navigate_down();
+        app.navigate_down();
+        assert_eq!(app.pqc_selected, 2);
+        app.go_last();
+        assert_eq!(app.pqc_selected, 4);
+        app.navigate_down();
+        assert_eq!(app.pqc_selected, 4, "selection must clamp at the last row");
+        app.go_first();
+        assert_eq!(app.pqc_selected, 0);
+    }
+
+    /// Regression: AI-Readiness previously fell through to the navigation
+    /// no-op arm; the scroll must move and clamp to the longer pane.
+    #[test]
+    fn ai_readiness_navigation_scrolls_and_clamps() {
+        let (sbom, profile) = crate::tui::test_support::aibom_single();
+        let mut app = ViewApp::new(sbom, "", profile);
+        app.active_tab = ViewTab::AiReadiness;
+
+        let max = app.ai_readiness_max_scroll();
+        assert!(max > 0, "AIBOM fixture must produce scrollable content");
+        for _ in 0..(max + 5) {
+            app.navigate_down();
+        }
+        assert_eq!(app.ai_readiness_scroll, max, "scroll must clamp at max");
+        app.go_first();
+        assert_eq!(app.ai_readiness_scroll, 0);
+        app.go_last();
+        assert_eq!(app.ai_readiness_scroll, max);
+        app.navigate_up();
+        assert_eq!(app.ai_readiness_scroll, max - 1);
     }
 }

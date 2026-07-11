@@ -1077,7 +1077,7 @@ impl FooterHints {
                 hints.insert(1, ("Enter", "detail"));
             }
             "pqc-compliance" => {
-                hints.insert(0, ("↑↓", "scroll"));
+                hints.insert(0, ("↑↓", "select"));
             }
             "models" | "datasets" => {
                 hints.insert(0, ("↑↓", "select"));

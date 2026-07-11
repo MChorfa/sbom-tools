@@ -510,9 +510,10 @@ pub fn render_quality_summary(
     area: Rect,
     report: &QualityReport,
     selected_rec: usize,
+    checks_scroll: usize,
 ) {
     if report.profile == ScoringProfile::AiReadiness {
-        render_ai_readiness_summary(frame, area, report, selected_rec);
+        render_ai_readiness_summary(frame, area, report, selected_rec, checks_scroll);
         return;
     }
 
@@ -657,6 +658,7 @@ fn render_ai_readiness_summary(
     area: Rect,
     report: &QualityReport,
     selected_rec: usize,
+    checks_scroll: usize,
 ) {
     let scheme = colors();
     let Some(metrics) = report.ai_readiness_metrics.as_ref() else {
@@ -783,9 +785,34 @@ fn render_ai_readiness_summary(
             .style(Style::default().fg(scheme.accent).bold())
             .bottom_margin(1),
     );
-    frame.render_widget(checks, chunks[2]);
+    let n_checks = metrics.checks.len();
+    let offset = checks_scroll.min(n_checks.saturating_sub(1));
+    let mut table_state = ratatui::widgets::TableState::default().with_offset(offset);
+    frame.render_stateful_widget(checks, chunks[2], &mut table_state);
+    // Visible rows: inner height minus borders, header and its bottom margin.
+    let visible = chunks[2].height.saturating_sub(2 + 2) as usize;
+    if n_checks > visible {
+        crate::tui::widgets::render_scrollbar(
+            frame,
+            chunks[2].inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            n_checks,
+            offset,
+        );
+    }
 
-    render_quality_recommendations(frame, chunks[3], report, selected_rec, 0);
+    // One shared offset scrolls both panes (coarse by design: the footer
+    // advertises a single up/down pair for the whole tab), each clamped to
+    // its own list so the shorter pane never scrolls into blank space.
+    render_quality_recommendations(
+        frame,
+        chunks[3],
+        report,
+        selected_rec,
+        checks_scroll.min(report.recommendations.len().saturating_sub(1)),
+    );
 }
 
 /// Render a compact 4-line header with grade, inline bar, score, profile, and strongest/weakest.

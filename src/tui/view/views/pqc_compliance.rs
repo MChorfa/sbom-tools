@@ -59,7 +59,11 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(5),
+            Constraint::Min(6),
+            Constraint::Length(7),
+        ])
         .split(area);
 
     // ── Header: compliance summary ──
@@ -146,11 +150,9 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                 .map_or("-".to_string(), |l| l.to_string());
 
             // Check CNSA 2.0 status for this algorithm
-            let cnsa2_status = if cnsa2_result
-                .violations
-                .iter()
-                .any(|v| v.element.as_deref() == Some(&comp.name))
-            {
+            let cnsa2_status = if cnsa2_result.violations.iter().any(|v| {
+                v.element.as_deref() == Some(&comp.name) && v.severity == ViolationSeverity::Error
+            }) {
                 Span::styled("FAIL", Style::default().fg(scheme.error))
             } else {
                 Span::styled("PASS", Style::default().fg(scheme.success))
@@ -179,6 +181,7 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         })
         .collect();
 
+    let selected = app.pqc_selected.min(algorithms.len() - 1);
     let table = Table::new(
         rows,
         [
@@ -190,7 +193,137 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         ],
     )
     .header(header_row)
-    .block(Block::default().borders(Borders::ALL));
+    .block(Block::default().borders(Borders::ALL))
+    .row_highlight_style(
+        Style::default()
+            .bg(scheme.selection)
+            .fg(scheme.text)
+            .add_modifier(Modifier::BOLD),
+    )
+    .highlight_symbol("\u{25b6}");
 
-    frame.render_widget(table, chunks[1]);
+    let mut table_state = ratatui::widgets::TableState::default().with_selected(Some(selected));
+    frame.render_stateful_widget(table, chunks[1], &mut table_state);
+    // Visible rows: borders (2) + header row + its bottom margin (2).
+    let visible = chunks[1].height.saturating_sub(4) as usize;
+    if algorithms.len() > visible {
+        crate::tui::widgets::render_scrollbar(
+            frame,
+            chunks[1].inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            algorithms.len(),
+            selected,
+        );
+    }
+
+    render_violation_detail(
+        frame,
+        chunks[2],
+        algorithms[selected],
+        cnsa2_result,
+        pqc_result,
+    );
+}
+
+/// Detail pane for the selected algorithm: every CNSA 2.0 / NIST PQC
+/// violation naming it, with requirement, standard references, and
+/// remediation guidance — the data the bare PASS/FAIL cells discard.
+fn render_violation_detail(
+    frame: &mut Frame,
+    area: Rect,
+    comp: &crate::model::Component,
+    cnsa2_result: &crate::quality::ComplianceResult,
+    pqc_result: &crate::quality::ComplianceResult,
+) {
+    let scheme = crate::tui::theme::colors();
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    let severity_color = |sev: ViolationSeverity| match sev {
+        ViolationSeverity::Error => scheme.error,
+        ViolationSeverity::Warning => scheme.warning,
+        ViolationSeverity::Info => scheme.info,
+    };
+
+    // One line per fact, each truncated to the pane width with an explicit
+    // ellipsis (no Wrap: wrapping made line counts unpredictable and cut
+    // remediation text mid-sentence with no marker).
+    for (tag, result) in [("[CNSA 2.0]", cnsa2_result), ("[NIST PQC]", pqc_result)] {
+        for v in result
+            .violations
+            .iter()
+            .filter(|v| v.element.as_deref() == Some(&comp.name))
+        {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    tag,
+                    Style::default()
+                        .fg(severity_color(v.severity))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    crate::tui::widgets::truncate_str(
+                        &v.message,
+                        inner_w.saturating_sub(tag.len() + 1),
+                    ),
+                    Style::default().fg(scheme.text),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Req: ", Style::default().fg(scheme.muted)),
+                Span::styled(
+                    crate::tui::widgets::truncate_str(&v.requirement, inner_w.saturating_sub(7)),
+                    Style::default().fg(scheme.text_muted),
+                ),
+            ]));
+            for r in &v.standard_refs {
+                lines.push(Line::from(Span::styled(
+                    crate::tui::widgets::truncate_str(
+                        &format!("  {}: {}", r.standard.label(), r.id),
+                        inner_w,
+                    ),
+                    Style::default().fg(scheme.text_muted),
+                )));
+            }
+            lines.push(Line::from(vec![
+                Span::styled("  Fix: ", Style::default().fg(scheme.success)),
+                Span::styled(
+                    crate::tui::widgets::truncate_str(
+                        v.remediation_guidance(),
+                        inner_w.saturating_sub(7),
+                    ),
+                    Style::default().fg(scheme.text),
+                ),
+            ]));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::styled(
+            "\u{2713} Compliant \u{2014} no violations for this algorithm.",
+            Style::default().fg(scheme.success),
+        ));
+    }
+
+    // Never clip silently: dual-failing algorithms produce more detail than
+    // the fixed pane holds — point at the Compliance tab for the rest.
+    let inner_h = area.height.saturating_sub(2) as usize;
+    if lines.len() > inner_h && inner_h >= 2 {
+        let hidden = lines.len() - (inner_h - 1);
+        lines.truncate(inner_h - 1);
+        lines.push(Line::styled(
+            format!("\u{2026} +{hidden} more lines \u{2014} see the Compliance tab"),
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
+
+    let detail = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", comp.name)),
+    );
+    frame.render_widget(detail, area);
 }

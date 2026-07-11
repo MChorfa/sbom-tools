@@ -300,6 +300,43 @@ fn crypto_list_scrolls_the_selection_into_view() {
 }
 
 #[test]
+fn pqc_selection_scrolls_into_view() {
+    let (sbom, profile) = crate::tui::test_support::cbom_single();
+    let mut app = ViewApp::new(sbom, crate::tui::test_support::CBOM, profile);
+    app.active_tab = ViewTab::PqcCompliance;
+
+    app.pqc_selected = 0;
+    let top = render_to_text(80, 24, |frame| render(frame, &mut app));
+    app.go_last();
+    assert!(app.pqc_selected > 0, "fixture must have several algorithms");
+    let scrolled = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert_ne!(
+        top, scrolled,
+        "selecting the last algorithm must scroll it into view / update the detail pane"
+    );
+}
+
+#[test]
+fn ai_readiness_scroll_reveals_rows_below_fold() {
+    let (sbom, profile) = crate::tui::test_support::aibom_single();
+    let mut app = ViewApp::new(sbom, AIBOM_BSI, profile);
+    app.active_tab = ViewTab::AiReadiness;
+
+    app.ai_readiness_scroll = 0;
+    let top = render_to_text(80, 24, |frame| render(frame, &mut app));
+    app.go_last();
+    assert!(
+        app.ai_readiness_scroll > 0,
+        "fixture must overflow the fold"
+    );
+    let scrolled = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert_ne!(
+        top, scrolled,
+        "scrolling must reveal checks/recommendations below the fold"
+    );
+}
+
+#[test]
 fn view_list_click_selects_the_item_under_the_cursor() {
     use crate::tui::view::events::handle_mouse_event;
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
