@@ -51,9 +51,23 @@ fn vendor_hash_violation(
 // --- vendor-hash threshold + severity ---------------------------------------
 
 #[test]
-fn vendor_hash_default_class_warns_below_50pct() {
-    // 4/10 = 40% coverage → below 50% threshold
+fn vendor_hash_default_class_errors_below_50pct() {
+    // 4/10 = 40% coverage → below the 50% threshold. The Phase 2 gate
+    // (Error below 50%) is the floor; pinning an explicit product class
+    // must never weaken it, so this stays an Error (not the class table's
+    // Warning) — same verdict as running Phase 2 with no class at all.
     let sbom = vendor_sbom(10, 4);
+    let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+        .with_product_class(CraProductClass::Default)
+        .check(&sbom);
+    assert_eq!(vendor_hash_violation(&res), Some(ViolationSeverity::Error));
+}
+
+#[test]
+fn vendor_hash_default_class_keeps_phase2_warning_above_50pct() {
+    // 6/10 = 60% — clears Default's 50% class bar, but the Phase 2 gate
+    // still warns below 80%; the class must not suppress the phase floor.
+    let sbom = vendor_sbom(10, 6);
     let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
         .with_product_class(CraProductClass::Default)
         .check(&sbom);
@@ -61,16 +75,6 @@ fn vendor_hash_default_class_warns_below_50pct() {
         vendor_hash_violation(&res),
         Some(ViolationSeverity::Warning)
     );
-}
-
-#[test]
-fn vendor_hash_default_class_clean_above_50pct() {
-    // 6/10 = 60% — clears Default's 50% bar
-    let sbom = vendor_sbom(10, 6);
-    let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
-        .with_product_class(CraProductClass::Default)
-        .check(&sbom);
-    assert_eq!(vendor_hash_violation(&res), None);
 }
 
 #[test]

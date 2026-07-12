@@ -47,7 +47,12 @@ impl ComplianceChecker {
         let attestation_present =
             any_ext(&[ExternalRefType::Attestation, ExternalRefType::Certification]);
 
-        let eucc_present = any_ext_url_contains(
+        let eucc_present = self.sidecar.as_ref().is_some_and(|s| {
+            s.eucc_protection_profile_id.is_some()
+                || s.eucc_target_of_evaluation.is_some()
+                || s.eucc_itsef_identifier.is_some()
+                || s.eucc_valid_until.is_some()
+        }) || any_ext_url_contains(
             &[ExternalRefType::Certification, ExternalRefType::Attestation],
             "eucc",
         ) || any_ext_url_contains(
@@ -311,43 +316,63 @@ impl ComplianceChecker {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let pct = (coverage * 100.0).round() as usize;
 
-                // Class-driven calibration overrides phase-based defaults
-                // when the operator pinned a CRA product class. Otherwise,
-                // fall through to the original Phase1/Phase2 thresholds for
-                // backwards compatibility.
-                let (severity, threshold_msg) = if self.has_explicit_product_class() {
-                    let threshold = self.vendor_hash_threshold();
-                    if coverage < threshold {
-                        let sev = self
-                            .class_severity(ClassCheck::VendorHashCoverage)
-                            .unwrap_or(ViolationSeverity::Warning);
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let thr_pct = (threshold * 100.0).round() as usize;
-                        (
-                            sev,
-                            format!(
-                                "below {thr_pct}% threshold for product class {}",
-                                self.effective_product_class().label()
-                            ),
-                        )
-                    } else {
-                        (ViolationSeverity::Info, String::new())
-                    }
+                // Phase-based thresholds are the floor; a pinned CRA product
+                // class can only escalate (tighter threshold or stronger
+                // severity), never weaken the phase gate — supplying MORE
+                // information must not relax enforcement.
+                let phase_gate = match self.level {
+                    ComplianceLevel::CraPhase2 if coverage < 0.50 => Some((
+                        ViolationSeverity::Error,
+                        "below 50% threshold".to_string(),
+                    )),
+                    ComplianceLevel::CraPhase2 if coverage < 0.80 => Some((
+                        ViolationSeverity::Warning,
+                        "below 80% threshold".to_string(),
+                    )),
+                    ComplianceLevel::CraPhase1 if coverage < 0.50 => Some((
+                        ViolationSeverity::Warning,
+                        "below 50% threshold".to_string(),
+                    )),
+                    _ => None,
+                };
+                let class_gate = if self.has_explicit_product_class()
+                    && coverage < self.vendor_hash_threshold()
+                {
+                    let sev = self
+                        .class_severity(ClassCheck::VendorHashCoverage)
+                        .unwrap_or(ViolationSeverity::Warning);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let thr_pct = (self.vendor_hash_threshold() * 100.0).round() as usize;
+                    Some((
+                        sev,
+                        format!(
+                            "below {thr_pct}% threshold for product class {}",
+                            self.effective_product_class().label()
+                        ),
+                    ))
                 } else {
-                    match self.level {
-                        ComplianceLevel::CraPhase2 if coverage < 0.50 => {
-                            (ViolationSeverity::Error, "below 50% threshold".to_string())
-                        }
-                        ComplianceLevel::CraPhase2 if coverage < 0.80 => (
-                            ViolationSeverity::Warning,
-                            "below 80% threshold".to_string(),
-                        ),
-                        ComplianceLevel::CraPhase1 if coverage < 0.50 => (
-                            ViolationSeverity::Warning,
-                            "below 50% threshold".to_string(),
-                        ),
-                        _ => (ViolationSeverity::Info, String::new()),
+                    None
+                };
+                const fn rank(s: ViolationSeverity) -> u8 {
+                    match s {
+                        ViolationSeverity::Error => 2,
+                        ViolationSeverity::Warning => 1,
+                        ViolationSeverity::Info => 0,
                     }
+                }
+                let (severity, threshold_msg) = match (phase_gate, class_gate) {
+                    (Some(p), Some(c)) => {
+                        // Class message is more specific; keep the stronger
+                        // severity of the two.
+                        if rank(p.0) > rank(c.0) {
+                            (p.0, c.1)
+                        } else {
+                            c
+                        }
+                    }
+                    (Some(p), None) => p,
+                    (None, Some(c)) => c,
+                    (None, None) => (ViolationSeverity::Info, String::new()),
                 };
                 if !threshold_msg.is_empty() {
                     violations.push(Violation {
@@ -603,18 +628,27 @@ impl ComplianceChecker {
         let Some(severity) = self.class_severity(ClassCheck::EuccReference) else {
             return;
         };
-        let has_eucc_ref = sbom.components.values().any(|comp| {
-            comp.external_refs.iter().any(|r| {
-                let url_lower = r.url.to_lowercase();
-                matches!(
-                    r.ref_type,
-                    crate::model::ExternalRefType::Certification
-                        | crate::model::ExternalRefType::Attestation
-                ) && (url_lower.contains("eucc")
-                    || url_lower.contains("common-criteria")
-                    || url_lower.contains("commoncriteria"))
-            })
+        // The sidecar's dedicated EUCC evidence fields are authoritative;
+        // the URL-substring scan over external refs is only a fallback.
+        let sidecar_has_eucc = self.sidecar.as_ref().is_some_and(|s| {
+            s.eucc_protection_profile_id.is_some()
+                || s.eucc_target_of_evaluation.is_some()
+                || s.eucc_itsef_identifier.is_some()
+                || s.eucc_valid_until.is_some()
         });
+        let has_eucc_ref = sidecar_has_eucc
+            || sbom.components.values().any(|comp| {
+                comp.external_refs.iter().any(|r| {
+                    let url_lower = r.url.to_lowercase();
+                    matches!(
+                        r.ref_type,
+                        crate::model::ExternalRefType::Certification
+                            | crate::model::ExternalRefType::Attestation
+                    ) && (url_lower.contains("eucc")
+                        || url_lower.contains("common-criteria")
+                        || url_lower.contains("commoncriteria"))
+                })
+            });
         if !has_eucc_ref {
             violations.push(Violation {
                 severity,
@@ -943,7 +977,7 @@ impl ComplianceChecker {
         // sidecar-supplied PSIRT URL.
         let has_vuln_handling = sbom.document.vulnerability_disclosure_url.is_some()
             || sbom.document.security_contact.is_some()
-            || sbom.components.values().any(|c| {
+            || manufacturer_scope_components(sbom).iter().any(|c| {
                 c.external_refs.iter().any(|r| {
                     matches!(
                         r.ref_type,
@@ -973,7 +1007,7 @@ impl ComplianceChecker {
         // Coordinated vulnerability disclosure policy (Art. 13(7)): require
         // either an Advisories reference or sidecar-supplied
         // coordinated_disclosure_policy_url.
-        let has_cvd_policy = sbom.components.values().any(|c| {
+        let has_cvd_policy = manufacturer_scope_components(sbom).iter().any(|c| {
             c.external_refs
                 .iter()
                 .any(|r| matches!(r.ref_type, crate::model::ExternalRefType::Advisories))

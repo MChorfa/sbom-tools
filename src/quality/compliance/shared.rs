@@ -1,5 +1,35 @@
 //! Small shared helpers reused across the compliance checkers.
 
+use crate::model::{Component, NormalizedSbom};
+
+/// Components whose external references can carry manufacturer-level
+/// evidence (security contact, CVD policy, disclosure process): the primary
+/// component when one is identified, otherwise the root components (no
+/// incoming dependency edge).
+///
+/// SBOM generators routinely copy upstream registry metadata — a third-party
+/// dependency's own GitHub advisories or support URL — onto dependency
+/// components; such references say nothing about the *manufacturer's*
+/// obligations and must not satisfy them.
+pub(crate) fn manufacturer_scope_components(sbom: &NormalizedSbom) -> Vec<&Component> {
+    if let Some(primary) = sbom
+        .primary_component_id
+        .as_ref()
+        .and_then(|id| sbom.components.get(id))
+    {
+        return vec![primary];
+    }
+    let mut incoming = std::collections::HashSet::new();
+    for edge in &sbom.edges {
+        incoming.insert(&edge.to);
+    }
+    sbom.components
+        .iter()
+        .filter(|(id, _)| !incoming.contains(id))
+        .map(|(_, c)| c)
+        .collect()
+}
+
 /// Render a slice of names as a comma-separated list, truncated with
 /// "…and N more" once `max` items are emitted. Keeps long-tail violation
 /// messages bounded for terminal/SARIF output.

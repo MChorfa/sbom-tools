@@ -122,17 +122,20 @@ impl ComplianceChecker {
             let has_doc_security_contact = sbom.document.security_contact.is_some()
                 || sbom.document.vulnerability_disclosure_url.is_some();
 
-            // Fallback: check component-level external refs
-            let has_component_security_contact = sbom.components.values().any(|comp| {
-                comp.external_refs.iter().any(|r| {
-                    matches!(
-                        r.ref_type,
-                        ExternalRefType::SecurityContact
-                            | ExternalRefType::Support
-                            | ExternalRefType::Advisories
-                    )
-                })
-            });
+            // Fallback: check component-level external refs — but only on the
+            // primary/root components. A third-party dependency's upstream
+            // advisories or support URL is not the manufacturer's contact.
+            let has_component_security_contact =
+                manufacturer_scope_components(sbom).iter().any(|comp| {
+                    comp.external_refs.iter().any(|r| {
+                        matches!(
+                            r.ref_type,
+                            ExternalRefType::SecurityContact
+                                | ExternalRefType::Support
+                                | ExternalRefType::Advisories
+                        )
+                    })
+                });
 
             if !has_doc_security_contact && !has_component_security_contact {
                 let sidecar_has_security = self.sidecar.as_ref().is_some_and(|s| {
@@ -245,8 +248,11 @@ impl ComplianceChecker {
         if matches!(self.level, ComplianceLevel::CraPhase2) {
             // CRA Art. 13(7): Coordinated vulnerability disclosure policy reference
             // Check for a vulnerability disclosure policy URL or advisories reference
+            // Component-level Advisories refs count only on the primary/root
+            // components — a dependency's upstream advisories URL is not the
+            // manufacturer's CVD policy.
             let has_vuln_disclosure_policy = sbom.document.vulnerability_disclosure_url.is_some()
-                || sbom.components.values().any(|comp| {
+                || manufacturer_scope_components(sbom).iter().any(|comp| {
                     comp.external_refs
                         .iter()
                         .any(|r| matches!(r.ref_type, ExternalRefType::Advisories))
@@ -492,7 +498,9 @@ impl ComplianceChecker {
                 });
             }
 
-            // NTIA minimum & FDA: version required
+            // NTIA minimum & FDA: version required (the CRA levels include
+            // the Art. 24 steward profile — steward SBOMs still need
+            // versioned components)
             if matches!(
                 self.level,
                 ComplianceLevel::NtiaMinimum
@@ -500,6 +508,7 @@ impl ComplianceChecker {
                     | ComplianceLevel::Standard
                     | ComplianceLevel::CraPhase1
                     | ComplianceLevel::CraPhase2
+                    | ComplianceLevel::CraOssSteward
                     | ComplianceLevel::Comprehensive
             ) && !has_known_value(&comp.version)
             {
@@ -509,7 +518,9 @@ impl ComplianceChecker {
                         format!("Component '{}' missing version", comp.name),
                         "SBOM-FDA-VERSION",
                     ),
-                    ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => (
+                    ComplianceLevel::CraPhase1
+                    | ComplianceLevel::CraPhase2
+                    | ComplianceLevel::CraOssSteward => (
                         "CRA Art. 13(12): Component version".to_string(),
                         format!(
                             "[CRA Art. 13(12)] Component '{}' missing version",
@@ -545,6 +556,7 @@ impl ComplianceChecker {
                     | ComplianceLevel::FdaMedicalDevice
                     | ComplianceLevel::CraPhase1
                     | ComplianceLevel::CraPhase2
+                    | ComplianceLevel::CraOssSteward
                     | ComplianceLevel::Comprehensive
             ) && !comp.identifiers.has_cra_identifier()
             {
@@ -554,6 +566,7 @@ impl ComplianceChecker {
                         | ComplianceLevel::FdaMedicalDevice
                         | ComplianceLevel::CraPhase1
                         | ComplianceLevel::CraPhase2
+                        | ComplianceLevel::CraOssSteward
                 ) {
                     ViolationSeverity::Error
                 } else {
@@ -576,7 +589,9 @@ impl ComplianceChecker {
                         "FDA: Unique component identifier".to_string(),
                         "SBOM-FDA-IDENTIFIER",
                     ),
-                    ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => (
+                    ComplianceLevel::CraPhase1
+                    | ComplianceLevel::CraPhase2
+                    | ComplianceLevel::CraOssSteward => (
                         format!(
                             "[CRA Annex I, [PRE-7-RQ-07]] Component '{}' missing unique identifier (PURL/CPE/SWHID/SWID)",
                             comp.name
@@ -611,6 +626,7 @@ impl ComplianceChecker {
                     | ComplianceLevel::FdaMedicalDevice
                     | ComplianceLevel::CraPhase1
                     | ComplianceLevel::CraPhase2
+                    | ComplianceLevel::CraOssSteward
                     | ComplianceLevel::Comprehensive
             ) && !comp
                 .supplier
@@ -619,9 +635,9 @@ impl ComplianceChecker {
                 && !has_known_value(&comp.author)
             {
                 let severity = match self.level {
-                    ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => {
-                        ViolationSeverity::Warning
-                    }
+                    ComplianceLevel::CraPhase1
+                    | ComplianceLevel::CraPhase2
+                    | ComplianceLevel::CraOssSteward => ViolationSeverity::Warning,
                     _ => ViolationSeverity::Error,
                 };
                 let (message, requirement, rule_id) = match self.level {
@@ -636,6 +652,18 @@ impl ComplianceChecker {
                             comp.name
                         ),
                         "CRA Art. 13(15): Supplier/manufacturer information".to_string(),
+                        "SBOM-CRA-ART-13-15",
+                    ),
+                    // Steward profile: component supplier info is part of the
+                    // Art. 24 SBOM floor, but stewards are exempt from the
+                    // Art. 13(15) manufacturer-identification obligation, so
+                    // the citation must not reference it.
+                    ComplianceLevel::CraOssSteward => (
+                        format!(
+                            "[CRA Art. 24] Component '{}' missing supplier/manufacturer",
+                            comp.name
+                        ),
+                        "CRA Art. 24 (steward): Component supplier information".to_string(),
                         "SBOM-CRA-ART-13-15",
                     ),
                     _ => (
@@ -760,20 +788,24 @@ impl ComplianceChecker {
         sbom: &NormalizedSbom,
         violations: &mut Vec<Violation>,
     ) {
-        // NTIA & FDA require dependency relationships
+        // NTIA & FDA require dependency relationships (the CRA levels
+        // include the Art. 24 steward profile)
         if matches!(
             self.level,
             ComplianceLevel::NtiaMinimum
                 | ComplianceLevel::FdaMedicalDevice
                 | ComplianceLevel::CraPhase1
                 | ComplianceLevel::CraPhase2
+                | ComplianceLevel::CraOssSteward
                 | ComplianceLevel::Comprehensive
         ) {
             let has_deps = !sbom.edges.is_empty();
             let has_multiple_components = sbom.components.len() > 1;
 
             let (requirement, rule_id) = match self.level {
-                ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => (
+                ComplianceLevel::CraPhase1
+                | ComplianceLevel::CraPhase2
+                | ComplianceLevel::CraOssSteward => (
                     "CRA Annex I: Dependency relationships",
                     "SBOM-CRA-ANNEX-I-DEPENDENCY",
                 ),
@@ -782,7 +814,9 @@ impl ComplianceChecker {
 
             if has_multiple_components && !has_deps {
                 let message = match self.level {
-                    ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 =>
+                    ComplianceLevel::CraPhase1
+                    | ComplianceLevel::CraPhase2
+                    | ComplianceLevel::CraOssSteward =>
                         "[CRA Annex I] SBOM with multiple components must include dependency relationships".to_string(),
                     _ =>
                         "SBOM with multiple components must include dependency relationships".to_string(),

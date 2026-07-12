@@ -185,10 +185,12 @@ impl ComplianceChecker {
             });
         }
 
-        // Sec 4(g) — Vulnerability disclosure
+        // Sec 4(g) — Vulnerability disclosure. Component-level refs count
+        // only on the primary/root components — a dependency's upstream
+        // advisories URL is not the vendor's disclosure process.
         let has_security_ref = sbom.document.security_contact.is_some()
             || sbom.document.vulnerability_disclosure_url.is_some()
-            || sbom.components.values().any(|comp| {
+            || manufacturer_scope_components(sbom).iter().any(|comp| {
                 comp.external_refs.iter().any(|r| {
                     matches!(
                         r.ref_type,

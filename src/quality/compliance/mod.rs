@@ -26,7 +26,10 @@ mod ssdf;
 use context::{ComplianceContext, checker_for};
 use registry::REMEDIATION_GENERIC;
 pub use registry::{RuleMeta, rule_meta};
-use shared::{has_known_value, is_valid_email_format, known_value, truncate_list};
+use shared::{
+    has_known_value, is_valid_email_format, known_value, manufacturer_scope_components,
+    truncate_list,
+};
 
 /// CRA enforcement phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1284,6 +1287,203 @@ mod tests {
                 .iter()
                 .any(|v| v.message.contains("Primary component")
                     && v.message.contains("no dependency relationship"))
+        );
+    }
+
+    /// CRA Art. 24 steward SBOMs still need versioned, identified components
+    /// and dependency relationships — the per-component gates used to skip
+    /// the CraOssSteward level entirely (vacuous "SBOM completeness").
+    #[test]
+    fn oss_steward_enforces_component_completeness() {
+        use crate::model::{Component, DocumentMetadata, ExternalRefType, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        // Steward vuln-handling satisfied so only completeness is under test.
+        sbom.document.vulnerability_disclosure_url =
+            Some("https://example.org/security".to_string());
+        for n in ["a", "b", "c"] {
+            let mut c = Component::new(n.to_string(), n.to_string());
+            c.external_refs.push(crate::model::ExternalReference {
+                ref_type: ExternalRefType::Advisories,
+                url: "https://example.org/advisories".to_string(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+            sbom.add_component(c);
+        }
+        let r = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-12-VERSION"
+                    && v.severity == ViolationSeverity::Error),
+            "steward components without versions must error"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-I-IDENTIFIER"
+                    && v.severity == ViolationSeverity::Error),
+            "steward components without identifiers must error"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-I-DEPENDENCY"
+                    && v.severity == ViolationSeverity::Error),
+            "steward SBOM without dependency edges must error"
+        );
+        assert!(!r.is_compliant, "incomplete steward SBOM must not pass");
+    }
+
+    /// A third-party dependency's upstream advisories/support refs must not
+    /// satisfy the manufacturer's Art. 13(6)/13(7) obligations.
+    #[test]
+    fn third_party_refs_do_not_satisfy_manufacturer_obligations() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, ExternalRefType,
+            ExternalReference, NormalizedSbom,
+        };
+        let build = |primary_has_contact: bool| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut app = Component::new("app".to_string(), "app".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/app@1.0".to_string());
+            if primary_has_contact {
+                app.external_refs.push(ExternalReference {
+                    ref_type: ExternalRefType::SecurityContact,
+                    url: "https://acme.example/security".to_string(),
+                    comment: None,
+                    hashes: Vec::new(),
+                });
+                app.external_refs.push(ExternalReference {
+                    ref_type: ExternalRefType::Advisories,
+                    url: "https://acme.example/advisories".to_string(),
+                    comment: None,
+                    hashes: Vec::new(),
+                });
+            }
+            // Third-party dep carrying its own upstream refs.
+            let mut lodash = Component::new("lodash".to_string(), "lodash".to_string())
+                .with_version("4.17.21".to_string())
+                .with_purl("pkg:npm/lodash@4.17.21".to_string());
+            lodash.external_refs.push(ExternalReference {
+                ref_type: ExternalRefType::Advisories,
+                url: "https://github.com/lodash/lodash/security/advisories".to_string(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+            lodash.external_refs.push(ExternalReference {
+                ref_type: ExternalRefType::Support,
+                url: "https://lodash.com/docs".to_string(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+            let app_id = app.canonical_id.clone();
+            let lodash_id = lodash.canonical_id.clone();
+            sbom.primary_component_id = Some(app_id.clone());
+            sbom.add_component(app);
+            sbom.add_component(lodash);
+            sbom.edges.push(DependencyEdge::new(
+                app_id,
+                lodash_id,
+                DependencyType::DependsOn,
+            ));
+            sbom
+        };
+
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(false));
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-6-CONTACT"),
+            "dep-level advisories/support refs must not satisfy Art. 13(6)"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-7"),
+            "dep-level advisories ref must not satisfy Art. 13(7)"
+        );
+
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(true));
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-6-CONTACT"),
+            "primary-component security contact satisfies Art. 13(6)"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-7"),
+            "primary-component advisories ref satisfies Art. 13(7)"
+        );
+    }
+
+    /// Pinning an explicit product class must never weaken the phase-based
+    /// vendor-hash gate: 40% coverage is an Error under CraPhase2 regardless
+    /// of a pinned Important-1 class (whose own threshold severity is softer).
+    #[test]
+    fn explicit_product_class_never_weakens_vendor_hash_gate() {
+        use crate::model::CraProductClass;
+        let mut sbom = NormalizedSbom::default();
+        for n in ["a", "b", "c", "d"] {
+            let c = vendor_component(n, true);
+            sbom.components.insert(c.canonical_id.clone(), c);
+        }
+        for n in ["e", "f", "g", "h", "i", "j"] {
+            let c = vendor_component(n, false);
+            sbom.components.insert(c.canonical_id.clone(), c);
+        }
+        let result = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::ImportantClass1)
+            .check(&sbom);
+        let v = result.violations.iter().find(|v| {
+            v.requirement.contains("PRE-7-RQ-07-RE") && v.severity == ViolationSeverity::Error
+        });
+        assert!(
+            v.is_some(),
+            "40% coverage must stay an Error under CraPhase2 even with an explicit class"
+        );
+    }
+
+    /// The sidecar's dedicated EUCC evidence fields must satisfy the
+    /// Critical-class EUCC reference check (not just URL substrings).
+    #[test]
+    fn eucc_sidecar_fields_satisfy_critical_class_check() {
+        use crate::model::{Component, CraProductClass, CraSidecarMetadata, DocumentMetadata};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("fw".to_string(), "fw".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:generic/fw@1.0".to_string()),
+        );
+
+        let bare = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::Critical)
+            .check(&sbom);
+        assert!(
+            bare.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-IV"),
+            "Critical class without EUCC evidence must flag Annex IV"
+        );
+
+        let sidecar = CraSidecarMetadata {
+            eucc_protection_profile_id: Some("PP-CC-MFR-2024-01".to_string()),
+            eucc_target_of_evaluation: Some("TOE-fw-1.0".to_string()),
+            ..Default::default()
+        };
+        let with_sidecar = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::Critical)
+            .with_sidecar(sidecar)
+            .check(&sbom);
+        assert!(
+            !with_sidecar
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-IV"),
+            "sidecar EUCC evidence fields must satisfy the Critical-class check"
         );
     }
 
