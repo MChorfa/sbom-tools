@@ -177,20 +177,22 @@ impl ComplianceChecker {
             .filter(|c| c.supplier.is_none() && c.author.is_none())
             .count();
         if without_supplier > 0 {
+            // Supplier Name is a REQUIRED NTIA minimum element, and EO 14028
+            // §4(e) mandates the NTIA minimum elements — so a missing supplier
+            // is a gating Error (as version and unique-id already are), not a
+            // Warning behind a >30% threshold.
             let pct = (without_supplier * 100) / total.max(1);
-            if pct > 30 {
-                violations.push(Violation {
-                    severity: ViolationSeverity::Warning,
-                    category: ViolationCategory::SupplierInfo,
-                    message: format!(
-                        "{without_supplier}/{total} components ({pct}%) missing supplier information"
-                    ),
-                    element: None,
-                    requirement: "EO 14028 Sec 4(e): Supplier identification".to_string(),
-                    rule_id: "SBOM-EO14028-SUPPLIER",
-                    standard_refs: Vec::new(),
-                });
-            }
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::SupplierInfo,
+                message: format!(
+                    "{without_supplier}/{total} components ({pct}%) missing supplier information"
+                ),
+                element: None,
+                requirement: "EO 14028 Sec 4(e): Supplier identification".to_string(),
+                rule_id: "SBOM-EO14028-SUPPLIER",
+                standard_refs: Vec::new(),
+            });
         }
     }
 }

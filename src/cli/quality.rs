@@ -21,6 +21,10 @@ pub struct QualityConfig {
     pub show_recommendations: bool,
     pub show_metrics: bool,
     pub min_score: Option<f32>,
+    /// Exit non-zero when the compliance verdict is non-compliant (opt-in;
+    /// the default gate is `--min-score` only, so existing scripts are
+    /// unaffected).
+    pub fail_on_noncompliant: bool,
     pub no_color: bool,
     /// Optional CRA sidecar metadata path (auto-discovered next to the SBOM
     /// when None). Supplements the embedded compliance check used by the
@@ -47,6 +51,7 @@ pub fn run_quality(
     show_recommendations: bool,
     show_metrics: bool,
     min_score: Option<f32>,
+    fail_on_noncompliant: bool,
     no_color: bool,
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
@@ -60,6 +65,7 @@ pub fn run_quality(
         show_recommendations,
         show_metrics,
         min_score,
+        fail_on_noncompliant,
         no_color,
         cra_sidecar_path,
         cra_product_class,
@@ -155,6 +161,18 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
             threshold
         );
         return Ok(exit_codes::QUALITY_BELOW_THRESHOLD);
+    }
+
+    // Opt-in: fail the command when the compliance verdict is non-compliant,
+    // so the printed "NON-COMPLIANT" cannot be paired with a success exit.
+    // Off by default, so `quality --min-score` keeps its score-only contract.
+    if config.fail_on_noncompliant && !report.compliance.is_compliant {
+        tracing::error!(
+            "SBOM is non-compliant with {} ({} error(s))",
+            report.compliance.level.name(),
+            report.compliance.error_count
+        );
+        return Ok(exit_codes::COMPLIANCE_ERRORS);
     }
 
     Ok(exit_codes::SUCCESS)
@@ -684,6 +702,7 @@ mod tests {
             show_recommendations: true,
             show_metrics: true,
             min_score,
+            fail_on_noncompliant: false,
             no_color: true,
             cra_sidecar_path: None,
             cra_product_class: None,
