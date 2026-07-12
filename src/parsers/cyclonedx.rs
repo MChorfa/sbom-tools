@@ -60,6 +60,13 @@ impl CycloneDxParser {
 
     /// Parse a `CycloneDX` BOM from XML
     fn parse_xml(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
+        // The component/service XML models are recursive (nested
+        // assemblies), and quick-xml's serde deserializer recurses with
+        // no depth limit — without this bound a crafted deeply-nested
+        // document aborts the process by stack overflow instead of
+        // returning an error. serde_json caps the JSON path at ~128
+        // levels; enforce the equivalent here with an iterative pre-scan.
+        xml_depth_within_limit(content)?;
         let cdx: CycloneDxBomXml =
             quick_xml::de::from_str(content).map_err(|e| ParseError::XmlError(e.to_string()))?;
 
@@ -80,6 +87,9 @@ impl CycloneDxParser {
             components: cdx
                 .components
                 .map(|c| c.component.into_iter().map(Into::into).collect()),
+            services: cdx
+                .services
+                .map(|s| s.service.into_iter().map(Into::into).collect()),
             dependencies: cdx
                 .dependencies
                 .map(|d| d.dependency.into_iter().map(Into::into).collect()),
@@ -95,12 +105,21 @@ impl CycloneDxParser {
     }
 
     /// Convert `CycloneDX` BOM to normalized representation
-    fn convert_to_normalized(&self, cdx: CycloneDxBom) -> NormalizedSbom {
+    fn convert_to_normalized(&self, mut cdx: CycloneDxBom) -> NormalizedSbom {
         let document = self.convert_metadata(&cdx);
         let mut sbom = NormalizedSbom::new(document);
 
         // Convert components
         let mut id_map: HashMap<String, CanonicalId> = HashMap::new();
+
+        // Nested assemblies of the primary component join the component
+        // walk below, parented to it.
+        let meta_children = cdx
+            .metadata
+            .as_mut()
+            .and_then(|m| m.component.as_mut())
+            .and_then(|c| c.components.take());
+        let mut primary_id: Option<CanonicalId> = None;
 
         // Handle metadata.component as primary/root product component (CRA requirement)
         if let Some(meta) = &cdx.metadata
@@ -113,6 +132,7 @@ impl CycloneDxParser {
                 .unwrap_or_else(|| comp.name.clone());
             let canonical_id = comp.canonical_id.clone();
             id_map.insert(bom_ref, canonical_id.clone());
+            primary_id = Some(canonical_id.clone());
 
             // Set as primary component
             sbom.set_primary_component(canonical_id);
@@ -135,17 +155,22 @@ impl CycloneDxParser {
             // Extract support_end_date from primary component properties
             if let Some(props) = &meta_comp.properties {
                 for prop in props {
-                    let name_lower = prop.name.to_lowercase();
+                    // `name`/`value` are optional in the schema; entries
+                    // missing either cannot carry a support-end date.
+                    let (Some(name), Some(value)) = (&prop.name, &prop.value) else {
+                        continue;
+                    };
+                    let name_lower = name.to_lowercase();
                     if name_lower.contains("endofsupport")
                         || name_lower.contains("end-of-support")
                         || name_lower.contains("eol")
                         || name_lower.contains("supportend")
                         || name_lower.contains("support_end")
                     {
-                        if let Ok(dt) = DateTime::parse_from_rfc3339(&prop.value) {
+                        if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
                             sbom.document.support_end_date = Some(dt.with_timezone(&Utc));
                         } else if let Ok(dt) =
-                            chrono::NaiveDate::parse_from_str(&prop.value, "%Y-%m-%d")
+                            chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
                         {
                             sbom.document.support_end_date = Some(
                                 dt.and_hms_opt(0, 0, 0)
@@ -163,20 +188,81 @@ impl CycloneDxParser {
         // Build scope map from bom-ref to DependencyScope
         let mut scope_map: HashMap<String, DependencyScope> = HashMap::new();
 
-        if let Some(components) = cdx.components {
-            for cdx_comp in components {
-                let comp = self.convert_component(&cdx_comp);
-                let bom_ref = cdx_comp.bom_ref.unwrap_or_else(|| comp.name.clone());
-                if let Some(scope_str) = &cdx_comp.scope {
-                    let scope = match scope_str.to_lowercase().as_str() {
-                        "optional" => DependencyScope::Optional,
-                        "excluded" => DependencyScope::Excluded,
-                        _ => DependencyScope::Required,
-                    };
-                    scope_map.insert(bom_ref.clone(), scope);
-                }
-                id_map.insert(bom_ref, comp.canonical_id.clone());
-                sbom.add_component(comp);
+        // Convert components, walking nested assemblies (component.components)
+        // with an explicit worklist: nested components are real inventory and
+        // their bom-refs participate in dependencies and vulnerability
+        // affects — dropping them undercounted the SBOM and silently
+        // discarded the edges and vulns that referenced them. Iteration is
+        // bounded by element count (no recursion, so hostile nesting depth
+        // cannot overflow the stack). Each entry carries its container's id
+        // so the assembly hierarchy is preserved as Contains edges.
+        let mut comp_stack: Vec<(Option<CanonicalId>, CdxComponent)> = Vec::new();
+        if let Some(components) = cdx.components.take() {
+            for c in components.into_iter().rev() {
+                comp_stack.push((None, c));
+            }
+        }
+        if let Some(children) = meta_children {
+            for child in children.into_iter().rev() {
+                comp_stack.push((primary_id.clone(), child));
+            }
+        }
+        while let Some((parent, mut cdx_comp)) = comp_stack.pop() {
+            let children = cdx_comp.components.take();
+            let comp = self.convert_component(&cdx_comp);
+            let bom_ref = cdx_comp
+                .bom_ref
+                .clone()
+                .unwrap_or_else(|| comp.name.clone());
+            if let Some(scope_str) = &cdx_comp.scope {
+                let scope = match scope_str.to_lowercase().as_str() {
+                    "optional" => DependencyScope::Optional,
+                    "excluded" => DependencyScope::Excluded,
+                    _ => DependencyScope::Required,
+                };
+                scope_map.insert(bom_ref.clone(), scope);
+            }
+            let canonical_id = comp.canonical_id.clone();
+            id_map.insert(bom_ref, canonical_id.clone());
+            if let Some(parent_id) = parent {
+                sbom.add_edge(DependencyEdge::new(
+                    parent_id,
+                    canonical_id.clone(),
+                    DependencyType::Contains,
+                ));
+            }
+            sbom.add_component(comp);
+            for child in children.into_iter().flatten().rev() {
+                comp_stack.push((Some(canonical_id.clone()), child));
+            }
+        }
+
+        // Convert services (SaaSBOM, 1.4+): they carry bom-refs that
+        // participate in dependencies and vulnerability affects, so they
+        // must join the inventory and id_map like components. Nested
+        // services walk the same worklist pattern.
+        let mut svc_stack: Vec<(Option<CanonicalId>, CdxService)> = Vec::new();
+        if let Some(services) = cdx.services.take() {
+            for s in services.into_iter().rev() {
+                svc_stack.push((None, s));
+            }
+        }
+        while let Some((parent, mut svc)) = svc_stack.pop() {
+            let children = svc.services.take();
+            let comp = self.convert_service(&svc);
+            let bom_ref = svc.bom_ref.clone().unwrap_or_else(|| comp.name.clone());
+            let canonical_id = comp.canonical_id.clone();
+            id_map.insert(bom_ref, canonical_id.clone());
+            if let Some(parent_id) = parent {
+                sbom.add_edge(DependencyEdge::new(
+                    parent_id,
+                    canonical_id.clone(),
+                    DependencyType::Contains,
+                ));
+            }
+            sbom.add_component(comp);
+            for child in children.into_iter().flatten().rev() {
+                svc_stack.push((Some(canonical_id.clone()), child));
             }
         }
 
@@ -220,8 +306,8 @@ impl CycloneDxParser {
 
         // Convert vulnerabilities
         if let Some(vulns) = cdx.vulnerabilities {
-            for vuln in vulns {
-                self.apply_vulnerability(&mut sbom, &vuln, &id_map);
+            for (index, vuln) in vulns.iter().enumerate() {
+                self.apply_vulnerability(&mut sbom, vuln, index, &id_map);
             }
             // Vulnerabilities and VEX were attached AFTER component
             // conversion computed each content hash; recompute the affected
@@ -440,9 +526,16 @@ impl CycloneDxParser {
             }
         }
 
-        // Set supplier
-        if let Some(supplier) = &cdx.supplier {
-            comp.supplier = Some(Organization::new(supplier.name.clone()));
+        // Set supplier. organizationalEntity has no required fields, so a
+        // supplier may carry only a URL — fall back to it as the name
+        // rather than failing or dropping the organization.
+        if let Some(supplier) = &cdx.supplier
+            && let Some(name) = supplier
+                .name
+                .clone()
+                .or_else(|| supplier.url.as_ref().and_then(|u| u.first().cloned()))
+        {
+            comp.supplier = Some(Organization::new(name));
         }
 
         // Set hashes
@@ -472,27 +565,8 @@ impl CycloneDxParser {
         // Set external references
         if let Some(ext_refs) = &cdx.external_references {
             for ext_ref in ext_refs {
-                let ref_type = match ext_ref.ref_type.as_str() {
-                    "vcs" => ExternalRefType::Vcs,
-                    "issue-tracker" => ExternalRefType::IssueTracker,
-                    "website" => ExternalRefType::Website,
-                    "advisories" => ExternalRefType::Advisories,
-                    "bom" => ExternalRefType::Bom,
-                    "model-card" => ExternalRefType::ModelCard,
-                    "documentation" => ExternalRefType::Documentation,
-                    "support" => ExternalRefType::Support,
-                    "security-contact" => ExternalRefType::SecurityContact,
-                    "license" => ExternalRefType::License,
-                    "build-meta" => ExternalRefType::BuildMeta,
-                    "release-notes" => ExternalRefType::ReleaseNotes,
-                    "citation" => ExternalRefType::Citation,
-                    "patent" => ExternalRefType::Patent,
-                    "patent-assertion" => ExternalRefType::PatentAssertion,
-                    "patent-family" => ExternalRefType::PatentFamily,
-                    other => ExternalRefType::Other(other.to_string()),
-                };
                 comp.external_refs.push(ExternalReference {
-                    ref_type,
+                    ref_type: map_cdx_external_ref_type(&ext_ref.ref_type),
                     url: ext_ref.url.clone(),
                     comment: ext_ref.comment.clone(),
                     hashes: Vec::new(),
@@ -500,12 +574,15 @@ impl CycloneDxParser {
             }
         }
 
-        // Set properties as extensions
+        // Set properties as extensions. Both fields are optional in the
+        // schema: value-less properties keep their name; name-less ones
+        // are unaddressable and skipped.
         if let Some(props) = &cdx.properties {
             for prop in props {
+                let Some(name) = prop.name.clone() else { continue };
                 comp.extensions.properties.push(Property {
-                    name: prop.name.clone(),
-                    value: prop.value.clone(),
+                    name,
+                    value: prop.value.clone().unwrap_or_default(),
                 });
             }
         }
@@ -939,24 +1016,127 @@ impl CycloneDxParser {
         proto
     }
 
-    /// Apply vulnerability information to components
+    /// Convert a `CycloneDX` service (SaaSBOM, 1.4+) to a normalized
+    /// Component. The normalized model has no first-class service kind, so
+    /// services map to `ComponentType::Other("service")`, with provider →
+    /// supplier and endpoints preserved as external references.
+    fn convert_service(&self, svc: &CdxService) -> Component {
+        let format_id = svc.bom_ref.clone().unwrap_or_else(|| svc.name.clone());
+        let mut comp = Component::new(svc.name.clone(), format_id);
+        comp.component_type = ComponentType::Other("service".to_string());
+
+        if let Some(version) = &svc.version {
+            comp = comp.with_version(version.clone());
+        }
+        comp.description.clone_from(&svc.description);
+        comp.group.clone_from(&svc.group);
+
+        if let Some(provider) = &svc.provider
+            && let Some(name) = provider
+                .name
+                .clone()
+                .or_else(|| provider.url.as_ref().and_then(|u| u.first().cloned()))
+        {
+            comp.supplier = Some(Organization::new(name));
+        }
+
+        // Declared service licenses (same licenseChoice shape as components)
+        if let Some(licenses) = &svc.licenses {
+            for lic in licenses {
+                if let Some(license) = &lic.license {
+                    let expr = license
+                        .id
+                        .clone()
+                        .or_else(|| license.name.clone())
+                        .unwrap_or_else(|| "NOASSERTION".to_string());
+                    comp.licenses.add_declared(LicenseExpression::new(expr));
+                }
+                if let Some(expr) = &lic.expression {
+                    comp.licenses
+                        .add_declared(LicenseExpression::new(expr.clone()));
+                }
+            }
+        }
+
+        for endpoint in svc.endpoints.iter().flatten() {
+            comp.external_refs.push(ExternalReference {
+                ref_type: ExternalRefType::Other("endpoint".to_string()),
+                url: endpoint.clone(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+        }
+        if let Some(ext_refs) = &svc.external_references {
+            for ext_ref in ext_refs {
+                comp.external_refs.push(ExternalReference {
+                    ref_type: map_cdx_external_ref_type(&ext_ref.ref_type),
+                    url: ext_ref.url.clone(),
+                    comment: ext_ref.comment.clone(),
+                    hashes: Vec::new(),
+                });
+            }
+        }
+        if let Some(props) = &svc.properties {
+            for prop in props {
+                let Some(name) = prop.name.clone() else { continue };
+                comp.extensions.properties.push(Property {
+                    name,
+                    value: prop.value.clone().unwrap_or_default(),
+                });
+            }
+        }
+
+        comp.calculate_content_hash();
+        comp
+    }
+
+    /// Apply vulnerability information to components. `index` is the
+    /// entry's position in the document's vulnerabilities array, used to
+    /// disambiguate fully-anonymous records.
     fn apply_vulnerability(
         &self,
         sbom: &mut NormalizedSbom,
         vuln: &CdxVulnerability,
+        index: usize,
         id_map: &HashMap<String, CanonicalId>,
     ) {
-        let source = vuln.source.as_ref().map_or(VulnerabilitySource::Cve, |s| {
-            match s.name.to_lowercase().as_str() {
-                "nvd" => VulnerabilitySource::Nvd,
-                "ghsa" | "github" => VulnerabilitySource::Ghsa,
-                "osv" => VulnerabilitySource::Osv,
-                "snyk" => VulnerabilitySource::Snyk,
-                other => VulnerabilitySource::Other(other.to_string()),
+        // vulnerability.id is optional per the schema (a record may be
+        // identified via references or source only): fall back to the
+        // first reference that carries an id — and in that case take THAT
+        // reference's source too, so the id isn't attributed to the wrong
+        // database. A fully-anonymous record gets an index-disambiguated
+        // UNKNOWN-{n} id: a shared literal would collide in id-keyed
+        // consumers and silently merge distinct vulnerabilities.
+        let fallback_ref = if vuln.id.is_none() {
+            vuln.references.iter().flatten().find(|r| r.id.is_some())
+        } else {
+            None
+        };
+        let id = vuln
+            .id
+            .clone()
+            .or_else(|| fallback_ref.and_then(|r| r.id.clone()))
+            .unwrap_or_else(|| format!("UNKNOWN-{index}"));
+
+        // vulnerabilitySource has no required fields: a source may carry
+        // only a URL — keep it rather than fabricating a name.
+        let source_field = vuln
+            .source
+            .as_ref()
+            .or_else(|| fallback_ref.and_then(|r| r.source.as_ref()));
+        let source = source_field.map_or(VulnerabilitySource::Cve, |s| {
+            match s.name.as_deref().map(str::to_lowercase).as_deref() {
+                Some("nvd") => VulnerabilitySource::Nvd,
+                Some("ghsa" | "github") => VulnerabilitySource::Ghsa,
+                Some("osv") => VulnerabilitySource::Osv,
+                Some("snyk") => VulnerabilitySource::Snyk,
+                Some(other) => VulnerabilitySource::Other(other.to_string()),
+                None => VulnerabilitySource::Other(
+                    s.url.clone().unwrap_or_else(|| "unknown".to_string()),
+                ),
             }
         });
-
-        let mut vuln_ref = VulnerabilityRef::new(vuln.id.clone(), source);
+        let mut vuln_ref = VulnerabilityRef::new(id, source);
         vuln_ref.description = super::capped_description(&vuln.description);
 
         // Parse CVSS scores
@@ -1105,9 +1285,17 @@ impl CycloneDxParser {
                 {
                     let mut v = vuln_ref.clone();
                     if let Some(versions) = &affect.versions {
+                        // Respect per-entry status: only "affected" (or
+                        // absent — the spec default) entries name affected
+                        // versions. "unaffected"/"unknown" must never be
+                        // reported as affected. Range entries (vers syntax)
+                        // are kept, not dropped.
                         v.affected_versions = versions
                             .iter()
-                            .filter_map(|ver| ver.version.clone())
+                            .filter(|ver| {
+                                matches!(ver.status.as_deref(), None | Some("affected"))
+                            })
+                            .filter_map(|ver| ver.version.clone().or_else(|| ver.range.clone()))
                             .collect();
                     }
                     if let Some(vex) = &vex_status {
@@ -1126,6 +1314,59 @@ impl CycloneDxParser {
                 }
             }
         }
+    }
+}
+
+/// Maximum XML element nesting depth accepted before deserialization.
+/// Matches the effective serde_json recursion cap on the JSON path; no
+/// legitimate SBOM assembly tree approaches it.
+const MAX_XML_DEPTH: usize = 128;
+
+/// Reject XML nested deeper than [`MAX_XML_DEPTH`] with an iterative
+/// event scan (constant stack), so the recursive serde models can never
+/// be driven to a stack overflow by hostile input. Malformed XML passes
+/// through — the real parser reports it (shallow input cannot overflow).
+fn xml_depth_within_limit(content: &str) -> Result<(), ParseError> {
+    let mut reader = quick_xml::Reader::from_str(content);
+    let mut depth: usize = 0;
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Start(_)) => {
+                depth += 1;
+                if depth > MAX_XML_DEPTH {
+                    return Err(ParseError::XmlError(format!(
+                        "XML nesting depth exceeds the {MAX_XML_DEPTH} limit"
+                    )));
+                }
+            }
+            Ok(quick_xml::events::Event::End(_)) => depth = depth.saturating_sub(1),
+            Ok(quick_xml::events::Event::Eof) | Err(_) => return Ok(()),
+            Ok(_) => {}
+        }
+    }
+}
+
+/// Map a CycloneDX external-reference type string to the normalized enum.
+/// Shared by the component and service conversion paths.
+fn map_cdx_external_ref_type(ref_type: &str) -> ExternalRefType {
+    match ref_type {
+        "vcs" => ExternalRefType::Vcs,
+        "issue-tracker" => ExternalRefType::IssueTracker,
+        "website" => ExternalRefType::Website,
+        "advisories" => ExternalRefType::Advisories,
+        "bom" => ExternalRefType::Bom,
+        "model-card" => ExternalRefType::ModelCard,
+        "documentation" => ExternalRefType::Documentation,
+        "support" => ExternalRefType::Support,
+        "security-contact" => ExternalRefType::SecurityContact,
+        "license" => ExternalRefType::License,
+        "build-meta" => ExternalRefType::BuildMeta,
+        "release-notes" => ExternalRefType::ReleaseNotes,
+        "citation" => ExternalRefType::Citation,
+        "patent" => ExternalRefType::Patent,
+        "patent-assertion" => ExternalRefType::PatentAssertion,
+        "patent-family" => ExternalRefType::PatentFamily,
+        other => ExternalRefType::Other(other.to_string()),
     }
 }
 
@@ -1304,6 +1545,8 @@ struct CycloneDxBom {
     version: Option<u32>,
     metadata: Option<CdxMetadata>,
     components: Option<Vec<CdxComponent>>,
+    /// Services (SaaSBOM, 1.4+) — inventory alongside components
+    services: Option<Vec<CdxService>>,
     dependencies: Option<Vec<CdxDependency>>,
     vulnerabilities: Option<Vec<CdxVulnerability>>,
     compositions: Option<Vec<CdxComposition>>,
@@ -1566,6 +1809,29 @@ struct CdxComponent {
     data_components: Vec<CdxDataComponent>,
     /// Cryptographic properties (1.6+)
     crypto_properties: Option<CdxCryptoProperties>,
+    /// Nested component assemblies (recursive since 1.0). Real inventory:
+    /// their bom-refs participate in dependencies and vulnerability affects.
+    components: Option<Vec<CdxComponent>>,
+}
+
+/// CycloneDX service (SaaSBOM, 1.4+). Only `name` is required per the
+/// schema; services nest recursively like component assemblies.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxService {
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    provider: Option<CdxSupplier>,
+    group: Option<String>,
+    name: String,
+    version: Option<String>,
+    description: Option<String>,
+    endpoints: Option<Vec<String>>,
+    licenses: Option<Vec<CdxLicenseChoice>>,
+    external_references: Option<Vec<CdxExternalReference>>,
+    properties: Option<Vec<CdxProperty>>,
+    services: Option<Vec<CdxService>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1588,7 +1854,9 @@ struct CdxLicense {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxSupplier {
-    name: String,
+    /// Optional per the schema: organizationalEntity has NO required
+    /// fields — a supplier may carry only a URL or contact.
+    name: Option<String>,
     url: Option<Vec<String>>,
 }
 
@@ -1612,8 +1880,12 @@ struct CdxExternalReference {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxProperty {
-    name: String,
-    value: String,
+    /// Optional: bom-1.6+ requires `name`, but 1.4/1.5 have NO required
+    /// list at all — name-less entries must not fail the document (they
+    /// are skipped, being unaddressable).
+    name: Option<String>,
+    /// Optional in every schema version.
+    value: Option<String>,
 }
 
 // ML Model and Dataset structures (CycloneDX 1.5+ AI/ML BOM support)
@@ -2084,8 +2356,13 @@ struct CdxDependency {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxVulnerability {
-    id: String,
+    /// Optional per the schema: the vulnerability definition has NO
+    /// required properties — a record may be identified via references
+    /// or source only.
+    id: Option<String>,
     source: Option<CdxVulnSource>,
+    /// Alternate identifiers in other sources (id fallback)
+    references: Option<Vec<CdxVulnReference>>,
     description: Option<String>,
     recommendation: Option<String>,
     ratings: Option<Vec<CdxRating>>,
@@ -2094,11 +2371,22 @@ struct CdxVulnerability {
     analysis: Option<CdxAnalysis>,
 }
 
+/// Entry of vulnerability.references: an id in another source
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxVulnReference {
+    id: Option<String>,
+    source: Option<CdxVulnSource>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct CdxVulnSource {
-    name: String,
+    /// Optional per the schema: vulnerabilitySource has NO required
+    /// fields — a source may be given as a URL only.
+    name: Option<String>,
     url: Option<String>,
 }
 
@@ -2181,6 +2469,8 @@ struct CycloneDxBomXml {
     metadata: Option<CdxMetadataXml>,
     /// Components wrapper element
     components: Option<CdxComponentsXml>,
+    /// Services wrapper element (SaaSBOM, 1.4+)
+    services: Option<CdxServicesXml>,
     /// Dependencies wrapper element
     dependencies: Option<CdxDependenciesXml>,
     /// Vulnerabilities wrapper element
@@ -2242,6 +2532,8 @@ struct CdxComponentXml {
     /// Cryptographic properties (1.6+, camelCase in XML)
     #[serde(rename = "cryptoProperties")]
     crypto_properties: Option<CdxCryptoProperties>,
+    /// Nested component assemblies (recursive)
+    components: Option<CdxComponentsXml>,
 }
 
 impl From<CdxComponentXml> for CdxComponent {
@@ -2291,7 +2583,8 @@ impl From<CdxComponentXml> for CdxComponent {
                 .property
                 .into_iter()
                 .map(|p| CdxProperty {
-                    name: p.name,
+                    // XSD requires the @name attribute
+                    name: Some(p.name),
                     value: p.value,
                 })
                 .collect()
@@ -2322,6 +2615,9 @@ impl From<CdxComponentXml> for CdxComponent {
             model_card: None,
             data_components: Vec::new(),
             crypto_properties: xml.crypto_properties,
+            components: xml
+                .components
+                .map(|w| w.component.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -2386,8 +2682,9 @@ struct CdxPropertiesXml {
 struct CdxPropertyXml {
     #[serde(rename = "@name")]
     name: String,
-    #[serde(rename = "$value")]
-    value: String,
+    /// Optional: a self-closing `<property name="x"/>` is schema-valid
+    #[serde(rename = "$value", default)]
+    value: Option<String>,
 }
 
 /// Dependencies wrapper element for XML format
@@ -2438,14 +2735,24 @@ struct CdxVulnerabilitiesXml {
 /// Vulnerability element for XML format
 #[derive(Debug, Deserialize)]
 struct CdxVulnerabilityXml {
-    id: String,
+    /// Optional per the spec (minOccurs="0" in the XSD)
+    id: Option<String>,
     source: Option<CdxVulnSource>,
+    /// References wrapper (alternate ids in other sources)
+    references: Option<CdxVulnReferencesXml>,
     description: Option<String>,
     recommendation: Option<String>,
     ratings: Option<CdxRatingsXml>,
     cwes: Option<CdxCwesXml>,
     affects: Option<CdxAffectsXml>,
     analysis: Option<CdxAnalysisXml>,
+}
+
+/// References wrapper element for XML vulnerabilities
+#[derive(Debug, Deserialize)]
+struct CdxVulnReferencesXml {
+    #[serde(rename = "reference", default)]
+    reference: Vec<CdxVulnReference>,
 }
 
 /// Ratings wrapper element for XML format
@@ -2505,6 +2812,7 @@ impl From<CdxVulnerabilityXml> for CdxVulnerability {
         Self {
             id: xml.id,
             source: xml.source,
+            references: xml.references.map(|r| r.reference),
             description: xml.description,
             recommendation: xml.recommendation,
             ratings: xml.ratings.map(|r| r.rating),
@@ -2524,6 +2832,95 @@ impl From<CdxVulnerabilityXml> for CdxVulnerability {
                 response: a.responses.map(|r| r.response),
                 detail: a.detail,
             }),
+        }
+    }
+}
+
+/// Services wrapper element for XML format
+#[derive(Debug, Deserialize)]
+struct CdxServicesXml {
+    #[serde(rename = "service", default)]
+    service: Vec<CdxServiceXml>,
+}
+
+/// Service element for XML format
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxServiceXml {
+    #[serde(rename = "@bom-ref")]
+    bom_ref: Option<String>,
+    provider: Option<CdxSupplier>,
+    group: Option<String>,
+    name: String,
+    version: Option<String>,
+    description: Option<String>,
+    endpoints: Option<CdxEndpointsXml>,
+    licenses: Option<CdxLicensesXml>,
+    #[serde(rename = "externalReferences")]
+    external_references: Option<CdxExternalReferencesXml>,
+    properties: Option<CdxPropertiesXml>,
+    /// Nested services (recursive)
+    services: Option<CdxServicesXml>,
+}
+
+/// Endpoints wrapper element for XML services
+#[derive(Debug, Deserialize)]
+struct CdxEndpointsXml {
+    #[serde(rename = "endpoint", default)]
+    endpoint: Vec<String>,
+}
+
+impl From<CdxServiceXml> for CdxService {
+    fn from(xml: CdxServiceXml) -> Self {
+        Self {
+            bom_ref: xml.bom_ref,
+            provider: xml.provider,
+            group: xml.group,
+            name: xml.name,
+            version: xml.version,
+            description: xml.description,
+            endpoints: xml.endpoints.map(|e| e.endpoint),
+            licenses: xml.licenses.map(|wrapper| {
+                wrapper
+                    .licenses
+                    .into_iter()
+                    .map(|choice| match choice {
+                        CdxLicenseChoiceXml::License(license) => CdxLicenseChoice {
+                            license: Some(license),
+                            expression: None,
+                        },
+                        CdxLicenseChoiceXml::Expression(expression) => CdxLicenseChoice {
+                            license: None,
+                            expression: Some(expression),
+                        },
+                    })
+                    .collect()
+            }),
+            external_references: xml.external_references.map(|wrapper| {
+                wrapper
+                    .reference
+                    .into_iter()
+                    .map(|r| CdxExternalReference {
+                        ref_type: r.ref_type,
+                        url: r.url,
+                        comment: r.comment,
+                    })
+                    .collect()
+            }),
+            properties: xml.properties.map(|wrapper| {
+                wrapper
+                    .property
+                    .into_iter()
+                    .map(|p| CdxProperty {
+                        // XSD requires the @name attribute
+                        name: Some(p.name),
+                        value: p.value,
+                    })
+                    .collect()
+            }),
+            services: xml
+                .services
+                .map(|w| w.service.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -3031,5 +3428,272 @@ mod tests {
             ml.fairness[0].group_at_risk.as_deref(),
             Some("assessed for demographic parity")
         );
+    }
+
+    // ── Spec-valid optional fields must not hard-fail the document ──
+    // organizationalEntity / vulnerability / vulnerabilitySource have NO
+    // required properties, and property requires only `name` (verified
+    // against bom-1.4..1.7 schemas). Each previously aborted the parse.
+
+    /// A supplier with only a URL is schema-valid; the URL becomes the
+    /// organization name rather than the document failing.
+    #[test]
+    fn supplier_without_name_parses() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6",
+                "components":[{"type":"library","bom-ref":"c","name":"lib","version":"1.0",
+                    "supplier":{"url":["https://example.com"]}}]}"#,
+        );
+        let comp = component(&sbom, "lib");
+        assert_eq!(
+            comp.supplier.as_ref().map(|s| s.name.as_str()),
+            Some("https://example.com"),
+            "URL-only supplier must fall back to the URL as name"
+        );
+    }
+
+    /// Properties are fully optional in bom-1.4/1.5 (no required list) and
+    /// value-less in 1.6+: neither shape may fail the document. Value-less
+    /// entries keep their name; name-less entries are skipped.
+    #[test]
+    fn property_without_value_parses() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6",
+                "components":[{"type":"library","bom-ref":"c","name":"lib","version":"1.0",
+                    "properties":[{"name":"internal:reviewed"},{"value":"orphan"}]}]}"#,
+        );
+        let comp = component(&sbom, "lib");
+        assert!(
+            comp.extensions
+                .properties
+                .iter()
+                .any(|p| p.name == "internal:reviewed"),
+            "value-less property must be kept by name"
+        );
+        assert_eq!(
+            comp.extensions.properties.len(),
+            1,
+            "name-less property is unaddressable and skipped"
+        );
+    }
+
+    /// A vulnerability without `id` is schema-valid: the first reference id
+    /// (with ITS source) is used, else an index-disambiguated UNKNOWN-{n}
+    /// (a shared literal would merge distinct anonymous vulnerabilities in
+    /// id-keyed consumers) — never a parse failure.
+    #[test]
+    fn vulnerability_without_id_parses() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6",
+                "components":[{"type":"library","bom-ref":"c","name":"lib","version":"1.0"}],
+                "vulnerabilities":[
+                    {"references":[{"id":"GHSA-xxxx-yyyy-zzzz","source":{"name":"GHSA"}}],
+                     "affects":[{"ref":"c"}]},
+                    {"description":"anonymous one","affects":[{"ref":"c"}]},
+                    {"description":"anonymous two","affects":[{"ref":"c"}]}
+                ]}"#,
+        );
+        let comp = component(&sbom, "lib");
+        let ids: Vec<&str> = comp.vulnerabilities.iter().map(|v| v.id.as_str()).collect();
+        assert!(ids.contains(&"GHSA-xxxx-yyyy-zzzz"), "reference id fallback, got {ids:?}");
+        let ghsa = comp
+            .vulnerabilities
+            .iter()
+            .find(|v| v.id == "GHSA-xxxx-yyyy-zzzz")
+            .expect("ghsa vuln");
+        assert!(
+            matches!(ghsa.source, VulnerabilitySource::Ghsa),
+            "id borrowed from a reference must carry that reference's source"
+        );
+        assert!(
+            ids.contains(&"UNKNOWN-1") && ids.contains(&"UNKNOWN-2"),
+            "anonymous vulns must get distinct ids, got {ids:?}"
+        );
+    }
+
+    /// Hostile deeply-nested XML must produce an error, not a stack-overflow
+    /// process abort: the recursive component/service XML models are only
+    /// reachable behind an iterative depth pre-scan.
+    #[test]
+    fn xml_nesting_depth_is_bounded() {
+        let mut doc =
+            String::from(r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.6"><components>"#);
+        for _ in 0..(MAX_XML_DEPTH + 100) {
+            doc.push_str(r#"<component type="library"><name>x</name><components>"#);
+        }
+        let result = CycloneDxParser::new().parse_str(&doc);
+        assert!(
+            result.is_err(),
+            "deeply nested XML must error before recursive deserialization"
+        );
+    }
+
+    /// A vulnerability source given only as a URL is schema-valid and keeps
+    /// the URL rather than failing or fabricating a name.
+    #[test]
+    fn vulnerability_source_url_only_parses() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6",
+                "components":[{"type":"library","bom-ref":"c","name":"lib","version":"1.0"}],
+                "vulnerabilities":[{"id":"CVE-2024-1234",
+                    "source":{"url":"https://osv.dev/CVE-2024-1234"},
+                    "affects":[{"ref":"c"}]}]}"#,
+        );
+        let comp = component(&sbom, "lib");
+        assert_eq!(comp.vulnerabilities.len(), 1);
+    }
+
+    /// Nested component assemblies are real inventory: all levels parse,
+    /// hierarchy becomes Contains edges, and dependencies/vulnerabilities
+    /// that reference nested bom-refs resolve instead of silently vanishing.
+    #[test]
+    fn nested_components_parse_with_edges_and_vulns() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6",
+                "metadata":{"component":{"type":"application","bom-ref":"app","name":"app","version":"1.0",
+                    "components":[{"type":"library","bom-ref":"inner-meta","name":"inner-meta","version":"1.0"}]}},
+                "components":[
+                    {"type":"container","bom-ref":"outer","name":"outer","version":"1.0",
+                     "components":[
+                        {"type":"library","bom-ref":"mid","name":"mid","version":"1.0",
+                         "components":[{"type":"library","bom-ref":"leaf","name":"leaf","version":"1.0"}]}]}],
+                "dependencies":[{"ref":"app","dependsOn":["leaf"]}],
+                "vulnerabilities":[{"id":"CVE-2024-9999","affects":[{"ref":"mid"}]}]}"#,
+        );
+        for name in ["app", "inner-meta", "outer", "mid", "leaf"] {
+            component(&sbom, name);
+        }
+        assert_eq!(sbom.component_count(), 5, "all nesting levels must parse");
+        let vuln_carrier = component(&sbom, "mid");
+        assert_eq!(
+            vuln_carrier.vulnerabilities.len(),
+            1,
+            "vulnerability targeting a nested bom-ref must attach"
+        );
+        let leaf_id = component(&sbom, "leaf").canonical_id.clone();
+        let app_id = component(&sbom, "app").canonical_id.clone();
+        assert!(
+            sbom.edges.iter().any(|e| e.from == app_id && e.to == leaf_id),
+            "dependency to a nested bom-ref must resolve"
+        );
+        let outer_id = component(&sbom, "outer").canonical_id.clone();
+        let mid_id = component(&sbom, "mid").canonical_id.clone();
+        assert!(
+            sbom.edges.iter().any(|e| e.from == outer_id
+                && e.to == mid_id
+                && matches!(e.relationship, DependencyType::Contains)),
+            "assembly hierarchy must become Contains edges"
+        );
+    }
+
+    /// Top-level services (SaaSBOM) join the inventory with their bom-refs
+    /// resolvable from dependencies; nested services parse too.
+    #[test]
+    fn services_parse_as_components() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6",
+                "components":[{"type":"application","bom-ref":"app","name":"app","version":"1.0"}],
+                "services":[
+                    {"bom-ref":"svc-api","name":"api-gateway","version":"2.1",
+                     "provider":{"name":"Acme SaaS"},
+                     "licenses":[{"expression":"Apache-2.0"}],
+                     "endpoints":["https://api.example.com/v1"],
+                     "services":[{"bom-ref":"svc-auth","name":"auth"}]}],
+                "dependencies":[{"ref":"app","dependsOn":["svc-api"]}]}"#,
+        );
+        assert_eq!(sbom.component_count(), 3, "app + 2 services");
+        let svc = component(&sbom, "api-gateway");
+        assert!(matches!(&svc.component_type, ComponentType::Other(t) if t == "service"));
+        assert_eq!(svc.supplier.as_ref().map(|s| s.name.as_str()), Some("Acme SaaS"));
+        assert!(
+            svc.licenses.declared.iter().any(|l| l.expression == "Apache-2.0"),
+            "declared service licenses must be kept"
+        );
+        component(&sbom, "auth");
+        let app_id = component(&sbom, "app").canonical_id.clone();
+        let svc_id = svc.canonical_id.clone();
+        assert!(
+            sbom.edges.iter().any(|e| e.from == app_id && e.to == svc_id),
+            "dependency on a service bom-ref must resolve"
+        );
+    }
+
+    /// affects[].versions status must be respected: only "affected" (or
+    /// absent — the spec default) entries are reported; "unaffected" and
+    /// "unknown" are not, and range entries are kept rather than dropped.
+    #[test]
+    fn affects_versions_status_respected() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6",
+                "components":[{"type":"library","bom-ref":"c","name":"lib","version":"1.0"}],
+                "vulnerabilities":[{"id":"CVE-2024-1111","affects":[{"ref":"c","versions":[
+                    {"version":"1.0.0","status":"affected"},
+                    {"version":"2.0.0","status":"unaffected"},
+                    {"version":"3.0.0","status":"unknown"},
+                    {"range":"vers:npm/>=4.0.0|<4.2.0"},
+                    {"version":"5.0.0"}
+                ]}]}]}"#,
+        );
+        let comp = component(&sbom, "lib");
+        assert_eq!(
+            comp.vulnerabilities[0].affected_versions,
+            vec![
+                "1.0.0".to_string(),
+                "vers:npm/>=4.0.0|<4.2.0".to_string(),
+                "5.0.0".to_string()
+            ],
+            "unaffected/unknown excluded; explicit+default affected and ranges kept"
+        );
+    }
+
+    /// XML twins of the hard-fail fixes: name-less supplier, value-less
+    /// property, id-less vulnerability, nested assemblies, and services all
+    /// parse from XML too.
+    #[test]
+    fn xml_optional_fields_and_nesting_parse() {
+        let sbom = parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="container" bom-ref="outer">
+      <name>outer</name>
+      <version>1.0</version>
+      <supplier><url>https://example.com</url></supplier>
+      <properties><property name="internal:reviewed"/></properties>
+      <components>
+        <component type="library" bom-ref="inner">
+          <name>inner</name>
+          <version>1.0</version>
+        </component>
+      </components>
+    </component>
+  </components>
+  <services>
+    <service bom-ref="svc">
+      <name>api</name>
+      <endpoints><endpoint>https://api.example.com</endpoint></endpoints>
+    </service>
+  </services>
+  <vulnerabilities>
+    <vulnerability>
+      <references><reference><id>GHSA-aaaa-bbbb-cccc</id></reference></references>
+      <affects><target><ref>inner</ref></target></affects>
+    </vulnerability>
+  </vulnerabilities>
+</bom>"#,
+        );
+        assert_eq!(sbom.component_count(), 3, "outer + inner + service");
+        let outer = component(&sbom, "outer");
+        assert_eq!(
+            outer.supplier.as_ref().map(|s| s.name.as_str()),
+            Some("https://example.com")
+        );
+        let inner = component(&sbom, "inner");
+        assert_eq!(
+            inner.vulnerabilities.first().map(|v| v.id.as_str()),
+            Some("GHSA-aaaa-bbbb-cccc"),
+            "id-less vulnerability must fall back to its reference id"
+        );
+        component(&sbom, "api");
     }
 }
