@@ -35,7 +35,7 @@ pub const HUGGINGFACE_API_URL: &str = "https://huggingface.co";
 /// grammar (`..`, extra `/`, `?`, `#`, `%`, whitespace, control chars) is
 /// rejected — it neutralizes path traversal / URL injection while accepting
 /// every real HuggingFace id.
-fn is_valid_hf_model_id(model_id: &str) -> bool {
+pub(crate) fn is_valid_hf_model_id(model_id: &str) -> bool {
     let mut segments = model_id.split('/');
     let ok = |seg: &str| {
         !seg.is_empty()

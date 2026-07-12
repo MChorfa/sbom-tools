@@ -28,6 +28,7 @@ mod api;
 mod client;
 
 pub use api::{HfLfs, HfModelInfo, HfSibling};
+pub(crate) use client::is_valid_hf_model_id;
 pub use client::{
     HUGGINGFACE_API_URL, HuggingFaceClient, HuggingFaceConfig, HuggingFaceEnrichmentStats,
     resolve_model_id,

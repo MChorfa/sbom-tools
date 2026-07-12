@@ -266,7 +266,7 @@ fn walk_dir(
 }
 
 /// Classify a repo file by its path.
-fn classify_file(rel_path: &str) -> FileRole {
+pub(crate) fn classify_file(rel_path: &str) -> FileRole {
     let basename = rel_path.rsplit('/').next().unwrap_or(rel_path);
     let lower = basename.to_lowercase();
     let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");

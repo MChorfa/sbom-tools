@@ -272,6 +272,19 @@ pub fn get_with_retry(
     url: &str,
     max_retries: u8,
 ) -> Result<reqwest::blocking::Response> {
+    get_with_retry_auth(client, url, max_retries, None)
+}
+
+/// [`get_with_retry`] with an optional `Authorization: Bearer` token
+/// (HuggingFace gated/private repos). The token is attached to the request
+/// only and is never logged.
+#[cfg(feature = "enrichment")]
+pub fn get_with_retry_auth(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    max_retries: u8,
+    bearer_token: Option<&str>,
+) -> Result<reqwest::blocking::Response> {
     offline_guard(url)?;
 
     for attempt in 0..=u32::from(max_retries) {
@@ -279,7 +292,11 @@ pub fn get_with_retry(
             tracing::debug!("retry attempt {attempt} for {url}");
         }
 
-        match client.get(url).send() {
+        let mut request = client.get(url);
+        if let Some(token) = bearer_token {
+            request = request.bearer_auth(token);
+        }
+        match request.send() {
             Ok(response) => {
                 let status = response.status();
                 let retryable =

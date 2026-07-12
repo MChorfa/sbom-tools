@@ -1,10 +1,11 @@
 //! AI-BOM generation from Hugging Face models.
 //!
 //! Turns a Hugging Face model — a local snapshot directory or a Hub repo id —
-//! into a [`NormalizedSbom`] shaped as a CycloneDX ML-BOM: the model as a
-//! `machine-learning-model` primary component carrying a modelCard and the
-//! SHA-256 of every weight file, per-file subcomponents for weights and
-//! configuration, and training-dataset references from the model card.
+//! into a [`NormalizedSbom`](crate::model::NormalizedSbom) shaped as a
+//! CycloneDX ML-BOM: the model as a `machine-learning-model` primary
+//! component carrying a modelCard and the SHA-256 of every weight file,
+//! per-file subcomponents for weights and configuration, and
+//! training-dataset references from the model card.
 //!
 //! Generation is *honest by default*: only derivable facts are populated,
 //! every hash records how it was obtained (computed locally vs declared by
@@ -18,6 +19,7 @@
 mod builder;
 mod card;
 mod config_json;
+mod description;
 mod license_map;
 mod local;
 mod report;
@@ -27,14 +29,16 @@ mod safetensors_meta;
 mod hub;
 
 pub use builder::build_sbom;
-pub use card::ModelCard;
-pub use config_json::ModelConfig;
-pub use local::{LocalModel, ModelFile, WeightFormat, ingest_local_dir};
+pub use card::{CardMetric, ModelCard};
+pub use config_json::{AdapterConfig, ModelConfig};
+pub use description::{FactSource, FileRole, ModelDescription, ModelFile, WeightFormat};
+pub use license_map::{MappedLicense, map_hf_license};
+pub use local::ingest_local_dir;
 pub use report::{GenerationReport, KnownUnknown, RiskFlag};
 pub use safetensors_meta::SafetensorsMeta;
 
 #[cfg(feature = "enrichment")]
-pub use hub::{HubModel, fetch_hub_model};
+pub use hub::fetch_hub_model;
 
 use std::path::PathBuf;
 
@@ -43,7 +47,7 @@ use std::path::PathBuf;
 #[non_exhaustive]
 pub enum AibomSource {
     /// A local snapshot directory (plain layout or a HuggingFace cache
-    /// `snapshots/<sha>` directory). Weight hashes are computed locally.
+    /// layout). Weight hashes are computed locally.
     LocalDir(PathBuf),
     /// A Hub repo id (`org/name`), optionally pinned to a revision. Metadata
     /// and LFS weight hashes come from the Hub API without downloading.
@@ -60,12 +64,12 @@ pub enum AibomSource {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct AibomOptions {
-    /// Operator-asserted sensitivity classification applied to training
-    /// dataset components (e.g. `none`, `pii`). Never inferred: dataset
-    /// sensitivity is a claim only the operator can make.
+    /// Operator-asserted sensitivity classification for the declared training
+    /// datasets (e.g. `none`, `pii`). Never inferred: dataset sensitivity is
+    /// a claim only the operator can make.
     pub dataset_sensitivity: Option<String>,
-    /// Explicit revision override for local directories whose commit sha
-    /// cannot be detected from the directory layout.
+    /// Explicit revision for local directories whose commit sha cannot be
+    /// detected from the directory layout.
     pub revision: Option<String>,
     /// Skip hashing local files (metadata-only BOM; hash absences are
     /// reported as known-unknowns).
@@ -129,15 +133,12 @@ pub fn generate_aibom(
     source: &AibomSource,
     options: &AibomOptions,
 ) -> Result<GeneratedAibom, AibomError> {
-    match source {
-        AibomSource::LocalDir(dir) => {
-            let model = ingest_local_dir(dir, options)?;
-            Ok(build_sbom(&model.into(), options))
-        }
+    let description = match source {
+        AibomSource::LocalDir(dir) => ingest_local_dir(dir, options)?,
         #[cfg(feature = "enrichment")]
         AibomSource::HubId { id, revision } => {
-            let model = fetch_hub_model(id, revision.as_deref(), options)?;
-            Ok(build_sbom(&model, options))
+            fetch_hub_model(id, revision.as_deref(), options)?
         }
-    }
+    };
+    Ok(build_sbom(&description, options))
 }

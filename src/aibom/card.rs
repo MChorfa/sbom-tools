@@ -81,6 +81,20 @@ impl ModelCard {
         Some(card)
     }
 
+    /// Build a card from the Hub API's `cardData` JSON object (the
+    /// server-parsed frontmatter). JSON is a YAML subset, so the JSON tree is
+    /// re-read as YAML and extracted by the same defensive logic. Body
+    /// sections (limitations, intended use) are unavailable via `cardData`.
+    #[must_use]
+    pub fn from_card_data(card_data: &serde_json::Value) -> Option<Self> {
+        if !card_data.is_object() {
+            return None;
+        }
+        let json = serde_json::to_string(card_data).ok()?;
+        let yaml = serde_yaml_ng::from_str::<Value>(&json).ok()?;
+        Some(Self::from_yaml(&yaml))
+    }
+
     /// Extract fields from a parsed frontmatter tree.
     fn from_yaml(v: &Value) -> Self {
         let mut card = Self {

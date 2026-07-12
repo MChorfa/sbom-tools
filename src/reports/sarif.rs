@@ -760,9 +760,9 @@ fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
     } else if rule_id.starts_with("SBOM-CRA-") {
         Some("https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng")
     } else if rule_id.starts_with("SBOM-BSI-") {
-        Some(
-            "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html",
-        )
+        // BSI's stable English shortlink for TR-03183 (printed in the
+        // v2.1.0 document imprint).
+        Some("https://bsi.bund.de/dok/TR-03183-en")
     } else if rule_id.starts_with("SBOM-NIST-SSDF-") || rule_id.starts_with("SBOM-SSDF-") {
         Some("https://doi.org/10.6028/NIST.SP.800-218")
     } else if rule_id.starts_with("SBOM-EO14028-") || rule_id.starts_with("SBOM-EO-14028-") {
@@ -1558,52 +1558,124 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
-            id: "SBOM-BSI-TR-03183-2-5-1".to_string(),
-            name: "BsiTr03183AuthorTool".to_string(),
+            id: "SBOM-BSI-TR-03183-2-4".to_string(),
+            name: "BsiTr03183FormatEligibility".to_string(),
             short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.1: SBOM author/tool identification".to_string(),
+                text: "BSI TR-03183-2 v2.1.0 §4: Newly generated/updated SBOMs must be CycloneDX 1.6+ or SPDX 3.0.1+".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-1".to_string(),
+            name: "BsiTr03183SbomCreator".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2.1: Creator of the SBOM (email, or URL if no email)".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-1-CONTACT".to_string(),
+            name: "BsiTr03183SbomCreatorContact".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2.1: SBOM creator must carry an email address or URL".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
             id: "SBOM-BSI-TR-03183-2-5-2".to_string(),
             name: "BsiTr03183Timestamp".to_string(),
             short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.2: ISO-8601 timestamp".to_string(),
+                text: "BSI TR-03183-2 §5.2.1: Timestamp of the SBOM data compilation".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Error },
         },
         SarifRule {
             id: "SBOM-BSI-TR-03183-2-5-3".to_string(),
-            name: "BsiTr03183ComponentIdentifier".to_string(),
+            name: "BsiTr03183ComponentName".to_string(),
             short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.3: Component name and unique identifier".to_string(),
+                text: "BSI TR-03183-2 §5.2.2: Component name (fallback: actual filename)".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-VERSION".to_string(),
+            name: "BsiTr03183ComponentVersion".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2.2: Component version (fallback: RFC 3339 modification date)".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-LICENSE".to_string(),
+            name: "BsiTr03183DistributionLicence".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2.2: Distribution licence(s) per component".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-LICENSE-SPDX".to_string(),
+            name: "BsiTr03183SpdxLicenceNaming".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §6.1: Licences must be named by SPDX identifier/expression".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-CREATOR".to_string(),
+            name: "BsiTr03183ComponentCreator".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2.2: Component creator (email, or URL if no email)".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
             id: "SBOM-BSI-TR-03183-2-5-4".to_string(),
             name: "BsiTr03183ComponentHash".to_string(),
             short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.4: Component cryptographic hash (SHA-256+)".to_string(),
+                text: "BSI TR-03183-2 §5.2.2: Hash of the deployable component as SHA-512".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-4-MISSING".to_string(),
+            name: "BsiTr03183ComponentHashMissing".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2.2/§3.2.1: Component has no hash of the deployable form".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
             id: "SBOM-BSI-TR-03183-2-5-5".to_string(),
             name: "BsiTr03183Dependencies".to_string(),
             short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.5: Dependency relationships".to_string(),
+                text: "BSI TR-03183-2 §5.2.2: Dependencies on other components".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Error },
         },
         SarifRule {
-            id: "SBOM-BSI-TR-03183-2-6".to_string(),
-            name: "BsiTr03183Recommended".to_string(),
+            id: "SBOM-BSI-TR-03183-2-5-5-COMPLETENESS".to_string(),
+            name: "BsiTr03183DependencyCompleteness".to_string(),
             short_description: SarifMessage {
-                text: "BSI TR-03183-2 §6: Recommended fields (license, supplier, lifecycle)".to_string(),
+                text: "BSI TR-03183-2 §5.2.2: Completeness of the dependency enumeration must be clearly indicated".to_string(),
             },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-5-2-4".to_string(),
+            name: "BsiTr03183UniqueIdentifier".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §5.2.4: Other unique identifiers (purl/CPE) — additional tier".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-BSI-TR-03183-2-3-1".to_string(),
+            name: "BsiTr03183NoVulnerabilityInfo".to_string(),
+            short_description: SarifMessage {
+                text: "BSI TR-03183-2 §3.1: An SBOM must not contain vulnerability information".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
             id: "SBOM-BSI-TR-03183-2-GENERAL".to_string(),
