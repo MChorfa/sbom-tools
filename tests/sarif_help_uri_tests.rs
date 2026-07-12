@@ -14,7 +14,7 @@ use sbom_tools::reports::generate_compliance_sarif;
 
 #[test]
 fn standard_ref_new_auto_populates_help_uri_for_cra() {
-    let r = StandardRef::new(StandardKind::CraArticle, "Art. 13(4)");
+    let r = StandardRef::new(StandardKind::CraArticle, "Art. 13(8)");
     assert_eq!(
         r.help_uri.as_deref(),
         Some("https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng")

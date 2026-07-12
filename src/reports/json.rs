@@ -299,28 +299,30 @@ struct CraComplianceDetail {
 
 #[derive(Serialize)]
 struct CraArticleSummary {
-    /// Article 13(4) - Machine-readable format
-    #[serde(rename = "art_13_4_machine_readable_format")]
-    art_13_4: usize,
-    /// Article 13(6) - Vulnerability disclosure
-    #[serde(rename = "art_13_6_vulnerability_disclosure")]
-    art_13_6: usize,
-    /// Article 13(7) - Coordinated vulnerability disclosure policy
-    #[serde(rename = "art_13_7_coordinated_disclosure")]
-    art_13_7: usize,
-    /// Article 13(8) - Support period
+    /// Annex I Part II (1) - Machine-readable SBOM format
+    #[serde(rename = "machine_readable_format")]
+    machine_readable: usize,
+    /// Article 13(17) / Annex I Part II (6) / Annex II (2) - Single point of
+    /// contact for vulnerability reporting
+    #[serde(rename = "art_13_17_contact")]
+    art_13_17: usize,
+    /// Annex I Part II (5) - Coordinated vulnerability disclosure policy
+    #[serde(rename = "cvd_policy")]
+    cvd_policy: usize,
+    /// Article 13(8) / 13(19) - Support period
     #[serde(rename = "art_13_8_support_period")]
     art_13_8: usize,
-    /// Article 13(11) - Component lifecycle
-    #[serde(rename = "art_13_11_component_lifecycle")]
-    art_13_11: usize,
-    /// Article 13(12) - Product identification
-    #[serde(rename = "art_13_12_product_identification")]
-    art_13_12: usize,
-    /// Article 13(15) - Manufacturer identification
-    #[serde(rename = "art_13_15_manufacturer_identification")]
-    art_13_15: usize,
-    /// Annex I - Technical documentation
+    /// Article 13(8) / Annex II (7) - Component lifecycle
+    #[serde(rename = "lifecycle")]
+    lifecycle: usize,
+    /// Article 13(15) / Annex II (3) - Product identification
+    #[serde(rename = "art_13_15_product_identification")]
+    art_13_15_product: usize,
+    /// Article 13(16) / Annex II (1) - Manufacturer identification
+    #[serde(rename = "art_13_16_manufacturer_identification")]
+    art_13_16_manufacturer: usize,
+    /// Annex I - Essential cybersecurity requirements (incl. Part II SBOM
+    /// elements and Part I (2)(f) integrity)
     #[serde(rename = "annex_i_technical_documentation")]
     annex_i: usize,
     /// Annex V - EU Declaration of Conformity
@@ -331,34 +333,36 @@ struct CraArticleSummary {
 impl CraComplianceDetail {
     fn from_result(result: ComplianceResult) -> Self {
         let mut summary = CraArticleSummary {
-            art_13_4: 0,
-            art_13_6: 0,
-            art_13_7: 0,
+            machine_readable: 0,
+            art_13_17: 0,
+            cvd_policy: 0,
             art_13_8: 0,
-            art_13_11: 0,
-            art_13_12: 0,
-            art_13_15: 0,
+            lifecycle: 0,
+            art_13_15_product: 0,
+            art_13_16_manufacturer: 0,
             annex_i: 0,
             annex_v: 0,
         };
 
-        // Count violations by article reference
+        // Count violations by article/annex reference. Predicates key on the
+        // requirement strings set at the compliance emit sites; more specific
+        // matches must precede the "annex v" / "annex i" prefix matches.
         for violation in &result.violations {
             let req = violation.requirement.to_lowercase();
-            if req.contains("art. 13(4)") || req.contains("art.13(4)") {
-                summary.art_13_4 += 1;
-            } else if req.contains("art. 13(6)") || req.contains("art.13(6)") {
-                summary.art_13_6 += 1;
-            } else if req.contains("art. 13(7)") || req.contains("art.13(7)") {
-                summary.art_13_7 += 1;
+            if req.contains("machine-readable") {
+                summary.machine_readable += 1;
+            } else if req.contains("art. 13(17)") || req.contains("art.13(17)") {
+                summary.art_13_17 += 1;
+            } else if req.contains("coordinated vulnerability disclosure") {
+                summary.cvd_policy += 1;
             } else if req.contains("art. 13(8)") || req.contains("art.13(8)") {
                 summary.art_13_8 += 1;
-            } else if req.contains("art. 13(11)") || req.contains("art.13(11)") {
-                summary.art_13_11 += 1;
-            } else if req.contains("art. 13(12)") || req.contains("art.13(12)") {
-                summary.art_13_12 += 1;
+            } else if req.contains("lifecycle") {
+                summary.lifecycle += 1;
             } else if req.contains("art. 13(15)") || req.contains("art.13(15)") {
-                summary.art_13_15 += 1;
+                summary.art_13_15_product += 1;
+            } else if req.contains("art. 13(16)") || req.contains("art.13(16)") {
+                summary.art_13_16_manufacturer += 1;
             } else if req.contains("annex viii") {
                 // Annex VIII (conformity assessment) has no bucket; the
                 // check must precede the "annex v" prefix match below.

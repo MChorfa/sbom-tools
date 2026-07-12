@@ -131,21 +131,23 @@ impl ComplianceChecker {
         }
     }
 
-    /// CRA gap checks: Art. 13(3), 13(5), 13(9), Annex I Part II supply chain, document integrity
+    /// CRA gap checks: SBOM freshness (Art. 13(7)), 13(5), 13(9), Annex I Part II supply chain, document integrity
     pub(crate) fn check_cra_gaps(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        // B1: Art. 13(3) — Update frequency / SBOM freshness. A missing
+        // B1: Art. 13(7) / Annex I Part II (1) — SBOM freshness. Keeping the
+        // documented component inventory current is the systematic-
+        // documentation duty applied to the SBOM element. A missing
         // timestamp (epoch sentinel) is a freshness gap in its own right, but
         // must be reported as "missing", not as a bogus ~20000-day age.
         if !sbom.document.has_known_timestamp() {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[CRA Art. 13(3)] SBOM has no creation timestamp; \
-                          CRA requires timely updates when components change"
+                message: "[CRA Art. 13(7) / Annex I Part II (1)] SBOM has no creation timestamp; \
+                          keep the documented component inventory current when components change"
                     .to_string(),
                 element: None,
-                requirement: "CRA Art. 13(3): SBOM update frequency".to_string(),
-                rule_id: "SBOM-CRA-ART-13-3",
+                requirement: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness".to_string(),
+                rule_id: "SBOM-CRA-SBOM-FRESHNESS",
                 standard_refs: Vec::new(),
             });
         } else {
@@ -155,11 +157,11 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::DocumentMetadata,
                     message: format!(
-                        "[CRA Art. 13(3)] SBOM is {age_days} days old; CRA requires timely updates when components change"
+                        "[CRA Art. 13(7) / Annex I Part II (1)] SBOM is {age_days} days old; keep the documented component inventory current when components change"
                     ),
                     element: None,
-                    requirement: "CRA Art. 13(3): SBOM update frequency".to_string(),
-                    rule_id: "SBOM-CRA-ART-13-3",
+                    requirement: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness".to_string(),
+                    rule_id: "SBOM-CRA-SBOM-FRESHNESS",
                     standard_refs: Vec::new(),
                 });
             } else if age_days > 30 {
@@ -167,17 +169,20 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::DocumentMetadata,
                     message: format!(
-                        "[CRA Art. 13(3)] SBOM is {age_days} days old; consider regenerating after component changes"
+                        "[CRA Art. 13(7) / Annex I Part II (1)] SBOM is {age_days} days old; consider regenerating after component changes"
                     ),
                     element: None,
-                    requirement: "CRA Art. 13(3): SBOM update frequency".to_string(),
-                    rule_id: "SBOM-CRA-ART-13-3",
+                    requirement: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness".to_string(),
+                    rule_id: "SBOM-CRA-SBOM-FRESHNESS",
                     standard_refs: Vec::new(),
                 });
             }
         }
 
-        // B2: Art. 13(5) — Licensed component tracking (all components should have license info)
+        // B2: Art. 13(5) — Third-party due diligence. The CRA does not list
+        // licences as an SBOM element; licence data is evidence that the
+        // manufacturer exercised due diligence on integrated third-party
+        // components.
         let total = sbom.components.len();
         let without_license = sbom
             .components
@@ -195,10 +200,11 @@ impl ComplianceChecker {
                 severity,
                 category: ViolationCategory::LicenseInfo,
                 message: format!(
-                    "[CRA Art. 13(5)] {without_license}/{total} components ({pct}%) missing license information"
+                    "[CRA Art. 13(5)] {without_license}/{total} components ({pct}%) missing license information needed to evidence third-party due diligence"
                 ),
                 element: None,
-                requirement: "CRA Art. 13(5): Licensed component tracking".to_string(),
+                requirement: "CRA Art. 13(5): Third-party due diligence (license tracking)"
+                    .to_string(),
                 rule_id: "SBOM-CRA-ART-13-5",
                 standard_refs: Vec::new(),
             });
@@ -391,7 +397,9 @@ impl ComplianceChecker {
             }
         }
 
-        // B5: Annex III — Document signature/integrity
+        // B5: Annex I Part I (2)(f) — Document signature/integrity. The
+        // clause protects the integrity of data, commands, programs and
+        // configuration (it does not mention authenticity).
         // Check for document-level hash, signature, or attestation
         let has_doc_integrity = sbom.document.serial_number.is_some()
             || sbom.components.values().any(|comp| {
@@ -407,12 +415,12 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::IntegrityInfo,
-                message: "[CRA Annex III] Consider adding document-level integrity metadata \
-                    (serial number, digital signature, or attestation with hash)"
+                message: "[CRA Annex I Part I (2)(f)] Consider adding document-level integrity \
+                    metadata (serial number, digital signature, or attestation with hash)"
                     .to_string(),
                 element: None,
-                requirement: "CRA Annex III: Document signature/integrity".to_string(),
-                rule_id: "SBOM-CRA-ANNEX-III",
+                requirement: "CRA Annex I Part I (2)(f): Document signature/integrity".to_string(),
+                rule_id: "SBOM-CRA-DOC-INTEGRITY",
                 standard_refs: Vec::new(),
             });
         }
@@ -458,7 +466,7 @@ impl ComplianceChecker {
             self.check_article_14_readiness_at(chrono::Utc::now(), violations);
         }
 
-        // B6: Art. 13(8) / Art. 13(11) — Component lifecycle / EOL detection
+        // B6: Art. 13(8) / Annex II (7) — Component lifecycle / EOL detection
         // If EOL enrichment data is present, warn about EOL components
         let eol_count = sbom
             .components
@@ -503,11 +511,11 @@ impl ComplianceChecker {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::SecurityInfo,
                 message: format!(
-                    "[CRA Art. 13(11)] {approaching_eol_count} component(s) are approaching end-of-life within 6 months"
+                    "[CRA Art. 13(8) / Annex II (7)] {approaching_eol_count} component(s) are approaching end-of-life within 6 months"
                 ),
                 element: None,
-                requirement: "CRA Art. 13(11): Component lifecycle monitoring".to_string(),
-                rule_id: "SBOM-CRA-ART-13-11",
+                requirement: "CRA Annex II (7): Component lifecycle monitoring".to_string(),
+                rule_id: "SBOM-CRA-LIFECYCLE",
                 standard_refs: Vec::new(),
             });
         }
@@ -532,12 +540,12 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::DocumentMetadata,
                     message:
-                        "[CRA Art. 13(6)] SPDX 3.0 document contains vulnerabilities but does not declare Security profile conformance; declare profileConformance: [\"security\"] for CRA Art. 13(6) compliance"
+                        "[CRA Annex I Part II (4)] SPDX 3.0 document contains vulnerabilities but does not declare Security profile conformance; declare profileConformance: [\"security\"] so vulnerability information is conveyed completely"
                             .to_string(),
                     element: None,
-                    requirement: "CRA Art. 13(6): SPDX 3.0 Security profile conformance"
+                    requirement: "CRA Annex I Part II (4): SPDX 3.0 Security profile conformance"
                         .to_string(),
-                    rule_id: "SBOM-CRA-ART-13-6-CONTACT",
+                    rule_id: "SBOM-CRA-VULN-METADATA",
                     standard_refs: Vec::new(),
                 });
             }
@@ -561,7 +569,7 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::LicenseInfo,
                     message:
-                        "[CRA Art. 13(5)] SPDX 3.0 document tracks licenses but does not declare SimpleLicensing profile conformance; declare profileConformance: [\"simpleLicensing\"] for completeness"
+                        "[CRA Art. 13(5)] SPDX 3.0 document tracks licenses but does not declare SimpleLicensing profile conformance; declare profileConformance: [\"simpleLicensing\"] to support third-party due diligence"
                             .to_string(),
                     element: None,
                     requirement: "CRA Art. 13(5): SPDX 3.0 SimpleLicensing profile conformance"
@@ -948,8 +956,8 @@ impl ComplianceChecker {
     // |-----------------------------------|-------------------------|-------------------|
     // | SBOM                              | Required                | Required          |
     // | Vulnerability handling process    | Required (Annex I II)   | Required          |
-    // | Coordinated disclosure policy     | Required (Art. 13(7))   | Required          |
-    // | Manufacturer email contact        | Required (Art. 13(15))  | NOT required      |
+    // | Coordinated disclosure policy     | Required (Annex I II (5)) | Required        |
+    // | Manufacturer email contact        | Required (Art. 13(16))  | NOT required      |
     // | EU Declaration of Conformity      | Required                | NOT required      |
     // | Conformity-assessment module      | Required                | NOT applied       |
     // | Article 14 reporting channels     | Required                | NOT applied       |
@@ -1003,8 +1011,8 @@ impl ComplianceChecker {
             });
         }
 
-        // Coordinated vulnerability disclosure policy (Art. 13(7)): require
-        // either an Advisories reference or sidecar-supplied
+        // Coordinated vulnerability disclosure policy (Annex I Part II (5)):
+        // require either an Advisories reference or sidecar-supplied
         // coordinated_disclosure_policy_url.
         let has_cvd_policy = manufacturer_scope_components(sbom).iter().any(|c| {
             c.external_refs
@@ -1018,11 +1026,11 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::SecurityInfo,
-                message: "[CRA Art. 13(7)] OSS steward should publish a coordinated vulnerability disclosure (CVD) policy — add an Advisories external reference or set coordinated_disclosure_policy_url in the sidecar".to_string(),
+                message: "[CRA Annex I Part II (5)] OSS steward should publish a coordinated vulnerability disclosure (CVD) policy — add an Advisories external reference or set coordinated_disclosure_policy_url in the sidecar".to_string(),
                 element: None,
-                requirement: "CRA Art. 13(7): Coordinated vulnerability disclosure policy"
+                requirement: "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy"
                     .to_string(),
-                rule_id: "SBOM-CRA-ART-13-7",
+                rule_id: "SBOM-CRA-CVD-POLICY",
                 standard_refs: Vec::new(),
             });
         }
@@ -1031,7 +1039,7 @@ impl ComplianceChecker {
         self.check_format_specific(sbom, violations);
 
         // -- Explicitly NOT enforced ----------------------------------------
-        // - Manufacturer email contact (Art. 13(15))
+        // - Manufacturer email contact (Art. 13(16))
         // - EU Declaration of Conformity reference (Annex V)
         // - Conformity-assessment module attestation
         // - Article 14 reporting channels (24h / 72h / ENISA)

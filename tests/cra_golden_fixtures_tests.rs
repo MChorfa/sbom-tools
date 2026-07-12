@@ -86,14 +86,14 @@ fn cra_compliant_passes_oss_steward_floor() {
 }
 
 #[test]
-fn noncompliant_no_manufacturer_fires_art_13_15_or_supplier_check() {
+fn noncompliant_no_manufacturer_fires_art_13_16_or_supplier_check() {
     let sbom_path = fixtures_dir().join("cra-noncompliant-no-manufacturer.cdx.json");
     assert!(sbom_path.exists());
     let parsed = parse_sbom(&sbom_path).expect("parse fixture");
     let result = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&parsed);
 
     let manufacturer_finding = result.violations.iter().any(|v| {
-        v.requirement.contains("Art. 13(15)")
+        v.requirement.contains("Art. 13(16)")
             || v.requirement.contains("Manufacturer")
             || v.requirement.contains("manufacturer")
             || v.requirement.contains("Supplier")
@@ -101,7 +101,7 @@ fn noncompliant_no_manufacturer_fires_art_13_15_or_supplier_check() {
     });
     assert!(
         manufacturer_finding,
-        "no-manufacturer fixture should fire either Art. 13(15) or supplier-tracking violation"
+        "no-manufacturer fixture should fire either Art. 13(16) or supplier-tracking violation"
     );
 }
 

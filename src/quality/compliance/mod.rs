@@ -272,7 +272,7 @@ impl ComplianceLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StandardKind {
-    /// EU CRA regulation article (e.g., "Art. 13(4)")
+    /// EU CRA regulation article (e.g., "Art. 13(8)")
     CraArticle,
     /// EU CRA regulation annex (e.g., "Annex I Part II 1")
     CraAnnex,
@@ -377,7 +377,7 @@ impl StandardKind {
     /// The returned URL is the *standard's* root, not a per-clause anchor —
     /// EUR-Lex and most national standards bodies do not publish stable
     /// per-article fragments. Per-article precision lives in the
-    /// `StandardRef::id` (e.g., "Art. 13(4)") rather than the URL.
+    /// `StandardRef::id` (e.g., "Art. 13(8)") rather than the URL.
     #[must_use]
     pub fn canonical_help_uri(self, _id: &str) -> Option<String> {
         let url = match self {
@@ -1330,7 +1330,7 @@ mod tests {
         assert!(
             r.violations
                 .iter()
-                .any(|v| v.rule_id == "SBOM-CRA-ART-13-12-VERSION"
+                .any(|v| v.rule_id == "SBOM-CRA-COMPONENT-VERSION"
                     && v.severity == ViolationSeverity::Error),
             "steward components without versions must error"
         );
@@ -1352,7 +1352,8 @@ mod tests {
     }
 
     /// A third-party dependency's upstream advisories/support refs must not
-    /// satisfy the manufacturer's Art. 13(6)/13(7) obligations.
+    /// satisfy the manufacturer's Art. 13(17) contact / Annex I Part II (5)
+    /// CVD-policy obligations.
     #[test]
     fn third_party_refs_do_not_satisfy_manufacturer_obligations() {
         use crate::model::{
@@ -1411,28 +1412,28 @@ mod tests {
         assert!(
             r.violations
                 .iter()
-                .any(|v| v.rule_id == "SBOM-CRA-ART-13-6-CONTACT"),
-            "dep-level advisories/support refs must not satisfy Art. 13(6)"
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-17-CONTACT"),
+            "dep-level advisories/support refs must not satisfy Art. 13(17)"
         );
         assert!(
             r.violations
                 .iter()
-                .any(|v| v.rule_id == "SBOM-CRA-ART-13-7"),
-            "dep-level advisories ref must not satisfy Art. 13(7)"
+                .any(|v| v.rule_id == "SBOM-CRA-CVD-POLICY"),
+            "dep-level advisories ref must not satisfy Annex I Part II (5)"
         );
 
         let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(true));
         assert!(
             !r.violations
                 .iter()
-                .any(|v| v.rule_id == "SBOM-CRA-ART-13-6-CONTACT"),
-            "primary-component security contact satisfies Art. 13(6)"
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-17-CONTACT"),
+            "primary-component security contact satisfies Art. 13(17)"
         );
         assert!(
             !r.violations
                 .iter()
-                .any(|v| v.rule_id == "SBOM-CRA-ART-13-7"),
-            "primary-component advisories ref satisfies Art. 13(7)"
+                .any(|v| v.rule_id == "SBOM-CRA-CVD-POLICY"),
+            "primary-component advisories ref satisfies Annex I Part II (5)"
         );
     }
 
@@ -1739,7 +1740,7 @@ mod tests {
     }
 
     /// Steward supplier findings cite Art. 24 in their structured refs, not
-    /// the exempted Art. 13(15).
+    /// the exempted Art. 13(16) manufacturer-identification obligation.
     #[test]
     fn steward_supplier_refs_cite_art_24() {
         use crate::model::{Component, DocumentMetadata, NormalizedSbom};
@@ -1758,8 +1759,10 @@ mod tests {
             .find(|v| v.rule_id == "SBOM-CRA-ART-24-SUPPLIER")
             .expect("steward supplier warning fires");
         assert!(
-            v.standard_refs.iter().all(|sr| sr.id != "Art. 13(15)"),
-            "steward supplier refs must not cite Art. 13(15)"
+            v.standard_refs
+                .iter()
+                .all(|sr| sr.id != "Art. 13(15)" && sr.id != "Art. 13(16)"),
+            "steward supplier refs must not cite Art. 13(15)/13(16)"
         );
         assert!(
             v.standard_refs.iter().any(|sr| sr.id == "Art. 24"),
@@ -1804,7 +1807,7 @@ mod tests {
         assert!(
             !r.violations
                 .iter()
-                .any(|v| v.rule_id == "SBOM-CRA-ART-13-6-CONTACT"),
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-17-CONTACT"),
             "evidence in a fully-cyclic graph must still count (fallback to all components)"
         );
     }
@@ -2992,12 +2995,12 @@ mod tests {
     }
 
     #[test]
-    fn registry_refs_for_art_13_4_include_article_and_pren() {
-        let refs = refs_for("SBOM-CRA-ART-13-4");
+    fn registry_refs_for_machine_readable_include_annex_and_pren() {
+        let refs = refs_for("SBOM-CRA-MACHINE-READABLE");
         assert!(
             refs.iter()
-                .any(|r| r.standard == StandardKind::CraArticle && r.id == "Art. 13(4)"),
-            "expected CRA Art. 13(4); got {refs:?}"
+                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part II (1)"),
+            "expected CRA Annex I Part II (1); got {refs:?}"
         );
         assert!(
             refs.iter()
@@ -3042,8 +3045,13 @@ mod tests {
     }
 
     #[test]
-    fn registry_refs_for_art_13_7_include_pren_rls() {
-        let refs = refs_for("SBOM-CRA-ART-13-7");
+    fn registry_refs_for_cvd_policy_include_annex_and_pren_rls() {
+        let refs = refs_for("SBOM-CRA-CVD-POLICY");
+        assert!(
+            refs.iter()
+                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part II (5)"),
+            "expected CRA Annex I Part II (5); got {refs:?}"
+        );
         assert!(
             refs.iter()
                 .any(|r| r.standard == StandardKind::Pren40000_1_3 && r.id == "RLS-2-RQ-03-RE"),
@@ -3104,18 +3112,18 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_supplies_security_contact_downgrades_art_13_6() {
+    fn sidecar_supplies_security_contact_downgrades_art_13_17() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default();
 
-        // Without sidecar: Art. 13(6) is a Warning
+        // Without sidecar: Art. 13(17) is a Warning
         let bare = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
-        let art_13_6_warning = bare.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(6)") && v.severity == ViolationSeverity::Warning
+        let art_13_17_warning = bare.violations.iter().find(|v| {
+            v.requirement.contains("Art. 13(17)") && v.severity == ViolationSeverity::Warning
         });
         assert!(
-            art_13_6_warning.is_some(),
-            "Without sidecar, Art. 13(6) should be a Warning"
+            art_13_17_warning.is_some(),
+            "Without sidecar, Art. 13(17) should be a Warning"
         );
 
         // With sidecar that supplies security_contact: same finding becomes Info
@@ -3126,25 +3134,25 @@ mod tests {
         let withsc = ComplianceChecker::new(ComplianceLevel::CraPhase2)
             .with_sidecar(sidecar)
             .check(&sbom);
-        let art_13_6_info = withsc.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(6)") && v.severity == ViolationSeverity::Info
+        let art_13_17_info = withsc.violations.iter().find(|v| {
+            v.requirement.contains("Art. 13(17)") && v.severity == ViolationSeverity::Info
         });
         assert!(
-            art_13_6_info.is_some(),
-            "With sidecar, Art. 13(6) should be downgraded to Info"
+            art_13_17_info.is_some(),
+            "With sidecar, Art. 13(17) should be downgraded to Info"
         );
         assert!(
             !withsc
                 .violations
                 .iter()
-                .any(|v| v.requirement.contains("Art. 13(6)")
+                .any(|v| v.requirement.contains("Art. 13(17)")
                     && v.severity == ViolationSeverity::Warning),
-            "With sidecar, no Warning-level Art. 13(6) violation should remain"
+            "With sidecar, no Warning-level Art. 13(17) violation should remain"
         );
     }
 
     #[test]
-    fn sidecar_supplies_product_name_downgrades_art_13_12() {
+    fn sidecar_supplies_product_name_downgrades_art_13_15() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default(); // no document name
 
@@ -3156,16 +3164,16 @@ mod tests {
             .with_sidecar(sidecar)
             .check(&sbom);
         let downgraded = result.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(12)") && v.severity == ViolationSeverity::Info
+            v.requirement.contains("Art. 13(15)") && v.severity == ViolationSeverity::Info
         });
         assert!(
             downgraded.is_some(),
-            "Sidecar product_name should downgrade Art. 13(12) to Info"
+            "Sidecar product_name should downgrade Art. 13(15) to Info"
         );
     }
 
     #[test]
-    fn sidecar_supplies_manufacturer_downgrades_art_13_15() {
+    fn sidecar_supplies_manufacturer_downgrades_art_13_16() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default();
         let sidecar = CraSidecarMetadata {
@@ -3176,16 +3184,16 @@ mod tests {
             .with_sidecar(sidecar)
             .check(&sbom);
         let downgraded = result.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(15)") && v.severity == ViolationSeverity::Info
+            v.requirement.contains("Art. 13(16)") && v.severity == ViolationSeverity::Info
         });
         assert!(
             downgraded.is_some(),
-            "Sidecar manufacturer_name should downgrade Art. 13(15) to Info"
+            "Sidecar manufacturer_name should downgrade Art. 13(16) to Info"
         );
     }
 
     #[test]
-    fn sidecar_supplies_cvd_url_downgrades_art_13_7() {
+    fn sidecar_supplies_cvd_url_downgrades_cvd_policy() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default();
         let sidecar = CraSidecarMetadata {
@@ -3196,11 +3204,11 @@ mod tests {
             .with_sidecar(sidecar)
             .check(&sbom);
         let downgraded = result.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(7)") && v.severity == ViolationSeverity::Info
+            v.requirement.contains("Annex I Part II (5)") && v.severity == ViolationSeverity::Info
         });
         assert!(
             downgraded.is_some(),
-            "Sidecar CVD URL should downgrade Art. 13(7) to Info"
+            "Sidecar CVD URL should downgrade the Annex I Part II (5) CVD-policy finding to Info"
         );
     }
 
@@ -4147,12 +4155,12 @@ mod tests {
         let result = ComplianceChecker::new(ComplianceLevel::CraPhase2)
             .with_sidecar(sidecar)
             .check(&sbom);
-        // No Art. 13(15) violation at all because SBOM provides org
+        // No Art. 13(16) violation at all because SBOM provides org
         assert!(
             !result.violations.iter().any(|v| v
                 .requirement
-                .contains("Art. 13(15): Manufacturer identification")),
-            "When SBOM provides manufacturer, no Art. 13(15) violation should be emitted"
+                .contains("Art. 13(16): Manufacturer identification")),
+            "When SBOM provides manufacturer, no Art. 13(16) violation should be emitted"
         );
     }
 }
