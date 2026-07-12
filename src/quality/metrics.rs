@@ -2108,7 +2108,8 @@ mod tests {
     fn file_components_do_not_dilute_completeness() {
         use crate::model::{Component, ComponentType, NormalizedSbom};
         let mut sbom = NormalizedSbom::default();
-        let pkg = Component::new("app".to_string(), "app@1".to_string()).with_version("1.0".to_string());
+        let pkg =
+            Component::new("app".to_string(), "app@1".to_string()).with_version("1.0".to_string());
         sbom.add_component(pkg);
         for i in 0..10 {
             let mut f = Component::new(format!("file-{i}"), format!("file-{i}@x"));

@@ -897,8 +897,7 @@ impl SpdxParser {
         for rel in spdx.relationships.iter().flatten() {
             if rel.relationship_type == "DESCRIBES" && doc_id(&rel.spdx_element_id) {
                 described.push(&rel.related_spdx_element);
-            } else if rel.relationship_type == "DESCRIBED_BY" && doc_id(&rel.related_spdx_element)
-            {
+            } else if rel.relationship_type == "DESCRIBED_BY" && doc_id(&rel.related_spdx_element) {
                 described.push(&rel.spdx_element_id);
             }
         }
@@ -913,7 +912,6 @@ impl SpdxParser {
         // Convert relationships to dependency edges
         if let Some(relationships) = &spdx.relationships {
             for rel in relationships {
-
                 // Map SPDX relationship types.
                 // `*_DEPENDENCY_OF` types have inverse direction:
                 //   "A DEV_DEPENDENCY_OF B" means B depends on A,
@@ -1113,11 +1111,7 @@ impl SpdxParser {
     }
 
     /// Convert SPDX package to normalized Component
-    fn convert_package(
-        &self,
-        pkg: &SpdxPackage,
-        license_names: &HashMap<&str, &str>,
-    ) -> Component {
+    fn convert_package(&self, pkg: &SpdxPackage, license_names: &HashMap<&str, &str>) -> Component {
         let mut comp = Component::new(pkg.name.clone(), pkg.spdx_id.clone());
 
         // Set version
@@ -1140,21 +1134,23 @@ impl SpdxParser {
 
         // Component type from SPDX 2.3 primaryPackagePurpose (older
         // documents lack it; Library remains the default).
-        comp.component_type = pkg.primary_package_purpose.as_deref().map_or(
-            ComponentType::Library,
-            |purpose| match purpose.to_uppercase().replace('-', "_").as_str() {
-                "APPLICATION" => ComponentType::Application,
-                "FRAMEWORK" => ComponentType::Framework,
-                "LIBRARY" => ComponentType::Library,
-                "CONTAINER" => ComponentType::Container,
-                "OPERATING_SYSTEM" => ComponentType::OperatingSystem,
-                "DEVICE" => ComponentType::Device,
-                "FIRMWARE" => ComponentType::Firmware,
-                "SOURCE" | "ARCHIVE" | "FILE" => ComponentType::File,
-                "DATA" => ComponentType::Data,
-                other => ComponentType::Other(other.to_lowercase()),
-            },
-        );
+        comp.component_type =
+            pkg.primary_package_purpose
+                .as_deref()
+                .map_or(ComponentType::Library, |purpose| {
+                    match purpose.to_uppercase().replace('-', "_").as_str() {
+                        "APPLICATION" => ComponentType::Application,
+                        "FRAMEWORK" => ComponentType::Framework,
+                        "LIBRARY" => ComponentType::Library,
+                        "CONTAINER" => ComponentType::Container,
+                        "OPERATING_SYSTEM" => ComponentType::OperatingSystem,
+                        "DEVICE" => ComponentType::Device,
+                        "FIRMWARE" => ComponentType::Firmware,
+                        "SOURCE" | "ARCHIVE" | "FILE" => ComponentType::File,
+                        "DATA" => ComponentType::Data,
+                        other => ComponentType::Other(other.to_lowercase()),
+                    }
+                });
 
         // Set licenses, resolving bare LicenseRef-* tokens through
         // hasExtractedLicensingInfos for display.
@@ -1162,7 +1158,8 @@ impl SpdxParser {
             && declared != "NOASSERTION"
             && declared != "NONE"
         {
-            comp.licenses.add_declared(build_license(declared, license_names));
+            comp.licenses
+                .add_declared(build_license(declared, license_names));
         }
         if let Some(concluded) = &pkg.license_concluded
             && concluded != "NOASSERTION"
@@ -1843,7 +1840,10 @@ mod tests {
         let file = component(&sbom, "./src/a.c");
         assert!(matches!(file.component_type, ComponentType::File));
         assert!(
-            matches!(file.hashes.first().map(|h| &h.algorithm), Some(HashAlgorithm::Blake3)),
+            matches!(
+                file.hashes.first().map(|h| &h.algorithm),
+                Some(HashAlgorithm::Blake3)
+            ),
             "BLAKE3 must map to the typed variant"
         );
 
@@ -1870,7 +1870,10 @@ mod tests {
 
         // LicenseRef resolution, originator, supplier email-cleaning.
         assert_eq!(
-            app.licenses.declared.first().and_then(|l| l.resolved_name.as_deref()),
+            app.licenses
+                .declared
+                .first()
+                .and_then(|l| l.resolved_name.as_deref()),
             Some("CyberNeko License")
         );
         assert_eq!(app.author.as_deref(), Some("Upstream Org"));
@@ -1887,10 +1890,10 @@ mod tests {
             "homepage must become a Website reference"
         );
         assert!(
-            app.external_refs
-                .iter()
-                .any(|r| matches!(r.ref_type, ExternalRefType::SourceDistribution)
-                    && r.url == "https://dl.example.com/app-1.0.tgz"),
+            app.external_refs.iter().any(|r| matches!(
+                r.ref_type,
+                ExternalRefType::SourceDistribution
+            ) && r.url == "https://dl.example.com/app-1.0.tgz"),
             "downloadLocation must be a distribution ref (round-trips on emit)"
         );
         assert_eq!(
@@ -2069,7 +2072,10 @@ mod tests {
         assert!(matches!(pkg.component_type, ComponentType::Container));
         assert_eq!(pkg.author.as_deref(), Some("Foo Upstream"));
         assert_eq!(
-            pkg.licenses.declared.first().and_then(|l| l.resolved_name.as_deref()),
+            pkg.licenses
+                .declared
+                .first()
+                .and_then(|l| l.resolved_name.as_deref()),
             Some("Beer-Ware License"),
             "tag-value LicenseID blocks must resolve LicenseRef tokens"
         );
@@ -2084,7 +2090,10 @@ mod tests {
         assert!(matches!(file.component_type, ComponentType::File));
         assert!(!file.hashes.is_empty(), "FileChecksum must parse");
         assert_eq!(
-            file.licenses.concluded.as_ref().map(|l| l.expression.as_str()),
+            file.licenses
+                .concluded
+                .as_ref()
+                .map(|l| l.expression.as_str()),
             Some("MIT")
         );
 

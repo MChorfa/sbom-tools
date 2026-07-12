@@ -454,10 +454,7 @@ impl ComplianceChecker {
             // requirements below do not apply to them (NTIA scopes those to
             // components). Without this carve-out, a file-cataloguing SBOM
             // emits thousands of spurious Errors and auto-fails compliance.
-            if matches!(
-                comp.component_type,
-                crate::model::ComponentType::File
-            ) {
+            if matches!(comp.component_type, crate::model::ComponentType::File) {
                 continue;
             }
 
