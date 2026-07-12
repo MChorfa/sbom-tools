@@ -390,13 +390,15 @@ impl StandardKind {
             Self::NistSsdf => "https://doi.org/10.6028/NIST.SP.800-218",
             // EO 14028 — Federal Register short-form.
             Self::Eo14028 => "https://www.federalregister.gov/d/2021-10460",
-            // FDA premarket cybersecurity guidance.
-            Self::FdaPremarket => {
-                "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions"
-            }
-            // NTIA SBOM Minimum Elements report.
+            // FDA premarket cybersecurity guidance — current edition is
+            // "Cybersecurity in Medical Devices: Quality Management System
+            // Considerations and Content of Premarket Submissions" (final,
+            // 2026-02-03); FDA's media id is the stable handle.
+            Self::FdaPremarket => "https://www.fda.gov/media/119933/download",
+            // NTIA SBOM Minimum Elements report (canonical host is ntia.gov;
+            // the old ntia.doc.gov URLs only survive via redirect).
             Self::NtiaMinimum => {
-                "https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf"
+                "https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom"
             }
             // CSAF v2.0 OASIS standard.
             Self::Csaf2 => "https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html",
@@ -408,8 +410,11 @@ impl StandardKind {
             Self::NistPqc => "https://csrc.nist.gov/projects/post-quantum-cryptography",
             // EU AI Act Regulation (EU) 2024/1689 — EUR-Lex ELI is the canonical home.
             Self::EuAiAct => "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng",
-            // BSI/G7 "SBOM for AI — Minimum Elements" — BSI is the publishing body.
-            Self::BsiSbomForAi => "https://www.bsi.bund.de",
+            // BSI/G7 "SBOM for AI — Minimum Elements" — final joint G7
+            // guidance (2026-05-12); CISA hosts the stable resource page.
+            Self::BsiSbomForAi => {
+                "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
+            }
             Self::Other => return None,
         };
         Some(url.to_string())
@@ -1794,6 +1799,63 @@ mod tests {
                 .any(|v| v.rule_id == "SBOM-CRA-ART-13-6-CONTACT"),
             "evidence in a fully-cyclic graph must still count (fallback to all components)"
         );
+    }
+
+    /// Dependency cycles fire the ClassCheck::Cycles calibration: Warning at
+    /// Default class, Error at Important-2/Critical; acyclic graphs are silent.
+    #[test]
+    fn cra_dependency_cycles_scale_with_product_class() {
+        use crate::model::{
+            Component, CraProductClass, DependencyEdge, DependencyType, DocumentMetadata,
+            NormalizedSbom,
+        };
+        let build = |cyclic: bool| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let a = Component::new("liba".to_string(), "liba".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/liba@1.0".to_string());
+            let b = Component::new("libb".to_string(), "libb".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/libb@1.0".to_string());
+            let a_id = a.canonical_id.clone();
+            let b_id = b.canonical_id.clone();
+            sbom.add_component(a);
+            sbom.add_component(b);
+            sbom.edges.push(DependencyEdge::new(
+                a_id.clone(),
+                b_id.clone(),
+                DependencyType::DependsOn,
+            ));
+            if cyclic {
+                sbom.edges
+                    .push(DependencyEdge::new(b_id, a_id, DependencyType::DependsOn));
+            }
+            sbom
+        };
+
+        let cycles = |r: &ComplianceResult| {
+            r.violations
+                .iter()
+                .find(|v| v.rule_id == "SBOM-CRA-CYCLES")
+                .map(|v| v.severity)
+        };
+
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(true));
+        assert_eq!(
+            cycles(&r),
+            Some(ViolationSeverity::Warning),
+            "cycles warn at the default class"
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::Critical)
+            .check(&build(true));
+        assert_eq!(
+            cycles(&r),
+            Some(ViolationSeverity::Error),
+            "cycles error at Critical class"
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(false));
+        assert_eq!(cycles(&r), None, "acyclic graphs are silent");
     }
 
     #[test]

@@ -17,13 +17,21 @@ pub struct RuleMeta {
     pub sarif_id: &'static str,
     /// Documentation-default severity for the rule. Push sites may still
     /// escalate/relax the concrete [`Violation::severity`] by product class or
-    /// CRA phase; this default is surfaced in the SARIF rule catalogue.
+    /// CRA phase. Consistency with the hand-maintained SARIF rule catalogue
+    /// is enforced by `registry_severity_matches_sarif_catalogue` in
+    /// tests/sarif_rule_catalogue_tests.rs.
     pub default_severity: ViolationSeverity,
     /// Harmonised-standard / regulation cross-references, in display order.
     pub refs: &'static [(StandardKind, &'static str)],
     /// Remediation guidance shown in reports and the TUI.
     pub remediation: &'static str,
 }
+
+/// NIST PQC readiness remediation, shared by the SBOM-PQC-* rules.
+///
+/// NIST IR 8547 is cited as its Initial Public Draft (Nov 2024) — still a
+/// draft as of 2026-07; SP 800-131A is at Rev. 2 (Rev. 3 is draft-only).
+const REMEDIATION_PQC: &str = "Migrate quantum-vulnerable algorithms per NIST IR 8547 ipd (Transition to Post-Quantum Cryptography Standards): adopt ML-KEM (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) or SP 800-208 stateful hash-based signatures, and retire algorithms disallowed by SP 800-131A Rev. 2.";
 
 /// Generic fallback remediation, shared by rules with no bespoke guidance.
 pub(crate) const REMEDIATION_GENERIC: &str = "Review the requirement and update the SBOM accordingly. Consult the EU CRA regulation (EU 2024/2847) for detailed guidance.";
@@ -246,6 +254,12 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             default_severity: ViolationSeverity::Info,
             refs: &[(ANNEX, "Annex V")],
             remediation: "Reference the EU Declaration of Conformity. CycloneDX: add an externalReference of type 'attestation' or 'certification'. SPDX: add an external document reference.",
+        },
+        "SBOM-CRA-CYCLES" => RuleMeta {
+            sarif_id: "SBOM-CRA-CYCLES",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(ANNEX, "Annex I Part II (1)")],
+            remediation: "Resolve cyclic dependency declarations so the SBOM's dependency graph is a directed acyclic inventory of the product's components.",
         },
         "SBOM-CRA-ANNEX-VIII" => RuleMeta {
             sarif_id: "SBOM-CRA-ANNEX-VIII",
@@ -931,50 +945,53 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         "SBOM-PQC-000" => RuleMeta {
             sarif_id: "SBOM-PQC-000",
             default_severity: ViolationSeverity::Error,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::NistPqc, "IR 8547 ipd")],
+            remediation: REMEDIATION_PQC,
         },
         "SBOM-PQC-001" => RuleMeta {
             sarif_id: "SBOM-PQC-001",
             default_severity: ViolationSeverity::Error,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[
+                (K::NistPqc, "IR 8547 ipd"),
+                (K::NistPqc, "SP 800-131A Rev. 2"),
+            ],
+            remediation: REMEDIATION_PQC,
         },
         "SBOM-PQC-012" => RuleMeta {
             sarif_id: "SBOM-PQC-012",
             default_severity: ViolationSeverity::Warning,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::NistPqc, "IR 8547 ipd")],
+            remediation: REMEDIATION_PQC,
         },
         "SBOM-PQC-010" => RuleMeta {
             sarif_id: "SBOM-PQC-010",
             default_severity: ViolationSeverity::Warning,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::NistPqc, "FIPS 203/204/205")],
+            remediation: REMEDIATION_PQC,
         },
         "SBOM-PQC-005" => RuleMeta {
             sarif_id: "SBOM-PQC-005",
             default_severity: ViolationSeverity::Error,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::NistPqc, "SP 800-131A Rev. 2")],
+            remediation: REMEDIATION_PQC,
         },
         "SBOM-PQC-008" => RuleMeta {
             sarif_id: "SBOM-PQC-008",
             default_severity: ViolationSeverity::Error,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::NistPqc, "SP 800-131A Rev. 2")],
+            remediation: REMEDIATION_PQC,
         },
         "SBOM-PQC-009" => RuleMeta {
             sarif_id: "SBOM-PQC-009",
             default_severity: ViolationSeverity::Info,
-            refs: &[(K::NistPqc, "NIST PQC")],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::NistPqc, "FIPS 203/204/205"), (K::NistPqc, "SP 800-208")],
+            remediation: REMEDIATION_PQC,
         },
         "SBOM-PQC-KEY-001" => RuleMeta {
             sarif_id: "SBOM-PQC-KEY-001",
             default_severity: ViolationSeverity::Error,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::NistPqc, "SP 800-131A Rev. 2")],
+            remediation: REMEDIATION_PQC,
         },
         // Certificate signed with a broken or quantum-vulnerable algorithm.
         "SBOM-PQC-CERT-001" => RuleMeta {

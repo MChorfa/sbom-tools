@@ -768,7 +768,7 @@ fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
             "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions",
         )
     } else if rule_id.starts_with("SBOM-NTIA-") {
-        Some("https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf")
+        Some("https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom")
     } else if rule_id.starts_with("SBOM-PQC-") || rule_id.starts_with("SBOM-NIST-PQC-") {
         Some("https://csrc.nist.gov/projects/post-quantum-cryptography")
     } else if rule_id.starts_with("SBOM-CNSA-") {
@@ -782,7 +782,9 @@ fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
     } else if rule_id.starts_with("SBOM-AIACT-") {
         Some("https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng")
     } else if rule_id.starts_with("SBOM-BSIAI-") {
-        Some("https://www.bsi.bund.de")
+        Some(
+            "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements",
+        )
     } else {
         None
     }

@@ -948,6 +948,32 @@ impl ComplianceChecker {
             }
         }
 
+        // CRA product-class calibration: dependency cycles undermine the
+        // reliability of the SBOM's dependency graph (Annex I Part II (1)
+        // requires the SBOM to cover the product's dependencies). Severity
+        // scales with the CRA product class (`ClassCheck::Cycles`).
+        if self.level.is_cra() && !sbom.edges.is_empty() {
+            let dm = crate::quality::DependencyMetrics::from_sbom(sbom);
+            if !dm.graph_analysis_skipped
+                && dm.cycle_count > 0
+                && let Some(severity) = self.class_severity(ClassCheck::Cycles)
+            {
+                violations.push(Violation {
+                    severity,
+                    category: ViolationCategory::DependencyInfo,
+                    message: format!(
+                        "[CRA Annex I Part II (1)] Dependency graph contains {} cycle(s); cyclic dependency declarations make the component inventory ambiguous",
+                        dm.cycle_count
+                    ),
+                    element: None,
+                    requirement: "CRA Annex I Part II (1): Dependency graph consistency"
+                        .to_string(),
+                    rule_id: "SBOM-CRA-CYCLES",
+                    standard_refs: Vec::new(),
+                });
+            }
+        }
+
         // CRA: warn if multiple root components (no incoming edges) and no primary component set
         if self.level.is_cra() && sbom.components.len() > 1 && sbom.primary_component_id.is_none() {
             use std::collections::HashSet;

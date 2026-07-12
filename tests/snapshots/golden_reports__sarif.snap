@@ -453,7 +453,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "note"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             },
             {
               "id": "SBOM-BSIAI-META",
@@ -464,7 +464,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             },
             {
               "id": "SBOM-BSIAI-SYS",
@@ -475,7 +475,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "warning"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             },
             {
               "id": "SBOM-BSIAI-MODEL",
@@ -486,7 +486,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             },
             {
               "id": "SBOM-BSIAI-DATASET",
@@ -497,7 +497,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             },
             {
               "id": "SBOM-BSIAI-INFRA",
@@ -508,7 +508,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "note"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             },
             {
               "id": "SBOM-BSIAI-SEC",
@@ -519,7 +519,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "note"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             },
             {
               "id": "SBOM-BSIAI-UNTYPED-ML",
@@ -530,7 +530,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "warning"
               },
-              "helpUri": "https://www.bsi.bund.de"
+              "helpUri": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
             }
           ]
         }
