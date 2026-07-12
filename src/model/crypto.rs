@@ -1029,12 +1029,36 @@ pub enum AlgorithmClass {
     Sha2,
     /// SHA-3 family hash/XOF (SHA3-*, SHAKE, Keccak).
     Sha3,
+    /// Recognized modern hash outside the SHA-2/SHA-3 families (SM3,
+    /// GOST R 34.11 "Streebog", …) — not broken, but not on approval
+    /// lists such as CNSA 2.0.
+    OtherHash,
     /// Post-quantum algorithm; the parameter set, when known, is in
     /// `parameter` (e.g., "1024" for ML-KEM-1024, "87" for ML-DSA-87).
     PostQuantum(PqcKind),
     /// Not recognized — callers should treat as "cannot verify", never as
     /// implicitly compliant.
     Unknown,
+}
+
+impl AlgorithmClass {
+    /// Rank for "report the most severe mention" selection (higher is
+    /// worse): Broken > ClassicalQuantumVulnerable > recognized
+    /// symmetric/hash (not necessarily approved) > post-quantum >
+    /// Unknown. Used to pick the worst algorithm out of multi-algorithm
+    /// identities like "sha384-rsa-cert-chain", where reporting the first
+    /// token (SHA-384, CNSA-approved) would hide the quantum-vulnerable
+    /// RSA.
+    #[must_use]
+    pub const fn severity_rank(self) -> u8 {
+        match self {
+            Self::Broken => 5,
+            Self::ClassicalQuantumVulnerable => 4,
+            Self::Symmetric | Self::Sha2 | Self::Sha3 | Self::OtherHash => 2,
+            Self::PostQuantum(_) => 1,
+            Self::Unknown => 0,
+        }
+    }
 }
 
 /// Structured result of [`classify_algorithm`]: canonical family name,
@@ -1089,10 +1113,14 @@ fn family_class(canonical: &str) -> AlgorithmClass {
         "MD2" | "MD4" | "MD5" | "SHA-1" | "DES" | "3DES" | "RC2" | "RC4" | "BLOWFISH" | "IDEA"
         | "CAST5" | "SKIPJACK" => C::Broken,
         "RSA" | "DSA" | "DH" | "ECDH" | "ECDSA" | "EDDSA" | "ED25519" | "ED448" | "X25519"
-        | "X448" | "ELGAMAL" | "ECIES" | "ECMQV" | "EC" => C::ClassicalQuantumVulnerable,
-        "AES" | "CHACHA20" | "CAMELLIA" | "ARIA" | "SEED" | "SERPENT" | "TWOFISH" => C::Symmetric,
+        | "X448" | "ELGAMAL" | "ECIES" | "ECMQV" | "EC" | "SM2" | "SM9" | "GOST-R-34.10" => {
+            C::ClassicalQuantumVulnerable
+        }
+        "AES" | "CHACHA20" | "CAMELLIA" | "ARIA" | "SEED" | "SERPENT" | "TWOFISH" | "SM4"
+        | "MAGMA" | "KUZNYECHIK" => C::Symmetric,
         "SHA-2" => C::Sha2,
         "SHA-3" => C::Sha3,
+        "SM3" | "GOST-R-34.11" => C::OtherHash,
         "ML-KEM" => C::PostQuantum(PqcKind::MlKem),
         "ML-DSA" => C::PostQuantum(PqcKind::MlDsa),
         "SLH-DSA" => C::PostQuantum(PqcKind::SlhDsa),
@@ -1141,6 +1169,14 @@ fn alias_lookup(token: &str) -> Option<(&'static str, Option<&'static str>, bool
         "ECIES" => ("ECIES", None),
         "ECMQV" => ("ECMQV", None),
         "EC" | "ECC" => ("EC", None),
+        // National classical public-key algorithms (quantum-vulnerable):
+        // Chinese SM2/SM9 and Russian GOST R 34.10. `normalize_algo_token`
+        // maps '.'/' '/'_' to '-', so "GOST R 34.10" arrives as
+        // "GOST-R-34-10"; bare "GOST" most commonly denotes the signature
+        // scheme and is classified conservatively as such.
+        "SM2" => ("SM2", None),
+        "SM9" => ("SM9", None),
+        "GOST" | "GOST3410" | "GOSTR3410" | "GOST-R-34-10" => ("GOST-R-34.10", None),
         // Symmetric.
         "AES" | "RIJNDAEL" => ("AES", None),
         "CHACHA" | "CHACHA20" | "XCHACHA20" | "CHACHA20-POLY1305" => ("CHACHA20", None),
@@ -1149,12 +1185,27 @@ fn alias_lookup(token: &str) -> Option<(&'static str, Option<&'static str>, bool
         "SEED" => ("SEED", None),
         "SERPENT" => ("SERPENT", None),
         "TWOFISH" => ("TWOFISH", None),
+        // National symmetric ciphers (SM4 is fixed 128-bit; GOST R 34.12
+        // Magma/Kuznyechik).
+        "SM4" => ("SM4", None),
+        "MAGMA" => ("MAGMA", None),
+        "KUZNYECHIK" | "KUZNECHIK" => ("KUZNYECHIK", None),
+        // National hashes — recognized, but not CNSA 2.0-approved.
+        "SM3" => ("SM3", None),
+        "GOST3411" | "GOSTR3411" | "GOST-R-34-11" | "STREEBOG" => ("GOST-R-34.11", None),
         // SHA-2 (digest size carried in the token where present).
         "SHA-2" | "SHA2" => ("SHA-2", None),
         "SHA-224" | "SHA224" => ("SHA-2", Some("224")),
         "SHA-256" | "SHA256" => ("SHA-2", Some("256")),
         "SHA-384" | "SHA384" => ("SHA-2", Some("384")),
         "SHA-512" | "SHA512" => ("SHA-2", Some("512")),
+        // FIPS 180-4 truncated variants ('/' is folded to '-' by
+        // normalize_algo_token). These must classify by their truncated
+        // OUTPUT size — SHA-512/256 is a 256-bit digest and NOT on the
+        // CNSA 2.0 hash allowlist, unlike full SHA-512 (finding: the
+        // generic rsplit branch preferred the alias-implied 512).
+        "SHA-512-256" | "SHA512-256" => ("SHA-2", Some("256")),
+        "SHA-512-224" | "SHA512-224" => ("SHA-2", Some("224")),
         // SHA-3 family.
         "SHA-3" | "SHA3" | "KECCAK" | "SHAKE" | "SHAKE128" | "SHAKE256" => ("SHA-3", None),
         "SHA3-224" => ("SHA-3", Some("224")),
@@ -1217,6 +1268,12 @@ fn classify_token(token: &str) -> Option<(&'static str, Option<String>)> {
         return finish(family, param.map(str::to_string), dilithium);
     }
 
+    // Brainpool named curves ("brainpoolP256r1", "brainpoolP384t1", …):
+    // the whole RFC 5639 family is classical elliptic-curve crypto.
+    if t.starts_with("BRAINPOOL") {
+        return Some(("EC", None));
+    }
+
     // Trailing "-<digits>" size: "ML-KEM-1024", "AES-128", "RSA-2048", "KYBER-768".
     if let Some((base, digits)) = t.rsplit_once('-')
         && !digits.is_empty()
@@ -1257,6 +1314,32 @@ fn classify_token(token: &str) -> Option<(&'static str, Option<String>)> {
 /// Unrecognized tokens (GCM, CBC, TLS, WITH, …) are simply skipped.
 #[must_use]
 pub fn classify_algorithm_names(name: &str) -> Vec<AlgorithmClassification> {
+    classify_names_impl(name, false)
+}
+
+/// Like [`classify_algorithm_names`], but drops the riskiest bare aliases
+/// ("SEED", "EC"/"ECC") that collide with everyday words — "seed-expander"
+/// is a DRBG utility, not the SEED block cipher, and "ec2" is not elliptic
+/// curve crypto. Used for the name-only fallback and raw bom-ref scans,
+/// where no structured identity backs the token; declared `algorithmFamily`
+/// strings and cipher-suite names (where bare "SEED" really is the cipher)
+/// keep the full alias table.
+#[must_use]
+pub fn classify_algorithm_names_guarded(name: &str) -> Vec<AlgorithmClassification> {
+    classify_names_impl(name, true)
+}
+
+/// Whether a matched token span is too generic to trust in unstructured
+/// text: the bare SEED / EC / ECC aliases (with or without a trailing
+/// size digit run) collide with non-crypto words.
+fn is_overgeneric_span(span: &str) -> bool {
+    let base = span
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_end_matches('-');
+    matches!(base, "SEED" | "EC" | "ECC")
+}
+
+fn classify_names_impl(name: &str, guarded: bool) -> Vec<AlgorithmClassification> {
     let upper = name.to_uppercase();
     let tokens: Vec<&str> = upper
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '+'))
@@ -1276,6 +1359,9 @@ pub fn classify_algorithm_names(name: &str) -> Vec<AlgorithmClassification> {
         for span in (1..=max_span).rev() {
             let joined = tokens[i..i + span].join("-");
             if let Some((family, parameter)) = classify_token(&joined) {
+                if guarded && is_overgeneric_span(&joined) {
+                    continue;
+                }
                 let cls = AlgorithmClassification {
                     family: Some(family.to_string()),
                     parameter,
@@ -1294,6 +1380,27 @@ pub fn classify_algorithm_names(name: &str) -> Vec<AlgorithmClassification> {
         }
     }
     out
+}
+
+/// The most severe classification among `mentions` (first wins on ties),
+/// per [`AlgorithmClass::severity_rank`]. Callers that must reduce a
+/// multi-algorithm identity ("sha384-rsa-cert-chain") to one verdict use
+/// this so the worst algorithm is reported, never whichever token happened
+/// to appear first.
+#[must_use]
+pub fn worst_classification(
+    mentions: Vec<AlgorithmClassification>,
+) -> Option<AlgorithmClassification> {
+    let mut worst: Option<AlgorithmClassification> = None;
+    for m in mentions {
+        if worst
+            .as_ref()
+            .is_none_or(|w| m.class.severity_rank() > w.class.severity_rank())
+        {
+            worst = Some(m);
+        }
+    }
+    worst
 }
 
 /// Classify an algorithm OID. Covers the common arcs emitted by real CBOM
@@ -1389,9 +1496,47 @@ fn classify_oid(oid: &str) -> Option<(&'static str, Option<String>)> {
             17 => Some(("ML-DSA", Some("44".to_string()))),
             18 => Some(("ML-DSA", Some("65".to_string()))),
             19 => Some(("ML-DSA", Some("87".to_string()))),
-            20..=35 => Some(("SLH-DSA", None)),
+            // Per the NIST CSOR registry only 20–31 are SLH-DSA parameter
+            // sets; 32–34 are id-hash-ml-dsa-44/65/87-with-sha512 (pre-hash
+            // ML-DSA, FIPS 204) and 35–46 the pre-hash SLH-DSA variants.
+            20..=31 => Some(("SLH-DSA", None)),
+            32 => Some(("ML-DSA", Some("44".to_string()))),
+            33 => Some(("ML-DSA", Some("65".to_string()))),
+            34 => Some(("ML-DSA", Some("87".to_string()))),
+            35..=46 => Some(("SLH-DSA", None)),
             _ => None,
         };
+    }
+    // Chinese SM arcs (GM/T 0006): SM2 EC signature/KEX, SM3 hash, SM4
+    // block cipher — SM2 is elliptic-curve crypto broken by Shor's
+    // algorithm, exactly like ECDSA.
+    if o == "1.2.156.10197.1.301" || o.starts_with("1.2.156.10197.1.301.") {
+        return Some(("SM2", None));
+    }
+    if o == "1.2.156.10197.1.401" || o.starts_with("1.2.156.10197.1.401.") {
+        return Some(("SM3", None));
+    }
+    if o == "1.2.156.10197.1.104" || o.starts_with("1.2.156.10197.1.104.") {
+        return Some(("SM4", None));
+    }
+    // Russian GOST R 34.10 (quantum-vulnerable EC signature): 34.10-94/2001
+    // keys and signatures plus the 34.10-2012 key (1.2.643.7.1.1.1.*) and
+    // signature (1.2.643.7.1.1.3.*) arcs.
+    if matches!(
+        o,
+        "1.2.643.2.2.19" | "1.2.643.2.2.20" | "1.2.643.2.2.3" | "1.2.643.2.2.4"
+    ) || o.starts_with("1.2.643.7.1.1.1.")
+        || o.starts_with("1.2.643.7.1.1.3.")
+    {
+        return Some(("GOST-R-34.10", None));
+    }
+    // GOST R 34.11 hashes (34.11-94 and the 34.11-2012 "Streebog" arc).
+    if o == "1.2.643.2.2.9" || o.starts_with("1.2.643.7.1.1.2.") {
+        return Some(("GOST-R-34.11", None));
+    }
+    // Brainpool named-curve arc (RFC 5639): classical EC crypto.
+    if o.starts_with("1.3.36.3.3.2.8.1.") {
+        return Some(("EC", None));
     }
 
     None
@@ -1404,15 +1549,22 @@ fn classify_oid(oid: &str) -> Option<(&'static str, Option<String>)> {
 /// 1. `family` (CycloneDX 1.7 `algorithmFamily`), normalized through the
 ///    alias table (case, `_`/` `/`/` separators, "SHA1"→"SHA-1",
 ///    "TDES"→"3DES", "Kyber"→"ML-KEM", …) with trailing sizes extracted
-///    ("ML-KEM-768" → ML-KEM + 768).
+///    ("ML-KEM-768" → ML-KEM + 768). A bare "SHA" family accompanied by a
+///    SHA-2 digest size in `parameter_set` reads as SHA-2 of that size
+///    (bare "SHA" means SHA-1 only in cipher-suite context).
 /// 2. `oid` (CycloneDX 1.6+ `cryptoProperties.oid`) via [`classify_oid`].
-/// 3. `elliptic_curve` (CycloneDX 1.7): any named curve marks the asset as
+/// 3. A declared-but-unrecognized `family` string is token-scanned as a
+///    last resort ("DES-CBC", "AES-128-CBC", "RSA/ECB/PKCS1Padding"), and
+///    the most severe mention wins — a mode/padding-qualified family must
+///    not silently classify as Unknown.
+/// 4. `elliptic_curve` (CycloneDX 1.7): any named curve marks the asset as
 ///    classical elliptic-curve crypto.
-/// 4. `name`: word-boundary token matching via [`classify_algorithm_names`],
-///    used **only** when both `family` and `oid` are absent — bounding
-///    false positives to assets that carry no structured identity at all.
-///    Callers should only pass names of components that actually have
-///    `crypto_properties`.
+/// 5. `name`: word-boundary token matching via
+///    [`classify_algorithm_names_guarded`], used **only** when both
+///    `family` and `oid` are absent — bounding false positives to assets
+///    that carry no structured identity at all. The most severe mention
+///    wins ("sha384-rsa-signature" is RSA, not SHA-384). Callers should
+///    only pass names of components that actually have `crypto_properties`.
 ///
 /// The explicit `parameter_set` (CycloneDX `parameterSetIdentifier`) fills the
 /// parameter when the identity source did not carry one; failing that, the
@@ -1451,6 +1603,19 @@ pub fn classify_algorithm(
 
     // 1. Explicit algorithm family.
     if let Some(f) = family.map(str::trim).filter(|f| !f.is_empty()) {
+        // Bare "SHA" means SHA-1 only in TLS cipher-suite names; a declared
+        // family "SHA" with a SHA-2 digest size in parameterSetIdentifier
+        // is that SHA-2 variant (finding: "SHA" + "384" was reported as the
+        // broken, self-contradictory "SHA-1-384").
+        if normalize_algo_token(f) == "SHA"
+            && let Some(p @ ("224" | "256" | "384" | "512")) = parameter_set.map(str::trim)
+        {
+            return AlgorithmClassification {
+                family: Some("SHA-2".to_string()),
+                parameter: Some(p.to_string()),
+                class: AlgorithmClass::Sha2,
+            };
+        }
         if let Some((canonical, parameter)) = classify_token(f) {
             return fill_parameter(AlgorithmClassification {
                 family: Some(canonical.to_string()),
@@ -1482,7 +1647,20 @@ pub fn classify_algorithm(
         });
     }
 
-    // 3. A named elliptic curve is authoritative that this is EC crypto.
+    // 3. Family declared but not a single recognizable token: token-scan
+    //    the family string itself, taking the most severe mention, so
+    //    compound spellings carrying a mode/chaining/padding qualifier
+    //    ("DES-CBC", "AES-128-CBC", "3DES-EDE-CBC", "RSA/ECB/PKCS1Padding")
+    //    classify by their base algorithm instead of falling through to
+    //    Unknown (which turned required CNSA2/PQC Errors into Warnings).
+    //    The declared family is authoritative, so the scan is unguarded.
+    if let Some(f) = family.map(str::trim).filter(|f| !f.is_empty())
+        && let Some(cls) = worst_classification(classify_algorithm_names(f))
+    {
+        return fill_parameter(cls);
+    }
+
+    // 4. A named elliptic curve is authoritative that this is EC crypto.
     if let Some(curve) = elliptic_curve.map(str::trim).filter(|c| !c.is_empty()) {
         return AlgorithmClassification {
             family: Some("EC".to_string()),
@@ -1491,11 +1669,13 @@ pub fn classify_algorithm(
         };
     }
 
-    // 4. Guarded name fallback: only when family and OID are both absent.
+    // 5. Guarded name fallback: only when family and OID are both absent,
+    //    with over-generic bare tokens (SEED/EC) dropped and the most
+    //    severe mention reported.
     if family.is_none()
         && oid.is_none()
         && let Some(n) = name
-        && let Some(cls) = classify_algorithm_names(n).into_iter().next()
+        && let Some(cls) = worst_classification(classify_algorithm_names_guarded(n))
     {
         return fill_parameter(cls);
     }
@@ -1870,6 +2050,241 @@ mod tests {
             |c| c.family.as_deref() == Some("ML-KEM") && c.parameter.as_deref() == Some("1024")
         ));
         assert!(!found.iter().any(|c| c.class == AlgorithmClass::Broken));
+    }
+
+    /// Compound algorithmFamily strings carrying a mode/chaining/padding
+    /// qualifier must classify by their base algorithm (+ key size), not
+    /// fall through to Unknown (finding: "DES-CBC" passed CNSA2/PQC).
+    #[test]
+    fn classify_compound_family_mode_suffixes() {
+        for (family, canonical, param, class) in [
+            ("DES-CBC", "DES", None, AlgorithmClass::Broken),
+            ("3DES-EDE-CBC", "3DES", None, AlgorithmClass::Broken),
+            ("AES-128-CBC", "AES", Some("128"), AlgorithmClass::Symmetric),
+            ("AES-256-GCM", "AES", Some("256"), AlgorithmClass::Symmetric),
+            (
+                "RSA/ECB/PKCS1Padding",
+                "RSA",
+                None,
+                AlgorithmClass::ClassicalQuantumVulnerable,
+            ),
+        ] {
+            let c = cls(Some(family), None, None, None, None);
+            assert_eq!(c.family.as_deref(), Some(canonical), "family for {family}");
+            assert_eq!(c.parameter.as_deref(), param, "parameter for {family}");
+            assert_eq!(c.class, class, "class for {family}");
+        }
+        // The scan reports the most severe mention: a compound family
+        // mixing a broken cipher with an approved hash is the cipher.
+        let c = cls(Some("DES-CBC-HMAC-SHA384"), None, None, None, None);
+        assert_eq!(c.family.as_deref(), Some("DES"));
+        assert_eq!(c.class, AlgorithmClass::Broken);
+        // Silent case: families with no recognizable token stay Unknown.
+        for family in ["Hybrid-KEM", "proprietary-frobnicator"] {
+            let c = cls(Some(family), None, None, None, None);
+            assert_eq!(c.class, AlgorithmClass::Unknown, "class for {family}");
+        }
+    }
+
+    /// FIPS 180-4 truncated SHA-2 must classify by the truncated OUTPUT
+    /// size — SHA-512/256 is a 256-bit digest, not CNSA-approved SHA-512.
+    #[test]
+    fn classify_truncated_sha2_variants() {
+        for (family, param) in [
+            ("SHA-512/256", "256"),
+            ("SHA-512/224", "224"),
+            ("SHA512/256", "256"),
+            ("sha-512/224", "224"),
+        ] {
+            let c = cls(Some(family), None, None, None, None);
+            assert_eq!(c.family.as_deref(), Some("SHA-2"), "family for {family}");
+            assert_eq!(c.parameter.as_deref(), Some(param), "param for {family}");
+            assert_eq!(c.class, AlgorithmClass::Sha2);
+        }
+        // Full SHA-512 keeps its 512-bit reading, and the family-string
+        // path now agrees with the OID path for the truncated variants.
+        let c = cls(Some("SHA-512"), None, None, None, None);
+        assert_eq!(c.parameter.as_deref(), Some("512"));
+        let by_oid = cls(None, None, Some("2.16.840.1.101.3.4.2.6"), None, None);
+        assert_eq!(by_oid.parameter.as_deref(), Some("256"));
+    }
+
+    /// The name fallback must report the most severe mention, not the
+    /// first: "sha384-rsa-signature" is quantum-vulnerable RSA, not
+    /// CNSA-approved SHA-384 (finding: token order hid RSA).
+    #[test]
+    fn classify_name_fallback_picks_most_severe() {
+        let hash_first = cls(None, Some("sha384-rsa-signature"), None, None, None);
+        let rsa_first = cls(None, Some("rsa-sha384-signature"), None, None, None);
+        for c in [&hash_first, &rsa_first] {
+            assert_eq!(c.family.as_deref(), Some("RSA"), "{c:?}");
+            assert_eq!(c.class, AlgorithmClass::ClassicalQuantumVulnerable);
+        }
+        // Broken outranks quantum-vulnerable.
+        let c = cls(None, Some("rsa-md5-legacy-signer"), None, None, None);
+        assert_eq!(c.family.as_deref(), Some("MD5"));
+        assert_eq!(c.class, AlgorithmClass::Broken);
+        // Silent case: single-mention names are unaffected.
+        let c = cls(None, Some("sha384-digest"), None, None, None);
+        assert_eq!(c.class, AlgorithmClass::Sha2);
+    }
+
+    /// A declared family "SHA" with a SHA-2 digest size in the parameter
+    /// set is SHA-2 of that size, not broken "SHA-1-384" (finding). Bare
+    /// "SHA" without a disambiguating parameter keeps the SHA-1 reading
+    /// (TLS cipher-suite convention).
+    #[test]
+    fn classify_bare_sha_with_parameter_set() {
+        for param in ["224", "256", "384", "512"] {
+            let c = cls(Some("SHA"), None, None, Some(param), None);
+            assert_eq!(c.family.as_deref(), Some("SHA-2"), "family for SHA/{param}");
+            assert_eq!(c.parameter.as_deref(), Some(param));
+            assert_eq!(c.class, AlgorithmClass::Sha2);
+        }
+        let c = cls(Some("SHA"), None, None, None, None);
+        assert_eq!(c.family.as_deref(), Some("SHA-1"));
+        assert_eq!(c.class, AlgorithmClass::Broken);
+        let c = cls(Some("SHA"), None, None, Some("160"), None);
+        assert_eq!(c.family.as_deref(), Some("SHA-1"));
+        assert_eq!(c.class, AlgorithmClass::Broken);
+    }
+
+    /// National quantum-vulnerable algorithms (SM2, GOST R 34.10,
+    /// brainpool curves) must classify as such instead of Unknown, and
+    /// SM4/GOST hashes get their proper classes (finding: SM2/GOST CBOMs
+    /// passed NIST PQC with only a warning).
+    #[test]
+    fn classify_national_algorithms() {
+        // By family/name alias.
+        for (family, canonical) in [
+            ("SM2", "SM2"),
+            ("sm9", "SM9"),
+            ("GOST", "GOST-R-34.10"),
+            ("GOST R 34.10", "GOST-R-34.10"),
+            ("GOST-R-34.10-2012", "GOST-R-34.10"),
+            ("brainpoolP256r1", "EC"),
+        ] {
+            let c = cls(Some(family), None, None, None, None);
+            assert_eq!(c.family.as_deref(), Some(canonical), "family for {family}");
+            assert_eq!(
+                c.class,
+                AlgorithmClass::ClassicalQuantumVulnerable,
+                "class for {family}"
+            );
+        }
+        // By OID.
+        for (oid, canonical, class) in [
+            (
+                "1.2.156.10197.1.301",
+                "SM2",
+                AlgorithmClass::ClassicalQuantumVulnerable,
+            ),
+            (
+                "1.2.643.2.2.19",
+                "GOST-R-34.10",
+                AlgorithmClass::ClassicalQuantumVulnerable,
+            ),
+            (
+                "1.2.643.7.1.1.1.1",
+                "GOST-R-34.10",
+                AlgorithmClass::ClassicalQuantumVulnerable,
+            ),
+            (
+                "1.3.36.3.3.2.8.1.1.7",
+                "EC",
+                AlgorithmClass::ClassicalQuantumVulnerable,
+            ),
+            ("1.2.156.10197.1.104", "SM4", AlgorithmClass::Symmetric),
+            (
+                "1.2.643.7.1.1.2.2",
+                "GOST-R-34.11",
+                AlgorithmClass::OtherHash,
+            ),
+        ] {
+            let c = cls(None, None, Some(oid), None, None);
+            assert_eq!(c.family.as_deref(), Some(canonical), "family for {oid}");
+            assert_eq!(c.class, class, "class for {oid}");
+        }
+        // Symmetric / hash aliases.
+        assert_eq!(
+            cls(Some("SM4"), None, None, None, None).class,
+            AlgorithmClass::Symmetric
+        );
+        assert_eq!(
+            cls(Some("Kuznyechik"), None, None, None, None).class,
+            AlgorithmClass::Symmetric
+        );
+        assert_eq!(
+            cls(Some("Streebog"), None, None, None, None).class,
+            AlgorithmClass::OtherHash
+        );
+    }
+
+    /// NIST CSOR sigAlgs 32–34 are pre-hash ML-DSA (HashML-DSA-44/65/87
+    /// with SHA-512), not SLH-DSA (finding: wrong family + FIPS citation).
+    #[test]
+    fn classify_hash_ml_dsa_oids() {
+        for (oid, param) in [
+            ("2.16.840.1.101.3.4.3.32", "44"),
+            ("2.16.840.1.101.3.4.3.33", "65"),
+            ("2.16.840.1.101.3.4.3.34", "87"),
+        ] {
+            let c = cls(None, None, Some(oid), None, None);
+            assert_eq!(
+                c.class,
+                AlgorithmClass::PostQuantum(PqcKind::MlDsa),
+                "class for {oid}"
+            );
+            assert_eq!(c.parameter.as_deref(), Some(param), "param for {oid}");
+        }
+        // The SLH-DSA parameter-set range (20–31) and the pre-hash SLH-DSA
+        // range (35–46) still classify as SLH-DSA.
+        for oid in [
+            "2.16.840.1.101.3.4.3.20",
+            "2.16.840.1.101.3.4.3.31",
+            "2.16.840.1.101.3.4.3.35",
+        ] {
+            assert_eq!(
+                cls(None, None, Some(oid), None, None).class,
+                AlgorithmClass::PostQuantum(PqcKind::SlhDsa),
+                "class for {oid}"
+            );
+        }
+    }
+
+    /// The guarded name scan drops over-generic bare tokens (SEED, EC/ECC)
+    /// that collide with everyday words, while the declared-family path and
+    /// cipher-suite scan keep them (finding: 'seed-expander' was flagged as
+    /// the SEED block cipher).
+    #[test]
+    fn guarded_name_scan_drops_overgeneric_tokens() {
+        for name in ["seed-expander", "ec2-instance-agent", "ecc-memory-check"] {
+            assert!(
+                classify_algorithm_names_guarded(name).is_empty(),
+                "guarded scan must ignore {name}"
+            );
+            assert_eq!(
+                cls(None, Some(name), None, None, None).class,
+                AlgorithmClass::Unknown,
+                "name fallback must not classify {name}"
+            );
+        }
+        // Distinctive tokens still classify through the guarded scan.
+        assert_eq!(
+            cls(None, Some("brainpoolP256r1-signer"), None, None, None).class,
+            AlgorithmClass::ClassicalQuantumVulnerable
+        );
+        // The unguarded scan (cipher-suite names) keeps bare SEED, and the
+        // declared family stays authoritative.
+        assert!(
+            classify_algorithm_names("TLS_RSA_WITH_SEED_CBC_SHA")
+                .iter()
+                .any(|c| c.family.as_deref() == Some("SEED"))
+        );
+        assert_eq!(
+            cls(Some("SEED"), None, None, None, None).class,
+            AlgorithmClass::Symmetric
+        );
     }
 
     #[test]

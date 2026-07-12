@@ -62,6 +62,9 @@ const REMEDIATION_PQC_PROTO: &str = "Disable SSL and TLS versions below 1.2 (SP 
 /// NIST PQC certificate remediation.
 const REMEDIATION_PQC_CERT: &str = "Re-issue the certificate with a NIST-approved post-quantum signature algorithm (FIPS 204 ML-DSA, FIPS 205 SLH-DSA, or SP 800-208 LMS/XMSS/HSS).";
 
+/// Remediation for unverifiable crypto evidence under the PQC standard.
+const REMEDIATION_PQC_UNKNOWN: &str = "Declare the asset's algorithm identity (algorithmFamily, OID, or a recognizable name), make bom-refs resolvable within the SBOM, and use parseable protocol versions so signature algorithms, cipher suites, and protocol references can be verified for PQC readiness.";
+
 /// Look up the static [`RuleMeta`] for a stable internal rule key.
 ///
 /// The key is the [`Violation::rule_id`] set at each check site. Returns
@@ -886,6 +889,15 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::Cnsa2, "CNSA 2.0")],
             remediation: REMEDIATION_GENERIC,
         },
+        // Certificate signature-algorithm ref cannot be resolved/classified —
+        // CNSA 2.0 compliance cannot be verified (Warning, never a silent
+        // pass).
+        "SBOM-CNSA2-CERT-UNKNOWN" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-CERT-UNKNOWN",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
+        },
         // Protocol version gate: CNSA 2.0 network protocols require TLS 1.3.
         "SBOM-CNSA2-PROTO-001" => RuleMeta {
             sarif_id: "SBOM-CNSA2-PROTO-001",
@@ -898,6 +910,15 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         "SBOM-CNSA2-PROTO-002" => RuleMeta {
             sarif_id: "SBOM-CNSA2-PROTO-002",
             default_severity: ViolationSeverity::Error,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
+        },
+        // Protocol asset with unresolvable/unclassifiable crypto references,
+        // or with nothing evaluable at all — CNSA 2.0 compliance cannot be
+        // verified (Warning, never a silent pass).
+        "SBOM-CNSA2-PROTO-UNKNOWN" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-PROTO-UNKNOWN",
+            default_severity: ViolationSeverity::Warning,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
             remediation: REMEDIATION_CNSA2,
         },
@@ -957,6 +978,14 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::NistPqc, "IR 8547")],
             remediation: REMEDIATION_PQC_CERT,
         },
+        // Certificate signature-algorithm ref cannot be resolved/classified —
+        // PQC readiness cannot be verified (Warning, never a silent pass).
+        "SBOM-PQC-CERT-UNKNOWN" => RuleMeta {
+            sarif_id: "SBOM-PQC-CERT-UNKNOWN",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::NistPqc, "IR 8547")],
+            remediation: REMEDIATION_PQC_UNKNOWN,
+        },
         // Protocol version gate: SSL / TLS below 1.2 disallowed.
         "SBOM-PQC-PROTO-001" => RuleMeta {
             sarif_id: "SBOM-PQC-PROTO-001",
@@ -971,6 +1000,15 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NistPqc, "SP 800-131A / IR 8547")],
             remediation: REMEDIATION_PQC_PROTO,
+        },
+        // Protocol asset with unresolvable/unclassifiable crypto references,
+        // an unparseable TLS version, or nothing evaluable at all — PQC
+        // readiness cannot be verified (Warning, never a silent pass).
+        "SBOM-PQC-PROTO-UNKNOWN" => RuleMeta {
+            sarif_id: "SBOM-PQC-PROTO-UNKNOWN",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::NistPqc, "IR 8547")],
+            remediation: REMEDIATION_PQC_UNKNOWN,
         },
         _ => return None,
     };

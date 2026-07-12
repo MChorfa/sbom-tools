@@ -2155,6 +2155,448 @@ mod tests {
         assert!(!result.is_compliant);
     }
 
+    /// Compound algorithmFamily spellings ("DES-CBC", "AES-128-CBC") must
+    /// fail both standards by their base algorithm — previously they
+    /// classified Unknown and produced only a Warning (false pass).
+    #[test]
+    fn compound_family_spellings_fail_both_standards() {
+        let sbom = make_crypto_sbom(&[("legacy-cipher", "DES-CBC", None, None)]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(!cnsa.is_compliant, "DES-CBC must not be CNSA 2.0 compliant");
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-005" && v.message.contains("DES")),
+            "DES-CBC must fire the broken-algorithm rule; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations.iter().any(|v| v.rule_id == "SBOM-PQC-005"),
+            "DES-CBC must fire SP 800-131A under PQC"
+        );
+
+        let sbom = make_crypto_sbom(&[("aes-cbc", "AES-128-CBC", None, None)]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-001" && v.message.contains("AES-128")),
+            "AES-128-CBC must fire the AES-256-only rule"
+        );
+
+        // Silent case: a compound spelling of an approved algorithm passes.
+        let ok = make_crypto_sbom(&[("aead", "AES-256-GCM", None, None)]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !cnsa
+                .violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Error),
+            "AES-256-GCM must pass the CNSA 2.0 allowlist; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Truncated SHA-2 (SHA-512/256, SHA-512/224) must fail the CNSA 2.0
+    /// hash gate by its truncated output size — previously it classified
+    /// as full SHA-512 and was falsely Approved.
+    #[test]
+    fn cnsa2_flags_truncated_sha2_variants() {
+        for family in ["SHA-512/256", "SHA-512/224"] {
+            let sbom = make_crypto_sbom(&[("hash", family, None, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+                "{family} must fail the CNSA 2.0 hash gate; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Silent case: full SHA-512 stays approved.
+        let ok = make_crypto_sbom(&[("hash", "SHA-512", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+            "SHA-512 must not trip the hash gate"
+        );
+    }
+
+    /// The name-only fallback must report the most severe token: a
+    /// hash-first name like "sha384-rsa-signature" is quantum-vulnerable
+    /// RSA, not CNSA-approved SHA-384 (previously the first token won and
+    /// both standards passed).
+    #[test]
+    fn name_fallback_reports_most_severe_token() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+        };
+        for name in ["sha384-rsa-signature", "rsa-sha384-signature"] {
+            let mut sbom = NormalizedSbom::default();
+            let mut c = crate::model::Component::new(name.into(), "algo-1".into());
+            c.component_type = ComponentType::Cryptographic;
+            c.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                    AlgorithmProperties::new(CryptoPrimitive::Signature),
+                ),
+            );
+            sbom.add_component(c);
+
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                cnsa.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-006" && v.message.contains("RSA")),
+                "'{name}' must be flagged quantum-vulnerable under CNSA 2.0; got {:?}",
+                cnsa.violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+            let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                pqc.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-PQC-001" && v.message.contains("RSA")),
+                "'{name}' must be flagged quantum-vulnerable under PQC"
+            );
+        }
+    }
+
+    /// A certificate whose signature-algorithm ref cannot be resolved or
+    /// classified must produce a "cannot verify" Warning under both
+    /// standards — previously it counted as evaluated and passed silently
+    /// (certificate-only CBOMs reported 100% compliant).
+    #[test]
+    fn cert_unknown_signature_ref_warns_both_standards() {
+        let sbom = make_cert_sbom("sig-algo-42", None);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning && v.rule_id == "SBOM-CNSA2-CERT-UNKNOWN"
+            }),
+            "opaque dangling sig ref must warn under CNSA 2.0; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !cnsa
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "an unverifiable ref is a Warning, not a CERT-001 Error"
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning && v.rule_id == "SBOM-PQC-CERT-UNKNOWN"
+            }),
+            "opaque dangling sig ref must warn under PQC"
+        );
+
+        // Silent case: a resolvable ML-DSA-87 signature produces neither
+        // the Warning nor an Error.
+        let ok = make_cert_sbom("sig-algo-42", Some("ML-DSA-87"));
+        for level in [ComplianceLevel::Cnsa2, ComplianceLevel::NistPqc] {
+            let result = ComplianceChecker::new(level).check(&ok);
+            assert!(
+                !result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id.ends_with("CERT-UNKNOWN")),
+                "{level:?}: resolvable approved sig ref must not warn"
+            );
+        }
+    }
+
+    /// A protocol asset with nothing evaluable (SSH, no version, no cipher
+    /// suites, no refs) must warn instead of silently counting as evaluated
+    /// and suppressing the no-inventory gate.
+    #[test]
+    fn protocol_without_evidence_warns_both_standards() {
+        use crate::model::{
+            ComponentType, CryptoAssetType, CryptoProperties, ProtocolProperties, ProtocolType,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = crate::model::Component::new("ssh-endpoint".into(), "proto-1".into());
+        c.component_type = ComponentType::Cryptographic;
+        c.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Protocol)
+                .with_protocol_properties(ProtocolProperties::new(ProtocolType::Ssh)),
+        );
+        sbom.add_component(c);
+
+        for (level, rule) in [
+            (ComplianceLevel::Cnsa2, "SBOM-CNSA2-PROTO-UNKNOWN"),
+            (ComplianceLevel::NistPqc, "SBOM-PQC-PROTO-UNKNOWN"),
+        ] {
+            let result = ComplianceChecker::new(level).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Warning && v.rule_id == rule),
+                "{level:?}: evidence-free protocol must warn with {rule}; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // Silent case: a TLS 1.3 protocol with a classifiable suite raises
+        // no PROTO-UNKNOWN warning.
+        let ok = make_protocol_sbom("1.3", "TLS_AES_256_GCM_SHA384", &[]);
+        for level in [ComplianceLevel::Cnsa2, ComplianceLevel::NistPqc] {
+            let result = ComplianceChecker::new(level).check(&ok);
+            assert!(
+                !result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id.ends_with("PROTO-UNKNOWN")),
+                "{level:?}: evaluable protocol must not warn"
+            );
+        }
+    }
+
+    /// An IKEv2 protocol whose transform refs are all opaque and
+    /// unresolvable must warn under both standards — previously it counted
+    /// as evaluated while receiving zero effective checks (vacuous 100%
+    /// compliant CBOMs).
+    #[test]
+    fn ikev2_opaque_transform_refs_warn_both_standards() {
+        use crate::model::{
+            ComponentType, CryptoAssetType, CryptoProperties, Ikev2TransformTypes,
+            ProtocolProperties, ProtocolType,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = crate::model::Component::new("ipsec-tunnel".into(), "proto-1".into());
+        c.component_type = ComponentType::Cryptographic;
+        c.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Protocol).with_protocol_properties(
+                ProtocolProperties::new(ProtocolType::Ikev2).with_ikev2_transform_types(
+                    Ikev2TransformTypes {
+                        encr: vec!["transform-encr-7".into()],
+                        prf: vec!["transform-prf-3".into()],
+                        integ: vec!["transform-integ-2".into()],
+                        ke: vec!["transform-ke-9".into()],
+                    },
+                ),
+            ),
+        );
+        sbom.add_component(c);
+
+        for (level, rule) in [
+            (ComplianceLevel::Cnsa2, "SBOM-CNSA2-PROTO-UNKNOWN"),
+            (ComplianceLevel::NistPqc, "SBOM-PQC-PROTO-UNKNOWN"),
+        ] {
+            let result = ComplianceChecker::new(level).check(&sbom);
+            assert!(
+                result.violations.iter().any(|v| {
+                    v.severity == ViolationSeverity::Warning
+                        && v.rule_id == rule
+                        && v.message.contains("transform-encr-7")
+                }),
+                "{level:?}: opaque IKEv2 transforms must warn with {rule}; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The CNSA 2.0 TLS gate must accept legitimate spellings of TLS 1.3
+    /// and share version parsing with the PQC gate, so the two standards
+    /// agree on the same input (previously "TLSv1.3" was a false Error and
+    /// "TLSv1.0" silently passed the PQC gate).
+    #[test]
+    fn tls_version_spellings_parse_tolerantly() {
+        for version in ["TLSv1.3", "tls1.3", "1.3.0", " 1.3", "v1.3"] {
+            let sbom = make_protocol_sbom(version, "TLS_AES_256_GCM_SHA384", &[]);
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                !cnsa
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+                "'{version}' must count as TLS 1.3; got {:?}",
+                cnsa.violations
+                    .iter()
+                    .map(|v| v.message.clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Spelled-out old versions now fail BOTH gates.
+        let sbom = make_protocol_sbom("TLSv1.0", "TLS_AES_256_GCM_SHA384", &[]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "TLSv1.0 must fail the CNSA 2.0 version gate"
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-001"),
+            "TLSv1.0 must fail the PQC minimum-version gate (previously silent)"
+        );
+        // Unparseable versions: strict Error under the CNSA 2.0 allowlist,
+        // cannot-verify Warning under PQC.
+        let sbom = make_protocol_sbom("quantum-safe", "TLS_AES_256_GCM_SHA384", &[]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "an unparseable version cannot affirm TLS 1.3"
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Warning
+                    && v.rule_id == "SBOM-PQC-PROTO-UNKNOWN"
+                    && v.message.contains("quantum-safe")),
+            "an unparseable version must be a cannot-verify Warning under PQC"
+        );
+    }
+
+    /// Reference resolution must carry the referenced asset's declared
+    /// classicalSecurityLevel: an AES asset whose key size is declared only
+    /// via classicalSecurityLevel=256 is Approved when evaluated directly,
+    /// so it must also be Approved when reached through a protocol's
+    /// cryptoRefArray (previously a false PROTO-002).
+    #[test]
+    fn protocol_ref_resolution_keeps_declared_security_level() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+            ProtocolProperties, ProtocolType,
+        };
+        let make = |classical_level: u32| {
+            let mut sbom = NormalizedSbom::default();
+            let mut aes = crate::model::Component::new("aes-gcm-cipher".into(), "algo-aes".into());
+            aes.component_type = ComponentType::Cryptographic;
+            aes.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                    AlgorithmProperties::new(CryptoPrimitive::Ae)
+                        .with_algorithm_family("AES".into())
+                        .with_classical_security_level(classical_level)
+                        .with_nist_quantum_security_level(5),
+                ),
+            );
+            sbom.add_component(aes);
+            let mut proto = crate::model::Component::new("tls-endpoint".into(), "proto-1".into());
+            proto.component_type = ComponentType::Cryptographic;
+            proto.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Protocol).with_protocol_properties(
+                    ProtocolProperties::new(ProtocolType::Tls)
+                        .with_version("1.3".into())
+                        .with_crypto_ref_array(vec!["algo-aes".into()]),
+                ),
+            );
+            sbom.add_component(proto);
+            sbom
+        };
+
+        // AES-256 via classicalSecurityLevel only: both the direct and the
+        // referenced evaluation must agree (zero errors).
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&make(256));
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Error),
+            "AES with classicalSecurityLevel=256 must pass via ref too; got {:?}",
+            result
+                .violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+
+        // Firing counterpart: a declared 128-bit level fails through the
+        // ref path exactly as it does directly.
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&make(128));
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-002" && v.message.contains("AES")),
+            "AES-128 referenced from a protocol must still fire PROTO-002"
+        );
+    }
+
+    /// National quantum-vulnerable algorithms (SM2 / GOST R 34.10 /
+    /// brainpool) must fail PQC and CNSA 2.0 as classical crypto instead of
+    /// producing only an unclassifiable Warning.
+    #[test]
+    fn national_algorithms_fail_both_standards() {
+        for family in ["SM2", "GOST R 34.10", "brainpoolP256r1"] {
+            let sbom = make_crypto_sbom(&[("national-sig", family, None, None)]);
+            let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                pqc.violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-PQC-001"),
+                "{family} must fire the quantum-vulnerable rule; got {:?}",
+                pqc.violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                cnsa.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-006"),
+                "{family} must fail the CNSA 2.0 allowlist as quantum-vulnerable"
+            );
+        }
+        // SM4 (symmetric) and GOST hashes are recognized-but-not-approved
+        // under CNSA 2.0, and not quantum-vulnerable under PQC.
+        for family in ["SM4", "Streebog"] {
+            let sbom = make_crypto_sbom(&[("national-prim", family, None, None)]);
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                cnsa.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-008"),
+                "{family} must be recognized as not CNSA 2.0-approved"
+            );
+            let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                !pqc.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-PQC-001" || v.rule_id == "SBOM-PQC-005"),
+                "{family} must not be reported broken or quantum-vulnerable"
+            );
+        }
+    }
+
     fn refs_for(rule_id: &'static str) -> Vec<StandardRef> {
         let v = Violation {
             severity: ViolationSeverity::Warning,
