@@ -979,7 +979,7 @@ fn get_sarif_ntia_rules() -> Vec<SarifRule> {
                 text: "NTIA Minimum Elements: Component version string".to_string(),
             },
             default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
+                level: SarifLevel::Error,
             },
         },
         SarifRule {
@@ -989,7 +989,7 @@ fn get_sarif_ntia_rules() -> Vec<SarifRule> {
                 text: "NTIA Minimum Elements: Supplier name".to_string(),
             },
             default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
+                level: SarifLevel::Error,
             },
         },
         SarifRule {
@@ -999,7 +999,7 @@ fn get_sarif_ntia_rules() -> Vec<SarifRule> {
                 text: "NTIA Minimum Elements: Unique identifier (PURL/CPE/SWID)".to_string(),
             },
             default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
+                level: SarifLevel::Error,
             },
         },
         SarifRule {
@@ -1136,7 +1136,7 @@ fn get_sarif_fda_rules() -> Vec<SarifRule> {
                 text: "FDA Medical Device: Component support/contact information".to_string(),
             },
             default_configuration: SarifConfiguration {
-                level: SarifLevel::Note,
+                level: SarifLevel::Warning,
             },
         },
         SarifRule {
@@ -1182,7 +1182,7 @@ fn get_sarif_ssdf_rules() -> Vec<SarifRule> {
                     .to_string(),
             },
             default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
+                level: SarifLevel::Error,
             },
         },
         SarifRule {
@@ -1368,7 +1368,7 @@ fn get_sarif_eo14028_rules() -> Vec<SarifRule> {
                 text: "EO 14028 Sec 4(e): Supplier identification".to_string(),
             },
             default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
+                level: SarifLevel::Error,
             },
         },
         SarifRule {
@@ -1603,7 +1603,7 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             short_description: SarifMessage {
                 text: "BSI TR-03183-2 §6: Recommended fields (license, supplier, lifecycle)".to_string(),
             },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+            default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },
         SarifRule {
             id: "SBOM-BSI-TR-03183-2-GENERAL".to_string(),
@@ -1880,7 +1880,7 @@ struct SarifArtifactLocation {
     uri: String,
 }
 
-#[derive(Serialize, Clone, Copy)]
+#[derive(Serialize, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 enum SarifLevel {
     #[allow(dead_code)]
@@ -1888,4 +1888,67 @@ enum SarifLevel {
     Note,
     Warning,
     Error,
+}
+
+#[cfg(test)]
+mod registry_consistency_tests {
+    use super::*;
+    use crate::quality::rule_meta;
+
+    fn expected_level(sev: crate::quality::ViolationSeverity) -> SarifLevel {
+        use crate::quality::ViolationSeverity as V;
+        match sev {
+            V::Error => SarifLevel::Error,
+            V::Warning => SarifLevel::Warning,
+            V::Info => SarifLevel::Note,
+        }
+    }
+
+    /// The registry's `default_severity` and the hand-maintained SARIF rule
+    /// catalogues must agree — the registry is documentation, the catalogue
+    /// is what GitHub code scanning displays, and they had already drifted
+    /// apart once (audit finding: registry.rs default_severity dead + wrong).
+    /// Rules whose id is not a registry key (e.g. SBOM-TOOLS-* change
+    /// tracking) are exempt, as are registry keys whose sarif_id differs
+    /// from the key (aliased identities).
+    #[test]
+    fn registry_severity_matches_sarif_catalogue() {
+        let mut tables: Vec<(&str, Vec<SarifRule>)> = vec![
+            ("ntia", get_sarif_ntia_rules()),
+            ("fda", get_sarif_fda_rules()),
+            ("ssdf", get_sarif_ssdf_rules()),
+            ("eo14028", get_sarif_eo14028_rules()),
+            ("compliance", get_sarif_compliance_rules()),
+        ];
+        let mut mismatches = Vec::new();
+        for (table_name, rules) in &mut tables {
+            for rule in rules.iter() {
+                let Some(meta) = rule_meta(&rule.id) else {
+                    continue;
+                };
+                if meta.sarif_id != rule.id {
+                    continue;
+                }
+                let expected = expected_level(meta.default_severity);
+                let actual = rule.default_configuration.level;
+                if !matches!(
+                    (&expected, &actual),
+                    (SarifLevel::Error, SarifLevel::Error)
+                        | (SarifLevel::Warning, SarifLevel::Warning)
+                        | (SarifLevel::Note, SarifLevel::Note)
+                        | (SarifLevel::None, SarifLevel::None)
+                ) {
+                    mismatches.push(format!(
+                        "{table_name}: {} registry={expected:?} catalogue={actual:?}",
+                        rule.id
+                    ));
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "registry default_severity and SARIF catalogue drifted:\n{}",
+            mismatches.join("\n")
+        );
+    }
 }

@@ -834,7 +834,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         },
         "SBOM-BSI-TR-03183-2-5-2" => RuleMeta {
             sarif_id: "SBOM-BSI-TR-03183-2-5-2",
-            default_severity: ViolationSeverity::Warning,
+            default_severity: ViolationSeverity::Error,
             refs: &[(K::BsiTr03183_2, "§5.2")],
             remediation: REMEDIATION_GENERIC,
         },
@@ -846,13 +846,13 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         },
         "SBOM-BSI-TR-03183-2-5-4" => RuleMeta {
             sarif_id: "SBOM-BSI-TR-03183-2-5-4",
-            default_severity: ViolationSeverity::Warning,
+            default_severity: ViolationSeverity::Error,
             refs: &[(K::BsiTr03183_2, "§5.4")],
             remediation: REMEDIATION_GENERIC,
         },
         "SBOM-BSI-TR-03183-2-5-5" => RuleMeta {
             sarif_id: "SBOM-BSI-TR-03183-2-5-5",
-            default_severity: ViolationSeverity::Warning,
+            default_severity: ViolationSeverity::Error,
             refs: &[(K::BsiTr03183_2, "§5.5")],
             remediation: REMEDIATION_GENERIC,
         },
