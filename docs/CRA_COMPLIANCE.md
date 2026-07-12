@@ -52,17 +52,17 @@ that ends up in SARIF `properties.standardHelpUris`.
 
 | Requirement string                                              | CRA Article    | prEN 40000-1-3      | BSI TR-03183-2 § | sidecar field that clears it                              |
 |-----------------------------------------------------------------|----------------|---------------------|------------------|-----------------------------------------------------------|
-| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)     | —                   | §4.1             | `riskAssessmentUrl` + `riskAssessmentMethodology`         |
-| `CRA Art. 13(3): SBOM freshness`                                | Art. 13(3)     | PRE-7-RQ-04         | §5.1             | regenerate SBOM on each release                           |
-| `CRA Art. 13(4): SBOM machine-readable format`                  | Art. 13(4)     | PRE-7-RQ-04         | §5.2             | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
-| `CRA Art. 13(5): Licensed component tracking`                   | Art. 13(5)     | PRE-7-RQ-05         | §5.4 (reco.)     | populate component `license` fields                       |
-| `CRA Art. 13(6): Vulnerability disclosure contact`              | Art. 13(6)     | RLS-2-RQ-01         | §5.5 (reco.)     | `securityContact` / `vulnerabilityDisclosureUrl`          |
+| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)     | —                   | —                | `riskAssessmentUrl` + `riskAssessmentMethodology`         |
+| `CRA Art. 13(3): SBOM freshness`                                | Art. 13(3)     | PRE-7-RQ-04         | §3.1             | regenerate SBOM on each release                           |
+| `CRA Art. 13(4): SBOM machine-readable format`                  | Art. 13(4)     | PRE-7-RQ-04         | §4               | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
+| `CRA Art. 13(5): Licensed component tracking`                   | Art. 13(5)     | PRE-7-RQ-05         | §5.2.2           | populate component `license` fields                       |
+| `CRA Art. 13(6): Vulnerability disclosure contact`              | Art. 13(6)     | RLS-2-RQ-01         | §5.2.5 (opt.)    | `securityContact` / `vulnerabilityDisclosureUrl`          |
 | `CRA Art. 13(7): Coordinated vulnerability disclosure policy`   | Art. 13(7)     | RLS-2-RQ-02         | —                | `coordinatedDisclosurePolicyUrl`                          |
-| `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)     | PRE-7-RQ-06         | §5.5             | `supportEndDate` + EOL enrichment                         |
-| `CRA Art. 13(9): Known vulnerabilities statement`               | Art. 13(9)     | RLS-2-RQ-04         | §5.5             | OSV / KEV / VEX enrichment                                |
-| `CRA Art. 13(11): Component lifecycle monitoring`               | Art. 13(11)    | PRE-7-RQ-06         | §5.5             | EOL enrichment + transitive supplier coverage             |
-| `CRA Art. 13(12): Product name and version identification`      | Art. 13(12)    | PRE-7-RQ-06         | §5.3             | SBOM `metadata.component.name` + `version` + sidecar      |
-| `CRA Art. 13(15): Manufacturer identification`                  | Art. 13(15)    | —                   | §5.3             | `manufacturerName` + `manufacturerEmail`                  |
+| `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)     | PRE-7-RQ-06         | —                | `supportEndDate` + EOL enrichment                         |
+| `CRA Art. 13(9): Known vulnerabilities statement`               | Art. 13(9)     | RLS-2-RQ-04         | —                | OSV / KEV / VEX enrichment                                |
+| `CRA Art. 13(11): Component lifecycle monitoring`               | Art. 13(11)    | PRE-7-RQ-06         | —                | EOL enrichment + transitive supplier coverage             |
+| `CRA Art. 13(12): Product name and version identification`      | Art. 13(12)    | PRE-7-RQ-06         | §5.2.2           | SBOM `metadata.component.name` + `version` + sidecar      |
+| `CRA Art. 13(15): Manufacturer identification`                  | Art. 13(15)    | —                   | §5.2.1           | `manufacturerName` + `manufacturerEmail`                  |
 
 ### CRA Article 14 (reporting obligations, applicable from 2026-09-11)
 
@@ -132,18 +132,30 @@ Default conformity routes per class:
 
 ## BSI TR-03183-2 — quick mapping
 
-`ComplianceLevel::BsiTr03183_2` runs the §5 mandatory rules plus §6
-recommendations. SARIF rule prefix: `SBOM-BSI-TR-03183-2-*`. Canonical URL:
-[bsi.bund.de TR-03183](https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html).
+`ComplianceLevel::BsiTr03183_2` implements **v2.1.0 (2025-08-20)**: the §4
+format gate, the §5.2.1/§5.2.2 required fields, the §5.2.4 additional tier,
+§6.1 licence naming, and the §3.1 vulnerability-information prohibition.
+SARIF rule prefix: `SBOM-BSI-TR-03183-2-*`. Canonical URL:
+[bsi.bund.de/dok/TR-03183-en](https://bsi.bund.de/dok/TR-03183-en).
 
-| BSI section | Required signal                                                | Cleared by                                                  |
-|-------------|----------------------------------------------------------------|-------------------------------------------------------------|
-| §5.1        | Mandatory ISO 8601 timestamp on document metadata              | parse-time validation                                        |
-| §5.2        | Mandatory creator + tool identification                        | SBOM `metadata.tools` / SPDX `creator`                      |
-| §5.3        | Mandatory PURL or other unique identifier per component        | one of `purl` / `cpe` / `swid` / `swhid` per component       |
-| §5.4        | Mandatory SHA-256+ hash per component                          | strong hash on every component                              |
-| §5.5        | Mandatory dependency relationships                             | populated `dependencies` graph                              |
-| §6 (reco.)  | License, supplier, lifecycle phase                             | `license` / `supplier` / lifecycle properties               |
+| BSI section    | Signal (severity)                                                        | Cleared by                                                    |
+|----------------|---------------------------------------------------------------------------|---------------------------------------------------------------|
+| §4 (+§7)       | CycloneDX ≥ 1.6 or SPDX ≥ 3.0.1 for newly generated/updated SBOMs (Error) | regenerate in an eligible format (v2.0.0 grace ended 2026-02-20) |
+| §5.2.1         | Creator of the SBOM with email, or URL if no email (Error / Warning)      | `metadata.authors[].email` / SPDX `creator`                    |
+| §5.2.1         | Timestamp of the SBOM data compilation (Error)                            | `metadata.timestamp` / SPDX `created`                          |
+| §5.2.2         | Component name (Error) and version (Error)                                | `name` + `version` (filename / RFC 3339 date fallbacks)        |
+| §5.2.2         | Distribution licence(s) per component (Error)                             | `licenses[]` with SPDX identifiers                             |
+| §5.2.2         | Hash of the deployable component **as SHA-512** (Error when only other algorithms; Warning when absent, §3.2.1) | SHA-512 hash per component |
+| §5.2.2         | Component creator (Warning, presence-level)                               | `supplier` / `author` per component                            |
+| §5.2.2         | Dependencies (Error) + completeness clearly indicated (Warning)           | `dependencies` graph + `compositions[].aggregate`              |
+| §5.2.4 (add.)  | Other unique identifiers — purl/CPE (Warning)                             | one of `purl` / `cpe` / `swid` / `swhid` per component         |
+| §6.1           | Licences named by SPDX identifier/expression (Warning)                    | valid SPDX expressions (text is not a substitute)              |
+| §3.1           | No vulnerability information inside the SBOM (Warning)                    | publish advisories separately (e.g. CSAF)                      |
+
+Not modeled (no rule emitted): filename of the component, and the
+executable / archive / structured properties (`bsi:component:*`
+CycloneDX taxonomy). The TR mandates **no generation-tool field and no
+signature** in any tier.
 
 ## CSAF v2.0 (ISO/IEC 20153:2025)
 
@@ -224,7 +236,7 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
 |------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
 | CRA — Regulation (EU) 2024/2847    | https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng                                                                                                 |
 | prEN 40000-1-3 (in development)    | (CEN-CENELEC JTC 13 — paywalled draft; URLs unstable)                                                                                              |
-| BSI TR-03183-2                     | https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html |
+| BSI TR-03183-2 (v2.1.0)            | https://bsi.bund.de/dok/TR-03183-en                                                                                                                |
 | ENISA SBOM Implementation Guidance | https://www.enisa.europa.eu/publications/sbom-implementation-guidance                                                                              |
 | NIST SP 800-218 SSDF               | https://doi.org/10.6028/NIST.SP.800-218                                                                                                            |
 | EO 14028                           | https://www.federalregister.gov/d/2021-10460                                                                                                       |

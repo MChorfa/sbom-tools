@@ -19,7 +19,8 @@
       "version": "1.0.0",
       "purl": "pkg:cargo/example-app@1.0.0",
       "supplier": {"name": "ExampleCorp"},
-      "hashes": [{"alg": "SHA-256", "content": "1111111111111111111111111111111111111111111111111111111111111111"}],
+      "licenses": [{"license": {"id": "Apache-2.0"}}],
+      "hashes": [{"alg": "SHA-512", "content": "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}],
       "externalReferences": [
         {"type": "vcs", "url": "https://github.com/example/example-app"},
         {"type": "issue-tracker", "url": "https://github.com/example/example-app/issues"},
@@ -37,7 +38,7 @@
       "version": "2.3.4",
       "purl": "pkg:cargo/lib-a@2.3.4",
       "supplier": {"name": "LibAVendor"},
-      "hashes": [{"alg": "SHA-256", "content": "2222222222222222222222222222222222222222222222222222222222222222"}],
+      "hashes": [{"alg": "SHA-512", "content": "22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"}],
       "licenses": [{"license": {"id": "Apache-2.0"}}]
     },
     {
@@ -47,7 +48,7 @@
       "version": "0.9.1",
       "purl": "pkg:cargo/lib-b@0.9.1",
       "supplier": {"name": "LibBVendor"},
-      "hashes": [{"alg": "SHA-256", "content": "3333333333333333333333333333333333333333333333333333333333333333"}],
+      "hashes": [{"alg": "SHA-512", "content": "33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333"}],
       "licenses": [{"license": {"id": "MIT"}}]
     }
   ],

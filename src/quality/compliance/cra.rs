@@ -364,7 +364,11 @@ impl ComplianceChecker {
                     // supplies the message, so the finding states the
                     // threshold that was actually breached at that severity.
                     (Some(p), Some(c)) => {
-                        if rank(p.0) > rank(c.0) { p } else { c }
+                        if rank(p.0) > rank(c.0) {
+                            p
+                        } else {
+                            c
+                        }
                     }
                     (Some(p), None) => p,
                     (None, Some(c)) => c,

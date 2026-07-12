@@ -291,70 +291,169 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-BSI-TR-03183-2-5-1",
-              "name": "BsiTr03183AuthorTool",
+              "id": "SBOM-BSI-TR-03183-2-4",
+              "name": "BsiTr03183FormatEligibility",
               "shortDescription": {
-                "text": "BSI TR-03183-2 §5.1: SBOM author/tool identification"
+                "text": "BSI TR-03183-2 v[VERSION] §4: Newly generated/updated SBOMs must be CycloneDX 1.6+ or SPDX 3.0.1+"
               },
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-5-1",
+              "name": "BsiTr03183SbomCreator",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §5.2.1: Creator of the SBOM (email, or URL if no email)"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-5-1-CONTACT",
+              "name": "BsiTr03183SbomCreatorContact",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §5.2.1: SBOM creator must carry an email address or URL"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
             },
             {
               "id": "SBOM-BSI-TR-03183-2-5-2",
               "name": "BsiTr03183Timestamp",
               "shortDescription": {
-                "text": "BSI TR-03183-2 §5.2: ISO-8601 timestamp"
+                "text": "BSI TR-03183-2 §5.2.1: Timestamp of the SBOM data compilation"
               },
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
             },
             {
               "id": "SBOM-BSI-TR-03183-2-5-3",
-              "name": "BsiTr03183ComponentIdentifier",
+              "name": "BsiTr03183ComponentName",
               "shortDescription": {
-                "text": "BSI TR-03183-2 §5.3: Component name and unique identifier"
+                "text": "BSI TR-03183-2 §5.2.2: Component name (fallback: actual filename)"
               },
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-VERSION",
+              "name": "BsiTr03183ComponentVersion",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §5.2.2: Component version (fallback: RFC 3339 modification date)"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-LICENSE",
+              "name": "BsiTr03183DistributionLicence",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §5.2.2: Distribution licence(s) per component"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-LICENSE-SPDX",
+              "name": "BsiTr03183SpdxLicenceNaming",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §6.1: Licences must be named by SPDX identifier/expression"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-CREATOR",
+              "name": "BsiTr03183ComponentCreator",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §5.2.2: Component creator (email, or URL if no email)"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
             },
             {
               "id": "SBOM-BSI-TR-03183-2-5-4",
               "name": "BsiTr03183ComponentHash",
               "shortDescription": {
-                "text": "BSI TR-03183-2 §5.4: Component cryptographic hash (SHA-256+)"
+                "text": "BSI TR-03183-2 §5.2.2: Hash of the deployable component as SHA-512"
               },
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-5-4-MISSING",
+              "name": "BsiTr03183ComponentHashMissing",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §5.2.2/§3.2.1: Component has no hash of the deployable form"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
             },
             {
               "id": "SBOM-BSI-TR-03183-2-5-5",
               "name": "BsiTr03183Dependencies",
               "shortDescription": {
-                "text": "BSI TR-03183-2 §5.5: Dependency relationships"
+                "text": "BSI TR-03183-2 §5.2.2: Dependencies on other components"
               },
               "defaultConfiguration": {
                 "level": "error"
               },
-              "helpUri": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
             },
             {
-              "id": "SBOM-BSI-TR-03183-2-6",
-              "name": "BsiTr03183Recommended",
+              "id": "SBOM-BSI-TR-03183-2-5-5-COMPLETENESS",
+              "name": "BsiTr03183DependencyCompleteness",
               "shortDescription": {
-                "text": "BSI TR-03183-2 §6: Recommended fields (license, supplier, lifecycle)"
+                "text": "BSI TR-03183-2 §5.2.2: Completeness of the dependency enumeration must be clearly indicated"
               },
               "defaultConfiguration": {
                 "level": "warning"
               },
-              "helpUri": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-5-2-4",
+              "name": "BsiTr03183UniqueIdentifier",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §5.2.4: Other unique identifiers (purl/CPE) — additional tier"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
+            },
+            {
+              "id": "SBOM-BSI-TR-03183-2-3-1",
+              "name": "BsiTr03183NoVulnerabilityInfo",
+              "shortDescription": {
+                "text": "BSI TR-03183-2 §3.1: An SBOM must not contain vulnerability information"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
             },
             {
               "id": "SBOM-BSI-TR-03183-2-GENERAL",
@@ -365,7 +464,7 @@ expression: "render(&SarifReporter::new())"
               "defaultConfiguration": {
                 "level": "warning"
               },
-              "helpUri": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
+              "helpUri": "https://bsi.bund.de/dok/TR-03183-en"
             },
             {
               "id": "SBOM-AIACT-NA",

@@ -68,8 +68,9 @@ pub enum ScoringProfile {
     LicenseCompliance,
     /// EU Cyber Resilience Act - emphasizes supply chain transparency and security disclosure
     Cra,
-    /// BSI TR-03183-2 (German national CRA-aligned SBOM technical guideline).
-    /// Stricter than CRA on hashes and identifiers; uses CRA-style weights.
+    /// BSI TR-03183-2 v2.1.0 (German national CRA-aligned SBOM technical
+    /// guideline). Stricter than CRA on formats and hashes (SHA-512);
+    /// uses CRA-style weights.
     BsiTr03183_2,
     /// Comprehensive - all aspects equally weighted
     Comprehensive,
@@ -151,8 +152,9 @@ impl ScoringProfile {
                 provenance: 0.15,
                 lifecycle: 0.08,
             },
-            // BSI TR-03183-2 emphasises identifiers and integrity (mandatory hashes)
-            // even more than CRA, while still tracking provenance/dependencies.
+            // BSI TR-03183-2 emphasises identifiers (§5.2.4 additional tier)
+            // and integrity (§5.2.2 mandatory SHA-512 hashes) even more than
+            // CRA, while still tracking provenance/dependencies.
             Self::BsiTr03183_2 => ScoringWeights {
                 completeness: 0.10,
                 identifiers: 0.22,
