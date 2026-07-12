@@ -198,8 +198,9 @@ impl EolClient {
             )));
         }
 
-        let products: Vec<String> = response
-            .json()
+        let bytes = crate::enrichment::source::read_bounded(response)
+            .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+        let products: Vec<String> = serde_json::from_slice(&bytes)
             .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
         cache
@@ -254,8 +255,9 @@ impl EolClient {
             )));
         }
 
-        let cycles: Vec<EolCycle> = response
-            .json()
+        let bytes = crate::enrichment::source::read_bounded(response)
+            .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+        let cycles: Vec<EolCycle> = serde_json::from_slice(&bytes)
             .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
         cache
@@ -291,11 +293,9 @@ impl EolClient {
     }
 }
 
-/// Filesystem-safe cache file name for an EOL key (e.g. `eol_python` →
-/// `eol_python.json`).
+/// Collision-free cache file name for an EOL key (SHA256 of the key).
 fn cache_filename(key: &str) -> String {
-    let safe_key = key.replace(['/', ':'], "_");
-    format!("{safe_key}.json")
+    crate::enrichment::source::key_to_filename(key)
 }
 
 // ============================================================================

@@ -252,15 +252,35 @@ impl EpssClient {
 /// without depending on the URL extension or a `Content-Encoding` header.
 #[cfg(feature = "enrichment")]
 fn decode_maybe_gzip(raw: &[u8]) -> Result<String, EnrichmentError> {
+    decode_maybe_gzip_with_max(raw, crate::enrichment::source::MAX_RESPONSE_BYTES)
+}
+
+/// [`decode_maybe_gzip`] with an explicit decompressed-size cap.
+///
+/// Split out so the bomb rejection can be exercised with a small body,
+/// mirroring `source::read_bounded_with_max`.
+#[cfg(feature = "enrichment")]
+fn decode_maybe_gzip_with_max(raw: &[u8], max_bytes: u64) -> Result<String, EnrichmentError> {
     use std::io::Read;
 
     if raw.starts_with(&[0x1f, 0x8b]) {
-        let mut decoder = flate2::read::GzDecoder::new(raw);
-        let mut out = String::new();
-        decoder
-            .read_to_string(&mut out)
+        // Bound the DECOMPRESSED size. read_bounded already caps the
+        // compressed body at 256 MiB, but gzip expands up to ~1000:1, so
+        // decompressing without a cap is a decompression-bomb OOM. Read at
+        // most max+1 bytes via Take and reject an overrun; the legitimate
+        // EPSS dataset is ~10-20 MiB uncompressed, far under the cap.
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(raw)
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut out)
             .map_err(|e| EnrichmentError::ParseError(format!("gzip decode failed: {e}")))?;
-        Ok(out)
+        if out.len() as u64 > max_bytes {
+            return Err(EnrichmentError::ParseError(format!(
+                "gzip-decoded EPSS body exceeds the {max_bytes}-byte limit (decompression bomb?)"
+            )));
+        }
+        String::from_utf8(out)
+            .map_err(|e| EnrichmentError::ParseError(format!("EPSS body is not valid UTF-8: {e}")))
     } else {
         String::from_utf8(raw.to_vec())
             .map_err(|e| EnrichmentError::ParseError(format!("EPSS body is not valid UTF-8: {e}")))
@@ -272,6 +292,37 @@ mod tests {
     use super::*;
     use crate::model::VulnerabilitySource;
     use tempfile::TempDir;
+
+    /// A highly-compressible gzip body must be rejected once its DECOMPRESSED
+    /// size exceeds the cap — a small compressed body cannot be allowed to
+    /// expand into an unbounded allocation (decompression bomb).
+    #[test]
+    fn gzip_decode_rejects_decompression_bomb() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+
+        // 1 MiB of zeros compresses to ~1 KiB — a ~1000:1 ratio.
+        let payload = vec![b'0'; 1024 * 1024];
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&payload).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(
+            compressed.len() < payload.len() / 100,
+            "test payload must be highly compressible"
+        );
+
+        // Decompressed size (1 MiB) exceeds a small cap → rejected.
+        let err = decode_maybe_gzip_with_max(&compressed, 64 * 1024).unwrap_err();
+        assert!(
+            matches!(err, EnrichmentError::ParseError(ref m) if m.contains("decompression bomb")),
+            "expected bomb rejection, got {err:?}"
+        );
+
+        // A body under the cap decodes fine.
+        let ok = decode_maybe_gzip_with_max(&compressed, 4 * 1024 * 1024).unwrap();
+        assert_eq!(ok.len(), payload.len());
+    }
 
     fn test_config(temp_dir: &TempDir) -> EpssClientConfig {
         EpssClientConfig {
