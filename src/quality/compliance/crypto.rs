@@ -16,6 +16,7 @@ use super::*;
 use crate::model::{
     AlgorithmClass, AlgorithmClassification, Component, CryptoAssetType, NormalizedSbomIndex,
     PqcKind, ProtocolProperties, ProtocolType, classify_algorithm, classify_algorithm_names,
+    classify_algorithm_names_guarded, worst_classification,
 };
 
 /// Outcome of checking one classified algorithm against the CNSA 2.0
@@ -46,28 +47,37 @@ fn classify_crypto_component(comp: &Component) -> AlgorithmClassification {
     )
 }
 
+/// The declared `classicalSecurityLevel` of a component's algorithm
+/// properties — evidence of the key size (e.g., AES-256) that must survive
+/// bom-ref resolution so referenced assets are judged with the same
+/// evidence as directly evaluated ones.
+fn classical_bits_of(comp: &Component) -> Option<u32> {
+    comp.crypto_properties
+        .as_ref()
+        .and_then(|c| c.algorithm_properties.as_ref())
+        .and_then(|a| a.classical_security_level)
+}
+
 /// Classify whatever a crypto bom-ref (signatureAlgorithmRef, cipher-suite
 /// algorithm ref, IKEv2 transform ref, …) points at: resolve it through the
-/// SBOM index to the referenced component when possible, otherwise fall back
-/// to word-boundary token matching on the raw ref string (opaque refs like
-/// "sig-algo-42" classify as Unknown rather than silently passing checks).
+/// SBOM index to the referenced component when possible — carrying along its
+/// declared `classicalSecurityLevel` — otherwise fall back to guarded
+/// word-boundary token matching on the raw ref string, reporting the most
+/// severe mention (opaque refs like "sig-algo-42" classify as Unknown rather
+/// than silently passing checks).
 fn classify_bom_ref(
     bom_ref: &str,
     sbom: &NormalizedSbom,
     index: &NormalizedSbomIndex,
-) -> AlgorithmClassification {
-    index
-        .resolve_bom_ref(bom_ref)
-        .and_then(|id| sbom.components.get(id))
-        .map_or_else(
-            || {
-                classify_algorithm_names(bom_ref)
-                    .into_iter()
-                    .next()
-                    .unwrap_or_else(AlgorithmClassification::unknown)
-            },
-            classify_crypto_component,
-        )
+) -> (AlgorithmClassification, Option<u32>) {
+    match resolve_component(bom_ref, sbom, index) {
+        Some(target) => (classify_crypto_component(target), classical_bits_of(target)),
+        None => (
+            worst_classification(classify_algorithm_names_guarded(bom_ref))
+                .unwrap_or_else(AlgorithmClassification::unknown),
+            None,
+        ),
+    }
 }
 
 /// Resolve a bom-ref to the referenced component, if it exists.
@@ -139,7 +149,7 @@ fn cnsa2_verdict(cls: &AlgorithmClassification, classical_bits: Option<u32>) -> 
                     .to_string(),
             },
         },
-        C::Sha3 => CnsaVerdict::NotApproved {
+        C::Sha3 | C::OtherHash => CnsaVerdict::NotApproved {
             rule_id: "SBOM-CNSA2-ALG-008",
             detail: format!(
                 "uses {}, which is not a CNSA 2.0 approved algorithm (CNSA 2.0 hashes \
@@ -206,15 +216,29 @@ fn cnsa2_requirement(rule_id: &str) -> &'static str {
     }
 }
 
-/// Whether the TLS/DTLS `version` string ("1.0", "1.2", …) is below `min`.
-/// Unparseable versions return `false` (handled as "cannot verify").
+/// Parse a TLS/DTLS version string tolerantly, shared by the CNSA 2.0 and
+/// PQC version gates so the two standards cannot disagree on the same
+/// input: "1.3", "TLSv1.3", "tls1.3", "TLS 1.3", "v1.3", "1.3.0", and
+/// "DTLSv1.3" all yield `(1, 3)`; "TLSv1" yields `(1, 0)`. Returns `None`
+/// when no leading major version can be parsed.
+fn parse_tls_version(v: &str) -> Option<(u32, u32)> {
+    let s = v.trim().to_ascii_lowercase();
+    let s = s
+        .strip_prefix("dtls")
+        .or_else(|| s.strip_prefix("tls"))
+        .unwrap_or(&s)
+        .trim_start();
+    let s = s.strip_prefix('v').unwrap_or(s).trim_start();
+    let mut parts = s.split('.');
+    let major: u32 = parts.next()?.trim().parse().ok()?;
+    let minor: u32 = parts.next().map_or(Some(0), |p| p.trim().parse().ok())?;
+    Some((major, minor))
+}
+
+/// Whether the TLS/DTLS `version` string is below `min`. Unparseable
+/// versions return `false` (the callers report them as "cannot verify").
 fn tls_version_below(version: &str, min: (u32, u32)) -> bool {
-    let mut parts = version.trim().split('.');
-    let Some(major) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
-        return false;
-    };
-    let minor: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    (major, minor) < min
+    parse_tls_version(version).is_some_and(|v| v < min)
 }
 
 /// Whether a protocol asset is SSL (obsolete under every profile here).
@@ -257,21 +281,45 @@ impl ComplianceChecker {
                         && let Some(sig_ref) = &cert.signature_algorithm_ref
                     {
                         crypto_assets_evaluated += 1;
-                        let cls = classify_bom_ref(sig_ref, sbom, &index);
-                        if let CnsaVerdict::NotApproved { detail, .. } = cnsa2_verdict(&cls, None) {
-                            violations.push(Violation {
-                                severity: ViolationSeverity::Error,
-                                category: ViolationCategory::CryptographyInfo,
-                                message: format!(
-                                    "Certificate '{}' signed with non-CNSA 2.0 algorithm: \
-                                     {detail} (ref: {sig_ref})",
-                                    comp.name
-                                ),
-                                element: Some(comp.name.clone()),
-                                requirement: "CNSA 2.0 Certificate".to_string(),
-                                rule_id: "SBOM-CNSA2-CERT-001",
-                                standard_refs: Vec::new(),
-                            });
+                        let (cls, bits) = classify_bom_ref(sig_ref, sbom, &index);
+                        match cnsa2_verdict(&cls, bits) {
+                            CnsaVerdict::Approved => {}
+                            CnsaVerdict::NotApproved { detail, .. } => {
+                                violations.push(Violation {
+                                    severity: ViolationSeverity::Error,
+                                    category: ViolationCategory::CryptographyInfo,
+                                    message: format!(
+                                        "Certificate '{}' signed with non-CNSA 2.0 algorithm: \
+                                         {detail} (ref: {sig_ref})",
+                                        comp.name
+                                    ),
+                                    element: Some(comp.name.clone()),
+                                    requirement: "CNSA 2.0 Certificate".to_string(),
+                                    rule_id: "SBOM-CNSA2-CERT-001",
+                                    standard_refs: Vec::new(),
+                                });
+                            }
+                            // An unclassifiable signature ref must warn, never
+                            // silently pass — mirrors SBOM-CNSA2-ALG-UNKNOWN
+                            // (previously a certificate-only CBOM whose sig
+                            // ref was opaque reported 100% compliant).
+                            CnsaVerdict::Unknown => {
+                                violations.push(Violation {
+                                    severity: ViolationSeverity::Warning,
+                                    category: ViolationCategory::CryptographyInfo,
+                                    message: format!(
+                                        "Certificate '{}' signature algorithm ref '{sig_ref}' \
+                                         cannot be resolved or classified; unable to verify \
+                                         against the CNSA 2.0 allowlist",
+                                        comp.name
+                                    ),
+                                    element: Some(comp.name.clone()),
+                                    requirement: "CNSA 2.0: certificate signature identification"
+                                        .to_string(),
+                                    rule_id: "SBOM-CNSA2-CERT-UNKNOWN",
+                                    standard_refs: Vec::new(),
+                                });
+                            }
                         }
                     }
                 }
@@ -434,8 +482,13 @@ impl ComplianceChecker {
                 standard_refs: Vec::new(),
             });
         } else if matches!(proto.protocol_type, ProtocolType::Tls | ProtocolType::Dtls)
-            && proto.version.as_deref() != Some("1.3")
+            && proto.version.as_deref().and_then(parse_tls_version) != Some((1, 3))
         {
+            // Tolerant version parsing: "TLSv1.3", "tls1.3", "1.3.0", … all
+            // count as TLS 1.3 (previously exact string equality with "1.3"
+            // failed spec-compliant spellings). Missing or unparseable
+            // versions remain an Error: an allowlist standard cannot
+            // affirm TLS 1.3 from a version it cannot read.
             let shown = proto.version.as_deref().map_or_else(
                 || "an unspecified version".to_string(),
                 |v| format!("version {v}"),
@@ -474,27 +527,37 @@ impl ComplianceChecker {
                 standard_refs: Vec::new(),
             });
         };
-        let record = |cls: &AlgorithmClassification, offenders: &mut Vec<String>| {
-            if let CnsaVerdict::NotApproved { .. } = cnsa2_verdict(cls, None) {
-                let label = cls.label();
-                if !offenders.contains(&label) {
-                    offenders.push(label);
+        // References that resolve nowhere and carry no recognizable token
+        // receive no effective check — collect them so the protocol warns
+        // instead of silently satisfying the CNSA2-000 inventory gate.
+        let mut unverifiable: Vec<String> = Vec::new();
+        let record =
+            |cls: &AlgorithmClassification, bits: Option<u32>, offenders: &mut Vec<String>| {
+                if let CnsaVerdict::NotApproved { .. } = cnsa2_verdict(cls, bits) {
+                    let label = cls.label();
+                    if !offenders.contains(&label) {
+                        offenders.push(label);
+                    }
                 }
-            }
-        };
+            };
 
-        // PROTO-002: cipher suites — both the resolvable algorithm refs and a
-        // word-boundary scan of the suite name.
+        // PROTO-002: cipher suites — both the algorithm refs (resolved
+        // through the index, with the referenced asset's declared
+        // classicalSecurityLevel as key-size evidence, or token-scanned when
+        // unresolvable) and a word-boundary scan of the suite name.
         for suite in &proto.cipher_suites {
             let mut offenders = Vec::new();
             for algo_ref in &suite.algorithms {
-                if let Some(target) = resolve_component(algo_ref, sbom, index) {
-                    record(&classify_crypto_component(target), &mut offenders);
+                let (cls, bits) = classify_bom_ref(algo_ref, sbom, index);
+                if cls.class == AlgorithmClass::Unknown {
+                    unverifiable.push(algo_ref.clone());
+                } else {
+                    record(&cls, bits, &mut offenders);
                 }
             }
             if let Some(name) = &suite.name {
                 for cls in classify_algorithm_names(name) {
-                    record(&cls, &mut offenders);
+                    record(&cls, None, &mut offenders);
                 }
             }
             push_proto_violation(
@@ -516,26 +579,87 @@ impl ComplianceChecker {
                 .chain(&ike.integ)
                 .chain(&ike.ke)
             {
-                record(&classify_bom_ref(r, sbom, index), &mut offenders);
+                let (cls, bits) = classify_bom_ref(r, sbom, index);
+                if cls.class == AlgorithmClass::Unknown {
+                    unverifiable.push(r.clone());
+                } else {
+                    record(&cls, bits, &mut offenders);
+                }
             }
             push_proto_violation("IKEv2 transforms include".to_string(), offenders);
         }
 
         // PROTO-002: crypto reference array. Only algorithm assets are judged
         // here — referenced certificates/keys are evaluated as their own
-        // assets.
+        // assets. Unresolvable refs get the token-scan fallback.
         let mut offenders = Vec::new();
         for r in &proto.crypto_ref_array {
-            if let Some(target) = resolve_component(r, sbom, index)
-                && target
-                    .crypto_properties
-                    .as_ref()
-                    .is_some_and(|c| c.asset_type == CryptoAssetType::Algorithm)
-            {
-                record(&classify_crypto_component(target), &mut offenders);
+            match resolve_component(r, sbom, index) {
+                Some(target) => {
+                    if target
+                        .crypto_properties
+                        .as_ref()
+                        .is_some_and(|c| c.asset_type == CryptoAssetType::Algorithm)
+                    {
+                        record(
+                            &classify_crypto_component(target),
+                            classical_bits_of(target),
+                            &mut offenders,
+                        );
+                    }
+                }
+                None => {
+                    if let Some(cls) = worst_classification(classify_algorithm_names_guarded(r)) {
+                        record(&cls, None, &mut offenders);
+                    } else {
+                        unverifiable.push(r.clone());
+                    }
+                }
             }
         }
         push_proto_violation("references".to_string(), offenders);
+
+        // A protocol whose references are all opaque, or that documents
+        // nothing evaluable at all (no SSL/TLS/DTLS version gate, no cipher
+        // suites, no transforms, no references), must warn rather than
+        // silently satisfying the CNSA2-000 inventory gate — mirrors
+        // SBOM-CNSA2-ALG-UNKNOWN.
+        let substantive = is_ssl_protocol(proto)
+            || matches!(proto.protocol_type, ProtocolType::Tls | ProtocolType::Dtls)
+            || !proto.cipher_suites.is_empty()
+            || proto.ikev2_transform_types.is_some()
+            || !proto.crypto_ref_array.is_empty();
+        if !unverifiable.is_empty() {
+            violations.push(Violation {
+                severity: ViolationSeverity::Warning,
+                category: ViolationCategory::CryptographyInfo,
+                message: format!(
+                    "Protocol '{}' has crypto references that cannot be resolved or \
+                     classified: {}; unable to verify against the CNSA 2.0 allowlist",
+                    comp.name,
+                    unverifiable.join(", ")
+                ),
+                element: Some(comp.name.clone()),
+                requirement: "CNSA 2.0: protocol algorithm identification".to_string(),
+                rule_id: "SBOM-CNSA2-PROTO-UNKNOWN",
+                standard_refs: Vec::new(),
+            });
+        } else if !substantive {
+            violations.push(Violation {
+                severity: ViolationSeverity::Warning,
+                category: ViolationCategory::CryptographyInfo,
+                message: format!(
+                    "Protocol '{}' documents no version, cipher suites, or algorithm \
+                     references; protocol algorithms cannot be verified against the \
+                     CNSA 2.0 allowlist",
+                    comp.name
+                ),
+                element: Some(comp.name.clone()),
+                requirement: "CNSA 2.0: protocol algorithm identification".to_string(),
+                rule_id: "SBOM-CNSA2-PROTO-UNKNOWN",
+                standard_refs: Vec::new(),
+            });
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -575,7 +699,7 @@ impl ComplianceChecker {
                         && let Some(sig_ref) = &cert.signature_algorithm_ref
                     {
                         crypto_assets_evaluated += 1;
-                        let cls = classify_bom_ref(sig_ref, sbom, &index);
+                        let (cls, _) = classify_bom_ref(sig_ref, sbom, &index);
                         let problem = match cls.class {
                             AlgorithmClass::Broken => Some("broken algorithm (SP 800-131A)"),
                             AlgorithmClass::ClassicalQuantumVulnerable => {
@@ -595,6 +719,26 @@ impl ComplianceChecker {
                                 element: Some(comp.name.clone()),
                                 requirement: "IR 8547: certificate signature".to_string(),
                                 rule_id: "SBOM-PQC-CERT-001",
+                                standard_refs: Vec::new(),
+                            });
+                        } else if cls.class == AlgorithmClass::Unknown {
+                            // An unclassifiable signature ref must warn, never
+                            // silently pass — mirrors SBOM-CNSA2-ALG-UNKNOWN
+                            // (previously a certificate-only CBOM whose sig
+                            // ref was opaque reported 100% PQC-ready).
+                            violations.push(Violation {
+                                severity: ViolationSeverity::Warning,
+                                category: ViolationCategory::CryptographyInfo,
+                                message: format!(
+                                    "Certificate '{}' signature algorithm ref '{sig_ref}' \
+                                     cannot be resolved or classified; unable to verify \
+                                     PQC readiness",
+                                    comp.name
+                                ),
+                                element: Some(comp.name.clone()),
+                                requirement: "IR 8547: certificate signature identification"
+                                    .to_string(),
+                                rule_id: "SBOM-PQC-CERT-UNKNOWN",
                                 standard_refs: Vec::new(),
                             });
                         }
@@ -836,6 +980,17 @@ impl ComplianceChecker {
             });
         }
 
+        // Unverifiable evidence: opaque references and unparseable TLS
+        // versions receive no effective check, so they are collected for a
+        // Warning instead of silently passing the SP 800-52 / IR 8547 gates.
+        let mut unverifiable: Vec<String> = Vec::new();
+        if matches!(proto.protocol_type, ProtocolType::Tls | ProtocolType::Dtls)
+            && let Some(version) = proto.version.as_deref()
+            && parse_tls_version(version).is_none()
+        {
+            unverifiable.push(format!("version '{version}'"));
+        }
+
         let mut push_proto_violation = |context: String, offenders: Vec<String>| {
             if offenders.is_empty() {
                 return;
@@ -871,8 +1026,11 @@ impl ComplianceChecker {
         for suite in &proto.cipher_suites {
             let mut offenders = Vec::new();
             for algo_ref in &suite.algorithms {
-                if let Some(target) = resolve_component(algo_ref, sbom, index) {
-                    record(&classify_crypto_component(target), &mut offenders);
+                let (cls, _) = classify_bom_ref(algo_ref, sbom, index);
+                if cls.class == AlgorithmClass::Unknown {
+                    unverifiable.push(algo_ref.clone());
+                } else {
+                    record(&cls, &mut offenders);
                 }
             }
             if let Some(name) = &suite.name {
@@ -898,22 +1056,83 @@ impl ComplianceChecker {
                 .chain(&ike.integ)
                 .chain(&ike.ke)
             {
-                record(&classify_bom_ref(r, sbom, index), &mut offenders);
+                let (cls, _) = classify_bom_ref(r, sbom, index);
+                if cls.class == AlgorithmClass::Unknown {
+                    unverifiable.push(r.clone());
+                } else {
+                    record(&cls, &mut offenders);
+                }
             }
             push_proto_violation("IKEv2 transforms include".to_string(), offenders);
         }
 
         let mut offenders = Vec::new();
         for r in &proto.crypto_ref_array {
-            if let Some(target) = resolve_component(r, sbom, index)
-                && target
-                    .crypto_properties
-                    .as_ref()
-                    .is_some_and(|c| c.asset_type == CryptoAssetType::Algorithm)
-            {
-                record(&classify_crypto_component(target), &mut offenders);
+            match resolve_component(r, sbom, index) {
+                Some(target) => {
+                    if target
+                        .crypto_properties
+                        .as_ref()
+                        .is_some_and(|c| c.asset_type == CryptoAssetType::Algorithm)
+                    {
+                        record(&classify_crypto_component(target), &mut offenders);
+                    }
+                }
+                None => {
+                    if let Some(cls) = worst_classification(classify_algorithm_names_guarded(r)) {
+                        record(&cls, &mut offenders);
+                    } else {
+                        unverifiable.push(r.clone());
+                    }
+                }
             }
         }
         push_proto_violation("references".to_string(), offenders);
+
+        // A protocol whose evidence is all opaque, or that documents nothing
+        // evaluable at all, must warn rather than silently satisfying the
+        // PQC-000 inventory gate — mirrors SBOM-CNSA2-ALG-UNKNOWN. For the
+        // version gate only a parseable TLS/DTLS version counts as evidence
+        // (SSL is substantively rejected above).
+        let version_evaluated = is_ssl_protocol(proto)
+            || (matches!(proto.protocol_type, ProtocolType::Tls | ProtocolType::Dtls)
+                && proto
+                    .version
+                    .as_deref()
+                    .is_some_and(|v| parse_tls_version(v).is_some()));
+        let substantive = version_evaluated
+            || !proto.cipher_suites.is_empty()
+            || proto.ikev2_transform_types.is_some()
+            || !proto.crypto_ref_array.is_empty();
+        if !unverifiable.is_empty() {
+            violations.push(Violation {
+                severity: ViolationSeverity::Warning,
+                category: ViolationCategory::CryptographyInfo,
+                message: format!(
+                    "Protocol '{}' has crypto evidence that cannot be resolved or \
+                     classified: {}; unable to verify PQC readiness",
+                    comp.name,
+                    unverifiable.join(", ")
+                ),
+                element: Some(comp.name.clone()),
+                requirement: "IR 8547: protocol algorithm identification".to_string(),
+                rule_id: "SBOM-PQC-PROTO-UNKNOWN",
+                standard_refs: Vec::new(),
+            });
+        } else if !substantive {
+            violations.push(Violation {
+                severity: ViolationSeverity::Warning,
+                category: ViolationCategory::CryptographyInfo,
+                message: format!(
+                    "Protocol '{}' documents no version, cipher suites, or algorithm \
+                     references; protocol algorithms cannot be verified for PQC readiness",
+                    comp.name
+                ),
+                element: Some(comp.name.clone()),
+                requirement: "IR 8547: protocol algorithm identification".to_string(),
+                rule_id: "SBOM-PQC-PROTO-UNKNOWN",
+                standard_refs: Vec::new(),
+            });
+        }
     }
 }
