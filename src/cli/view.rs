@@ -168,7 +168,7 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
 
     // Run NTIA validation if requested
     if config.validate_ntia {
-        super::validate::validate_ntia_elements(parsed.sbom())?;
+        super::validate::print_ntia_validation(parsed.sbom());
     }
 
     // Output the result

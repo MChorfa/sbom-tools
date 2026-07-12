@@ -28,11 +28,11 @@ fn stderr(output: &Output) -> String {
 
 #[test]
 fn validate_fail_on_warning_returns_exit_code_2() {
-    // minimal.cdx.json has 0 NTIA errors but several warnings (missing
-    // version/supplier), so --fail-on-warning must exit with code 2.
+    // ntia-warnings-only.cdx.json has 0 NTIA errors but dependency-coverage
+    // warnings (sparse graph), so --fail-on-warning must exit with code 2.
     let output = base_command()
         .arg("validate")
-        .arg(fixture_path("cyclonedx/minimal.cdx.json"))
+        .arg(fixture_path("cyclonedx/ntia-warnings-only.cdx.json"))
         .args(["--standard", "ntia", "--summary", "--fail-on-warning"])
         .output()
         .expect("validate command should run");
@@ -44,7 +44,7 @@ fn validate_fail_on_warning_returns_exit_code_2() {
 fn validate_without_fail_on_warning_returns_exit_code_0_when_warnings_only() {
     let output = base_command()
         .arg("validate")
-        .arg(fixture_path("cyclonedx/minimal.cdx.json"))
+        .arg(fixture_path("cyclonedx/ntia-warnings-only.cdx.json"))
         .args(["--standard", "ntia", "--summary"])
         .output()
         .expect("validate command should run");
