@@ -168,6 +168,26 @@ impl AlgorithmProperties {
         self.primitive == CryptoPrimitive::Combiner
     }
 
+    /// Returns `true` if this is a CLASSICAL public-key algorithm broken by a
+    /// cryptographically-relevant quantum computer (Shor's algorithm): RSA,
+    /// finite-field / elliptic-curve Diffie-Hellman, DSA/ECDSA/EdDSA, ElGamal.
+    ///
+    /// These are quantum-vulnerable regardless of key size or a declared
+    /// `nistQuantumSecurityLevel` — the family alone is authoritative. Matched
+    /// on `algorithm_family` (case-insensitive); the PQC families (ML-KEM,
+    /// ML-DSA, SLH-DSA, …) are not in the list and correctly return `false`.
+    #[must_use]
+    pub fn is_classical_quantum_vulnerable(&self) -> bool {
+        const CLASSICAL_PK: &[&str] = &[
+            "RSA", "DSA", "DH", "DHE", "ECDH", "ECDHE", "ECDSA", "EDDSA", "ED25519", "ED448",
+            "X25519", "X448", "ELGAMAL", "ECIES", "ECMQV",
+        ];
+        self.algorithm_family.as_deref().is_some_and(|f| {
+            let upper = f.to_uppercase();
+            CLASSICAL_PK.iter().any(|c| upper == *c)
+        })
+    }
+
     /// Returns `true` if the algorithm is considered broken or weak.
     /// Checks `algorithm_family` first, then falls back to matching
     /// common weak names in the `parameter_set_identifier`.

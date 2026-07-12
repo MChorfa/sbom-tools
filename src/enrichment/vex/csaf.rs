@@ -116,6 +116,8 @@ struct CsafVulnId {
 #[derive(Debug, Default, Deserialize)]
 struct CsafProductStatus {
     #[serde(default)]
+    first_affected: Vec<String>,
+    #[serde(default)]
     known_affected: Vec<String>,
     #[serde(default)]
     known_not_affected: Vec<String>,
@@ -173,8 +175,8 @@ pub(crate) fn parse_csaf(content: &str) -> Result<CsafVexResult, VexParseError> 
     let product_lookup = build_product_lookup(doc.product_tree.as_ref());
 
     let mut scoped: HashMap<(String, String), VexStatus> = HashMap::new();
-    let mut unscoped: HashMap<String, VexStatus> = HashMap::new();
     let mut statements_parsed = 0;
+    let mut unresolved_products = 0;
 
     for vuln in &doc.vulnerabilities {
         let Some(vuln_id) = pick_vuln_id(vuln) else {
@@ -187,31 +189,43 @@ pub(crate) fn parse_csaf(content: &str) -> Result<CsafVexResult, VexParseError> 
         let mut apply = |product_ids: &[String], state: VexState| {
             for pid in product_ids {
                 statements_parsed += 1;
-                let vex_status = VexStatus::new(state.clone());
                 if let Some(purl) = product_lookup.get(pid).cloned() {
-                    scoped.insert((vuln_id.clone(), purl), vex_status);
+                    scoped.insert((vuln_id.clone(), purl), VexStatus::new(state.clone()));
                 } else {
-                    // No PURL available — emit as unscoped fallback.
-                    // Later identical vuln_ids overwrite, which matches the
-                    // OpenVEX/CDX path's "later wins" semantics.
-                    unscoped.insert(vuln_id.clone(), vex_status);
+                    // Product could not be resolved to a PURL. A CSAF
+                    // product_status entry is ALWAYS scoped to a specific
+                    // product — it is never a document-wide statement — so an
+                    // unresolvable product must NOT be promoted to global
+                    // (vuln-only) scope. Doing so applied the status to every
+                    // component carrying this CVE, which for
+                    // known_not_affected/fixed silently suppressed the CVE on
+                    // unrelated components. Skipped, mirroring the OpenVEX path
+                    // (mod.rs) which drops unresolvable products for the same
+                    // reason.
+                    unresolved_products += 1;
                 }
             }
         };
 
+        // CSAF 2.0 product_status semantics:
+        //   *_affected  → the product IS affected (incl. last_affected: the
+        //                 last versions KNOWN AFFECTED — they are vulnerable).
+        //   *_fixed / recommended → the product has the fix (recommended: the
+        //                 vendor-recommended fixed version).
+        apply(&status.first_affected, VexState::Affected);
         apply(&status.known_affected, VexState::Affected);
+        apply(&status.last_affected, VexState::Affected);
         apply(&status.known_not_affected, VexState::NotAffected);
         apply(&status.fixed, VexState::Fixed);
         apply(&status.first_fixed, VexState::Fixed);
+        apply(&status.recommended, VexState::Fixed);
         apply(&status.under_investigation, VexState::UnderInvestigation);
-        apply(&status.recommended, VexState::Affected); // "recommended" upgrade
-        apply(&status.last_affected, VexState::Fixed); // last vuln cycle, fixed in newer
     }
 
     Ok(CsafVexResult {
         scoped,
-        unscoped,
         statements_parsed,
+        unresolved_products,
     })
 }
 
@@ -219,9 +233,10 @@ pub(crate) fn parse_csaf(content: &str) -> Result<CsafVexResult, VexParseError> 
 pub(crate) struct CsafVexResult {
     /// `(vuln_id, purl)` → status for product-scoped entries.
     pub scoped: HashMap<(String, String), VexStatus>,
-    /// `vuln_id` → status for entries without a resolvable PURL.
-    pub unscoped: HashMap<String, VexStatus>,
     pub statements_parsed: usize,
+    /// Count of product_status entries dropped because their product_id could
+    /// not be resolved to a PURL (never applied — see `parse_csaf`).
+    pub unresolved_products: usize,
 }
 
 // ============================================================================
@@ -411,8 +426,12 @@ mod tests {
         )));
     }
 
+    /// A product that does NOT resolve to a PURL must be dropped, never
+    /// promoted to a global (vuln-only) statement. A CSAF product_status is
+    /// always product-scoped; applying an unresolvable product globally would
+    /// (for not_affected/fixed) silently suppress the CVE on every component.
     #[test]
-    fn missing_purl_falls_back_to_unscoped() {
+    fn missing_purl_product_is_dropped_not_globally_applied() {
         let csaf = r#"{
             "document": {
                 "category": "csaf_security_advisory",
@@ -429,18 +448,72 @@ mod tests {
             "vulnerabilities": [
                 {
                     "cve": "CVE-2024-77777",
-                    "product_status": { "known_affected": ["P1"] }
+                    "product_status": { "known_not_affected": ["P1"] }
                 }
             ]
         }"#;
         let result = parse_csaf(csaf).unwrap();
-        assert!(result.scoped.is_empty());
+        assert!(
+            result.scoped.is_empty(),
+            "unresolved product must not be scoped"
+        );
         assert_eq!(
+            result.unresolved_products, 1,
+            "the unresolvable product must be counted as skipped"
+        );
+    }
+
+    /// CSAF product_status states must map to the correct VexState:
+    /// last_affected is AFFECTED (not Fixed), recommended is FIXED (not
+    /// Affected), and first_affected is Affected.
+    #[test]
+    fn csaf_status_states_map_to_correct_vex_state() {
+        let csaf = r#"{
+            "document": {
+                "category": "csaf_security_advisory",
+                "csaf_version": "2.0",
+                "publisher": {"category":"vendor","name":"X"},
+                "title": "x",
+                "tracking": {"id":"x"}
+            },
+            "product_tree": {
+                "full_product_names": [
+                    { "product_id": "PA", "name": "a",
+                      "product_identification_helper": {"purl": "pkg:cargo/a@1.0"} },
+                    { "product_id": "PR", "name": "r",
+                      "product_identification_helper": {"purl": "pkg:cargo/r@1.0"} },
+                    { "product_id": "PF", "name": "f",
+                      "product_identification_helper": {"purl": "pkg:cargo/f@1.0"} }
+                ]
+            },
+            "vulnerabilities": [
+                {
+                    "cve": "CVE-2024-11111",
+                    "product_status": {
+                        "last_affected": ["PA"],
+                        "recommended": ["PR"],
+                        "first_affected": ["PF"]
+                    }
+                }
+            ]
+        }"#;
+        let result = parse_csaf(csaf).unwrap();
+        let get = |purl: &str| {
             result
-                .unscoped
-                .get("CVE-2024-77777")
-                .map(|v| v.status.clone()),
-            Some(VexState::Affected)
+                .scoped
+                .get(&("CVE-2024-11111".to_string(), purl.to_string()))
+                .map(|v| v.status.clone())
+        };
+        assert_eq!(
+            get("pkg:cargo/a@1.0"),
+            Some(VexState::Affected),
+            "last_affected"
+        );
+        assert_eq!(get("pkg:cargo/r@1.0"), Some(VexState::Fixed), "recommended");
+        assert_eq!(
+            get("pkg:cargo/f@1.0"),
+            Some(VexState::Affected),
+            "first_affected"
         );
     }
 
