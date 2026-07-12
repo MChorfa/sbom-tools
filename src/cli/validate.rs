@@ -67,9 +67,7 @@ pub fn run_validate(
     for std_name in &standards {
         let result = match std_name.to_lowercase().as_str() {
             "ntia" => ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(parsed.sbom()),
-            "fda" => {
-                ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(parsed.sbom())
-            }
+            "fda" => ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(parsed.sbom()),
             "cra" => {
                 let mut checker = ComplianceChecker::new(ComplianceLevel::CraPhase2);
                 if let Some(sc) = cra_sidecar.clone() {

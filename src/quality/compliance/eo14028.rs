@@ -122,9 +122,7 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::ComponentIdentification,
-                message: format!(
-                    "{without_name}/{total} components missing a component name"
-                ),
+                message: format!("{without_name}/{total} components missing a component name"),
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component name (NTIA baseline)".to_string(),
                 rule_id: "SBOM-EO14028-NAME",
@@ -216,12 +214,7 @@ impl ComplianceChecker {
         let without_supplier = sbom
             .components
             .values()
-            .filter(|c| {
-                !c.supplier
-                    .as_ref()
-                    .is_some_and(|s| known_value(Some(s.name.as_str())).is_some())
-                    && !has_known_value(&c.author)
-            })
+            .filter(|c| !has_known_supplier(&c.supplier, &c.author))
             .count();
         if without_supplier > 0 {
             // Supplier Name is a REQUIRED NTIA minimum element, and EO 14028

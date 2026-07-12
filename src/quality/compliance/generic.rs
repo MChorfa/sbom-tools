@@ -15,6 +15,17 @@ impl ComplianceChecker {
 
         // All levels require creator information
         if sbom.document.creators.is_empty() {
+            let (requirement, rule_id) = if self.level == ComplianceLevel::NtiaMinimum {
+                (
+                    "NTIA Minimum Elements: Author".to_string(),
+                    "SBOM-NTIA-AUTHOR",
+                )
+            } else {
+                (
+                    "Document creator identification".to_string(),
+                    "SBOM-CRA-GENERAL",
+                )
+            };
             violations.push(Violation {
                 severity: match self.level {
                     ComplianceLevel::Minimum => ViolationSeverity::Warning,
@@ -23,8 +34,8 @@ impl ComplianceChecker {
                 category: ViolationCategory::DocumentMetadata,
                 message: "SBOM must have creator/tool information".to_string(),
                 element: None,
-                requirement: "Document creator identification".to_string(),
-                rule_id: "SBOM-CRA-GENERAL",
+                requirement,
+                rule_id,
                 standard_refs: Vec::new(),
             });
         }
@@ -487,13 +498,21 @@ impl ComplianceChecker {
             // and asserted-as-unknown sentinels (NOASSERTION/NONE) count as
             // missing — a placeholder cannot satisfy a required element.
             if known_value(Some(comp.name.as_str())).is_none() {
+                let (requirement, rule_id) = if self.level == ComplianceLevel::NtiaMinimum {
+                    (
+                        "NTIA Minimum Elements: Component Name".to_string(),
+                        "SBOM-NTIA-NAME",
+                    )
+                } else {
+                    ("Component name (required)".to_string(), "SBOM-CRA-GENERAL")
+                };
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::ComponentIdentification,
                     message: "Component must have a name".to_string(),
                     element: Some(comp.identifiers.format_id.clone()),
-                    requirement: "Component name (required)".to_string(),
-                    rule_id: "SBOM-CRA-GENERAL",
+                    requirement,
+                    rule_id,
                     standard_refs: Vec::new(),
                 });
             }
@@ -628,11 +647,7 @@ impl ComplianceChecker {
                     | ComplianceLevel::CraPhase2
                     | ComplianceLevel::CraOssSteward
                     | ComplianceLevel::Comprehensive
-            ) && !comp
-                .supplier
-                .as_ref()
-                .is_some_and(|s| known_value(Some(s.name.as_str())).is_some())
-                && !has_known_value(&comp.author)
+            ) && !has_known_supplier(&comp.supplier, &comp.author)
             {
                 let severity = match self.level {
                     ComplianceLevel::CraPhase1
@@ -927,6 +942,34 @@ impl ComplianceChecker {
         sbom: &NormalizedSbom,
         violations: &mut Vec<Violation>,
     ) {
+        // FDA: surface unresolved critical/high vulnerabilities — premarket
+        // submissions must address known vulnerabilities.
+        if matches!(self.level, ComplianceLevel::FdaMedicalDevice) {
+            use crate::model::Severity;
+            let vulns = sbom.all_vulnerabilities();
+            let critical = vulns
+                .iter()
+                .filter(|(_, v)| matches!(v.severity, Some(Severity::Critical)))
+                .count();
+            let high = vulns
+                .iter()
+                .filter(|(_, v)| matches!(v.severity, Some(Severity::High)))
+                .count();
+            if critical > 0 || high > 0 {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Warning,
+                    category: ViolationCategory::SecurityInfo,
+                    message: format!(
+                        "SBOM contains {critical} critical and {high} high severity vulnerabilities"
+                    ),
+                    element: None,
+                    requirement: "FDA: Known vulnerability assessment".to_string(),
+                    rule_id: "SBOM-FDA-SECURITY",
+                    standard_refs: Vec::new(),
+                });
+            }
+        }
+
         if !matches!(self.level, ComplianceLevel::CraPhase2) {
             return;
         }

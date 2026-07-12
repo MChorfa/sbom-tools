@@ -321,10 +321,9 @@ impl ComplianceChecker {
                 // severity), never weaken the phase gate — supplying MORE
                 // information must not relax enforcement.
                 let phase_gate = match self.level {
-                    ComplianceLevel::CraPhase2 if coverage < 0.50 => Some((
-                        ViolationSeverity::Error,
-                        "below 50% threshold".to_string(),
-                    )),
+                    ComplianceLevel::CraPhase2 if coverage < 0.50 => {
+                        Some((ViolationSeverity::Error, "below 50% threshold".to_string()))
+                    }
                     ComplianceLevel::CraPhase2 if coverage < 0.80 => Some((
                         ViolationSeverity::Warning,
                         "below 80% threshold".to_string(),
@@ -364,11 +363,7 @@ impl ComplianceChecker {
                     (Some(p), Some(c)) => {
                         // Class message is more specific; keep the stronger
                         // severity of the two.
-                        if rank(p.0) > rank(c.0) {
-                            (p.0, c.1)
-                        } else {
-                            c
-                        }
+                        if rank(p.0) > rank(c.0) { (p.0, c.1) } else { c }
                     }
                     (Some(p), None) => p,
                     (None, Some(c)) => c,

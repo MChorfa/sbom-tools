@@ -66,6 +66,18 @@ pub(crate) fn has_known_value(value: &Option<String>) -> bool {
     known_value(value.as_deref()).is_some()
 }
 
+/// Whether a component carries real supplier/author attribution: a supplier
+/// organization or author whose name is not a placeholder sentinel.
+pub(crate) fn has_known_supplier(
+    supplier: &Option<crate::model::Organization>,
+    author: &Option<String>,
+) -> bool {
+    supplier
+        .as_ref()
+        .is_some_and(|s| known_value(Some(s.name.as_str())).is_some())
+        || has_known_value(author)
+}
+
 /// Simple email format validation (checks basic structure, not full RFC 5322)
 pub(crate) fn is_valid_email_format(email: &str) -> bool {
     // Basic checks: contains @, has local and domain parts, no spaces

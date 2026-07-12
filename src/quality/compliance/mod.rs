@@ -28,8 +28,8 @@ use context::{ComplianceContext, checker_for};
 use registry::REMEDIATION_GENERIC;
 pub use registry::{RuleMeta, rule_meta};
 use shared::{
-    has_known_value, is_valid_email_format, known_value, manufacturer_scope_components,
-    truncate_list,
+    has_known_supplier, has_known_value, is_valid_email_format, known_value,
+    manufacturer_scope_components, truncate_list,
 };
 
 /// CRA enforcement phase
@@ -1196,7 +1196,7 @@ mod tests {
     #[test]
     fn dependency_graph_orphans_warn() {
         use crate::model::{
-            Component, CompletenessDeclaration, DependencyEdge, DependencyType, DocumentMetadata,
+            CompletenessDeclaration, Component, DependencyEdge, DependencyType, DocumentMetadata,
             NormalizedSbom,
         };
         let build = || {
@@ -1220,9 +1220,9 @@ mod tests {
 
         let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&build());
         assert!(
-            r.violations
-                .iter()
-                .any(|v| v.message.contains("participate in no dependency relationship")),
+            r.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
             "3/5 orphaned components must produce a dependency-coverage warning"
         );
 
@@ -1230,9 +1230,9 @@ mod tests {
         declared.document.completeness_declaration = CompletenessDeclaration::Incomplete;
         let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&declared);
         assert!(
-            !r.violations
-                .iter()
-                .any(|v| v.message.contains("participate in no dependency relationship")),
+            !r.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
             "declared-incomplete SBOMs are exempt from the orphan warning"
         );
     }
@@ -1277,11 +1277,8 @@ mod tests {
         );
 
         // Connect the primary → warning disappears.
-        sbom.edges.push(DependencyEdge::new(
-            app_id,
-            a_id,
-            DependencyType::DependsOn,
-        ));
+        sbom.edges
+            .push(DependencyEdge::new(app_id, a_id, DependencyType::DependsOn));
         let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
         assert!(
             !r.violations

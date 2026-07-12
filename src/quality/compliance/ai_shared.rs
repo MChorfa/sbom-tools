@@ -70,8 +70,7 @@ pub(crate) fn ai_bom_scope(sbom: &NormalizedSbom) -> AiBomScope<'_> {
         untyped_ml_components: Vec::new(),
     };
     for c in sbom.components.values() {
-        let is_ml =
-            c.component_type == ComponentType::MachineLearningModel || c.ml_model.is_some();
+        let is_ml = c.component_type == ComponentType::MachineLearningModel || c.ml_model.is_some();
         if is_ml {
             scope.ml_components.push(c);
         }
