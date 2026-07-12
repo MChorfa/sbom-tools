@@ -7,7 +7,7 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 « [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
-Mode: Grouped │ Focus:  ◄ Old │ New  │ Sync: Independent │ Change: 0/0 │ [a]lign
+Mode: Grouped │ Change: 0/0 │ [a]lign [/]search [a] for row actions
 
 ┌ acme-webapp (Old) ◄ ────────────────┐ │┌ acme-webapp (New) ──────────────────┐
 │Removed: 4 │ Modified: 5             │ ││Added: 4 │ Modified: 5               │
@@ -25,4 +25,4 @@ Mode: Grouped │ Focus:  ◄ Old │ New  │ Sync: Independent │ Change: 0/0
 │~ lodash 4.17.20                     │ ││~ lodash 4.17.21                     │
 └─────────────────────────────────────┘ │└─────────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
-  ←→/p panel  J/K scroll both │  Tab switch  / search  e export  ? help  q quit
+    …  a align  n/N change │  Tab switch  / search  e export  ? help  q quit

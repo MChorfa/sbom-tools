@@ -1020,3 +1020,51 @@ fn license_tab_surfaces_compat_conflicts() {
     );
     insta::assert_snapshot!("view_licenses_conflicts_120x40", text);
 }
+
+/// All eight CBOM/AI tabs must render the enhanced empty state (icon +
+/// centered reason) instead of an unstyled paragraph.
+#[test]
+fn empty_cbom_and_ai_tabs_use_enhanced_empty_state() {
+    pin_theme();
+    for (tab, reason) in [
+        (ViewTab::Crypto, "CycloneDX 1.6+"),
+        (ViewTab::Algorithms, "CycloneDX 1.6+"),
+        (ViewTab::Certificates, "CycloneDX 1.6+"),
+        (ViewTab::Keys, "CycloneDX 1.6+"),
+        (ViewTab::Protocols, "CycloneDX 1.6+"),
+        (ViewTab::PqcCompliance, "cryptoProperties"),
+        (ViewTab::Models, "machine-learning-model"),
+        (ViewTab::Datasets, "data components"),
+    ] {
+        let profile = if matches!(tab, ViewTab::Models | ViewTab::Datasets) {
+            crate::model::BomProfile::AiBom
+        } else {
+            crate::model::BomProfile::Cbom
+        };
+        let mut app = ViewApp::new(NormalizedSbom::default(), "", profile);
+        app.active_tab = tab;
+        let text = render_to_text(80, 24, |frame| {
+            render(frame, &mut app);
+        });
+        assert!(
+            text.contains(reason),
+            "{tab:?} empty state must explain what data is required:\n{text}"
+        );
+    }
+}
+
+/// Lock one representative enhanced empty state.
+#[test]
+fn snapshot_cbom_empty_algorithms() {
+    pin_theme();
+    let mut app = ViewApp::new(
+        NormalizedSbom::default(),
+        "",
+        crate::model::BomProfile::Cbom,
+    );
+    app.active_tab = ViewTab::Algorithms;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    insta::assert_snapshot!("cbom_empty_algorithms_80x24", text);
+}

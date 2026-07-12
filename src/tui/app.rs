@@ -66,6 +66,7 @@ pub use super::app_states::{
     SimilarityThreshold,
     SortDirection,
     // Timeline states
+    TimelineChartMetric,
     TimelineComponentFilter,
     TimelineSortBy,
     TimelineState,
@@ -235,6 +236,11 @@ pub struct App {
     /// Tab-bar window computed by the last render — shared with the mouse
     /// hit-test so render geometry and click geometry cannot drift.
     pub(crate) tab_window: crate::tui::shared::TabWindow,
+    /// Frame area from the last render: the mouse handler reproduces each
+    /// mode's Layout::split geometry (panels shrink below their Length
+    /// constraints at 80x24, so no fixed row constants survive both sizes)
+    /// and ratatui's table auto-scroll from it.
+    pub(crate) last_frame_area: Option<ratatui::layout::Rect>,
     pub(crate) summary_view: crate::tui::view_states::SummaryView,
     pub(crate) components_view: crate::tui::view_states::ComponentsView,
     pub(crate) dependencies_view: crate::tui::view_states::DependenciesView,

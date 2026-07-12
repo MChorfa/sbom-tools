@@ -24,6 +24,8 @@ pub use diff_compliance::{
 };
 pub use graph_changes::render_graph_changes;
 pub use licenses::render_licenses;
+pub(crate) use matrix::extend_with_status_or_hints as matrix_status_tail;
+pub(crate) use matrix::ordered_sbom_indices;
 pub use matrix::{MatrixPanel, render_matrix};
 pub(crate) use multi_dashboard::ordered_comparison_indices;
 pub use multi_dashboard::{MultiDashboardPanel, render_multi_dashboard};
@@ -38,6 +40,9 @@ pub use source::render_source;
 pub(crate) use summary::all_changes_line_count;
 pub use summary::render_summary;
 pub(crate) use timeline::filtered_evolution_entries;
+pub(crate) use timeline::ordered_version_indices;
+#[cfg(test)]
+pub(crate) use timeline::resolve_version_diff;
 pub use timeline::{TimelinePanel, render_timeline};
 pub(crate) use vulnerabilities::count_grouped_items;
 pub use vulnerabilities::render_vulnerabilities;

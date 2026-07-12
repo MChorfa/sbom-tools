@@ -3,26 +3,26 @@ source: src/tui/ui/render_snapshot_tests.rs
 expression: text
 ---
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ Matrix: 3×3 SBOMs (3 pairs)  │ Sort: Name ↑ │ Threshold: All │ Highlight     │
+│ Matrix: 3×3 SBOMs (3 pairs)  │ Sort: Avg Similarity ↑ │ Threshold: All │ High│
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Similarity Matrix [z: focus, r: row, c: col, ┐┌ Pair Details ────────────────┐
-│          alpha  beta   gamma                 ││Comparing:                    │
-│                                              ││alpha ↔ beta                  │
-│alpha      -     53%    0%                    ││                              │
-│beta      53%     -     0%                    ││Similarity: 53.5%             │
-│gamma     0%     0%      -                    ││                              │
-│                                              ││alpha: 9 components           │
+│          gamma  beta   alpha                 ││Comparing:                    │
+│                                              ││gamma ↔ beta                  │
+│gamma      -     0%     0%                    ││                              │
+│beta      0%      -     53%                   ││Similarity: 0.0%              │
+│alpha     0%     53%     -                    ││                              │
+│                                              ││gamma: 3 components           │
 │                                              ││beta: 9 components            │
 │                                              ││                              │
 │                                              ││Changes:                      │
-│                                              ││+ Added: 4                    │
-│                                              ││- Removed: 4                  │
-│                                              ││~ Modified: 5                 │
+│                                              ││+ Added: 3                    │
+│                                              ││- Removed: 9                  │
+│                                              ││~ Modified: 0                 │
 │                                              ││                              │
 └──────────────────────────────────────────────┘└──────────────────────────────┘
 ┌ Clustering (1 clusters) [C: details] ────────────────────────────────────────┐
 │Algorithm: greedy  Threshold: 50%                                             │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Pairs: 3  Avg: 18%  │  …  Tab panel  / search  V views  K keys  q quit        │
+│Pairs: 3  Avg: 18%  │  ℹ Sort: Avg Similarity ↑                               │
 └──────────────────────────────────────────────────────────────────────────────┘

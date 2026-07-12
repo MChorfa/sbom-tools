@@ -60,6 +60,7 @@ impl App {
             compliance_state: crate::tui::app_states::PolicyComplianceState::new(),
             export_template: None,
             tab_window: crate::tui::shared::TabWindow::default(),
+            last_frame_area: None,
             summary_view: crate::tui::view_states::SummaryView::new(),
             components_view: crate::tui::view_states::ComponentsView::new(),
             dependencies_view: crate::tui::view_states::DependenciesView::new(),

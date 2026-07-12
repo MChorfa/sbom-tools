@@ -2,7 +2,7 @@
 //!
 //! Shows cryptographic key material grouped by state with size and type info.
 
-use crate::model::{ComponentType, CryptoAssetType, CryptoMaterialState};
+use crate::model::{ComponentType, CryptoAssetType};
 use crate::tui::view::app::ViewApp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -26,10 +26,14 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .collect();
 
     if keys.is_empty() {
-        let msg = Paragraph::new("No key material found in this CBOM.")
-            .block(Block::default().borders(Borders::ALL).title(" Keys "))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No key material found",
+            Some("Requires CycloneDX 1.6+ CBOM data (cryptoProperties)"),
+            None,
+        );
         return;
     }
 
@@ -50,13 +54,7 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
             let (state_icon, state_color) = mat
                 .and_then(|m| m.state.as_ref())
-                .map(|s| match s {
-                    CryptoMaterialState::Active => ("●", scheme.success),
-                    CryptoMaterialState::Compromised => ("!", scheme.critical),
-                    CryptoMaterialState::Deactivated => ("○", scheme.text_muted),
-                    CryptoMaterialState::Destroyed => ("X", scheme.text_muted),
-                    _ => ("?", scheme.warning),
-                })
+                .map(crate::tui::shared::crypto::key_state_glyph)
                 .unwrap_or(("?", scheme.text_muted));
 
             let type_label = mat.map(|m| m.material_type.to_string()).unwrap_or_default();
@@ -82,7 +80,8 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Key Material ({}) ", keys.len())),
+            .title(format!(" Key Material ({}) ", keys.len()))
+            .title_bottom(crate::tui::shared::crypto::key_legend()),
     );
     let mut list_state = ratatui::widgets::ListState::default();
     if !keys.is_empty() {
@@ -113,49 +112,7 @@ pub fn render_keys(frame: &mut Frame, area: Rect, app: &ViewApp) {
         && let Some(mat) = &cp.related_crypto_material_properties
     {
         lines.push(Line::raw(""));
-        lines.push(Line::from(format!("Type:   {}", mat.material_type)));
-        if let Some(state) = &mat.state {
-            let color = match state {
-                CryptoMaterialState::Active => scheme.success,
-                CryptoMaterialState::Compromised => scheme.critical,
-                CryptoMaterialState::Deactivated => scheme.text_muted,
-                _ => scheme.warning,
-            };
-            lines.push(Line::from(vec![
-                Span::raw("State:  "),
-                Span::styled(state.to_string(), Style::default().fg(color)),
-            ]));
-        }
-        if let Some(size) = mat.size {
-            lines.push(Line::from(format!("Size:   {size} bits")));
-        }
-        if let Some(fmt) = &mat.format {
-            lines.push(Line::from(format!("Format: {fmt}")));
-        }
-        if let Some(algo_ref) = &mat.algorithm_ref {
-            lines.push(Line::from(format!("Algo:   {algo_ref}")));
-        }
-        if let Some(sb) = &mat.secured_by {
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "-- Secured By --",
-                Style::default().fg(scheme.primary),
-            ));
-            lines.push(Line::from(format!("Mechanism: {}", sb.mechanism)));
-            if let Some(a) = &sb.algorithm_ref {
-                lines.push(Line::from(format!("Algorithm: {a}")));
-            }
-        }
-        lines.push(Line::raw(""));
-        if let Some(d) = &mat.creation_date {
-            lines.push(Line::from(format!("Created:   {}", d.format("%Y-%m-%d"))));
-        }
-        if let Some(d) = &mat.activation_date {
-            lines.push(Line::from(format!("Activated: {}", d.format("%Y-%m-%d"))));
-        }
-        if let Some(d) = &mat.expiration_date {
-            lines.push(Line::from(format!("Expires:   {}", d.format("%Y-%m-%d"))));
-        }
+        lines.extend(crate::tui::shared::crypto::key_material_detail_lines(mat));
     }
 
     let detail = Paragraph::new(lines)

@@ -8,20 +8,20 @@ expression: text
 ┌ Components Evolution (1-3/3) [m: metric, +/-: zoom, h/l: scroll] ────────────┐
 │▃▃▃9▃▃▃ ▃▃▃9▃▃▃ ▁▁▁3▁▁▁                                                       │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ Versions [g: jump, d: diff] ─┐┌ Component Evolution (28/28) [f: filter, Enter┐
-│#    Version    Comp Chan CRA ││Component       Version      Since   Status   │
+┌ Versions [g: jump, d: diff] ─┐┌──────────────────────────────────────────────┐
+│#    Version    Comp Chan CRA ││                                              │
+│                              ││                    (empty)                   │
+│1.   v1         9    init ✗   ││                                              │
+│2.   v2         9    +4 - ✗   ││               No results found               │
+│3.   v3         3    +3 - ✗   ││                                              │
+│                              ││             Filter: Filter = All             │
 │                              ││                                              │
-│1.   v1         9    init ✗   ││product-reviews              v3      Added    │
-│2.   v2         9    +4 - ✗   ││sentiment-class 1.0.0        v3      Added    │
-│3.   v3         3    +3 - ✗   ││axios           1.4.0        v2      Added    │
-│                              ││dayjs           1.11.7       v2      Added    │
-│                              ││express         4.18.2       v2      Added    │
-│                              ││lodash          4.17.21      v2      Added    │
-│                              ││prisma          4.15.0       v2      Added    │
-│                              ││react           18.2.0       v2      Added    │
-│                              ││typescript      5.0.4        v2      Added    │
-│                              ││zod             3.21.4       v2      Added    │
-│                              ││bsi-aibom-compl 1.0.0        v3      Added    │
+│                              ││ Press [f] to change filter or [Esc] to clear │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │Added: 7  Removed: 13  │  …  Tab panel  / search  V views  K keys  q quit     │

@@ -68,6 +68,7 @@ pub fn run_tui(app: &mut App) -> io::Result<()> {
 /// Main render function
 fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    app.last_frame_area = Some(area);
 
     // Check minimum terminal size
     if check_terminal_size(area.width, area.height).is_err() {
@@ -79,7 +80,13 @@ fn render(frame: &mut Frame, app: &mut App) {
     match app.mode {
         AppMode::MultiDiff => {
             if let Some(ref result) = app.data.multi_diff_result {
-                views::render_multi_dashboard(frame, area, result, &app.tabs.multi_diff);
+                views::render_multi_dashboard(
+                    frame,
+                    area,
+                    result,
+                    &app.tabs.multi_diff,
+                    app.status_message.as_deref(),
+                );
             }
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
@@ -87,7 +94,13 @@ fn render(frame: &mut Frame, app: &mut App) {
         }
         AppMode::Timeline => {
             if let Some(ref result) = app.data.timeline_result {
-                views::render_timeline(frame, area, result, &app.tabs.timeline);
+                views::render_timeline(
+                    frame,
+                    area,
+                    result,
+                    &app.tabs.timeline,
+                    app.status_message.as_deref(),
+                );
             }
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
@@ -95,7 +108,13 @@ fn render(frame: &mut Frame, app: &mut App) {
         }
         AppMode::Matrix => {
             if let Some(ref result) = app.data.matrix_result {
-                views::render_matrix(frame, area, result, &app.tabs.matrix);
+                views::render_matrix(
+                    frame,
+                    area,
+                    result,
+                    &app.tabs.matrix,
+                    app.status_message.as_deref(),
+                );
             }
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);

@@ -41,4 +41,4 @@ Mode: Aligned │ Focus:  ◄ Old │ New  │ Sync: Independent │ Change: -/1
 │                                                         │ ││                                                         │
 └─────────────────────────────────────────────────────────┘ ┴└─────────────────────────────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
-          ←→/p panel  J/K scroll both │  Tab switch  / search  e export  ? help  q quit [y] copy - jquery 3.5.1
+     …  a align  n/N change  Enter detail │  Tab switch  / search  e export  ? help  q quit [y] copy - jquery 3.5.1

@@ -22,10 +22,14 @@ pub fn render_crypto(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .collect();
 
     if crypto_components.is_empty() {
-        let msg = Paragraph::new("No cryptographic assets found in this SBOM.\n\nCBOM data (CycloneDX 1.6+) is required for this tab.")
-            .block(Block::default().borders(Borders::ALL).title(" Crypto "))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No cryptographic assets found",
+            Some("Requires CycloneDX 1.6+ CBOM data (cryptoProperties)"),
+            None,
+        );
         return;
     }
 
@@ -179,25 +183,7 @@ fn render_list(
                 })
                 .unwrap_or("???");
 
-            let quantum_indicator = cp
-                .and_then(|p| p.algorithm_properties.as_ref())
-                .map(|a| {
-                    if a.is_weak_by_name(&comp.name) {
-                        Span::styled(
-                            "!",
-                            Style::default()
-                                .fg(scheme.critical)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else if a.is_quantum_safe() {
-                        Span::styled("Q", Style::default().fg(scheme.success))
-                    } else if a.nist_quantum_security_level == Some(0) {
-                        Span::styled("V", Style::default().fg(scheme.warning))
-                    } else {
-                        Span::raw(" ")
-                    }
-                })
-                .unwrap_or_else(|| Span::raw(" "));
+            let quantum_indicator = crate::tui::shared::crypto::quantum_indicator(comp);
 
             let style = if i == app.crypto_list_selected {
                 crate::tui::theme::Styles::selected()
@@ -221,7 +207,8 @@ fn render_list(
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Assets ({}) ", crypto_components.len())),
+            .title(format!(" Assets ({}) ", crypto_components.len()))
+            .title_bottom(crate::tui::shared::crypto::quantum_legend()),
     );
     // Stateful render so the selected asset scrolls into view on large CBOMs
     // (a plain render_widget always shows the top of the list).
@@ -277,79 +264,9 @@ fn render_detail(
                 "-- Algorithm Properties --",
                 Style::default().fg(scheme.primary),
             ));
-            lines.push(Line::from(format!("Primitive: {}", algo.primitive)));
-            if let Some(f) = &algo.algorithm_family {
-                lines.push(Line::from(format!("Family:    {f}")));
-            }
-            if let Some(p) = &algo.parameter_set_identifier {
-                lines.push(Line::from(format!("Params:    {p}")));
-            }
-            if let Some(m) = &algo.mode {
-                lines.push(Line::from(format!("Mode:      {m}")));
-            }
-            if let Some(c) = &algo.elliptic_curve {
-                lines.push(Line::from(format!("Curve:     {c}")));
-            }
-            if let Some(bits) = algo.classical_security_level {
-                lines.push(Line::from(format!("Security:  {bits} bits")));
-            }
-            if let Some(ql) = algo.nist_quantum_security_level {
-                let color = if ql == 0 {
-                    scheme.error
-                } else if ql >= 3 {
-                    scheme.success
-                } else {
-                    scheme.warning
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("Quantum:   "),
-                    Span::styled(
-                        format!("Level {ql}"),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    if ql == 0 {
-                        Span::styled(" VULNERABLE", Style::default().fg(scheme.error))
-                    } else {
-                        Span::styled(" SAFE", Style::default().fg(scheme.success))
-                    },
-                ]));
-            }
-            if algo.is_weak_by_name(&comp.name) {
-                lines.push(Line::styled(
-                    "WARNING: Weak/broken algorithm",
-                    Style::default()
-                        .fg(scheme.critical)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-            if algo.is_hybrid_pqc() {
-                lines.push(Line::styled(
-                    "Hybrid PQC combiner",
-                    Style::default().fg(scheme.primary),
-                ));
-            }
-            if !algo.crypto_functions.is_empty() {
-                let funcs: Vec<_> = algo
-                    .crypto_functions
-                    .iter()
-                    .map(|f| f.to_string())
-                    .collect();
-                lines.push(Line::from(format!("Functions: {}", funcs.join(", "))));
-            }
-            if !algo.certification_level.is_empty() {
-                let certs: Vec<_> = algo
-                    .certification_level
-                    .iter()
-                    .map(|c| c.to_string())
-                    .collect();
-                lines.push(Line::from(format!("Certified: {}", certs.join(", "))));
-            }
-            if let Some(env) = &algo.execution_environment {
-                lines.push(Line::from(format!("Exec Env:  {env}")));
-            }
-            if let Some(plat) = &algo.implementation_platform {
-                lines.push(Line::from(format!("Platform:  {plat}")));
-            }
+            lines.extend(crate::tui::shared::crypto::algorithm_detail_lines(
+                &comp.name, algo,
+            ));
         }
 
         if let Some(cert) = &cp.certificate_properties {
@@ -357,41 +274,7 @@ fn render_detail(
                 "-- Certificate Properties --",
                 Style::default().fg(scheme.primary),
             ));
-            if let Some(s) = &cert.subject_name {
-                lines.push(Line::from(format!("Subject: {s}")));
-            }
-            if let Some(i) = &cert.issuer_name {
-                lines.push(Line::from(format!("Issuer:  {i}")));
-            }
-            if let Some(nb) = &cert.not_valid_before {
-                lines.push(Line::from(format!("Valid From: {}", nb.format("%Y-%m-%d"))));
-            }
-            if let Some(na) = &cert.not_valid_after {
-                let color = if cert.is_expired() {
-                    scheme.error
-                } else if cert.is_expiring_soon(90) {
-                    scheme.warning
-                } else {
-                    scheme.success
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("Valid To:   "),
-                    Span::styled(
-                        na.format("%Y-%m-%d").to_string(),
-                        Style::default().fg(color),
-                    ),
-                    if cert.is_expired() {
-                        Span::styled(" EXPIRED", Style::default().fg(scheme.error))
-                    } else if cert.is_expiring_soon(90) {
-                        Span::styled(" EXPIRING SOON", Style::default().fg(scheme.warning))
-                    } else {
-                        Span::raw("")
-                    },
-                ]));
-            }
-            if let Some(fmt) = &cert.certificate_format {
-                lines.push(Line::from(format!("Format:  {fmt}")));
-            }
+            lines.extend(crate::tui::shared::crypto::certificate_detail_lines(cert));
         }
 
         if let Some(mat) = &cp.related_crypto_material_properties {
@@ -399,28 +282,7 @@ fn render_detail(
                 "-- Key Material Properties --",
                 Style::default().fg(scheme.primary),
             ));
-            lines.push(Line::from(format!("Type:  {}", mat.material_type)));
-            if let Some(state) = &mat.state {
-                let color = match state {
-                    crate::model::CryptoMaterialState::Active => scheme.success,
-                    crate::model::CryptoMaterialState::Compromised => scheme.critical,
-                    crate::model::CryptoMaterialState::Deactivated => scheme.text_muted,
-                    _ => scheme.warning,
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("State: "),
-                    Span::styled(state.to_string(), Style::default().fg(color)),
-                ]));
-            }
-            if let Some(size) = mat.size {
-                lines.push(Line::from(format!("Size:  {size} bits")));
-            }
-            if let Some(fmt) = &mat.format {
-                lines.push(Line::from(format!("Format: {fmt}")));
-            }
-            if let Some(sb) = &mat.secured_by {
-                lines.push(Line::from(format!("Secured by: {}", sb.mechanism)));
-            }
+            lines.extend(crate::tui::shared::crypto::key_material_detail_lines(mat));
         }
 
         if let Some(proto) = &cp.protocol_properties {
@@ -428,21 +290,7 @@ fn render_detail(
                 "-- Protocol Properties --",
                 Style::default().fg(scheme.primary),
             ));
-            lines.push(Line::from(format!("Protocol: {}", proto.protocol_type)));
-            if let Some(v) = &proto.version {
-                lines.push(Line::from(format!("Version:  {v}")));
-            }
-            if !proto.cipher_suites.is_empty() {
-                lines.push(Line::from(format!(
-                    "Cipher Suites: {}",
-                    proto.cipher_suites.len()
-                )));
-                for suite in &proto.cipher_suites {
-                    if let Some(name) = &suite.name {
-                        lines.push(Line::from(format!("  - {name}")));
-                    }
-                }
-            }
+            lines.extend(crate::tui::shared::crypto::protocol_detail_lines(proto));
         }
     }
 

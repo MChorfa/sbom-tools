@@ -78,6 +78,10 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
         // Sort
         KeyCode::Char('s') => {
             app.tabs.matrix.toggle_sort();
+            // focus_row/focus_col and search matches are display indices;
+            // they would silently point at different SBOMs after the reorder.
+            app.tabs.matrix.clear_focus();
+            update_matrix_search_matches(app);
             app.set_status_message(format!(
                 "Sort: {} {}",
                 app.tabs.matrix.sort_by.label(),
@@ -86,6 +90,8 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
         }
         KeyCode::Char('S') => {
             app.tabs.matrix.toggle_sort_direction();
+            app.tabs.matrix.clear_focus();
+            update_matrix_search_matches(app);
         }
 
         // Threshold filter
@@ -202,17 +208,18 @@ pub(super) fn update_matrix_search_matches(app: &mut App) {
         return;
     }
 
+    // Matches are DISPLAY positions so Enter selects the highlighted row
+    // under any sort (mirrors update_multi_diff_search_matches).
     let matches: Vec<usize> = app
         .data
         .matrix_result
         .as_ref()
         .map_or_else(Vec::new, |result| {
-            result
-                .sboms
+            crate::tui::views::ordered_sbom_indices(result, &app.tabs.matrix)
                 .iter()
                 .enumerate()
-                .filter(|(_, sbom)| sbom.name.to_lowercase().contains(&query))
-                .map(|(i, _)| i)
+                .filter(|(_, raw)| result.sboms[**raw].name.to_lowercase().contains(&query))
+                .map(|(display, _)| display)
                 .collect()
         });
 

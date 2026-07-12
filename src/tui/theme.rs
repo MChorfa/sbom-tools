@@ -957,6 +957,45 @@ pub fn mode_badge(mode: &str) -> Span<'static> {
 pub struct FooterHints;
 
 impl FooterHints {
+    /// Hints for the multi-comparison modes. The tail is exactly
+    /// `GLOBAL_COUNT` honest globals — the multi modes have no diff tab bar,
+    /// help overlay, or export dialog, so the tabbed globals don't apply.
+    #[must_use]
+    pub fn for_multi_mode(mode: &str) -> Vec<(&'static str, &'static str)> {
+        let mut hints: Vec<(&'static str, &'static str)> = match mode {
+            "matrix" => vec![
+                ("t", "threshold"),
+                ("z", "focus"),
+                ("H", "highlight"),
+                ("C", "clusters"),
+                ("Enter", "diff"),
+                ("x", "export"),
+            ],
+            "timeline" => vec![
+                ("g", "jump"),
+                ("d", "diff"),
+                ("t", "stats"),
+                ("f", "filter"),
+                ("m", "metric"),
+            ],
+            _ => vec![
+                ("f", "filter"),
+                ("s", "sort"),
+                ("v", "variable"),
+                ("h", "heatmap"),
+                ("x", "cross-target"),
+            ],
+        };
+        hints.extend([
+            ("Tab", "panel"),
+            ("/", "search"),
+            ("V", "views"),
+            ("K", "keys"),
+            ("q", "quit"),
+        ]);
+        hints
+    }
+
     /// Get hints for a specific tab in diff mode
     #[must_use]
     pub fn for_diff_tab(tab: &str) -> Vec<(&'static str, &'static str)> {
@@ -988,8 +1027,13 @@ impl FooterHints {
                 hints.insert(2, ("g", "group"));
             }
             "sidebyside" | "side-by-side" | "diff" => {
-                hints.insert(0, ("←→/p", "panel"));
-                hints.insert(1, ("J/K", "scroll both"));
+                // Lead with the keys absent from every 80-col surface; the
+                // width fitter drops from the END of the tab block.
+                hints.insert(0, ("a", "align"));
+                hints.insert(1, ("n/N", "change"));
+                hints.insert(2, ("Enter", "detail"));
+                hints.insert(3, ("←→/p", "panel"));
+                hints.insert(4, ("J/K", "scroll"));
             }
             "quality" => {
                 hints.insert(0, ("v", "view"));
@@ -1001,9 +1045,12 @@ impl FooterHints {
                 hints.insert(3, ("↑↓", "select"));
             }
             "source" => {
-                hints.insert(0, ("w", "panel"));
-                hints.insert(1, ("v", "tree/raw"));
-                hints.insert(2, ("↑↓", "scroll"));
+                hints.insert(0, ("u", "collapse"));
+                hints.insert(1, ("a", "align"));
+                hints.insert(2, ("z", "fold"));
+                hints.insert(3, ("m", "mark"));
+                hints.insert(4, ("w", "panel"));
+                hints.insert(5, ("v", "tree/raw"));
             }
             "graphchanges" | "graph" => {
                 hints.insert(0, ("↑↓", "select"));
@@ -1230,6 +1277,51 @@ mod a11y_tests {
         assert_eq!(startup_theme_for(true, "light").name, "monochrome");
         assert_eq!(startup_theme_for(false, "light").name, "light");
         assert_eq!(startup_theme_for(false, "dark").name, "dark");
+    }
+
+    /// Multi-mode footers must carry exactly GLOBAL_COUNT honest globals so
+    /// the separator/fit logic works, with no dead keys ('?' and 'e' render
+    /// only in the tabbed layout, unreachable in multi modes).
+    #[test]
+    fn for_multi_mode_hints_are_honest() {
+        for mode in ["matrix", "timeline", "multi"] {
+            let hints = super::FooterHints::for_multi_mode(mode);
+            assert!(hints.len() > super::FooterHints::GLOBAL_COUNT, "{mode}");
+            assert_eq!(hints.last(), Some(&("q", "quit")), "{mode}");
+            let tail = &hints[hints.len() - super::FooterHints::GLOBAL_COUNT..];
+            // The separator/fit contract depends on exactly this tail.
+            assert_eq!(
+                tail,
+                [
+                    ("Tab", "panel"),
+                    ("/", "search"),
+                    ("V", "views"),
+                    ("K", "keys"),
+                    ("q", "quit"),
+                ],
+                "{mode}"
+            );
+            assert!(
+                !hints.contains(&("?", "help")) && !hints.contains(&("e", "export")),
+                "{mode}: no dead keys"
+            );
+        }
+        assert!(
+            super::FooterHints::for_multi_mode("matrix").contains(&("x", "export")),
+            "matrix keeps its real export key"
+        );
+    }
+
+    /// The two densest diff tabs must lead with their tab-specific power keys
+    /// so width fitting sacrifices the memorized globals last.
+    #[test]
+    fn footer_hints_lead_with_tab_keys() {
+        let sxs = super::FooterHints::for_diff_tab("sidebyside");
+        assert_eq!(sxs[0], ("a", "align"));
+        assert!(sxs.contains(&("n/N", "change")));
+        let source = super::FooterHints::for_diff_tab("source");
+        assert_eq!(source[0], ("u", "collapse"));
+        assert!(source.contains(&("z", "fold")) && source.contains(&("m", "mark")));
     }
 
     #[test]

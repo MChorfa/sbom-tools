@@ -3,26 +3,26 @@ source: src/tui/ui/render_snapshot_tests.rs
 expression: text
 ---
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ Matrix: 3×3 SBOMs (3 pairs)  │ Sort: Name ↑ │ Threshold: All │ Highlight     │
+│ Matrix: 8×8 SBOMs (28 pairs)  │ Sort: Name ↑ │ Threshold: All │ Highlight    │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ Similarity Matrix [z: focus, r: row, c: col, ┐┌ Pair Details ────────────────┐
-│          alpha  beta   gamma                 ││Comparing:                    │
-│                                              ││alpha ↔ beta                  │
-│alpha      -     53%    0%                    ││                              │
-│beta      53%     -     0%                    ││Similarity: 53.5%             │
-│gamma     0%     0%      -                    ││                              │
-│                                              ││alpha: 9 components           │
-│                                              ││beta: 9 components            │
-│                                              ││                              │
-│                                              ││Changes:                      │
-│                                              ││+ Added: 4                    │
+┌ Similarity Matrix (4-8/8) [z: focus, r: row, ┐┌ Pair Details ────────────────┐
+│          v4     v5     v6     v7     v8      ││Comparing:                    │
+│                                              ││v1 ↔ v8                       │
+│v1        53%    100%   53%    100%   53%     ││                              │
+│v2        100%   53%    100%   53%    100%    ││Similarity: 53.5%             │
+│v3        53%    100%   53%    100%   53%     ││                              │
+│v4         -     53%    100%   53%    100%    ││v1: 9 components              │
+│v5        53%     -     53%    100%   53%     ││v8: 9 components              │
+│v6        100%   53%     -     53%    100%    ││                              │
+│v7        53%    100%   53%     -     53%     ││Changes:                      │
+│v8        100%   53%    100%   53%     -      ││+ Added: 4                    │
 │                                              ││- Removed: 4                  │
 │                                              ││~ Modified: 5                 │
 │                                              ││                              │
 └──────────────────────────────────────────────┘└──────────────────────────────┘
-┌ Clustering (1 clusters) [C: details] ────────────────────────────────────────┐
-│Algorithm: greedy  Threshold: 50%                                             │
+┌ Clustering (2 clusters) [C: details] ────────────────────────────────────────┐
+│Algorithm: greedy  Threshold: 80%                                             │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Pairs: 3  Avg: 18%  │  …  Tab panel  / search  V views  K keys  q quit        │
+│Pairs: 28  Avg: 73%  │  …  Tab panel  / search  V views  K keys  q quit       │
 └──────────────────────────────────────────────────────────────────────────────┘

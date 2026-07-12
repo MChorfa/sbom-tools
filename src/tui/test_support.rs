@@ -130,6 +130,26 @@ pub(crate) fn demo_timeline() -> crate::diff::TimelineResult {
     engine.timeline(&sboms).expect("timeline must succeed")
 }
 
+/// Eight synthetic SBOMs (alternating demo-old/demo-new, names v1..v8) so the
+/// matrix column viewport actually clips at 80 cols and clustering yields
+/// interleaved members.
+pub(crate) fn demo_matrix_large() -> crate::diff::MatrixResult {
+    let a = parse_sbom_str(DEMO_OLD).expect("fixture must parse");
+    let b = parse_sbom_str(DEMO_NEW).expect("fixture must parse");
+    let names = ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"];
+    let sboms: Vec<(&NormalizedSbom, &str, &str)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (if i % 2 == 0 { &a } else { &b }, *name, "demo.cdx.json"))
+        .collect();
+    let mut engine = crate::diff::MultiDiffEngine::new();
+    // 0.8: identical-content SBOMs (similarity 1.0) cluster together while
+    // the ~0.54 cross-pairs stay apart, yielding two interleaved clusters.
+    engine
+        .matrix(&sboms, Some(0.8))
+        .expect("matrix must succeed")
+}
+
 /// Build an NxN matrix result over the same three fixtures, with a similarity
 /// threshold so `clustering` is populated (needed by the cluster-navigation
 /// tests).

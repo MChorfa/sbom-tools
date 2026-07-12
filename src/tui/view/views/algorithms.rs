@@ -80,10 +80,14 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
     });
 
     if algorithms.is_empty() {
-        let msg = Paragraph::new("No algorithms found in this CBOM.")
-            .block(Block::default().borders(Borders::ALL).title(" Algorithms "))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No algorithms found",
+            Some("Requires CycloneDX 1.6+ CBOM data (cryptoProperties)"),
+            None,
+        );
         return;
     }
 
@@ -102,22 +106,7 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .as_ref()
                 .and_then(|cp| cp.algorithm_properties.as_ref());
 
-            let qi = algo
-                .map(|a| {
-                    if a.is_weak_by_name(&comp.name) {
-                        Span::styled(
-                            "!",
-                            Style::default()
-                                .fg(scheme.critical)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else if a.is_quantum_safe() {
-                        Span::styled("Q", Style::default().fg(scheme.success))
-                    } else {
-                        Span::styled("V", Style::default().fg(scheme.warning))
-                    }
-                })
-                .unwrap_or_else(|| Span::raw(" "));
+            let qi = crate::tui::shared::crypto::quantum_indicator(comp);
 
             let family = algo
                 .and_then(|a| a.algorithm_family.as_deref())
@@ -142,11 +131,16 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
-        " Algorithms ({}) [{}] ",
-        algorithms.len(),
-        app.algorithm_sort_by.label()
-    )));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(
+                " Algorithms ({}) [{}] ",
+                algorithms.len(),
+                app.algorithm_sort_by.label()
+            ))
+            .title_bottom(crate::tui::shared::crypto::quantum_legend()),
+    );
     let mut list_state = ratatui::widgets::ListState::default();
     if !algorithms.is_empty() {
         list_state.select(Some(app.algorithms_selected.min(algorithms.len() - 1)));
@@ -182,82 +176,9 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
         lines.push(Line::raw(""));
 
         if let Some(algo) = &cp.algorithm_properties {
-            lines.push(Line::from(format!("Primitive: {}", algo.primitive)));
-            if let Some(f) = &algo.algorithm_family {
-                lines.push(Line::from(format!("Family:    {f}")));
-            }
-            if let Some(p) = &algo.parameter_set_identifier {
-                lines.push(Line::from(format!("Params:    {p}")));
-            }
-            if let Some(m) = &algo.mode {
-                lines.push(Line::from(format!("Mode:      {m}")));
-            }
-            if let Some(c) = &algo.elliptic_curve {
-                lines.push(Line::from(format!("Curve:     {c}")));
-            }
-            if let Some(bits) = algo.classical_security_level {
-                lines.push(Line::from(format!("Security:  {bits} bits")));
-            }
-            if let Some(ql) = algo.nist_quantum_security_level {
-                let color = if ql == 0 {
-                    scheme.error
-                } else if ql >= 3 {
-                    scheme.success
-                } else {
-                    scheme.warning
-                };
-                lines.push(Line::from(vec![
-                    Span::raw("Quantum:   "),
-                    Span::styled(
-                        format!("Level {ql}"),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    if ql == 0 {
-                        Span::styled(" VULNERABLE", Style::default().fg(scheme.error))
-                    } else {
-                        Span::styled(" SAFE", Style::default().fg(scheme.success))
-                    },
-                ]));
-            }
-            if algo.is_weak_by_name(&comp.name) {
-                lines.push(Line::styled(
-                    "WARNING: Weak/broken algorithm",
-                    Style::default()
-                        .fg(scheme.critical)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-            if algo.is_hybrid_pqc() {
-                lines.push(Line::styled(
-                    "Hybrid PQC combiner",
-                    Style::default().fg(scheme.primary),
-                ));
-            }
-            if !algo.crypto_functions.is_empty() {
-                let funcs: Vec<_> = algo
-                    .crypto_functions
-                    .iter()
-                    .map(|f| f.to_string())
-                    .collect();
-                lines.push(Line::from(format!("Functions: {}", funcs.join(", "))));
-            }
-            if !algo.certification_level.is_empty() {
-                let certs: Vec<_> = algo
-                    .certification_level
-                    .iter()
-                    .map(|c| c.to_string())
-                    .collect();
-                lines.push(Line::from(format!("Certified: {}", certs.join(", "))));
-            }
-            if let Some(p) = &algo.padding {
-                lines.push(Line::from(format!("Padding:   {p}")));
-            }
-            if let Some(env) = &algo.execution_environment {
-                lines.push(Line::from(format!("Exec Env:  {env}")));
-            }
-            if let Some(platform) = &algo.implementation_platform {
-                lines.push(Line::from(format!("Platform:  {platform}")));
-            }
+            lines.extend(crate::tui::shared::crypto::algorithm_detail_lines(
+                &comp.name, algo,
+            ));
         }
     }
 

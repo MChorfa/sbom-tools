@@ -49,7 +49,7 @@ pub use sidebyside::{
 };
 pub use source::{SourceDiffState, SourcePanelState, SourceSide, SourceViewMode};
 pub use summary::SummaryState;
-pub use timeline::{TimelineComponentFilter, TimelineSortBy, TimelineState};
+pub use timeline::{TimelineChartMetric, TimelineComponentFilter, TimelineSortBy, TimelineState};
 pub use vulnerabilities::{
     DiffVulnItem, DiffVulnStatus, VulnFilter, VulnSort, VulnerabilitiesState,
 };

@@ -26,10 +26,14 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .collect();
 
     if protos.is_empty() {
-        let msg = Paragraph::new("No protocols found in this CBOM.")
-            .block(Block::default().borders(Borders::ALL).title(" Protocols "))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No protocols found",
+            Some("Requires CycloneDX 1.6+ CBOM data (cryptoProperties)"),
+            None,
+        );
         return;
     }
 
@@ -103,63 +107,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
         && let Some(proto) = &cp.protocol_properties
     {
         lines.push(Line::raw(""));
-        lines.push(Line::from(format!("Protocol: {}", proto.protocol_type)));
-        if let Some(v) = &proto.version {
-            lines.push(Line::from(format!("Version:  {v}")));
-        }
-
-        if !proto.cipher_suites.is_empty() {
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                format!("-- Cipher Suites ({}) --", proto.cipher_suites.len()),
-                Style::default().fg(scheme.primary),
-            ));
-            for suite in &proto.cipher_suites {
-                if let Some(name) = &suite.name {
-                    lines.push(Line::from(format!("  {name}")));
-                }
-                if !suite.algorithms.is_empty() {
-                    lines.push(Line::styled(
-                        format!("    Algorithms: {}", suite.algorithms.join(", ")),
-                        Style::default().fg(scheme.text_muted),
-                    ));
-                }
-            }
-        }
-
-        if let Some(ikev2) = &proto.ikev2_transform_types {
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "-- IKEv2 Transform Types --",
-                Style::default().fg(scheme.primary),
-            ));
-            if !ikev2.encr.is_empty() {
-                lines.push(Line::from(format!("Encryption: {}", ikev2.encr.join(", "))));
-            }
-            if !ikev2.prf.is_empty() {
-                lines.push(Line::from(format!("PRF:        {}", ikev2.prf.join(", "))));
-            }
-            if !ikev2.integ.is_empty() {
-                lines.push(Line::from(format!(
-                    "Integrity:  {}",
-                    ikev2.integ.join(", ")
-                )));
-            }
-            if !ikev2.ke.is_empty() {
-                lines.push(Line::from(format!("Key Exch:   {}", ikev2.ke.join(", "))));
-            }
-        }
-
-        if !proto.crypto_ref_array.is_empty() {
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "-- Referenced Algorithms --",
-                Style::default().fg(scheme.primary),
-            ));
-            for r in &proto.crypto_ref_array {
-                lines.push(Line::from(format!("  {r}")));
-            }
-        }
+        lines.extend(crate::tui::shared::crypto::protocol_detail_lines(proto));
     }
 
     let detail = Paragraph::new(lines)
