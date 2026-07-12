@@ -377,7 +377,7 @@ fn render_vex_coverage_card(frame: &mut Frame, area: Rect, result: &crate::diff:
 fn compute_risk_level(
     result: &crate::diff::DiffResult,
     scheme: &crate::tui::theme::ColorScheme,
-) -> (&'static str, Color) {
+) -> (&'static str, Color, Color) {
     let major_bumps = count_major_bumps(&result.components.modified);
     let critical_vulns = *result
         .vulnerabilities
@@ -394,16 +394,19 @@ fn compute_risk_level(
         + result.summary.components_removed
         + result.summary.components_modified;
 
+    // Badge foreground follows the theme convention (severity_badge_fg):
+    // light text on the dark critical/error backgrounds, dark text on the
+    // bright warning/success ones.
     if critical_vulns > 0 {
-        ("Critical Risk", scheme.critical)
+        ("Critical Risk", scheme.critical, scheme.badge_fg_light)
     } else if high_vulns > 0 || major_bumps >= 3 {
-        ("High Risk", scheme.error)
+        ("High Risk", scheme.error, scheme.badge_fg_light)
     } else if major_bumps > 0 || new_vulns > 0 || result.summary.components_removed > 3 {
-        ("Medium Risk", scheme.warning)
+        ("Medium Risk", scheme.warning, scheme.badge_fg_dark)
     } else if total_changes > 0 {
-        ("Low Risk", scheme.success)
+        ("Low Risk", scheme.success, scheme.badge_fg_dark)
     } else {
-        ("No Changes", scheme.muted)
+        ("No Changes", scheme.muted, scheme.badge_fg_dark)
     }
 }
 
@@ -484,7 +487,7 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         return;
     };
 
-    let (risk_label, risk_color) = compute_risk_level(result, &scheme);
+    let (risk_label, risk_color, risk_badge_fg) = compute_risk_level(result, &scheme);
     let score = result.semantic_score;
     let total_changes = result.summary.total_changes;
     let major_bumps = count_major_bumps(&result.components.modified);
@@ -495,7 +498,7 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let mut line1 = vec![
         Span::styled(
             format!(" {risk_label} "),
-            Style::default().fg(Color::Black).bg(risk_color).bold(),
+            Style::default().fg(risk_badge_fg).bg(risk_color).bold(),
         ),
         Span::raw("  Score: "),
         Span::styled(
@@ -559,7 +562,7 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         Style::default().fg(scheme.border),
     )));
 
-    // Key findings (reuse logic from render_key_findings)
+    // Key findings
     // Critical vulnerabilities
     for vuln in result
         .vulnerabilities
@@ -571,7 +574,10 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         lines.push(Line::from(vec![
             Span::styled(
                 " \u{26a0} CRITICAL ",
-                Style::default().fg(Color::Black).bg(scheme.critical).bold(),
+                Style::default()
+                    .fg(scheme.severity_badge_fg("critical"))
+                    .bg(scheme.critical)
+                    .bold(),
             ),
             Span::styled(
                 format!(" {} in {}", vuln.id, vuln.component_name),
@@ -597,7 +603,10 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         lines.push(Line::from(vec![
             Span::styled(
                 " \u{25b2} MAJOR ",
-                Style::default().fg(Color::Black).bg(scheme.warning).bold(),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(scheme.warning)
+                    .bold(),
             ),
             Span::raw(format!(" {} ", comp.name)),
             Span::styled(old_v.to_string(), Style::default().fg(scheme.muted)),
@@ -705,321 +714,6 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(risk_color));
     let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
-}
-
-/// Compact risk header (kept for reference, no longer called from main layout).
-#[allow(dead_code)]
-fn render_risk_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-    let scheme = colors();
-    let Some(result) = ctx.diff_result.as_ref() else {
-        return;
-    };
-
-    let (risk_label, risk_color) = compute_risk_level(result, &scheme);
-    let score = result.semantic_score;
-    let total_changes = result.summary.total_changes;
-    let major_bumps = count_major_bumps(&result.components.modified);
-
-    // Line 1: Risk badge + Score + Changes
-    let mut line1_spans = vec![
-        Span::styled(
-            format!(" {risk_label} "),
-            Style::default().fg(Color::Black).bg(risk_color).bold(),
-        ),
-        Span::raw("  Score: "),
-        Span::styled(
-            format!("{score:.1}"),
-            Style::default().fg(risk_color).bold(),
-        ),
-        Span::raw("  \u{2502}  "),
-        Span::styled(
-            format!("{total_changes} changes"),
-            Style::default().fg(scheme.text),
-        ),
-    ];
-    if major_bumps > 0 {
-        line1_spans.push(Span::styled(
-            format!(", {major_bumps} major bumps"),
-            Style::default().fg(scheme.warning).bold(),
-        ));
-    }
-    let line1 = Line::from(line1_spans);
-
-    // Line 2: Quality delta + Matching + Enrichment
-    let mut line2_spans: Vec<Span> = Vec::new();
-    if let Some(delta) = result.quality_delta.as_ref() {
-        let old_g = delta
-            .old_grade
-            .as_ref()
-            .map_or("?", crate::quality::QualityGrade::letter);
-        let new_g = delta
-            .new_grade
-            .as_ref()
-            .map_or("?", crate::quality::QualityGrade::letter);
-        let delta_str = if delta.overall_score_delta > 0.5 {
-            format!(" (+{:.1})", delta.overall_score_delta)
-        } else if delta.overall_score_delta < -0.5 {
-            format!(" ({:.1})", delta.overall_score_delta)
-        } else {
-            " (unchanged)".to_string()
-        };
-        line2_spans.push(Span::raw("Quality: "));
-        line2_spans.push(Span::styled(
-            format!("{old_g} \u{2192} {new_g}"),
-            Style::default().fg(scheme.text).bold(),
-        ));
-        line2_spans.push(Span::styled(delta_str, Style::default().fg(scheme.muted)));
-    }
-    if let Some(metrics) = result.match_metrics.as_ref() {
-        if !line2_spans.is_empty() {
-            line2_spans.push(Span::raw("  \u{2502}  "));
-        }
-        line2_spans.push(Span::raw("Matching: "));
-        line2_spans.push(Span::styled(
-            format!(
-                "{} exact, {} fuzzy",
-                metrics.exact_matches, metrics.fuzzy_matches
-            ),
-            Style::default().fg(scheme.text),
-        ));
-        if metrics.avg_match_score > 0.0 {
-            line2_spans.push(Span::styled(
-                format!("  Avg: {:.2}", metrics.avg_match_score),
-                Style::default().fg(scheme.muted),
-            ));
-        }
-    }
-    #[cfg(feature = "enrichment")]
-    {
-        if ctx.enrichment_stats_old.is_some() || ctx.enrichment_stats_new.is_some() {
-            line2_spans.push(Span::styled(
-                "  [enriched]",
-                Style::default().fg(scheme.added),
-            ));
-        }
-    }
-    let line2 = Line::from(line2_spans);
-
-    // Line 3: SBOM metadata (format, component counts, dependency counts)
-    let mut line3_spans: Vec<Span> = Vec::new();
-    if let Some(old) = ctx.old_sbom {
-        let fmt = &old.document.format;
-        line3_spans.push(Span::styled(
-            format!("{fmt} {}", old.document.format_version),
-            Style::default().fg(scheme.accent),
-        ));
-    }
-    if let (Some(old), Some(new)) = (ctx.old_sbom, ctx.new_sbom) {
-        line3_spans.push(Span::raw("  \u{2502}  ")); // │ separator
-        line3_spans.push(Span::styled(
-            format!(
-                "Old: {} comps, {} deps",
-                old.component_count(),
-                old.edges.len()
-            ),
-            Style::default().fg(scheme.muted),
-        ));
-        line3_spans.push(Span::raw("  "));
-        line3_spans.push(Span::styled(
-            format!(
-                "New: {} comps, {} deps",
-                new.component_count(),
-                new.edges.len()
-            ),
-            Style::default().fg(scheme.text),
-        ));
-    }
-    let line3 = Line::from(line3_spans);
-
-    let block = Block::default()
-        .title(" Risk Assessment ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(risk_color));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height >= 1 {
-        frame
-            .buffer_mut()
-            .set_line(inner.x, inner.y, &line1, inner.width);
-    }
-    if inner.height >= 2 {
-        frame
-            .buffer_mut()
-            .set_line(inner.x, inner.y + 1, &line2, inner.width);
-    }
-    if inner.height >= 3 {
-        frame
-            .buffer_mut()
-            .set_line(inner.x, inner.y + 2, &line3, inner.width);
-    }
-}
-
-/// Key findings section (kept for reference, logic merged into render_summary_header).
-#[allow(dead_code)]
-fn render_key_findings(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-    let scheme = colors();
-    let Some(result) = ctx.diff_result.as_ref() else {
-        return;
-    };
-
-    let mut findings: Vec<Line> = Vec::new();
-
-    // 1. Critical vulnerabilities
-    for vuln in result
-        .vulnerabilities
-        .introduced
-        .iter()
-        .filter(|v| v.severity == "Critical")
-        .take(2)
-    {
-        findings.push(Line::from(vec![
-            Span::styled(
-                " \u{26a0} CRITICAL ",
-                Style::default().fg(Color::Black).bg(scheme.critical).bold(),
-            ),
-            Span::styled(
-                format!(" {} in {}", vuln.id, vuln.component_name),
-                Style::default().fg(scheme.critical),
-            ),
-        ]));
-    }
-
-    // 2. Major version bumps
-    for comp in result
-        .components
-        .modified
-        .iter()
-        .filter(|c| {
-            matches!(
-                version_change_level(c.old_version.as_deref(), c.new_version.as_deref()),
-                VersionLevel::Major
-            )
-        })
-        .take(3)
-    {
-        let old_v = comp.old_version.as_deref().unwrap_or("?");
-        let new_v = comp.new_version.as_deref().unwrap_or("?");
-        findings.push(Line::from(vec![
-            Span::styled(
-                " \u{25b2} MAJOR ",
-                Style::default().fg(Color::Black).bg(scheme.warning).bold(),
-            ),
-            Span::raw(format!(" {} ", comp.name)),
-            Span::styled(old_v.to_string(), Style::default().fg(scheme.muted)),
-            Span::styled(" \u{2192} ", Style::default().fg(scheme.modified)),
-            Span::styled(
-                new_v.to_string(),
-                Style::default().fg(scheme.modified).bold(),
-            ),
-        ]));
-    }
-
-    // 3. License conflicts
-    if !result.licenses.conflicts.is_empty() {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{26a0} ", Style::default().fg(scheme.critical)),
-            Span::styled(
-                format!(
-                    "{} license conflicts detected",
-                    result.licenses.conflicts.len()
-                ),
-                Style::default().fg(scheme.critical),
-            ),
-        ]));
-    }
-
-    // 4. Quality regressions
-    if let Some(delta) = &result.quality_delta
-        && !delta.regressions.is_empty()
-    {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{25bc} ", Style::default().fg(scheme.warning)),
-            Span::styled(
-                format!("Quality regressions: {}", delta.regressions.join(", ")),
-                Style::default().fg(scheme.warning),
-            ),
-        ]));
-    }
-
-    // 5. Added components summary
-    let added_count = result.components.added.len();
-    if added_count > 0 {
-        let names: Vec<&str> = result
-            .components
-            .added
-            .iter()
-            .take(4)
-            .map(|c| c.name.as_str())
-            .collect();
-        let suffix = if added_count > 4 {
-            format!(", +{} more", added_count - 4)
-        } else {
-            String::new()
-        };
-        findings.push(Line::from(vec![
-            Span::styled(" + ", Style::default().fg(scheme.added).bold()),
-            Span::styled(
-                format!("{added_count} added"),
-                Style::default().fg(scheme.added),
-            ),
-            Span::styled(
-                format!(" ({}{})", names.join(", "), suffix),
-                Style::default().fg(scheme.muted),
-            ),
-        ]));
-    }
-
-    // 6. Removed components summary
-    let removed_count = result.components.removed.len();
-    if removed_count > 0 {
-        let names: Vec<&str> = result
-            .components
-            .removed
-            .iter()
-            .take(4)
-            .map(|c| c.name.as_str())
-            .collect();
-        let suffix = if removed_count > 4 {
-            format!(", +{} more", removed_count - 4)
-        } else {
-            String::new()
-        };
-        findings.push(Line::from(vec![
-            Span::styled(" - ", Style::default().fg(scheme.removed).bold()),
-            Span::styled(
-                format!("{removed_count} removed"),
-                Style::default().fg(scheme.removed),
-            ),
-            Span::styled(
-                format!(" ({}{})", names.join(", "), suffix),
-                Style::default().fg(scheme.muted),
-            ),
-        ]));
-    }
-
-    // 7. Vulnerability status
-    let new_vulns = result.vulnerabilities.introduced.len();
-    if new_vulns > 0 {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{26a0} ", Style::default().fg(scheme.critical)),
-            Span::styled(
-                format!("{new_vulns} new vulnerabilities introduced"),
-                Style::default().fg(scheme.critical),
-            ),
-        ]));
-    } else {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{2713} ", Style::default().fg(scheme.added)),
-            Span::styled("No new vulnerabilities", Style::default().fg(scheme.added)),
-        ]));
-    }
-
-    let block = Block::default()
-        .title(" Key Findings ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(scheme.border));
-    let paragraph = Paragraph::new(findings).block(block);
     frame.render_widget(paragraph, area);
 }
 
@@ -1623,7 +1317,13 @@ fn metadata_change_lines<'a>(
         let old = change.old_value.as_deref().unwrap_or("\u{2205}");
         let new = change.new_value.as_deref().unwrap_or("\u{2205}");
         lines.push(Line::from(vec![
-            Span::styled(badge, Style::default().fg(Color::Black).bg(color).bold()),
+            Span::styled(
+                badge,
+                Style::default()
+                    .fg(scheme.change_badge_fg())
+                    .bg(color)
+                    .bold(),
+            ),
             Span::raw(" "),
             Span::styled(change.field.clone(), Style::default().fg(color)),
             Span::styled(": ", Style::default().fg(scheme.muted)),
@@ -1989,6 +1689,7 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     frame.render_widget(paragraph, area);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VersionLevel {
     Patch,
     Minor,
@@ -1997,29 +1698,117 @@ enum VersionLevel {
     Unknown,
 }
 
+/// Classify a version change via the diff engine's lenient classifier, which
+/// handles v-prefixes (Go), short versions (`1.2`), 4-segment versions, and
+/// pre-release promotion — strict `semver::Version::parse` classified all of
+/// those as Unknown, silently undercounting major bumps and the Risk level.
 fn version_change_level(old: Option<&str>, new: Option<&str>) -> VersionLevel {
-    match (old, new) {
-        (Some(o), Some(n)) => {
-            if let (Ok(old_v), Ok(new_v)) = (semver::Version::parse(o), semver::Version::parse(n)) {
-                if new_v.major > old_v.major {
-                    VersionLevel::Major
-                } else if new_v.major < old_v.major {
-                    VersionLevel::Downgrade
-                } else if new_v.minor > old_v.minor {
-                    VersionLevel::Minor
-                } else if new_v.minor < old_v.minor {
-                    VersionLevel::Downgrade
-                } else if new_v.patch > old_v.patch {
-                    VersionLevel::Patch
-                } else if new_v.patch < old_v.patch {
-                    VersionLevel::Downgrade
-                } else {
-                    VersionLevel::Unknown
-                }
-            } else {
-                VersionLevel::Unknown
-            }
-        }
+    use crate::diff::VersionChangeType;
+
+    let (Some(o), Some(n)) = (old, new) else {
+        return VersionLevel::Unknown;
+    };
+    match crate::diff::classify_version_strings(o, n) {
+        VersionChangeType::MajorUpgrade => VersionLevel::Major,
+        VersionChangeType::MinorUpgrade => VersionLevel::Minor,
+        VersionChangeType::PatchUpgrade => VersionLevel::Patch,
+        VersionChangeType::Downgrade => VersionLevel::Downgrade,
         _ => VersionLevel::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod version_level_tests {
+    use super::*;
+
+    /// Regression: non-strict-semver ecosystems (Go v-prefix, 2-component,
+    /// 4-segment, pre-release promotion) previously all classified as Unknown,
+    /// undercounting major bumps and the Summary Risk level.
+    #[test]
+    fn version_level_classifies_non_semver_ecosystems() {
+        // Go-style v-prefix.
+        assert_eq!(
+            version_change_level(Some("v1.2.3"), Some("v2.0.0")),
+            VersionLevel::Major
+        );
+        // Two-component version.
+        assert_eq!(
+            version_change_level(Some("1.2"), Some("1.3")),
+            VersionLevel::Minor
+        );
+        // Four-segment version must not fall to Unknown.
+        assert_ne!(
+            version_change_level(Some("1.2.3.4"), Some("1.2.3.5")),
+            VersionLevel::Unknown
+        );
+        // Downgrade detection.
+        assert_eq!(
+            version_change_level(Some("2.0.0"), Some("1.9.0")),
+            VersionLevel::Downgrade
+        );
+        // Pre-release promotion within the same triple is a patch-level step.
+        assert_eq!(
+            version_change_level(Some("1.0.0-alpha"), Some("1.0.0")),
+            VersionLevel::Patch
+        );
+        // Honestly unknown: non-numeric schemes and missing versions.
+        assert_eq!(
+            version_change_level(Some("abc"), Some("def")),
+            VersionLevel::Unknown
+        );
+        assert_eq!(
+            version_change_level(None, Some("1.0.0")),
+            VersionLevel::Unknown
+        );
+    }
+
+    /// Go pseudo-versions must classify deterministically without panicking.
+    #[test]
+    fn version_level_go_pseudo_version() {
+        let level = version_change_level(
+            Some("v0.0.0-20200101000000-abcdef123456"),
+            Some("v0.0.0-20210101000000-fedcba654321"),
+        );
+        assert_eq!(
+            level,
+            VersionLevel::Patch,
+            "pseudo-version timestamp bump orders as a pre-release (patch) step"
+        );
+    }
+}
+
+#[cfg(test)]
+mod risk_badge_tests {
+    use super::*;
+
+    /// Badge foreground must follow the theme convention: light text on the
+    /// dark critical/error badge backgrounds, dark text on bright ones
+    /// (previously hardcoded `Color::Black` everywhere).
+    #[test]
+    fn compute_risk_level_badge_fg() {
+        let scheme = crate::tui::theme::ColorScheme::dark();
+
+        // Critical risk: one Critical introduced vulnerability.
+        let mut critical = crate::diff::DiffResult::default();
+        let vref = crate::model::VulnerabilityRef::new(
+            "CVE-2024-0001".to_string(),
+            crate::model::VulnerabilitySource::Osv,
+        );
+        let comp =
+            crate::model::Component::new("liba".to_string(), "pkg:npm/liba@1.0.0".to_string());
+        let mut detail = crate::diff::VulnerabilityDetail::from_ref(&vref, &comp);
+        detail.severity = "Critical".to_string();
+        critical.vulnerabilities.introduced.push(detail);
+
+        let (label, _, badge_fg) = compute_risk_level(&critical, &scheme);
+        assert_eq!(label, "Critical Risk");
+        assert_eq!(badge_fg, scheme.badge_fg_light);
+
+        // Low risk: additions only.
+        let mut low = crate::diff::DiffResult::default();
+        low.summary.components_added = 1;
+        let (label, _, badge_fg) = compute_risk_level(&low, &scheme);
+        assert_eq!(label, "Low Risk");
+        assert_eq!(badge_fg, scheme.badge_fg_dark);
     }
 }

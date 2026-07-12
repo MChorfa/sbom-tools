@@ -54,6 +54,40 @@ fn render_tree_panel(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         format!(" Components ({}) ", app.stats.component_count)
     };
 
+    // Zero matches previously rendered a silent blank panel; explain why it's
+    // empty and how to recover (mirrors the dependency tree's empty state).
+    if app.cached_tree_nodes.is_empty() {
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+        let inner = block.inner(chunks[1]);
+        frame.render_widget(block, chunks[1]);
+
+        let (message, hint) = if !app.tree_search_query.is_empty() {
+            (
+                format!("No components match \"{}\"", app.tree_search_query),
+                "Press [/] to edit search or [Esc] to clear",
+            )
+        } else if !matches!(app.tree_filter, TreeFilter::All) {
+            (
+                format!("No components match filter '{}'", app.tree_filter.label()),
+                "Press [f] to change filter",
+            )
+        } else {
+            ("No components in this SBOM".to_string(), "")
+        };
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            inner,
+            "\u{2205}",
+            &message,
+            if hint.is_empty() { None } else { Some(hint) },
+            None,
+        );
+        return;
+    }
+
     let tree = Tree::new(&app.cached_tree_nodes)
         .block(
             Block::default()

@@ -331,12 +331,26 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
 
     // Global keys
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => {
+        KeyCode::Char('q') => {
             // Save last active tab before quitting
             let mut prefs = TuiPreferences::load();
             prefs.last_view_tab = Some(app.active_tab.as_str().to_string());
             let _ = prefs.save();
             app.should_quit = true;
+        }
+        // Esc backs out one level instead of quitting the app (overlays and
+        // ACTIVE local searches already consumed Esc earlier in this
+        // function, so this arm only fires at top level).
+        KeyCode::Esc => {
+            // First rung: clear an APPLIED (Enter-confirmed) tree search, so
+            // the tree empty-state's "[Esc] to clear" promise stays truthful.
+            if app.active_tab == ViewTab::Tree && !app.tree_search_query.is_empty() {
+                app.clear_tree_search();
+            } else if app.focus_panel == super::app::FocusPanel::Right {
+                app.focus_panel = super::app::FocusPanel::Left;
+            } else if app.navigation_ctx.has_history() {
+                app.go_back();
+            }
         }
         KeyCode::Char('?') => {
             app.toggle_help();

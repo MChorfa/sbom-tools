@@ -1,0 +1,28 @@
+---
+source: src/tui/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
+
+ [1] ┌──────────────────── Keyboard Shortcuts (Diff) ─────────────────────┐│  [5
+     │Global                                                              │
+─────│                                                                    │─────
+┌ Sum│q  Quit application                                                 │────┐
+│ Hig│?  Toggle help                                                      │    │
+└────│e  Export dialog                                                    │────┘
+┌ Com│l  Color legend                                                     │────┐
+│ + A│T  Toggle theme                                                     │    │
+└────│/  Search                                                           │────┘
+┌ Mat│K  Keyboard shortcuts                                               │────┐
+└────│V  View switcher (multi-views)                                      │────┘
+┌ Cha│D  Component deep dive                                              │────┐
+│██12│y/Ctrl+C  Copy selected to clipboard                                │elta│
+└────│Shift+drag  Select text with mouse                                  │────┘
+┌ All│b/Backspace  Navigate back                                          │────┐
+│── M│                                                                    │    │
+│ ~ M│Navigation                                                          │    │
+│ ~ M│                                                                    │    │
+│ ~ a│j/k  Up/Down                                                        │    │
+└────└────────────────────────────────────────────────────────────────────┘────┘
+ Components: 15 │ Vulns: 0 │ Score: 53.5
+                  Tab switch  / search  e export  ? help  q quit

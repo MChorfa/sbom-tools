@@ -59,7 +59,7 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         // Navigation
-        KeyCode::Tab | KeyCode::Char('p') => app.tabs.timeline.toggle_panel(),
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => app.tabs.timeline.toggle_panel(),
         KeyCode::Up | KeyCode::Char('k') => app.tabs.timeline.select_prev(),
         KeyCode::Down | KeyCode::Char('j') => app.tabs.timeline.select_next(),
 
@@ -82,6 +82,20 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
         }
         KeyCode::Char('f') => {
             app.tabs.timeline.toggle_component_filter();
+            // The filter changes how many components are visible; keep the
+            // navigation bound and the selection in sync with the filtered
+            // list (mirrors the multi-diff 'f' resync).
+            if let Some(result) = app.data.timeline_result.as_ref() {
+                let visible = crate::tui::views::filtered_evolution_entries(
+                    result,
+                    app.tabs.timeline.component_filter,
+                )
+                .len();
+                app.tabs.timeline.total_components = visible;
+                if app.tabs.timeline.selected_component >= visible {
+                    app.tabs.timeline.selected_component = visible.saturating_sub(1);
+                }
+            }
             app.set_status_message(format!(
                 "Filter: {}",
                 app.tabs.timeline.component_filter.label()
@@ -104,9 +118,15 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
             app.set_status_message(status.to_string());
         }
 
-        // Component history detail
+        // Component history detail. Guarded: with a filter yielding zero
+        // entries the modal would clear its rect and render nothing — an
+        // invisible overlay that swallows every key except Esc/q.
         KeyCode::Enter | KeyCode::Char(' ') => {
-            app.tabs.timeline.toggle_component_history();
+            if app.tabs.timeline.total_components > 0 {
+                app.tabs.timeline.toggle_component_history();
+            } else {
+                app.set_status_message("No components match the current filter");
+            }
         }
 
         // Jump to version

@@ -6,6 +6,7 @@ use ratatui::{
     widgets::{Block, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget},
 };
 use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
 /// A node in the component tree.
 #[derive(Debug, Clone)]
@@ -443,7 +444,11 @@ impl StatefulWidget for Tree<'_> {
                     }
                 }
             } else {
-                x += self.highlight_symbol.len() as u16;
+                // Advance by display width, not byte length: the default
+                // "▶ " symbol is 4 bytes but 2 columns, so byte-length
+                // indenting shifted every non-selected row 2 columns right
+                // of the selected one (visible jitter when moving the cursor).
+                x += UnicodeWidthStr::width(self.highlight_symbol) as u16;
             }
 
             // Tree prefix
@@ -481,9 +486,10 @@ impl StatefulWidget for Tree<'_> {
             let depth_color = if item.is_group {
                 scheme.primary
             } else {
+                // Depth 2+ merges into text_muted: a dedicated light-gray RGB
+                // step was near-invisible on the light theme's background.
                 match item.depth {
                     0 | 1 => scheme.text,
-                    2 => Color::Rgb(180, 180, 180),
                     _ => scheme.text_muted,
                 }
             };
@@ -684,5 +690,58 @@ mod tests {
         assert_eq!(detect_component_type("firmware.img"), "bin");
         assert_eq!(detect_component_type("rootfs.squashfs"), "fs");
         assert_eq!(detect_component_type("random.unknown"), "unk");
+    }
+}
+
+#[cfg(test)]
+mod indent_tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::StatefulWidget;
+
+    /// Regression for the byte-length indent bug: the expand indicator must
+    /// sit in the same column on selected and non-selected rows ("▶ " is
+    /// 4 bytes but 2 display columns, so non-selected rows drifted 2 right).
+    #[test]
+    fn unselected_rows_align_with_selected_row() {
+        crate::tui::test_support::pin_theme();
+        let group = |id: &str| TreeNode::Group {
+            id: id.to_string(),
+            label: id.to_string(),
+            children: Vec::new(),
+            item_count: 1,
+            vuln_count: 0,
+        };
+        let roots = [group("alpha"), group("beta")];
+        let mut state = TreeState::new();
+        state.selected = 0;
+
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::empty(area);
+        Tree::new(&roots).render(area, &mut buf, &mut state);
+
+        // Compare the column where each row's LABEL starts (the selected row
+        // also paints the highlight arrow at column 0, so scanning for the
+        // first arrow glyph would find the highlight, not the tree content).
+        let row_text = |y: u16| -> String {
+            (0..area.width)
+                .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                .collect()
+        };
+        let label_col = |y: u16, label: &str| -> usize {
+            let text = row_text(y);
+            let byte_idx = text
+                .find(label)
+                .unwrap_or_else(|| panic!("label {label:?} not on row {y}: {text:?}"));
+            // Convert the byte offset to a display column ("▶" is 3 bytes but
+            // 1 column — the same trap the render fix closes).
+            text[..byte_idx].chars().count()
+        };
+        assert_eq!(
+            label_col(0, "alpha"),
+            label_col(1, "beta"),
+            "selected (row 0) and non-selected (row 1) labels must align"
+        );
     }
 }

@@ -18,6 +18,7 @@ mod vulnerabilities;
 pub use components::render_components;
 pub use dependencies::render_dependencies;
 pub(crate) use dependencies::update_graph_cache;
+pub(crate) use diff_compliance::nth_diff_violation;
 pub use diff_compliance::{
     diff_compliance_violation_count, render_diff_compliance, resolve_selected_group_element,
 };
@@ -35,6 +36,7 @@ pub use sidebyside::render_sidebyside;
 pub(crate) use sidebyside::{build_aligned_rows, build_unified_entries};
 pub use source::render_source;
 pub use summary::render_summary;
+pub(crate) use timeline::filtered_evolution_entries;
 pub use timeline::{TimelinePanel, render_timeline};
 pub(crate) use vulnerabilities::count_grouped_items;
 pub use vulnerabilities::render_vulnerabilities;

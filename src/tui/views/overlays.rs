@@ -510,7 +510,7 @@ fn get_shortcuts_for_context(
                 item("h/l", "Left/Right"),
                 item("g/G", "First/Last"),
                 item("PgUp/PgDn", "Page up/down"),
-                item("Tab", "Next panel/tab"),
+                item("Tab", "Next tab"),
                 (jump_hint, "Jump to tab".to_string()),
             ],
         },

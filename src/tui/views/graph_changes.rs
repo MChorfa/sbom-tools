@@ -219,14 +219,23 @@ fn render_changes_table(
     let inner = block.inner(table_area);
     frame.render_widget(block, table_area);
 
+    // At narrow widths the Min(30) Details column collapses to zero and
+    // squeezes Component into unreadability; drop Details entirely below the
+    // width where both columns can render (fixed 22 + 3 spacing + 20 + 18
+    // minimums). The full detail remains available in the detail panel.
+    let show_details = inner.width >= 60;
+
     // Header
-    let header = Row::new(vec![
+    let mut header_cells = vec![
         Cell::from("Impact").style(Style::default().fg(colors().text_muted).bold()),
         Cell::from("Type").style(Style::default().fg(colors().text_muted).bold()),
         Cell::from("Component").style(Style::default().fg(colors().text_muted).bold()),
-        Cell::from("Details").style(Style::default().fg(colors().text_muted).bold()),
-    ])
-    .height(1);
+    ];
+    if show_details {
+        header_cells
+            .push(Cell::from("Details").style(Style::default().fg(colors().text_muted).bold()));
+    }
+    let header = Row::new(header_cells).height(1);
 
     // Build rows
     let rows: Vec<Row> = changes
@@ -239,20 +248,31 @@ fn render_changes_table(
                 30,
             ))
             .style(Style::default().fg(colors().text));
-            let details_cell = details_cell(&change.change);
 
-            Row::new(vec![impact_cell, type_cell, component_cell, details_cell])
+            let mut cells = vec![impact_cell, type_cell, component_cell];
+            if show_details {
+                cells.push(details_cell(&change.change));
+            }
+            Row::new(cells)
         })
         .collect();
 
-    let widths = [
-        Constraint::Length(10),
-        Constraint::Length(12),
-        Constraint::Length(30),
-        Constraint::Min(30),
-    ];
+    let widths: &[Constraint] = if show_details {
+        &[
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Min(20),
+            Constraint::Min(18),
+        ]
+    } else {
+        &[
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Min(16),
+        ]
+    };
 
-    let table = Table::new(rows, widths)
+    let table = Table::new(rows, widths.iter().copied())
         .header(header)
         .row_highlight_style(Style::default().bg(colors().selection));
 

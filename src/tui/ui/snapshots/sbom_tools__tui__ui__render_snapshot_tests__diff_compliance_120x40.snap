@@ -11,15 +11,15 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
  ✓ Min  │  ✗ Std  │  ✗ NTIA  │  ✗ CRA-1  │  ✗ CRA-2  │  ✗ FDA  │  ✗ SSDF  │  ✗ EO14028  │  ✗ CNSA2  │  ✗ PQC  │  ✗ BSI
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ EU CRA Phase 1 (2027): FAIL 54% → FAIL 54%  unchanged ───────────────────────────────────────────────────────────────┐
-│Errors: 3  Warnings: 14  Info: 26  │  New: 13  Resolved: 13                                                           │
+│Errors: 3  Warnings: 14  Info: 26  │  New: 12  Resolved: 12                                                           │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Compliance Diff Overview ────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                                      │
 │  Violation Diff:                                                                                                     │
 │                                                                                                                      │
-│      + 13 new violations introduced                                                                                  │
-│      - 13 violations resolved                                                                                        │
-│      = 30 violations persistent                                                                                      │
+│      + 12 new violations introduced                                                                                  │
+│      - 12 violations resolved                                                                                        │
+│      = 31 violations persistent                                                                                      │
 │                                                                                                                      │
 │    Error count:  3 → 3  (0)                                                                                          │
 │                                                                                                                      │

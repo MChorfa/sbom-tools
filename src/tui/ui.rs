@@ -123,6 +123,14 @@ fn render(frame: &mut Frame, app: &mut App) {
     // Render tabs with shortcuts
     render_tabs(frame, chunks[1], app);
 
+    // Record the side-by-side panel viewport height before the read-only
+    // RenderContext is built: content area minus context bar (2) and panel
+    // borders (2). The scroll clamp keeps the selected row inside this window.
+    if app.active_tab == TabKind::SideBySide {
+        let rows = chunks[2].height.saturating_sub(4) as usize;
+        app.side_by_side_state_mut().set_viewport_rows(rows);
+    }
+
     // Render content based on active tab.
     // Migrated tabs use RenderContext (read-only); unmigrated tabs still use &mut App.
     match app.active_tab {
@@ -185,6 +193,13 @@ fn render(frame: &mut Frame, app: &mut App) {
     if app.overlays.threshold_tuning.visible {
         super::views::render_threshold_tuning(frame, &app.overlays.threshold_tuning);
     }
+
+    // Cross-view overlays (K shortcuts, D deep-dive). The K/D handlers set
+    // these visible in Diff/View mode too, but only the multi-mode render
+    // branches painted them — leaving an invisible modal swallowing input.
+    // Safe unconditionally: each inner renderer self-gates on .visible, and
+    // the view switcher's V key is mode-gated to Multi/Timeline/Matrix.
+    render_cross_view_overlays(frame, app);
 }
 
 /// Build a human-readable label for an SBOM: "name@version" or just "name".
@@ -710,8 +725,12 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, tab_count: usize) {
             Span::styled("Toggle this help", Style::default().fg(colors().text)),
         ]),
         Line::from(vec![
-            Span::styled("  q / Esc        ", Style::default().fg(colors().accent)),
-            Span::styled("Quit / Close overlay", Style::default().fg(colors().text)),
+            Span::styled("  q              ", Style::default().fg(colors().accent)),
+            Span::styled("Quit", Style::default().fg(colors().text)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Esc            ", Style::default().fg(colors().accent)),
+            Span::styled("Close overlay / cancel", Style::default().fg(colors().text)),
         ]),
         Line::from(""),
         Line::styled(

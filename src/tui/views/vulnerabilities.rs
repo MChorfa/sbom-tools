@@ -713,9 +713,24 @@ fn render_detail_panel(
                     source: String::new(),
                     remediation: None,
                     fixed_version: None,
-                    is_kev: false,
+                    // A collapsed component group header carries the KEV /
+                    // ransomware badges when any member vulnerability does
+                    // (a RANSOMWARE badge without KEV would be contradictory).
+                    is_kev: matches!(
+                        vuln_data,
+                        VulnListData::Diff(items)
+                            if items.iter().any(|it| {
+                                it.vuln.component_name == *name && it.vuln.is_kev
+                            })
+                    ),
                     epss_score: None,
-                    is_ransomware: false,
+                    is_ransomware: matches!(
+                        vuln_data,
+                        VulnListData::Diff(items)
+                            if items.iter().any(|it| {
+                                it.vuln.component_name == *name && it.vuln.is_ransomware
+                            })
+                    ),
                     affected_versions: Vec::new(),
                     cvss_vector: None,
                     published_age_days: None,
@@ -1090,7 +1105,7 @@ fn get_diff_vuln_at(
             fixed_version: None,
             is_kev: vuln.is_kev,
             epss_score: vuln.epss_score,
-            is_ransomware: false, // Not available in diff mode
+            is_ransomware: vuln.is_ransomware,
             affected_versions: Vec::new(),
             cvss_vector: None,
             published_age_days: vuln.days_since_published,

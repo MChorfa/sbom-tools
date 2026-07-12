@@ -16,9 +16,9 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │                                                                              │
 │  Violation Diff:                                                             │
 │                                                                              │
-│      + 13 new violations introduced                                          │
-│      - 13 violations resolved                                                │
-│      = 30 violations persistent                                              │
+│      + 12 new violations introduced                                          │
+│      - 12 violations resolved                                                │
+│      = 31 violations persistent                                              │
 │                                                                              │
 │    Error count:  3 → 3  (0)                                                  │
 └──────────────────────────────────────────────────────────────────────────────┘

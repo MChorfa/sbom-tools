@@ -1636,6 +1636,44 @@ mod tests {
         );
     }
 
+    /// `from_ref` must carry the KEV ransomware-campaign flag across the
+    /// diff boundary (it was previously dropped, leaving the diff-mode
+    /// RANSOMWARE badge dead code).
+    #[test]
+    fn from_ref_copies_ransomware_flag() {
+        let mut vuln = VulnerabilityRef::new("CVE-2024-3333".to_string(), VulnerabilitySource::Osv);
+        vuln.is_kev = true;
+        let mut kev = crate::model::KevInfo::new(
+            chrono::Utc::now(),
+            chrono::Utc::now() + chrono::Duration::days(30),
+            "patch".to_string(),
+        );
+        kev.known_ransomware_use = true;
+        vuln.kev_info = Some(kev);
+
+        let detail = crate::diff::VulnerabilityDetail::from_ref(&vuln, &rich_comp("liba", "1.0.0"));
+        assert!(
+            detail.is_ransomware,
+            "ransomware flag must survive from_ref"
+        );
+
+        // Negative case: KEV entry present but NOT flagged for ransomware use.
+        let mut kev_only =
+            VulnerabilityRef::new("CVE-2024-4444".to_string(), VulnerabilitySource::Osv);
+        kev_only.is_kev = true;
+        kev_only.kev_info = Some(crate::model::KevInfo::new(
+            chrono::Utc::now(),
+            chrono::Utc::now() + chrono::Duration::days(30),
+            "patch".to_string(),
+        ));
+        let plain =
+            crate::diff::VulnerabilityDetail::from_ref(&kev_only, &rich_comp("libb", "1.0.0"));
+        assert!(
+            !plain.is_ransomware,
+            "KEV without known ransomware use must not set the flag"
+        );
+    }
+
     #[test]
     fn component_hash_distinguishes_field_boundaries() {
         // Dropped license "MIT" + gained supplier "MIT" used to collide.

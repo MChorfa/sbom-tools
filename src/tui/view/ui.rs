@@ -159,7 +159,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &ViewApp) {
     );
 
     let profile_color = if app.bom_profile == crate::model::BomProfile::Cbom {
-        Color::Cyan
+        colors().primary
     } else {
         colors().text_muted
     };
@@ -235,11 +235,11 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
         let metrics = crate::quality::CryptographyMetrics::from_sbom(&app.sbom);
         let readiness = metrics.quantum_readiness_score();
         let q_color = if readiness >= 80.0 {
-            Color::Green
+            colors().success
         } else if readiness >= 40.0 {
-            Color::Yellow
+            colors().warning
         } else {
-            Color::Red
+            colors().error
         };
         let mut s = vec![
             Span::styled(" Algo: ", Style::default().fg(colors().text_muted)),
@@ -270,7 +270,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
             s.push(Span::styled(" │ ", Style::default().fg(colors().muted)));
             s.push(Span::styled(
                 format!("Weak: {}", metrics.weak_algorithm_count),
-                Style::default().fg(Color::Red).bold(),
+                Style::default().fg(colors().critical).bold(),
             ));
         }
         s

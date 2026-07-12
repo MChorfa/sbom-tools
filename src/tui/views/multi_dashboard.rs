@@ -505,12 +505,21 @@ fn render_variable_components(
     state: &MultiDiffState,
 ) {
     let scheme = colors();
+    // Window around the selection sized to the REAL pane height (borders +
+    // table header + spacing = 4 rows of chrome): with the selection bounds
+    // now populated, the drill-down cursor can travel past the fold and must
+    // stay visible at any terminal size.
+    let visible_rows = (area.height.saturating_sub(4) as usize).max(1);
+    let window_start = state
+        .selected_variable_component
+        .saturating_sub(visible_rows - 1);
     let rows: Vec<Row> = result
         .summary
         .variable_components
         .iter()
         .enumerate()
-        .take(15) // Limit to first 15
+        .skip(window_start)
+        .take(visible_rows)
         .map(|(i, vc)| {
             let is_selected = i == state.selected_variable_component;
             let base_style = if is_selected {

@@ -11,16 +11,16 @@ Group:  Ecosystem   Filter:  All   │  [/] search  [g] group  [f] f┌ npm ─�
                                                                   │npm                                                 │
 ┌ Components (9) ────────────────────────────────────────────────┐│Components: 8                                       │
 │▶ ▼ npm (8)                                                     ││                                                    │
-│    │  ├─ · axios@1.4.0 [npm]                                   ││Vulnerabilities: 0                                  │
-│    │  ├─ · dayjs@1.11.7 [npm]                                  ││Clean           8 █████████████████████████         │
-│    │  ├─ · express@4.18.2 [npm]                                ││                                                    │
-│    │  ├─ · lodash@4.17.21 [npm]                                ││                                                    │
-│    │  ├─ · prisma@4.15.0 [npm]                                 ││                                                    │
-│    │  ├─ · react@18.2.0 [npm]                                  ││                                                    │
-│    │  ├─ · typescript@5.0.4 [npm]                              ││                                                    │
-│    │  └─ · zod@3.21.4 [npm]                                    ││                                                    │
-│    ▼ Unknown (1)                                               ││                                                    │
-│       └─ · acme-webapp@2.0.0                                   ││                                                    │
+│  │  ├─ · axios@1.4.0 [npm]                                     ││Vulnerabilities: 0                                  │
+│  │  ├─ · dayjs@1.11.7 [npm]                                    ││Clean           8 █████████████████████████         │
+│  │  ├─ · express@4.18.2 [npm]                                  ││                                                    │
+│  │  ├─ · lodash@4.17.21 [npm]                                  ││                                                    │
+│  │  ├─ · prisma@4.15.0 [npm]                                   ││                                                    │
+│  │  ├─ · react@18.2.0 [npm]                                    ││                                                    │
+│  │  ├─ · typescript@5.0.4 [npm]                                ││                                                    │
+│  │  └─ · zod@3.21.4 [npm]                                      ││                                                    │
+│  ▼ Unknown (1)                                                 ││                                                    │
+│     └─ · acme-webapp@2.0.0                                     ││                                                    │
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 │                                                                ││                                                    │

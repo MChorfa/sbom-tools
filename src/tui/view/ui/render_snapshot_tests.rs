@@ -374,3 +374,112 @@ fn aibom_tab_click_selects_a_profile_specific_tab() {
     );
     assert_eq!(app.active_tab, target, "click on {needle} @col {col}");
 }
+
+/// Temporary literal-guard for the four files fixed by the CBOM/tree theme
+/// routing: no raw `Color::` variants may be reintroduced (they bypass the
+/// active theme and break light/high-contrast/NO_COLOR rendering).
+///
+/// Scoped to exactly these files — the six dedicated CBOM tab files still
+/// carry raw literals and are fixed by a later theming PR, whose repo-wide CI
+/// grep supersedes this test.
+#[test]
+fn no_raw_color_variants_in_themed_view_chrome() {
+    let sources = [
+        ("view/ui.rs", include_str!("../ui.rs")),
+        (
+            "view/views/overview.rs",
+            include_str!("../views/overview.rs"),
+        ),
+        (
+            "view/views/dependencies.rs",
+            include_str!("../views/dependencies.rs"),
+        ),
+        ("widgets/tree.rs", include_str!("../../widgets/tree.rs")),
+    ];
+    for (name, src) in sources {
+        for (i, line) in src.lines().enumerate() {
+            assert!(
+                !line.contains("Color::"),
+                "{name}:{}: raw Color:: literal bypasses the theme: {line}",
+                i + 1
+            );
+        }
+    }
+}
+
+/// Regression: a GPL-licensed component must count into the copyleft (⚠)
+/// bucket of the Licenses risk summary, not "unknown" (the old string match
+/// compared against "Strong Copyleft", which the category never stringifies
+/// to, so GPL exposure was reported as unknown).
+#[test]
+fn gpl_risk_summary_renders_as_copyleft() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let mut comp = Component::new("readline".to_string(), "readline-ref".to_string())
+        .with_version("8.2".to_string());
+    comp.licenses
+        .add_declared(crate::model::LicenseExpression::new(
+            "GPL-3.0-only".to_string(),
+        ));
+    sbom.components
+        .insert(CanonicalId::from_name_version("readline", None), comp);
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Licenses;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("\u{26a0} 1"),
+        "GPL must count as copyleft in the risk summary:\n{text}"
+    );
+    assert!(
+        text.contains("? 0"),
+        "GPL must not fall into the unknown bucket:\n{text}"
+    );
+}
+
+/// Esc must never quit the viewer: it backs out one level (right panel ->
+/// left, breadcrumb -> back) and otherwise no-ops; only 'q' quits.
+#[test]
+fn esc_never_quits_view_app() {
+    let mut app = demo_view_app(ViewTab::Tree);
+
+    handle_key_event(&mut app, key(KeyCode::Esc));
+    assert!(!app.should_quit, "Esc at top level must not quit");
+
+    // Backing out of the right detail panel.
+    app.focus_panel = crate::tui::view::app::FocusPanel::Right;
+    handle_key_event(&mut app, key(KeyCode::Esc));
+    assert!(!app.should_quit);
+    assert_eq!(
+        app.focus_panel,
+        crate::tui::view::app::FocusPanel::Left,
+        "Esc backs out of the right panel"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::Char('q')));
+    assert!(app.should_quit, "'q' still quits");
+}
+
+/// A filter with zero matches must render an explanatory empty state, not a
+/// silent blank panel. Bookmarked is deterministically empty (the bookmark
+/// set starts empty); Critical would NOT be — the demo fixture carries a
+/// critical vuln on axios@1.4.0.
+#[test]
+fn view_tree_filter_empty_state() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    app.tree_filter = crate::tui::view::app::TreeFilter::Bookmarked;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("No components match filter 'Bookmarked'"),
+        "empty tree must explain the active filter:\n{text}"
+    );
+    assert!(
+        text.contains("[f] to change filter"),
+        "empty state must offer the recovery hint:\n{text}"
+    );
+    insta::assert_snapshot!("view_tree_filter_bookmarked_empty_80x24", text);
+}

@@ -27,26 +27,32 @@ pub enum ComponentListData<'a> {
 /// - `ml_training_dataset` removal = provenance loss (red)
 /// - `dataset_sensitivity` addition = new PII/sensitive tag (warning)
 /// - `crypto_downgrade` / `ml_quantization` = security/precision downgrade
-fn field_change_severity(field: &str, old_is_none: bool) -> Option<(&'static str, Color)> {
+fn field_change_severity(field: &str, old_is_none: bool) -> Option<(&'static str, Color, Color)> {
     let scheme = colors();
+    // Badge foreground follows the theme convention: light text on dark
+    // `error` backgrounds, dark text on bright `warning` ones.
     match field {
         // Training-data removal drops model provenance — the highest-cost ML
         // signal. An addition is benign and renders generically.
-        "ml_training_dataset" if !old_is_none => Some(("PROVENANCE LOSS", scheme.error)),
+        "ml_training_dataset" if !old_is_none => {
+            Some(("PROVENANCE LOSS", scheme.error, scheme.badge_fg_light))
+        }
         // A dataset newly gaining a sensitivity classification (e.g. `pii`) is a
         // data-governance escalation; losing one renders generically.
-        "dataset_sensitivity" if old_is_none => Some(("PII", scheme.warning)),
+        "dataset_sensitivity" if old_is_none => Some(("PII", scheme.warning, scheme.badge_fg_dark)),
         // Explicit classical-security-bit downgrade detected by the diff engine.
-        "crypto_downgrade" => Some(("DOWNGRADE", scheme.error)),
+        "crypto_downgrade" => Some(("DOWNGRADE", scheme.error, scheme.badge_fg_light)),
         // Quantization changes can reduce model precision; quantum-level changes
         // alter post-quantum posture. Flag both as downgrades to draw the eye.
-        "ml_quantization" | "crypto_quantum_level" => Some(("DOWNGRADE", scheme.warning)),
+        "ml_quantization" | "crypto_quantum_level" => {
+            Some(("DOWNGRADE", scheme.warning, scheme.badge_fg_dark))
+        }
         // Algorithm / protocol / key-state churn is security-relevant.
         "crypto_algorithm"
         | "crypto_protocol_version"
         | "crypto_key_state"
         | "crypto_cert_expiry"
-        | "crypto_asset_type" => Some(("CRYPTO", scheme.warning)),
+        | "crypto_asset_type" => Some(("CRYPTO", scheme.warning, scheme.badge_fg_dark)),
         _ => None,
     }
 }
@@ -630,12 +636,12 @@ fn render_diff_detail(
                 let scheme = colors();
                 let mut field_line =
                     vec![Span::styled("  • ", Style::default().fg(scheme.text_muted))];
-                let field_color = if let Some((badge, color)) =
+                let field_color = if let Some((badge, color, badge_fg)) =
                     field_change_severity(&change.field, change.old_value.is_none())
                 {
                     field_line.push(Span::styled(
                         format!(" {badge} "),
-                        Style::default().fg(Color::Black).bg(color).bold(),
+                        Style::default().fg(badge_fg).bg(color).bold(),
                     ));
                     field_line.push(Span::raw(" "));
                     color
@@ -854,4 +860,30 @@ fn get_diff_rows(ctx: &RenderContext, components: &[&ComponentChange]) -> Vec<Ro
             .style(row_style)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod field_badge_tests {
+    use super::*;
+
+    /// Badge foregrounds must come from the theme (light on dark `error`
+    /// backgrounds, dark on bright `warning` ones), not hardcoded black.
+    #[test]
+    fn field_change_severity_returns_theme_badge_fg() {
+        crate::tui::test_support::pin_theme();
+        let scheme = colors();
+
+        let (_, _, fg) = field_change_severity("ml_training_dataset", false)
+            .expect("training-data removal is flagged");
+        assert_eq!(fg, scheme.badge_fg_light, "error-background badge");
+
+        let (_, _, fg) =
+            field_change_severity("dataset_sensitivity", true).expect("new PII tag is flagged");
+        assert_eq!(fg, scheme.badge_fg_dark, "warning-background badge");
+
+        assert!(
+            field_change_severity("description", false).is_none(),
+            "benign fields render generically"
+        );
+    }
 }

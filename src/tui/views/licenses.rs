@@ -159,7 +159,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     // Panel switch hint only in Diff mode
     if is_diff_mode {
-        spans.push(Span::styled(" [Tab]", Style::default().fg(scheme.accent)));
+        spans.push(Span::styled(" [p]", Style::default().fg(scheme.accent)));
         spans.push(Span::styled(
             " panel",
             Style::default().fg(scheme.text_muted),
@@ -944,12 +944,4 @@ fn render_license_details(
         .wrap(ratatui::widgets::Wrap { trim: true });
 
     frame.render_widget(detail, area);
-}
-
-/// Categorize a license by type (legacy function for compatibility)
-pub fn categorize_license(license: &str) -> String {
-    LicenseInfo::from_spdx(license)
-        .category
-        .as_str()
-        .to_string()
 }

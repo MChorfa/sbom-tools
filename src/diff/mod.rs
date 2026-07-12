@@ -61,6 +61,10 @@ pub use multi::{
     VersionChangeType, VersionSpread, VulnerabilityMatrix, VulnerabilitySnapshot,
 };
 pub use multi_engine::MultiDiffEngine;
+// Only consumer is the TUI Summary tab; gate so `--no-default-features`
+// builds don't carry an unused re-export.
+#[cfg(feature = "tui")]
+pub(crate) use multi_engine::classify_version_strings;
 pub use result::{
     CategoryDelta, ChangeSet, ChangeType, ComponentChange, ComponentLicenseChange,
     ConfidenceInterval, DependencyChange, DependencyChangeType, DependencyGraphChange, DiffResult,
