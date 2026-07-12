@@ -43,11 +43,9 @@ fn default_cache_dir() -> PathBuf {
     namespaced_cache_dir("staleness")
 }
 
-/// Filesystem-safe cache file name for a registry key (e.g. `npm:lodash` →
-/// `npm_lodash.json`).
+/// Collision-free cache file name for a registry key (SHA256 of the key).
 fn cache_filename(key: &str) -> String {
-    let safe_key = key.replace(['/', ':'], "_");
-    format!("{safe_key}.json")
+    crate::enrichment::source::key_to_filename(key)
 }
 
 /// Package metadata from registry
@@ -154,8 +152,9 @@ impl RegistryClient {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
+                let bytes = crate::enrichment::source::read_bounded(resp)
+                    .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+                let json: serde_json::Value = serde_json::from_slice(&bytes)
                     .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
                 let time = json.get("time").and_then(|t| t.as_object());
@@ -217,8 +216,9 @@ impl RegistryClient {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
+                let bytes = crate::enrichment::source::read_bounded(resp)
+                    .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+                let json: serde_json::Value = serde_json::from_slice(&bytes)
                     .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
                 let info = json.get("info");
@@ -299,8 +299,9 @@ impl RegistryClient {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
+                let bytes = crate::enrichment::source::read_bounded(resp)
+                    .map_err(|e| EnrichmentError::ApiError(e.to_string()))?;
+                let json: serde_json::Value = serde_json::from_slice(&bytes)
                     .map_err(|e| EnrichmentError::ParseError(e.to_string()))?;
 
                 let krate = json.get("crate");

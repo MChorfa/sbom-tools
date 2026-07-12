@@ -230,20 +230,74 @@ impl std::fmt::Display for ComponentType {
     }
 }
 
-/// Cryptographic hash
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Where a hash came from — determines whether integrity verification trusts
+/// it as an EXPECTED baseline. Runtime-only, never serialized: a hash parsed
+/// from an SBOM is author-attested (`Authored`); one this tool added during
+/// enrichment (fetched from a registry / served from cache) is `Enriched` and
+/// must NOT be used as the baseline to verify local files against — that
+/// would be circular (the tool checks a file against a hash it fetched from
+/// the same source that could host the file).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HashProvenance {
+    /// Present in the parsed SBOM — author-attested, trusted as a baseline.
+    #[default]
+    Authored,
+    /// Added by this tool's enrichment — informational, not a verify baseline.
+    Enriched,
+}
+
+/// Cryptographic hash.
+///
+/// `PartialEq`/`Eq`/`Hash` intentionally ignore [`provenance`](Self::provenance)
+/// so dedup, content-hashing, and diff identity depend only on the
+/// algorithm+value (provenance is a runtime trust marker, not part of the
+/// hash's identity).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hash {
     /// Hash algorithm
     pub algorithm: HashAlgorithm,
     /// Hash value (hex encoded)
     pub value: String,
+    /// Trust provenance (runtime only — never serialized).
+    #[serde(skip)]
+    pub provenance: HashProvenance,
+}
+
+impl PartialEq for Hash {
+    fn eq(&self, other: &Self) -> bool {
+        self.algorithm == other.algorithm && self.value == other.value
+    }
+}
+
+impl Eq for Hash {}
+
+impl std::hash::Hash for Hash {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.algorithm.hash(state);
+        self.value.hash(state);
+    }
 }
 
 impl Hash {
-    /// Create a new hash
+    /// Create an author-attested hash (parsed from an SBOM).
     #[must_use]
     pub const fn new(algorithm: HashAlgorithm, value: String) -> Self {
-        Self { algorithm, value }
+        Self {
+            algorithm,
+            value,
+            provenance: HashProvenance::Authored,
+        }
+    }
+
+    /// Create an enrichment-sourced hash (fetched from a registry / cache).
+    /// Not trusted as an integrity baseline by `verify`.
+    #[must_use]
+    pub const fn enriched(algorithm: HashAlgorithm, value: String) -> Self {
+        Self {
+            algorithm,
+            value,
+            provenance: HashProvenance::Enriched,
+        }
     }
 }
 

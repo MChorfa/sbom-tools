@@ -165,11 +165,17 @@ fn verify_component(
         file,
     };
 
-    // Only consider hashes we can recompute over a file.
+    // Only consider hashes we can recompute over a file AND that are
+    // author-attested. An enrichment-sourced hash (fetched by this tool from
+    // HuggingFace / served from cache) must NOT be the baseline we verify
+    // local files against — that is circular trust (a poisoned cache or a
+    // config-overridden URL would set the very hash it is checked against).
     let verifiable: Vec<_> = component
         .hashes
         .iter()
-        .filter(|h| is_verifiable(&h.algorithm))
+        .filter(|h| {
+            is_verifiable(&h.algorithm) && h.provenance == crate::model::HashProvenance::Authored
+        })
         .collect();
 
     if verifiable.is_empty() {
@@ -384,6 +390,45 @@ mod tests {
         assert_eq!(report.verified_count, 1);
         assert_eq!(report.components[0].result, ModelVerifyResult::Verified);
         assert!(!report.has_failures());
+    }
+
+    /// An ENRICHED (network/cache-sourced) hash must NOT be used as the verify
+    /// baseline — that would be circular trust. A component with only an
+    /// enriched hash verifies as NoHash even though the blob is present.
+    #[test]
+    fn enriched_hash_is_not_a_verify_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let weights = b"fake model weights";
+        let hex = sha256_hex(weights);
+        let blobs = dir.path().join("blobs");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::write(blobs.join(&hex), weights).unwrap();
+
+        let mut c = Component::new("bert".to_string(), "bert-ref".to_string())
+            .with_version("1.0.0".to_string());
+        c.component_type = ComponentType::MachineLearningModel;
+        // Only an enrichment-sourced hash — not author-attested.
+        c.hashes
+            .push(Hash::enriched(HashAlgorithm::Sha256, hex.clone()));
+
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(c);
+
+        let report = verify_model_dir(&sbom, dir.path());
+        assert_eq!(
+            report.components[0].result,
+            ModelVerifyResult::NoHash,
+            "an enriched hash must not be trusted as a verify baseline"
+        );
+
+        // Sanity: the SAME hash marked Authored DOES verify (proves the file
+        // is present and the only difference is provenance).
+        let mut sbom2 = NormalizedSbom::new(DocumentMetadata::default());
+        sbom2.add_component(model_component("bert", &hex));
+        assert_eq!(
+            verify_model_dir(&sbom2, dir.path()).components[0].result,
+            ModelVerifyResult::Verified
+        );
     }
 
     #[test]
