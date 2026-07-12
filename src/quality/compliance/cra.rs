@@ -360,10 +360,11 @@ impl ComplianceChecker {
                     }
                 }
                 let (severity, threshold_msg) = match (phase_gate, class_gate) {
+                    // Whichever gate produced the stronger severity also
+                    // supplies the message, so the finding states the
+                    // threshold that was actually breached at that severity.
                     (Some(p), Some(c)) => {
-                        // Class message is more specific; keep the stronger
-                        // severity of the two.
-                        if rank(p.0) > rank(c.0) { (p.0, c.1) } else { c }
+                        if rank(p.0) > rank(c.0) { p } else { c }
                     }
                     (Some(p), None) => p,
                     (None, Some(c)) => c,
