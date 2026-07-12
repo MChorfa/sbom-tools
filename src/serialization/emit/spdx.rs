@@ -219,17 +219,24 @@ fn emit_package(component: &Component, spdx_id: &str, report: &mut FidelityRepor
 /// otherwise `NOASSERTION` (a valid SPDX sentinel).
 fn download_location(component: &Component) -> String {
     use crate::model::ExternalRefType;
+    // Prefer an explicit distribution ref — the SPDX parser stores the
+    // package's downloadLocation there, so it round-trips — over the
+    // VCS/homepage fallbacks (a parsed homepage must not displace the
+    // real download location on re-emission).
     component
         .external_refs
         .iter()
         .find(|r| {
             matches!(
                 r.ref_type,
-                ExternalRefType::Vcs
-                    | ExternalRefType::SourceDistribution
-                    | ExternalRefType::BinaryDistribution
-                    | ExternalRefType::Website
+                ExternalRefType::SourceDistribution | ExternalRefType::BinaryDistribution
             )
+        })
+        .or_else(|| {
+            component
+                .external_refs
+                .iter()
+                .find(|r| matches!(r.ref_type, ExternalRefType::Vcs | ExternalRefType::Website))
         })
         .map_or_else(|| "NOASSERTION".to_string(), |r| r.url.clone())
 }
