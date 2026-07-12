@@ -73,6 +73,12 @@ pub struct ViewApp {
     /// Show help overlay
     pub(crate) show_help: bool,
 
+    /// Help overlay scroll offset (rows)
+    pub(crate) help_scroll: u16,
+
+    /// Help overlay scroll ceiling, measured at render time
+    pub(crate) help_max_scroll: u16,
+
     /// Show export dialog
     pub(crate) show_export: bool,
 
@@ -211,6 +217,8 @@ impl ViewApp {
             search_state: SearchState::new(),
             focus_panel: FocusPanel::Left,
             show_help: false,
+            help_scroll: 0,
+            help_max_scroll: 0,
             show_export: false,
             show_legend: false,
             status_message: None,
@@ -434,6 +442,7 @@ impl ViewApp {
         self.search_state.active = true;
         self.search_state.query.clear();
         self.search_state.results.clear();
+        self.search_state.search_error = None;
     }
 
     /// Stop search mode.
@@ -443,22 +452,33 @@ impl ViewApp {
 
     /// Execute search with current query.
     pub fn execute_search(&mut self) {
-        self.search_state.results = self.search(&self.search_state.query.clone());
+        let query = self.search_state.query.clone();
+        if query.len() < 2 {
+            self.search_state.results = Vec::new();
+            self.search_state.selected = 0;
+            return;
+        }
+        // Shared matcher: same substring/regex semantics as diff mode.
+        match crate::tui::app_states::SearchMatcher::build(&query, self.search_state.mode) {
+            Ok(matcher) => {
+                self.search_state.search_error = None;
+                self.search_state.results = self.search(&matcher);
+            }
+            Err(e) => {
+                self.search_state.search_error = Some(e);
+                self.search_state.results = Vec::new();
+            }
+        }
         self.search_state.selected = 0;
     }
 
     /// Search across the SBOM for matching items.
-    fn search(&self, query: &str) -> Vec<SearchResult> {
-        if query.len() < 2 {
-            return Vec::new();
-        }
-
-        let query_lower = query.to_lowercase();
+    fn search(&self, matcher: &crate::tui::app_states::SearchMatcher) -> Vec<SearchResult> {
         let mut results = Vec::new();
 
         // Search components
         for (id, comp) in &self.sbom.components {
-            if comp.name.to_lowercase().contains(&query_lower) {
+            if matcher.is_match(&comp.name) {
                 results.push(SearchResult::Component {
                     id: id.value().to_string(),
                     name: comp.name.clone(),
@@ -466,7 +486,7 @@ impl ViewApp {
                     match_field: "name".to_string(),
                 });
             } else if let Some(purl) = &comp.identifiers.purl
-                && purl.to_lowercase().contains(&query_lower)
+                && matcher.is_match(purl)
             {
                 results.push(SearchResult::Component {
                     id: id.value().to_string(),
@@ -480,7 +500,7 @@ impl ViewApp {
         // Search vulnerabilities
         for (_, comp) in &self.sbom.components {
             for vuln in &comp.vulnerabilities {
-                if vuln.id.to_lowercase().contains(&query_lower) {
+                if matcher.is_match(&vuln.id) {
                     results.push(SearchResult::Vulnerability {
                         id: vuln.id.clone(),
                         component_id: comp.canonical_id.to_string(), // Store ID for navigation
@@ -749,6 +769,8 @@ impl ViewApp {
         if self.show_help {
             self.show_export = false;
             self.show_legend = false;
+            self.help_scroll = 0;
+            self.help_max_scroll = 0;
         }
     }
 
@@ -2929,6 +2951,10 @@ pub(crate) struct SearchState {
     pub query: String,
     pub results: Vec<SearchResult>,
     pub selected: usize,
+    /// Substring or regex (Ctrl+R toggles, same contract as diff mode)
+    pub mode: crate::tui::app_states::SearchMode,
+    /// Error from an invalid regex pattern
+    pub search_error: Option<String>,
 }
 
 impl SearchState {
@@ -2938,6 +2964,8 @@ impl SearchState {
             query: String::new(),
             results: Vec::new(),
             selected: 0,
+            mode: crate::tui::app_states::SearchMode::Substring,
+            search_error: None,
         }
     }
 

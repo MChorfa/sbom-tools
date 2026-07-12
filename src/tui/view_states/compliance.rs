@@ -188,11 +188,12 @@ impl ViewState for ComplianceView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
+            Shortcut::primary("\u{2190}\u{2192}", "standard"),
+            Shortcut::primary("v", "view"),
+            Shortcut::primary("g", "group"),
+            Shortcut::primary("\u{2191}\u{2193}", "select"),
             Shortcut::new("h/l", "Switch standard"),
-            Shortcut::new("v", "View mode"),
             Shortcut::new("Enter", "Detail"),
-            Shortcut::new("g", "Group"),
             Shortcut::new("c", "Go to component"),
             Shortcut::new("E", "Export"),
             Shortcut::new("G", "Last"),

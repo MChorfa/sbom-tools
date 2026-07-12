@@ -101,8 +101,8 @@ impl ViewState for QualityView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("v", "Toggle view"),
-            Shortcut::primary("j/k", "Navigate"),
+            Shortcut::primary("v", "view"),
+            Shortcut::new("j/k", "Navigate"),
             Shortcut::new("g/G", "First/Last"),
             Shortcut::new("PgUp/PgDn", "Scroll"),
         ]

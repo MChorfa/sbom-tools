@@ -118,12 +118,19 @@ fn render(frame: &mut Frame, app: &mut ViewApp) {
 
     // Render overlays
     if app.show_help {
-        let shortcuts_state = crate::tui::app::ShortcutsOverlayState {
+        let mut shortcuts_state = crate::tui::app::ShortcutsOverlayState {
             visible: true,
             context: crate::tui::app::ShortcutsContext::View,
             profile: Some(app.bom_profile),
+            // ViewApp has no ViewState impls yet (documented partial scope).
+            tab_title: None,
+            tab_items: Vec::new(),
+            scroll: app.help_scroll,
+            max_scroll: 0,
         };
-        crate::tui::views::render_shortcuts_overlay(frame, &shortcuts_state);
+        crate::tui::views::render_shortcuts_overlay(frame, &mut shortcuts_state);
+        app.help_scroll = shortcuts_state.scroll;
+        app.help_max_scroll = shortcuts_state.max_scroll;
     }
 
     if app.search_state.active {
@@ -477,15 +484,28 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
     let cursor_char = "│";
 
+    let mode_label = match search.mode {
+        crate::tui::app_states::SearchMode::Substring => "[substring]",
+        crate::tui::app_states::SearchMode::Regex => "[regex]",
+    };
     let search_input = Paragraph::new(Line::from(vec![
-        Span::styled("/", Style::default().fg(colors().primary)),
+        Span::styled("/ ", Style::default().fg(colors().primary)),
+        Span::styled(
+            format!("{mode_label} "),
+            Style::default().fg(colors().text_muted),
+        ),
         Span::styled(&search.query, Style::default().fg(colors().text)),
         Span::styled(cursor_char, Style::default().fg(colors().accent)),
+        if search.search_error.is_some() {
+            Span::styled("  (invalid pattern)", Style::default().fg(colors().error))
+        } else {
+            Span::raw("")
+        },
     ]))
     .block(
         Block::default()
             .title(format!(
-                " Search ({} results) [↑↓] select [Enter] go [Esc] cancel ",
+                " Search ({} results) [\u{2191}\u{2193}] select [Enter] go [^R] regex [Esc] cancel ",
                 search.results.len()
             ))
             .title_style(Style::default().fg(colors().primary))

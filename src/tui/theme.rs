@@ -996,72 +996,6 @@ impl FooterHints {
         hints
     }
 
-    /// Get hints for a specific tab in diff mode
-    #[must_use]
-    pub fn for_diff_tab(tab: &str) -> Vec<(&'static str, &'static str)> {
-        let mut hints = Self::global();
-
-        match tab.to_lowercase().as_str() {
-            "components" => {
-                hints.insert(0, ("f", "filter"));
-                hints.insert(1, ("s", "sort"));
-            }
-            "dependencies" => {
-                hints.insert(0, ("f", "filter"));
-                hints.insert(1, ("t", "transitive"));
-                hints.insert(2, ("h", "highlight"));
-                hints.insert(3, ("Enter", "expand"));
-                hints.insert(4, ("c", "component"));
-            }
-            "licenses" => {
-                hints.insert(0, ("g", "group"));
-                hints.insert(1, ("s", "sort"));
-                hints.insert(2, ("r", "risk"));
-                hints.insert(3, ("c", "compat"));
-                // The real panel-toggle key is `p`; Tab always switches tabs.
-                hints.insert(4, ("p", "panel"));
-            }
-            "vulnerabilities" | "vulns" => {
-                hints.insert(0, ("f", "filter"));
-                hints.insert(1, ("s", "sort"));
-                hints.insert(2, ("g", "group"));
-            }
-            "sidebyside" | "side-by-side" | "diff" => {
-                // Lead with the keys absent from every 80-col surface; the
-                // width fitter drops from the END of the tab block.
-                hints.insert(0, ("a", "align"));
-                hints.insert(1, ("n/N", "change"));
-                hints.insert(2, ("Enter", "detail"));
-                hints.insert(3, ("←→/p", "panel"));
-                hints.insert(4, ("J/K", "scroll"));
-            }
-            "quality" => {
-                hints.insert(0, ("v", "view"));
-            }
-            "compliance" => {
-                hints.insert(0, ("←→", "standard"));
-                hints.insert(1, ("v", "view"));
-                hints.insert(2, ("g", "group"));
-                hints.insert(3, ("↑↓", "select"));
-            }
-            "source" => {
-                hints.insert(0, ("u", "collapse"));
-                hints.insert(1, ("a", "align"));
-                hints.insert(2, ("z", "fold"));
-                hints.insert(3, ("m", "mark"));
-                hints.insert(4, ("w", "panel"));
-                hints.insert(5, ("v", "tree/raw"));
-            }
-            "graphchanges" | "graph" => {
-                hints.insert(0, ("↑↓", "select"));
-                hints.insert(1, ("PgUp/Dn", "page"));
-            }
-            _ => {}
-        }
-
-        hints
-    }
-
     /// Get hints for a specific tab in view mode
     #[must_use]
     pub fn for_view_tab(tab: &str) -> Vec<(&'static str, &'static str)> {
@@ -1313,15 +1247,24 @@ mod a11y_tests {
     }
 
     /// The two densest diff tabs must lead with their tab-specific power keys
-    /// so width fitting sacrifices the memorized globals last.
+    /// so width fitting sacrifices the memorized globals last. Primary order
+    /// in ViewState::shortcuts() IS footer order now.
     #[test]
     fn footer_hints_lead_with_tab_keys() {
-        let sxs = super::FooterHints::for_diff_tab("sidebyside");
-        assert_eq!(sxs[0], ("a", "align"));
-        assert!(sxs.contains(&("n/N", "change")));
-        let source = super::FooterHints::for_diff_tab("source");
-        assert_eq!(source[0], ("u", "collapse"));
-        assert!(source.contains(&("z", "fold")) && source.contains(&("m", "mark")));
+        use crate::tui::traits::ViewState;
+        let primaries = |v: &dyn ViewState| -> Vec<(String, String)> {
+            v.shortcuts()
+                .into_iter()
+                .filter(|s| s.primary)
+                .map(|s| (s.key, s.description))
+                .collect()
+        };
+        let sxs = primaries(&crate::tui::view_states::SideBySideView::new());
+        assert_eq!(sxs[0], ("a".to_string(), "align".to_string()));
+        assert!(sxs.iter().any(|(k, d)| k == "n/N" && d == "change"));
+        let source = primaries(&crate::tui::view_states::SourceView::new());
+        assert_eq!(source[0], ("u".to_string(), "collapse".to_string()));
+        assert!(source.iter().any(|(k, _)| k == "z") && source.iter().any(|(k, _)| k == "m"));
     }
 
     #[test]
@@ -1530,7 +1473,16 @@ mod footer_budget_tests {
     /// hints drop from the end of their block first.
     #[test]
     fn fit_footer_hints_keeps_global_tail() {
-        let hints = FooterHints::for_diff_tab("dependencies");
+        // Five tab hints ahead of the global tail (the shape every diff tab
+        // footer now produces from its ViewState::shortcuts() primaries).
+        let mut hints: Vec<(&str, &str)> = vec![
+            ("f", "filter"),
+            ("t", "transitive"),
+            ("h", "highlight"),
+            ("Enter", "expand"),
+            ("c", "component"),
+        ];
+        hints.extend(FooterHints::global());
         let (kept, elided) = fit_footer_hints(&hints, 40);
         assert!(elided, "a 40-col budget must drop something");
         assert!(footer_hints_width(&kept) <= 40 || kept.len() == FooterHints::GLOBAL_COUNT);

@@ -163,7 +163,16 @@ pub fn handle_key_event(app: &mut super::App, key: KeyEvent) {
     if app.has_overlay() {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.close_overlays(),
-            KeyCode::Char('?') if app.overlays.show_help => app.toggle_help(),
+            // The single ?/K overlay toggles closed on the keys that open it.
+            KeyCode::Char('?' | 'K') | KeyCode::F(1) if app.overlays.shortcuts.visible => {
+                app.overlays.shortcuts.hide();
+            }
+            KeyCode::Down | KeyCode::Char('j') if app.overlays.shortcuts.visible => {
+                app.overlays.shortcuts.scroll_down();
+            }
+            KeyCode::Up | KeyCode::Char('k') if app.overlays.shortcuts.visible => {
+                app.overlays.shortcuts.scroll_up();
+            }
             KeyCode::Char('e') if app.overlays.show_export => app.toggle_export(),
             KeyCode::Char('l') if app.overlays.show_legend => app.toggle_legend(),
             // Export format selection in export dialog
@@ -216,15 +225,6 @@ pub fn handle_key_event(app: &mut super::App, key: KeyEvent) {
                 app.overlays.view_switcher.hide();
                 mouse::switch_to_view(app, super::app::MultiViewType::Matrix);
             }
-            _ => {}
-        }
-        return;
-    }
-
-    // Handle shortcuts overlay
-    if app.overlays.shortcuts.visible {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('K') | KeyCode::F(1) => app.overlays.shortcuts.hide(),
             _ => {}
         }
         return;
@@ -304,7 +304,7 @@ fn handle_global_fallback(app: &mut super::App, key: KeyEvent) {
             let _ = prefs.save();
             app.should_quit = true;
         }
-        KeyCode::Char('?') => app.toggle_help(),
+        KeyCode::Char('?') => open_shortcuts_overlay(app),
         KeyCode::Char('e') => app.toggle_export(),
         KeyCode::Char('l') => app.toggle_legend(),
         KeyCode::Char('T') => {
@@ -331,17 +331,8 @@ fn handle_global_fallback(app: &mut super::App, key: KeyEvent) {
                 app.overlays.view_switcher.toggle();
             }
         }
-        // Keyboard shortcuts overlay
-        KeyCode::Char('K') | KeyCode::F(1) => {
-            let context = match app.mode {
-                super::AppMode::MultiDiff => super::app::ShortcutsContext::MultiDiff,
-                super::AppMode::Timeline => super::app::ShortcutsContext::Timeline,
-                super::AppMode::Matrix => super::app::ShortcutsContext::Matrix,
-                super::AppMode::Diff => super::app::ShortcutsContext::Diff,
-                super::AppMode::View => super::app::ShortcutsContext::View,
-            };
-            app.overlays.shortcuts.show(context);
-        }
+        // Keyboard shortcuts overlay ('?' routes here too: one surface)
+        KeyCode::Char('K') | KeyCode::F(1) => open_shortcuts_overlay(app),
         // Component deep dive (D key)
         KeyCode::Char('D') => {
             if let Some(component_name) = helpers::get_selected_component_name(app) {
@@ -573,6 +564,34 @@ fn dispatch_export(app: &mut super::App, format: crate::tui::export::ExportForma
         app.export_compliance(format);
     } else {
         app.export(format);
+    }
+}
+
+/// Open the unified ?/K shortcuts overlay: mode-derived context plus a
+/// This-Tab section from the active tab's `ViewState::shortcuts()`.
+fn open_shortcuts_overlay(app: &mut super::App) {
+    let context = match app.mode {
+        super::AppMode::MultiDiff => super::app::ShortcutsContext::MultiDiff,
+        super::AppMode::Timeline => super::app::ShortcutsContext::Timeline,
+        super::AppMode::Matrix => super::app::ShortcutsContext::Matrix,
+        super::AppMode::Diff => super::app::ShortcutsContext::Diff,
+        super::AppMode::View => super::app::ShortcutsContext::View,
+    };
+    let tab = app.active_view_state().map(|v| {
+        (
+            app.active_tab.title().to_string(),
+            v.shortcuts()
+                .into_iter()
+                .map(|s| (s.key, s.description))
+                .collect::<Vec<_>>(),
+        )
+    });
+    match tab {
+        Some((title, items)) => app
+            .overlays
+            .shortcuts
+            .show_with_tab(context, Some(title), items),
+        None => app.overlays.shortcuts.show(context),
     }
 }
 

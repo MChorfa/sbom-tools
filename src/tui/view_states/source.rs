@@ -355,18 +355,18 @@ impl ViewState for SourceView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
-            Shortcut::new("v", "Tree/Raw"),
-            Shortcut::new("w", "Switch side"),
+            Shortcut::primary("u", "collapse"),
+            Shortcut::primary("a", "align"),
+            Shortcut::primary("z", "fold"),
+            Shortcut::primary("m", "mark"),
+            Shortcut::primary("w", "panel"),
+            Shortcut::primary("v", "tree/raw"),
+            Shortcut::new("j/k", "Navigate"),
             Shortcut::new("s", "Sync"),
             Shortcut::new("/", "Search"),
             Shortcut::new("H/L", "Collapse/Expand all"),
             Shortcut::new("!/@@/#", "Fold depth"),
-            Shortcut::new("z/Z", "Fold/Unfold"),
             Shortcut::new("%", "Match bracket"),
-            Shortcut::new("m", "Bookmark"),
-            Shortcut::new("a", "Align panels"),
-            Shortcut::new("u", "Collapse unchanged"),
             Shortcut::new("d", "Detail"),
         ]
     }

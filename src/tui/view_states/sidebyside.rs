@@ -258,15 +258,15 @@ impl ViewState for SideBySideView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Scroll"),
-            Shortcut::new("J/K", "Sync scroll"),
-            Shortcut::new("p/\u{2190}\u{2192}", "Panel focus"),
-            Shortcut::new("a", "Alignment"),
+            Shortcut::primary("a", "align"),
+            Shortcut::primary("n/N", "change"),
+            Shortcut::primary("Enter", "detail"),
+            Shortcut::primary("\u{2190}\u{2192}/p", "panel"),
+            Shortcut::primary("J/K", "scroll"),
+            Shortcut::new("j/k", "Scroll"),
             Shortcut::new("s", "Sync mode"),
             Shortcut::new("/", "Search"),
-            Shortcut::new("n/N", "Next/Prev change (or search match)"),
             Shortcut::new("1-3", "Filter toggles"),
-            Shortcut::new("Enter", "Detail"),
         ]
     }
 }

@@ -68,22 +68,10 @@ impl ViewState for DependenciesView {
             }
         }
 
-        // Handle deps help overlay
-        if self.inner.show_deps_help {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
-                self.inner.show_deps_help = false;
-            }
-            return EventResult::Consumed;
-        }
-
         // Normal key handling
         match key.code {
             KeyCode::Char('/') => {
                 self.inner.start_search();
-                EventResult::Consumed
-            }
-            KeyCode::Char('?') => {
-                self.inner.toggle_deps_help();
                 EventResult::Consumed
             }
             KeyCode::Char('t') => {
@@ -237,14 +225,20 @@ impl ViewState for DependenciesView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
-            Shortcut::new("t", "Transitive"),
+            Shortcut::primary("f", "filter"),
+            Shortcut::primary("t", "transitive"),
+            Shortcut::primary("h", "highlight"),
+            Shortcut::primary("Enter", "expand"),
+            Shortcut::primary("c", "component"),
+            Shortcut::new("j/k", "Navigate"),
+            Shortcut::new("Enter/\u{2192}", "Expand node"),
+            Shortcut::new("\u{2190}", "Collapse node"),
             Shortcut::new("+/-", "Depth"),
             Shortcut::new(">/<", "Roots"),
             Shortcut::new("e/E", "Expand/Collapse all"),
             Shortcut::new("/", "Search"),
             Shortcut::new("s", "Sort"),
-            Shortcut::new("?", "Help"),
+            Shortcut::new("y", "Copy path"),
         ]
     }
 }
