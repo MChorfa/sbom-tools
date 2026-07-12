@@ -38,7 +38,9 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // Check if vulnerability chart has data (used for dynamic height)
     let severity_counts = result.vulnerabilities.introduced_by_severity();
     let has_vulns = severity_counts.values().any(|&v| v > 0);
-    let chart_height = if has_vulns { 10 } else { 3 };
+    // No-vuln charts need real height: SBOM Comparison has 6 content lines +
+    // borders (it previously got 3 rows and rendered header-only).
+    let chart_height = if has_vulns { 10 } else { 8 };
 
     // Count findings for dynamic height
     let findings_count = count_findings(result);
@@ -60,19 +62,38 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         3
     };
 
-    // Merged summary height: risk (2 lines) + blank line + findings + border (2)
-    let summary_height = (findings_count + 5).clamp(7, 13) as u16;
+    let plan = summary_layout_plan(area.height, findings_count, insights_policy_h, chart_height);
 
-    // Main layout: merged summary, stats, insights+policy, charts, all changes
+    if plan.compact {
+        // Dense risk strip + tall scrollable All Changes: at small heights the
+        // stacked fixed rows collapsed every box to ~1 line (empty bordered
+        // shells, 3 visible changes).
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(4), Constraint::Min(6)])
+            .split(area);
+        render_compact_summary_header(frame, rows[0], ctx);
+        render_all_changes(frame, rows[1], ctx);
+        return;
+    }
+
+    // Plan-driven rows: hidden rows drop their constraints entirely instead
+    // of rendering empty shells.
+    let mut constraints = vec![
+        Constraint::Length(plan.summary_h), // Risk + Findings (merged)
+        Constraint::Length(6),              // Stats cards (4 columns)
+    ];
+    if plan.show_insights {
+        constraints.push(Constraint::Length(insights_policy_h));
+    }
+    if plan.show_charts {
+        constraints.push(Constraint::Length(chart_height));
+    }
+    constraints.push(Constraint::Min(6)); // All changes (scrollable)
+
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(summary_height), // Row 0: Risk + Findings (merged)
-            Constraint::Length(6),              // Row 1: Stats cards (4 columns)
-            Constraint::Length(insights_policy_h), // Row 2: Insights + Policy (merged)
-            Constraint::Length(chart_height),   // Row 3: Charts
-            Constraint::Min(6),                 // Row 4: All changes (scrollable)
-        ])
+        .constraints(constraints)
         .split(area);
 
     // Row 0: Merged risk assessment + key findings
@@ -94,30 +115,78 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     render_vulnerabilities_card(frame, stats_chunks[2], ctx);
     render_license_card(frame, stats_chunks[3], ctx);
 
-    // Row 2: Insights + Policy merged
-    render_insights_policy_row(frame, main_chunks[2], ctx);
-
-    // Row 3: Bar charts (or collapsed when no vulns)
-    if has_vulns {
-        let chart_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(main_chunks[3]);
-
-        render_ecosystem_breakdown_chart(frame, chart_chunks[0], result);
-        render_severity_chart(frame, chart_chunks[1], result);
-    } else {
-        let chart_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(main_chunks[3]);
-
-        render_ecosystem_breakdown_chart(frame, chart_chunks[0], result);
-        render_sbom_comparison(frame, chart_chunks[1], ctx);
+    let mut row = 2;
+    if plan.show_insights {
+        render_insights_policy_row(frame, main_chunks[row], ctx);
+        row += 1;
     }
 
-    // Row 4: All changes (scrollable, sorted by importance)
-    render_all_changes(frame, main_chunks[4], ctx);
+    if plan.show_charts {
+        let chart_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_chunks[row]);
+
+        render_ecosystem_breakdown_chart(frame, chart_chunks[0], result);
+        if has_vulns {
+            render_severity_chart(frame, chart_chunks[1], result);
+        } else {
+            render_sbom_comparison(frame, chart_chunks[1], ctx);
+        }
+        row += 1;
+    }
+
+    // Last row: All changes (scrollable, sorted by importance)
+    render_all_changes(frame, main_chunks[row], ctx);
+}
+
+/// Layout decision for the diff Summary at a given content height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SummaryLayoutPlan {
+    summary_h: u16,
+    show_insights: bool,
+    show_charts: bool,
+    compact: bool,
+}
+
+/// Deterministic degradation cascade for the Summary rows: shrink the header,
+/// then drop the charts, then the insights, and finally fall back to the
+/// compact strip when even header+stats+changes cannot fit.
+fn summary_layout_plan(
+    content_h: u16,
+    findings_count: usize,
+    insights_h: u16,
+    chart_h: u16,
+) -> SummaryLayoutPlan {
+    let mut summary_h = (findings_count + 5).clamp(7, 13) as u16;
+    let mut show_insights = true;
+    let mut show_charts = true;
+
+    let demand = |summary_h: u16, insights: bool, charts: bool| -> u16 {
+        summary_h + 6 + if insights { insights_h } else { 0 } + if charts { chart_h } else { 0 } + 6
+    };
+
+    // (a) shrink the header
+    while demand(summary_h, show_insights, show_charts) > content_h && summary_h > 7 {
+        summary_h -= 1;
+    }
+    // (b) drop the charts row
+    if demand(summary_h, show_insights, show_charts) > content_h {
+        show_charts = false;
+    }
+    // (c) drop the insights row
+    if demand(summary_h, show_insights, show_charts) > content_h {
+        show_insights = false;
+    }
+    // (d) compact fallback
+    let compact = demand(7, false, false) > content_h;
+
+    SummaryLayoutPlan {
+        summary_h,
+        show_insights,
+        show_charts,
+        compact,
+    }
 }
 
 /// Render the Quality Delta / Matching / VEX insights row (items 1.1, 1.2, 1.3).
@@ -481,20 +550,17 @@ fn count_findings(result: &crate::diff::DiffResult) -> usize {
 
 /// Merged summary header: risk assessment + key findings in one bordered card.
 /// Reduces visual clutter by combining two sections into one with a separator.
-fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-    let scheme = colors();
-    let Some(result) = ctx.diff_result.as_ref() else {
-        return;
-    };
-
-    let (risk_label, risk_color, risk_badge_fg) = compute_risk_level(result, &scheme);
+/// The one-line risk strip: badge + semantic score + change/major-bump counts.
+/// Shared by the full header and the compact 80x24 header.
+fn summary_risk_line(
+    result: &crate::diff::DiffResult,
+    scheme: &crate::tui::theme::ColorScheme,
+) -> Line<'static> {
+    let (risk_label, risk_color, risk_badge_fg) = compute_risk_level(result, scheme);
     let score = result.semantic_score;
     let total_changes = result.summary.total_changes;
     let major_bumps = count_major_bumps(&result.components.modified);
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Line 1: Risk badge + Score + Changes
     let mut line1 = vec![
         Span::styled(
             format!(" {risk_label} "),
@@ -517,7 +583,83 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             Style::default().fg(scheme.warning).bold(),
         ));
     }
-    lines.push(Line::from(line1));
+    Line::from(line1)
+}
+
+/// Compact Summary header for small terminals: the risk strip plus a single
+/// dense stat line covering components/deps/vulns/licenses.
+fn render_compact_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+    let scheme = colors();
+    let Some(result) = ctx.diff_result.as_ref() else {
+        return;
+    };
+    let (_, risk_color, _) = compute_risk_level(result, &scheme);
+    let s = &result.summary;
+
+    let stat_line = Line::from(vec![
+        Span::styled("Comp ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("+{}", s.components_added),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(
+            format!(" -{}", s.components_removed),
+            Style::default().fg(scheme.removed),
+        ),
+        Span::styled(
+            format!(" ~{}", s.components_modified),
+            Style::default().fg(scheme.modified),
+        ),
+        Span::styled(" \u{2502} Deps ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("+{}", s.dependencies_added),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(
+            format!(" -{}", s.dependencies_removed),
+            Style::default().fg(scheme.removed),
+        ),
+        Span::styled(" \u{2502} Vuln ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("\u{25b2}{}", s.vulnerabilities_introduced),
+            Style::default().fg(scheme.critical),
+        ),
+        Span::styled(
+            format!(" \u{25bc}{}", s.vulnerabilities_resolved),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(" \u{2502} Lic ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("+{}", s.licenses_added),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(
+            format!(" -{}", s.licenses_removed),
+            Style::default().fg(scheme.removed),
+        ),
+    ]);
+
+    let para = Paragraph::new(vec![summary_risk_line(result, &scheme), stat_line]).block(
+        Block::default()
+            .title(" Summary ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(risk_color)),
+    );
+    frame.render_widget(para, area);
+}
+
+fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+    let scheme = colors();
+    let Some(result) = ctx.diff_result.as_ref() else {
+        return;
+    };
+
+    let (_, risk_color, _) = compute_risk_level(result, &scheme);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Line 1: Risk badge + Score + Changes
+    lines.push(summary_risk_line(result, &scheme));
 
     // Line 2: SBOM metadata + Quality + Matching
     let mut line2: Vec<Span> = Vec::new();
@@ -1168,49 +1310,108 @@ fn render_ecosystem_breakdown_chart(
 ) {
     let scheme = colors();
 
-    // Count changes per ecosystem across added, removed, modified
-    let mut eco_counts: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    // Per-ecosystem (added, removed, modified) triples: the previous flat sum
+    // hid the change direction, and its rotating palette could paint an
+    // ecosystem in the semantically-critical red.
+    let mut eco_counts: std::collections::HashMap<&str, (u64, u64, u64)> =
+        std::collections::HashMap::new();
     for comp in &result.components.added {
-        let eco = comp.ecosystem.as_deref().unwrap_or("unknown");
-        *eco_counts.entry(eco).or_default() += 1;
+        eco_counts
+            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
+            .or_default()
+            .0 += 1;
     }
     for comp in &result.components.removed {
-        let eco = comp.ecosystem.as_deref().unwrap_or("unknown");
-        *eco_counts.entry(eco).or_default() += 1;
+        eco_counts
+            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
+            .or_default()
+            .1 += 1;
     }
     for comp in &result.components.modified {
-        let eco = comp.ecosystem.as_deref().unwrap_or("unknown");
-        *eco_counts.entry(eco).or_default() += 1;
+        eco_counts
+            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
+            .or_default()
+            .2 += 1;
     }
 
     let mut ecosystems: Vec<_> = eco_counts.into_iter().collect();
-    ecosystems.sort_by(|a, b| b.1.cmp(&a.1));
+    ecosystems.sort_by(|a, b| {
+        let ta = a.1.0 + a.1.1 + a.1.2;
+        let tb = b.1.0 + b.1.1 + b.1.2;
+        tb.cmp(&ta).then_with(|| a.0.cmp(b.0))
+    });
 
-    let palette = scheme.chart_palette();
-    let bars: Vec<Bar> = ecosystems
+    let block = Block::default()
+        .title(" Changes by Ecosystem ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(scheme.border));
+
+    if ecosystems.len() <= 1 {
+        // Single ecosystem: a labelled tally row beats a labelless bar.
+        let lines: Vec<Line> = ecosystems
+            .iter()
+            .map(|(eco, (a, r, m))| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:<12} ", crate::tui::widgets::truncate_str(eco, 12)),
+                        Style::default().fg(scheme.text),
+                    ),
+                    Span::styled(format!("+{a}"), Style::default().fg(scheme.added)),
+                    Span::raw("  "),
+                    Span::styled(format!("-{r}"), Style::default().fg(scheme.removed)),
+                    Span::raw("  "),
+                    Span::styled(format!("~{m}"), Style::default().fg(scheme.modified)),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+
+    // Multi-ecosystem: grouped bars — one group per ecosystem (top 3 by
+    // total), three semantic bars (+/-/~) per group. Grouped, not stacked:
+    // ratatui's BarChart has no stacked mode.
+    let groups: Vec<BarGroup> = ecosystems
         .iter()
-        .take(5)
-        .enumerate()
-        .map(|(i, (name, count))| {
-            Bar::default()
-                .value(*count)
-                .label(Line::from(crate::tui::widgets::truncate_str(name, 8)))
-                .style(Style::default().fg(palette[i % palette.len()]))
+        .take(3)
+        .map(|(eco, (a, r, m))| {
+            // ratatui only prints a bar's value when it fits inside
+            // bar_width(3); compact 4+-digit counts to "Nk" so huge diffs
+            // don't silently lose their numbers.
+            let compact = |v: u64| {
+                let mut bar = Bar::default().value(v);
+                if v > 999 {
+                    bar = bar.text_value(format!("{}k", v / 1000));
+                }
+                bar
+            };
+            let bars = vec![
+                compact(*a)
+                    .label(Line::from("+"))
+                    .style(Style::default().fg(scheme.added)),
+                compact(*r)
+                    .label(Line::from("-"))
+                    .style(Style::default().fg(scheme.removed)),
+                compact(*m)
+                    .label(Line::from("~"))
+                    .style(Style::default().fg(scheme.modified)),
+            ];
+            BarGroup::default()
+                .label(Line::from(crate::tui::widgets::truncate_str(eco, 8)))
+                .bars(&bars)
         })
         .collect();
 
-    let bar_chart = BarChart::default()
-        .block(
-            Block::default()
-                .title(" Changes by Ecosystem ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(scheme.border)),
-        )
-        .bar_width(7)
-        .bar_gap(1)
+    let mut bar_chart = BarChart::default()
+        .block(block)
+        .bar_width(3)
+        .bar_gap(0)
+        .group_gap(2)
         .value_style(Style::default().fg(scheme.text).bold())
-        .label_style(Style::default().fg(scheme.text))
-        .data(BarGroup::default().bars(&bars));
+        .label_style(Style::default().fg(scheme.text));
+    for g in groups {
+        bar_chart = bar_chart.data(g);
+    }
 
     frame.render_widget(bar_chart, area);
 }
@@ -1846,7 +2047,7 @@ mod risk_badge_tests {
 
     /// Badge foreground must follow the theme convention: light text on the
     /// dark critical/error badge backgrounds, dark text on bright ones
-    /// (previously hardcoded `Color::Black` everywhere).
+    /// (previously hardcoded black everywhere).
     #[test]
     fn compute_risk_level_badge_fg() {
         let scheme = crate::tui::theme::ColorScheme::dark();
@@ -1873,5 +2074,38 @@ mod risk_badge_tests {
         let (label, _, badge_fg) = compute_risk_level(&low, &scheme);
         assert_eq!(label, "Low Risk");
         assert_eq!(badge_fg, scheme.badge_fg_dark);
+    }
+}
+
+#[cfg(test)]
+mod layout_plan_tests {
+    use super::*;
+
+    /// Table-driven degradation cascade: shrink header -> drop charts ->
+    /// drop insights -> compact strip.
+    #[test]
+    fn summary_layout_plan_cascade() {
+        // 80x24 content height (17): even minimal rows don't fit -> compact.
+        let p = summary_layout_plan(17, 6, 5, 8);
+        assert!(p.compact, "17 rows must go compact: {p:?}");
+
+        // Demo 120x40 arithmetic: 8+6+5+8+6 = 33 fits exactly with the
+        // header shrunk to 8.
+        let p = summary_layout_plan(33, 6, 5, 8);
+        assert!(!p.compact);
+        assert_eq!(p.summary_h, 8);
+        assert!(p.show_insights && p.show_charts);
+
+        // Roomy: header keeps its natural clamp.
+        let p = summary_layout_plan(40, 6, 5, 8);
+        assert!(!p.compact);
+        assert_eq!(p.summary_h, 11, "(findings 6 + 5).clamp(7,13)");
+        assert!(p.show_insights && p.show_charts);
+
+        // Mid-tier: too tight for charts, keeps insights.
+        let p = summary_layout_plan(25, 6, 5, 8);
+        assert!(!p.compact, "25 rows is not compact: {p:?}");
+        assert!(!p.show_charts, "charts drop first: {p:?}");
+        assert!(p.show_insights, "insights survive at 25 rows: {p:?}");
     }
 }

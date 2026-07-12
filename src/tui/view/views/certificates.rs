@@ -6,12 +6,13 @@ use crate::model::{ComponentType, CryptoAssetType};
 use crate::tui::view::app::ViewApp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 /// Render the certificates tab (CBOM mode).
 pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = crate::tui::theme::colors();
     let certs: Vec<_> = app
         .sbom
         .components
@@ -66,14 +67,14 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
             let (status_icon, status_color) = cert
                 .map(|c| {
                     if c.is_expired() {
-                        ("X", Color::Red)
+                        ("X", scheme.error)
                     } else if c.is_expiring_soon(90) {
-                        ("!", Color::Yellow)
+                        ("!", scheme.warning)
                     } else {
-                        ("✓", Color::Green)
+                        ("✓", scheme.success)
                     }
                 })
-                .unwrap_or(("?", Color::DarkGray));
+                .unwrap_or(("?", scheme.text_muted));
 
             let expiry = cert
                 .and_then(|c| c.not_valid_after.as_ref())
@@ -81,9 +82,7 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .unwrap_or_else(|| "-".to_string());
 
             let style = if i == app.certificates_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                crate::tui::theme::Styles::selected()
             } else {
                 Style::default()
             };
@@ -91,7 +90,10 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                 Span::raw(&comp.name),
-                Span::styled(format!("  {expiry}"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {expiry}"),
+                    Style::default().fg(scheme.text_muted),
+                ),
             ]))
             .style(style)
         })
@@ -143,11 +145,11 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
         }
         if let Some(na) = &cert.not_valid_after {
             let color = if cert.is_expired() {
-                Color::Red
+                scheme.error
             } else if cert.is_expiring_soon(90) {
-                Color::Yellow
+                scheme.warning
             } else {
-                Color::Green
+                scheme.success
             };
             let status_label = if cert.is_expired() {
                 " EXPIRED"

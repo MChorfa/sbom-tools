@@ -1,0 +1,28 @@
+---
+source: src/tui/view/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  VIEW  │ SBOM │ CycloneDX  │ [SBOM]
+
+« [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  »
+
+────────────────────────────────────────────────────────────────────────────────
+┌──────────────────┐┌──────────────────┐┌──────────────────┐┌──────────────────┐
+│     CRITICAL     ││       HIGH       ││      MEDIUM      ││        LOW       │
+│         1        ││         1        ││         0        ││         0        │
+└──────────────────┘└──────────────────┘└──────────────────┘└──────────────────┘
+⚡  KEV 1 [k] · Fixable 1 · EPSS≥10% 1
+Filter:  All  KEV:  Off  Sort:  Severity  Dedupe:  On  Group:  Component
+[f] filter [k] kev [s] sort [d] dedupe [g] group [E/C] fold [Tab] next group
+┌ Vulnerabilities (1 of 2) ────────────────┐┌ Group Details ───────────────────┐
+│  Vuln ID              Fix CWE            ││kev-lib  (1 vulnerabilities)      │
+│▶ ├─▶ kev-lib (1)                         ││                                  │
+│  └─▶ fix-lib (1)                         ││CVEs (1):                         │
+│                                          ││ C       CVE-2024-0001 KEV        │
+│                                          ││                                  │
+│                                          ││                                  │
+│                                          ││                                  │
+│                                          ││                                  │
+└──────────────────────────────────────────┘└──────────────────────────────────┘
+ Components: 2 │ Vulns: 2 (1C/1H) │ Licenses: 1
+    …  Tab switch  / search  e export  ? help  q quit [y] copy CVE-2024-0001

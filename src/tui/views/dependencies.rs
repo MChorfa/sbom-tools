@@ -608,10 +608,7 @@ fn render_dependency_tree(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                     line.spans
                         .into_iter()
                         .map(|span| {
-                            Span::styled(
-                                span.content,
-                                span.style.bg(Color::Rgb(60, 60, 20)), // subtle yellow bg
-                            )
+                            Span::styled(span.content, span.style.bg(scheme.search_highlight_bg))
                         })
                         .collect::<Vec<_>>(),
                 )

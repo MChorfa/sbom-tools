@@ -386,11 +386,19 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
             app.toggle_legend();
         }
         KeyCode::Char('T') => {
-            // Toggle theme (dark -> light -> high-contrast) and save preference
+            // Toggle theme (dark -> light -> high-contrast) and save preference.
+            // Monochrome is sticky (NO_COLOR): the toggle is a no-op there, and
+            // skipping the save keeps the user's colored preference intact for
+            // sessions without NO_COLOR.
+            let before = crate::tui::theme::current_theme_name();
             let theme_name = toggle_theme();
-            let mut prefs = TuiPreferences::load();
-            prefs.theme = theme_name.parse().unwrap_or_default();
-            let _ = prefs.save();
+            if theme_name != before
+                && let Ok(parsed) = theme_name.parse()
+            {
+                let mut prefs = TuiPreferences::load();
+                prefs.theme = parsed;
+                let _ = prefs.save();
+            }
         }
         KeyCode::Char('P') => {
             // Cycle BOM profile (SBOM → CBOM → AI-BOM → SBOM) and re-score.

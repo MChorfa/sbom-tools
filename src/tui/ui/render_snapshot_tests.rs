@@ -575,6 +575,175 @@ mod diff_alignment {
             "training-dataset removal must carry a provenance-loss risk badge:\n{text}"
         );
     }
+
+    /// App::new_diff must backfill the engine QualityDelta when the pipeline
+    /// didn't provide one (TUI-only construction paths previously saw None,
+    /// hiding the Quality Impact card and the regression chips).
+    #[test]
+    fn new_diff_backfills_quality_delta() {
+        let app = app_with_result(DiffResult::default(), TabKind::Quality);
+        assert!(
+            app.data
+                .diff_result
+                .as_ref()
+                .is_some_and(|r| r.quality_delta.is_some()),
+            "constructor must backfill quality_delta from the scored reports"
+        );
+    }
+
+    /// The Quality tab renders the engine's regressed/improved chips, the
+    /// violation delta, and ALL category transitions (the previous 4-category
+    /// recompute silently omitted Integrity/Provenance regressions).
+    #[test]
+    fn quality_tab_renders_engine_delta() {
+        let mut result = DiffResult::default();
+        // overall_score_delta 0.0: both fixture SBOMs are empty, so the tab
+        // only trusts the engine delta when it matches the displayed 0-point
+        // transition (profile-mismatch guard in render_diff_quality).
+        result.quality_delta = Some(crate::diff::QualityDelta {
+            overall_score_delta: 0.0,
+            old_grade: None,
+            new_grade: None,
+            category_deltas: vec![
+                crate::diff::CategoryDelta {
+                    category: "Integrity".to_string(),
+                    old_score: 80.0,
+                    new_score: 60.0,
+                    delta: -20.0,
+                },
+                crate::diff::CategoryDelta {
+                    category: "Licenses".to_string(),
+                    old_score: 50.0,
+                    new_score: 70.0,
+                    delta: 20.0,
+                },
+            ],
+            regressions: vec!["Provenance".to_string(), "Integrity".to_string()],
+            improvements: vec!["Licenses".to_string()],
+            violation_count_delta: 2,
+        });
+        let mut app = app_with_result(result, TabKind::Quality);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("Regressed: Provenance, Integrity"),
+            "regression chips must render:\n{text}"
+        );
+        assert!(
+            text.contains("Improved: Licenses"),
+            "improvement chips must render:\n{text}"
+        );
+        assert!(
+            text.contains("Compliance violations: +2"),
+            "violation delta must render:\n{text}"
+        );
+        assert!(
+            text.contains("Integrity: 80% → 60%"),
+            "Integrity transition (previously invisible) must render:\n{text}"
+        );
+    }
+
+    /// The Licenses tab leads with a before→after risk posture header.
+    #[test]
+    fn licenses_tab_renders_delta_header() {
+        let mut result = DiffResult::default();
+        result
+            .licenses
+            .new_licenses
+            .push(crate::diff::LicenseChange {
+                license: "GPL-3.0-only".to_string(),
+                components: vec!["libx".to_string()],
+                family: "GPL".to_string(),
+            });
+        result
+            .licenses
+            .removed_licenses
+            .push(crate::diff::LicenseChange {
+                license: "MIT".to_string(),
+                components: vec!["liby".to_string()],
+                family: "MIT".to_string(),
+            });
+        let mut app = app_with_result(result, TabKind::Licenses);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("Licenses: +1 new"),
+            "header title must render:\n{text}"
+        );
+        assert!(
+            text.contains("High/Critical: 0 \u{2192} 1"),
+            "risk transition must render (GPL is High risk):\n{text}"
+        );
+        assert!(
+            text.contains("regressed"),
+            "posture label must render:\n{text}"
+        );
+    }
+
+    /// Compliance selection must be visible without color: the selected row
+    /// carries a \u{25b6} marker.
+    #[test]
+    fn compliance_selection_marker_visible() {
+        let mut app = super::demo_app(TabKind::Compliance);
+        // Cycle Overview -> NewViolations so a violation table renders.
+        crate::tui::events::handle_key_event(
+            &mut app,
+            super::key(crossterm::event::KeyCode::Char('v')),
+        );
+        let text = render_to_text(120, 40, |frame| {
+            app.prepare_render();
+            render(frame, &mut app);
+        });
+        assert!(
+            text.contains("\u{25b6} ERROR")
+                || text.contains("\u{25b6} WARN")
+                || text.contains("\u{25b6} INFO"),
+            "selected violation row must carry the marker:\n{text}"
+        );
+    }
+
+    /// Multi-ecosystem diffs render grouped +/-/~ bars; single-ecosystem
+    /// diffs render a labelled tally row instead of a labelless bar.
+    #[test]
+    fn ecosystem_chart_is_semantic() {
+        fn comp(name: &str, eco: &str) -> crate::diff::ComponentChange {
+            let component = Component::new(name.to_string(), format!("pkg:{eco}/{name}@1.0.0"));
+            let mut c = crate::diff::ComponentChange::added(&component, 0);
+            c.ecosystem = Some(eco.to_string());
+            c
+        }
+        // Two ecosystems -> grouped bars with +/-/~ labels.
+        let mut result = DiffResult::default();
+        for i in 0..3 {
+            result.components.added.push(comp(&format!("np{i}"), "npm"));
+        }
+        result.components.removed.push(comp("py0", "pypi"));
+        result.components.modified.push(comp("py1", "pypi"));
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("npm") && text.contains("pypi"),
+            "both ecosystem groups must label:\n{text}"
+        );
+        // The semantic +/-/~ bar-label row is what distinguishes the grouped
+        // chart from the old flat per-ecosystem bars.
+        assert!(
+            text.contains(" +  -  ~"),
+            "grouped chart must label its +/-/~ bars:\n{text}"
+        );
+
+        // Single ecosystem -> tally row, no bar glyphs in that panel.
+        let mut result = DiffResult::default();
+        for i in 0..4 {
+            result.components.added.push(comp(&format!("np{i}"), "npm"));
+        }
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        // The full labelled tally row — "+4" alone also appears in the All
+        // Changes panel title, which would make this assertion vacuous.
+        assert!(
+            text.contains("npm          +4  -0  ~0"),
+            "single ecosystem must render the labelled tally row:\n{text}"
+        );
+    }
 }
 
 #[test]
@@ -901,11 +1070,11 @@ fn summary_all_changes_scrolls_below_the_fold() {
         app.prepare_render();
         render(frame, &mut app);
     });
-    // '+ dayjs' is an added npm component, priority-sorted below the
-    // modified/removed entries and below the panel's fold.
+    // '~ lodash' is a patch-level bump, priority-sorted to the very end of
+    // the list and below the panel's fold.
     assert!(
-        !first.contains("+ dayjs"),
-        "precondition: the added entry starts below the fold:\n{first}"
+        !first.contains("~ lodash"),
+        "precondition: the patch entry starts below the fold:\n{first}"
     );
 
     handle_key_event(&mut app, key(KeyCode::End));
@@ -918,7 +1087,7 @@ fn summary_all_changes_scrolls_below_the_fold() {
         render(frame, &mut app);
     });
     assert!(
-        scrolled.contains("+ dayjs"),
+        scrolled.contains("~ lodash"),
         "scrolling must reveal the entries below the fold:\n{scrolled}"
     );
 }
@@ -1082,4 +1251,38 @@ fn tab_marker_click_selects_adjacent_hidden_tab() {
         entries[before - 1].0,
         "« click must select the tab just left of the window"
     );
+}
+
+/// Regression: at 80x24 the Summary previously collapsed every box to ~1
+/// line (empty Matching/Security Policy shells, 3 visible changes). The
+/// compact strip + tall All Changes list must surface far more.
+#[test]
+fn compact_summary_shows_many_changes_at_80x24() {
+    let text = render_tab(TabKind::Summary, 80, 24);
+    assert!(
+        text.contains("axios") && text.contains("- jquery"),
+        "entries previously below the fold must be visible:\n{text}"
+    );
+    assert!(
+        text.contains("Comp +4 -4 ~5"),
+        "the dense stat strip must render:\n{text}"
+    );
+    assert!(
+        !text.contains(" Matching ") && !text.contains("Changes by Ecosystem"),
+        "compact mode must not render empty shells:\n{text}"
+    );
+}
+
+/// Lock the mid-tier degradation (charts dropped, stats+insights kept) so
+/// the cascade order cannot regress silently. Height 31 is the smallest that
+/// keeps insights (content 24 = demand with insights, without charts); at 30
+/// the insights row is dropped too and the tier would go unguarded.
+#[test]
+fn snapshot_summary_100x31() {
+    let text = render_tab(TabKind::Summary, 100, 31);
+    assert!(
+        text.contains(" Matching ") && !text.contains("Changes by Ecosystem"),
+        "100x31 must sit exactly in the charts-dropped, insights-kept tier:\n{text}"
+    );
+    insta::assert_snapshot!("diff_summary_100x31", text);
 }

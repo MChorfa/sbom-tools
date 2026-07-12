@@ -12,9 +12,9 @@ Group:  License   │  [g] toggle  [Enter] ins┌ License Details ────�
                                             │                                  █
 ┌ Licenses (3) ────────────────────────────┐│Category: Permissive              █
 │  License              Count     Category ││Risk: Low                         █
-│▶ MIT                     6 ████ Permissiv││Family: MIT                       █
-│  Apache-2.0              2 ███  Permissiv││Components: 6                     █
-│  Unknown                 1 ██   Unknown  ││                                  █
+│▶ MIT                     6 ████ ✓ Permiss││Family: MIT                       █
+│  Apache-2.0              2 ███  ✓ Permiss││Components: 6                     █
+│  Unknown                 1 ██   ? Unknown││                                  █
 │                                          ││Characteristics:                  █
 │                                          ││✓ Commercial use allowed          █
 │                                          ││✓ Modification allowed            █

@@ -2,7 +2,7 @@
 
 use crate::tui::theme::colors;
 use crate::tui::view::app::ViewApp;
-use crate::tui::widgets::{SeverityBar, extract_display_name, format_count};
+use crate::tui::widgets::{extract_display_name, format_count};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
@@ -483,15 +483,7 @@ fn vuln_breakdown_lines(app: &ViewApp) -> Vec<Line<'static>> {
 
     let mut lines = Vec::new();
 
-    // Severity bar
-    let _bar = SeverityBar::new(
-        stats.critical_count,
-        stats.high_count,
-        stats.medium_count,
-        stats.low_count,
-    );
-
-    // Add percentage breakdown
+    // Percentage breakdown (the labelled inline bars below are the real rendering)
     let add_severity_line = |lines: &mut Vec<Line>, label: &str, count: usize, color: Color| {
         let pct = (count as f64 / total as f64 * 100.0) as usize;
         let bar_width = 20;

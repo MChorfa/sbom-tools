@@ -6,12 +6,13 @@ use crate::model::{ComponentType, CryptoAssetType};
 use crate::tui::view::app::ViewApp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 /// Render the protocols tab (CBOM mode).
 pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = crate::tui::theme::colors();
     let protos: Vec<_> = app
         .sbom
         .components
@@ -52,9 +53,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
             let suite_count = proto.map_or(0, |p| p.cipher_suites.len());
 
             let style = if i == app.protocols_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                crate::tui::theme::Styles::selected()
             } else {
                 Style::default()
             };
@@ -63,7 +62,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Span::raw(&comp.name),
                 Span::styled(
                     format!("  v{version}  [{suite_count} suites]"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(scheme.text_muted),
                 ),
             ]))
             .style(style)
@@ -113,7 +112,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
             lines.push(Line::raw(""));
             lines.push(Line::styled(
                 format!("-- Cipher Suites ({}) --", proto.cipher_suites.len()),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             for suite in &proto.cipher_suites {
                 if let Some(name) = &suite.name {
@@ -122,7 +121,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 if !suite.algorithms.is_empty() {
                     lines.push(Line::styled(
                         format!("    Algorithms: {}", suite.algorithms.join(", ")),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(scheme.text_muted),
                     ));
                 }
             }
@@ -132,7 +131,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
             lines.push(Line::raw(""));
             lines.push(Line::styled(
                 "-- IKEv2 Transform Types --",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             if !ikev2.encr.is_empty() {
                 lines.push(Line::from(format!("Encryption: {}", ikev2.encr.join(", "))));
@@ -155,7 +154,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
             lines.push(Line::raw(""));
             lines.push(Line::styled(
                 "-- Referenced Algorithms --",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(scheme.primary),
             ));
             for r in &proto.crypto_ref_array {
                 lines.push(Line::from(format!("  {r}")));

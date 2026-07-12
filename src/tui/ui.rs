@@ -1059,7 +1059,13 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             Style::default().fg(colors().primary).bold(),
         )]),
         Line::from(vec![
-            Span::styled("  ✓ ■ ", Style::default().fg(colors().permissive)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("permissive")
+                ),
+                Style::default().fg(colors().permissive),
+            ),
             Span::styled("Permissive  ", Style::default().fg(colors().text)),
             Span::styled(
                 "(MIT, Apache, BSD)",
@@ -1067,17 +1073,35 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled("  © ■ ", Style::default().fg(colors().copyleft)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("copyleft")
+                ),
+                Style::default().fg(colors().copyleft),
+            ),
             Span::styled("Copyleft    ", Style::default().fg(colors().text)),
             Span::styled("(GPL, AGPL)", Style::default().fg(colors().text_muted)),
         ]),
         Line::from(vec![
-            Span::styled("  ◐ ■ ", Style::default().fg(colors().weak_copyleft)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("weak copyleft")
+                ),
+                Style::default().fg(colors().weak_copyleft),
+            ),
             Span::styled("Weak Copyleft ", Style::default().fg(colors().text)),
             Span::styled("(LGPL, MPL)", Style::default().fg(colors().text_muted)),
         ]),
         Line::from(vec![
-            Span::styled("  ⊘ ■ ", Style::default().fg(colors().proprietary)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("proprietary")
+                ),
+                Style::default().fg(colors().proprietary),
+            ),
             Span::styled("Proprietary ", Style::default().fg(colors().text)),
             Span::styled("(Commercial)", Style::default().fg(colors().text_muted)),
         ]),

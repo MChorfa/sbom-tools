@@ -31,7 +31,18 @@ fn render_diff_quality(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         return;
     }
 
-    let quality_delta = ctx.diff_result.and_then(|r| r.quality_delta.as_ref());
+    // The pipeline computes quality_delta with the Standard scoring profile,
+    // while this tab displays profile-aware reports (AI readiness, CBOM). Only
+    // trust the engine delta when it describes the scores actually on screen;
+    // otherwise fall back to display-derived deltas so headline, change
+    // reasons, and per-category rows stay consistent with the gauges above.
+    let quality_delta = ctx
+        .diff_result
+        .and_then(|r| r.quality_delta.as_ref())
+        .filter(|qd| {
+            matches!((old_report, new_report), (Some(o), Some(n))
+                if (qd.overall_score_delta - (n.overall_score - o.overall_score)).abs() < 0.75)
+        });
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -44,7 +55,7 @@ fn render_diff_quality(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     render_quality_header(frame, chunks[0], old_report, new_report, quality_delta);
     render_category_bar_chart(frame, chunks[1], old_report, new_report, quality_delta);
-    render_combined_recommendations(frame, chunks[2], old_report, new_report, ctx);
+    render_combined_recommendations(frame, chunks[2], old_report, new_report, ctx, quality_delta);
 }
 
 fn render_no_quality_data(frame: &mut Frame, area: Rect) {
@@ -189,7 +200,7 @@ fn render_category_bar_chart(
     area: Rect,
     old_report: Option<&QualityReport>,
     new_report: Option<&QualityReport>,
-    _quality_delta: Option<&QualityDelta>,
+    quality_delta: Option<&QualityDelta>,
 ) {
     let scheme = colors();
     let (Some(old), Some(new)) = (old_report, new_report) else {
@@ -303,7 +314,11 @@ fn render_category_bar_chart(
             break;
         }
 
-        let delta = new_s - old_s;
+        // Prefer the engine-computed per-category delta; fall back to the
+        // local recompute when the engine didn't ship one.
+        let delta = quality_delta
+            .and_then(|qd| qd.category_deltas.iter().find(|cd| cd.category == *name))
+            .map_or(new_s - old_s, |cd| cd.delta);
         let name_color = if delta < -0.5 {
             scheme.removed
         } else {
@@ -439,80 +454,6 @@ fn render_empty_gauge(frame: &mut Frame, area: Rect, title: &str) {
         .percent(0)
         .label("N/A");
     frame.render_widget(gauge, area);
-}
-
-// ---------------------------------------------------------------------------
-// Grade transition badge + regression alert banner (4.2, 4.3)
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-fn render_grade_banner(frame: &mut Frame, area: Rect, quality_delta: Option<&QualityDelta>) {
-    let Some(qd) = quality_delta else { return };
-    let scheme = colors();
-
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Grade transition line
-    let old_letter = qd
-        .old_grade
-        .as_ref()
-        .map_or("?", crate::quality::QualityGrade::letter);
-    let new_letter = qd
-        .new_grade
-        .as_ref()
-        .map_or("?", crate::quality::QualityGrade::letter);
-
-    let delta = qd.overall_score_delta;
-    let (arrow, grade_color) = if delta > 0.0 {
-        ("\u{25b2}", scheme.added)
-    } else if delta < 0.0 {
-        ("\u{25bc}", scheme.removed)
-    } else {
-        ("\u{2014}", scheme.muted)
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(" Grade: ", Style::default().fg(scheme.text)),
-        Span::styled(old_letter, Style::default().fg(scheme.text).bold()),
-        Span::styled(" \u{2192} ", Style::default().fg(scheme.text_muted)),
-        Span::styled(new_letter, Style::default().fg(grade_color).bold()),
-        Span::styled(
-            format!("  {arrow} {delta:+.1} pts"),
-            Style::default().fg(grade_color),
-        ),
-    ]));
-
-    // Regression alert line
-    if !qd.regressions.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                " \u{26a0} Regressions: ",
-                Style::default().fg(scheme.warning).bold(),
-            ),
-            Span::styled(
-                qd.regressions.join(", "),
-                Style::default().fg(scheme.removed),
-            ),
-        ]));
-    }
-
-    let border_color = if !qd.regressions.is_empty() {
-        scheme.warning
-    } else if delta > 0.0 {
-        scheme.added
-    } else if delta < 0.0 {
-        scheme.removed
-    } else {
-        scheme.muted
-    };
-
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .title(" Quality Delta ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color)),
-    );
-    frame.render_widget(paragraph, area);
 }
 
 // ---------------------------------------------------------------------------
@@ -792,23 +733,32 @@ fn render_combined_recommendations(
     old_report: Option<&QualityReport>,
     new_report: Option<&QualityReport>,
     ctx: &RenderContext,
+    quality_delta: Option<&QualityDelta>,
 ) {
     let scheme = colors();
     let mut lines: Vec<Line> = vec![];
 
     if let (Some(old), Some(new)) = (old_report, new_report) {
-        let score_diff = new.overall_score as i32 - old.overall_score as i32;
-        let (icon, color, text) = if score_diff > 5 {
+        // Headline driven by the engine's overall delta when available,
+        // falling back to the local recompute.
+        let score_diff = quality_delta.map_or_else(
+            || f64::from(new.overall_score as i32 - old.overall_score as i32),
+            |qd| f64::from(qd.overall_score_delta),
+        );
+        // Branch on the rounded value: {:.0} rounds, so branching on the raw
+        // float could print "by 5 points" inside a strictly-more-than-5 branch.
+        let shown = score_diff.round();
+        let (icon, color, text) = if shown > 5.0 {
             (
                 "↑",
                 scheme.added,
-                format!("Quality improved by {score_diff} points"),
+                format!("Quality improved by {shown:.0} points"),
             )
-        } else if score_diff < -5 {
+        } else if shown < -5.0 {
             (
                 "↓",
                 scheme.removed,
-                format!("Quality decreased by {} points", score_diff.abs()),
+                format!("Quality decreased by {:.0} points", shown.abs()),
             )
         } else {
             ("→", scheme.warning, "Quality score unchanged".to_string())
@@ -819,9 +769,52 @@ fn render_combined_recommendations(
             Span::styled(text, Style::default().fg(color)),
         ]));
 
+        // Engine-computed regressed/improved category chips + the compliance
+        // violation delta — the explicit "what got worse" the tab previously
+        // approximated with a partial 4-of-8-category recompute.
+        if let Some(qd) = quality_delta {
+            if !qd.regressions.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled(" Regressed: ", Style::default().fg(scheme.text_muted)),
+                    Span::styled(
+                        qd.regressions.join(", "),
+                        Style::default().fg(scheme.removed).bold(),
+                    ),
+                ]));
+            }
+            if !qd.improvements.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled(" Improved: ", Style::default().fg(scheme.text_muted)),
+                    Span::styled(
+                        qd.improvements.join(", "),
+                        Style::default().fg(scheme.added).bold(),
+                    ),
+                ]));
+            }
+            if qd.violation_count_delta != 0 {
+                let c = if qd.violation_count_delta > 0 {
+                    scheme.error
+                } else {
+                    scheme.success
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        " Compliance violations: ",
+                        Style::default().fg(scheme.text_muted),
+                    ),
+                    Span::styled(
+                        format!("{:+}", qd.violation_count_delta),
+                        Style::default().fg(c).bold(),
+                    ),
+                ]));
+            }
+        }
+
         // Add specific change reasons
         lines.push(Line::from(""));
-        add_change_reasons(&mut lines, old, new);
+        if let Some(qd) = quality_delta {
+            add_change_reasons(&mut lines, qd);
+        }
     }
 
     if let Some(report) = new_report {
@@ -884,21 +877,14 @@ fn render_combined_recommendations(
     }
 }
 
-fn add_change_reasons(lines: &mut Vec<Line>, old: &QualityReport, new: &QualityReport) {
+fn add_change_reasons(lines: &mut Vec<Line>, qd: &QualityDelta) {
     let scheme = colors();
-    let changes = vec![
-        (
-            "Completeness",
-            old.completeness_score,
-            new.completeness_score,
-        ),
-        ("Identifiers", old.identifier_score, new.identifier_score),
-        ("Licenses", old.license_score, new.license_score),
-        ("Dependencies", old.dependency_score, new.dependency_score),
-    ];
-
-    for (name, old_score, new_score) in changes {
-        let diff = new_score - old_score;
+    // The engine's per-category deltas cover all categories (incl. Integrity
+    // and Provenance, which the previous hardcoded 4-category list omitted —
+    // a regression there was silently invisible).
+    for cd in &qd.category_deltas {
+        let (name, old_score, new_score) = (cd.category.as_str(), cd.old_score, cd.new_score);
+        let diff = cd.delta;
         if diff.abs() > 5.0 {
             let (icon, color) = if diff > 0.0 {
                 ("↑", scheme.added)

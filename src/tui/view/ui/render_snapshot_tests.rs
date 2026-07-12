@@ -375,38 +375,6 @@ fn aibom_tab_click_selects_a_profile_specific_tab() {
     assert_eq!(app.active_tab, target, "click on {needle} @col {col}");
 }
 
-/// Temporary literal-guard for the four files fixed by the CBOM/tree theme
-/// routing: no raw `Color::` variants may be reintroduced (they bypass the
-/// active theme and break light/high-contrast/NO_COLOR rendering).
-///
-/// Scoped to exactly these files — the six dedicated CBOM tab files still
-/// carry raw literals and are fixed by a later theming PR, whose repo-wide CI
-/// grep supersedes this test.
-#[test]
-fn no_raw_color_variants_in_themed_view_chrome() {
-    let sources = [
-        ("view/ui.rs", include_str!("../ui.rs")),
-        (
-            "view/views/overview.rs",
-            include_str!("../views/overview.rs"),
-        ),
-        (
-            "view/views/dependencies.rs",
-            include_str!("../views/dependencies.rs"),
-        ),
-        ("widgets/tree.rs", include_str!("../../widgets/tree.rs")),
-    ];
-    for (name, src) in sources {
-        for (i, line) in src.lines().enumerate() {
-            assert!(
-                !line.contains("Color::"),
-                "{name}:{}: raw Color:: literal bypasses the theme: {line}",
-                i + 1
-            );
-        }
-    }
-}
-
 /// Regression: a GPL-licensed component must count into the copyleft (⚠)
 /// bucket of the Licenses risk summary, not "unknown" (the old string match
 /// compared against "Strong Copyleft", which the category never stringifies
@@ -549,4 +517,239 @@ fn view_overview_eol_compact_snapshot() {
     settings.bind(|| {
         insta::assert_snapshot!("view_overview_eol_80x24", text);
     });
+}
+
+/// Build a `ViewApp` on the CBOM fixture with a deterministic tab.
+fn cbom_view_app(active_tab: ViewTab) -> ViewApp {
+    pin_theme();
+    let (sbom, profile) = crate::tui::test_support::cbom_single();
+    let mut app = ViewApp::new(sbom, crate::tui::test_support::CBOM, profile);
+    app.active_tab = active_tab;
+    app
+}
+
+/// Baseline snapshots for all six CBOM tabs at both sizes. The theme-routing
+/// PR that introduces these is glyph-neutral (render_to_text strips styles),
+/// so they lock a clean baseline for the following data-surfacing PRs.
+#[test]
+fn snapshot_cbom_tabs() {
+    // The certificate detail's "Remaining: N days" is wall-clock relative
+    // (fixture expiry minus today) and would decay the baseline daily.
+    let mut settings = insta::Settings::clone_current();
+    settings.add_filter(r"Remaining:  \d+ days *", "Remaining:  [N] days   ");
+    let _guard = settings.bind_to_scope();
+
+    let tabs = [
+        ("crypto", ViewTab::Crypto),
+        ("algorithms", ViewTab::Algorithms),
+        ("certificates", ViewTab::Certificates),
+        ("keys", ViewTab::Keys),
+        ("protocols", ViewTab::Protocols),
+        ("pqc_compliance", ViewTab::PqcCompliance),
+    ];
+    for (name, tab) in tabs {
+        for (w, h) in SIZES {
+            let mut app = cbom_view_app(tab);
+            let text = render_to_text(w, h, |frame| {
+                render(frame, &mut app);
+            });
+            insta::assert_snapshot!(format!("cbom_{name}_{w}x{h}"), text);
+        }
+    }
+}
+
+/// Regression: selected CBOM list rows must take their background from the
+/// theme's selection slot (the hardcoded DarkGray defeated the high-contrast
+/// selection fix and lost contrast under the light theme).
+#[test]
+fn cbom_selected_row_uses_theme_selection_bg() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = cbom_view_app(ViewTab::Crypto);
+    app.crypto_list_selected = 0;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|frame| render(frame, &mut app))
+        .expect("render");
+
+    let buffer = terminal.backend().buffer();
+    let expected = crate::tui::theme::colors().selection;
+    let found = (0..24u16).any(|y| {
+        (0..80u16).any(|x| {
+            buffer
+                .cell((x, y))
+                .is_some_and(|c| c.style().bg == Some(expected))
+        })
+    });
+    assert!(
+        found,
+        "some cell must carry the theme selection background {expected:?}"
+    );
+    let darkgray = (0..24u16).any(|y| {
+        (0..80u16).any(|x| {
+            buffer
+                .cell((x, y))
+                .is_some_and(|c| c.style().bg == Some(ratatui::style::Color::DarkGray))
+        })
+    });
+    assert!(
+        !darkgray,
+        "no cell may use the hardcoded DarkGray selection background"
+    );
+}
+
+/// Two-severity fixture: full-card path with the triage row underneath.
+fn triage_view_app(active_tab: ViewTab) -> ViewApp {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+
+    let mut kev_comp = Component::new("kev-lib".to_string(), "kev-ref".to_string())
+        .with_version("1.0.0".to_string());
+    let mut kev_vuln = VulnerabilityRef::new("CVE-2024-0001".to_string(), VulnerabilitySource::Nvd);
+    kev_vuln.severity = Some(Severity::Critical);
+    kev_vuln.is_kev = true;
+    kev_vuln.epss_score = Some(0.73);
+    kev_comp.vulnerabilities.push(kev_vuln);
+    sbom.components
+        .insert(CanonicalId::from_name_version("kev-lib", None), kev_comp);
+
+    let mut fix_comp = Component::new("fix-lib".to_string(), "fix-ref".to_string())
+        .with_version("2.0.0".to_string());
+    let mut fix_vuln = VulnerabilityRef::new("CVE-2024-0002".to_string(), VulnerabilitySource::Nvd);
+    fix_vuln.severity = Some(Severity::High);
+    fix_vuln.remediation = Some(crate::model::Remediation {
+        remediation_type: crate::model::RemediationType::Upgrade,
+        description: None,
+        fixed_version: Some("2.1.0".to_string()),
+    });
+    fix_comp.vulnerabilities.push(fix_vuln);
+    sbom.components
+        .insert(CanonicalId::from_name_version("fix-lib", None), fix_comp);
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = active_tab;
+    app
+}
+
+/// The triage row must render under the full severity cards, answering
+/// exploited/fixable/likely-exploited without touching a filter.
+#[test]
+fn view_vuln_triage_snapshots() {
+    for (w, h) in SIZES {
+        let mut app = triage_view_app(ViewTab::Vulnerabilities);
+        let text = render_to_text(w, h, |frame| {
+            render(frame, &mut app);
+        });
+        assert!(
+            text.contains("KEV 1") && text.contains("Fixable 1"),
+            "triage row must render at {w}x{h}:\n{text}"
+        );
+        insta::assert_snapshot!(format!("view_vuln_triage_{w}x{h}"), text);
+    }
+}
+
+/// Regression for the broadened compact trigger: an all-Critical SBOM must
+/// take the compact path instead of rows of empty '0' cards.
+#[test]
+fn all_critical_sbom_uses_compact_stats() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    for i in 0..2 {
+        let name = format!("crit-{i}");
+        let mut comp =
+            Component::new(name.clone(), format!("{name}-ref")).with_version("1.0.0".to_string());
+        let mut v = VulnerabilityRef::new(format!("CVE-2024-1{i:03}"), VulnerabilitySource::Nvd);
+        v.severity = Some(Severity::Critical);
+        comp.vulnerabilities.push(v);
+        sbom.components
+            .insert(CanonicalId::from_name_version(&name, None), comp);
+    }
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Vulnerabilities;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        !text.contains(" MEDIUM "),
+        "compact path must not render the empty MEDIUM card:\n{text}"
+    );
+    assert!(
+        text.contains("vulnerabilities"),
+        "compact summary must render:\n{text}"
+    );
+}
+
+/// Lock the legend overlay vocabulary (severity letters, license glyphs) to
+/// the shared helpers: the legend and the list rows must not drift apart.
+/// 80x30 because the popup is 60% of frame height: at 80x24 the last legend
+/// rows (including the Proprietary glyph) are clipped and would go unlocked.
+#[test]
+fn view_legend_overlay_80x30() {
+    let mut app = demo_view_app(ViewTab::Licenses);
+    app.toggle_legend();
+    let text = render_to_text(80, 30, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("\u{2298}"),
+        "the full license vocabulary (incl. \u{2298} Proprietary) must be visible:\n{text}"
+    );
+    insta::assert_snapshot!("view_legend_overlay_80x30", text);
+}
+
+/// Compact stats (single-severity SBOM) must show the full triage line —
+/// KEV, Fixable, and EPSS — as a full-width row even at 80 cols; embedded in
+/// the 35%-wide summary card the EPSS segment was clipped.
+#[test]
+fn view_vuln_compact_80x24_shows_full_triage_line() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    // Distinct vuln counts (3/2/1) keep the top-components bar order
+    // deterministic: ties preserve the SBOM map's arbitrary iteration order.
+    for i in 0..3 {
+        let name = format!("crit-{i}");
+        let mut comp =
+            Component::new(name.clone(), format!("{name}-ref")).with_version("1.0.0".to_string());
+        for j in 0..(3 - i) {
+            let mut v =
+                VulnerabilityRef::new(format!("CVE-2024-2{i}{j:02}"), VulnerabilitySource::Nvd);
+            v.severity = Some(Severity::Critical);
+            // Distinct CVSS scores: the table sorts severity -> cvss, and a
+            // full tie would surface the dedupe HashMap's random order.
+            v.cvss.push(crate::model::CvssScore {
+                version: crate::model::CvssVersion::V31,
+                base_score: 9.8 - (i as f32).mul_add(0.3, j as f32 * 0.1),
+                vector: None,
+                exploitability_score: None,
+                impact_score: None,
+            });
+            if i == 0 && j == 0 {
+                v.is_kev = true;
+                v.epss_score = Some(0.42);
+            }
+            if i == 1 && j == 0 {
+                v.remediation = Some(crate::model::Remediation {
+                    remediation_type: crate::model::RemediationType::Upgrade,
+                    description: None,
+                    fixed_version: Some("1.1.0".to_string()),
+                });
+            }
+            comp.vulnerabilities.push(v);
+        }
+        sbom.components
+            .insert(CanonicalId::from_name_version(&name, None), comp);
+    }
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Vulnerabilities;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("EPSS\u{2265}10% 1"),
+        "the EPSS triage count must survive 80 cols:\n{text}"
+    );
+    insta::assert_snapshot!("view_vuln_compact_80x24", text);
 }
