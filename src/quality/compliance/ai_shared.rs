@@ -1,0 +1,242 @@
+//! Shared applicability gate and component classification for the AI-BOM
+//! compliance profiles (EU AI Act Annex IV, BSI/G7 SBOM-for-AI).
+//!
+//! Both profiles must scope identically: which components count as ML models,
+//! which count as AI datasets, and whether the SBOM is in scope at all. The
+//! logic was previously duplicated in `eu_ai_act.rs` and `bsi_sbom_for_ai.rs`
+//! and leaked in both directions:
+//!
+//! - any `type: data` component (a config bundle, or SPDX 3.0
+//!   primary-purpose "documentation", which maps to [`ComponentType::Data`])
+//!   was enrolled as an AI training dataset, making plain non-AI SBOMs fail
+//!   the BSI-AI MUST dataset elements with blocking Errors;
+//! - a component carrying a full CycloneDX modelCard (the parser sets
+//!   [`Component::ml_model`] regardless of the declared type) but typed
+//!   `application`/`library` was invisible, so genuine AI SBOMs were declared
+//!   "Not applicable" and passed vacuously.
+//!
+//! Centralizing the classification here keeps the two profiles consistent by
+//! construction: an ML component requires the `machine-learning-model` type
+//! or parsed ML-model metadata; an AI dataset requires real dataset evidence
+//! (`Component::dataset`), never the bare component type. Components that
+//! merely *look* like ML content (a `pkg:huggingface` PURL or a `model-card`
+//! external reference) without either signal are collected separately so the
+//! profiles stay applicable and can surface a mistyped-ML warning instead of
+//! letting "untype your models" evade the assessment.
+
+use super::{Violation, ViolationCategory, ViolationSeverity, truncate_list};
+use crate::model::{Component, ComponentType, ExternalRefType, NormalizedSbom};
+
+/// The AI-BOM scope of an SBOM, as seen by the AI compliance profiles.
+pub(crate) struct AiBomScope<'a> {
+    /// ML-model components: typed `machine-learning-model`, or carrying
+    /// parsed ML-model metadata (CycloneDX modelCard / SPDX 3.0 AI profile)
+    /// regardless of the declared component type.
+    pub ml_components: Vec<&'a Component>,
+    /// AI-dataset components: require real dataset evidence
+    /// ([`Component::dataset`]). A bare `type: data` component is NOT an AI
+    /// dataset — CycloneDX `data` covers configurations and source-of-truth
+    /// data generally, and SPDX 3.0 maps primary-purpose "documentation" to
+    /// [`ComponentType::Data`].
+    pub dataset_components: Vec<&'a Component>,
+    /// Components that look like ML content (a `pkg:huggingface` PURL or a
+    /// `model-card` external reference) but are neither typed
+    /// `machine-learning-model` nor carry ML-model metadata. Their presence
+    /// keeps the SBOM applicable; each profile surfaces them via its
+    /// mistyped-ML warning rule (`SBOM-AIACT-UNTYPED-ML` /
+    /// `SBOM-BSIAI-UNTYPED-ML`).
+    pub untyped_ml_components: Vec<&'a Component>,
+}
+
+impl AiBomScope<'_> {
+    /// Whether the AI profiles apply to this SBOM at all. Non-applicable
+    /// SBOMs get the single informational N/A finding
+    /// (`SBOM-AIACT-NA` / `SBOM-BSIAI-NA`) and never fail.
+    pub(crate) fn is_applicable(&self) -> bool {
+        !self.ml_components.is_empty()
+            || !self.dataset_components.is_empty()
+            || !self.untyped_ml_components.is_empty()
+    }
+}
+
+/// Classify the SBOM's components for the AI-BOM compliance profiles.
+///
+/// Iteration follows the SBOM's component order (`IndexMap`), so violation
+/// messages built from these lists are deterministic.
+pub(crate) fn ai_bom_scope(sbom: &NormalizedSbom) -> AiBomScope<'_> {
+    let mut scope = AiBomScope {
+        ml_components: Vec::new(),
+        dataset_components: Vec::new(),
+        untyped_ml_components: Vec::new(),
+    };
+    for c in sbom.components.values() {
+        let is_ml =
+            c.component_type == ComponentType::MachineLearningModel || c.ml_model.is_some();
+        if is_ml {
+            scope.ml_components.push(c);
+        }
+        if c.dataset.is_some() {
+            scope.dataset_components.push(c);
+        }
+        if !is_ml && looks_like_ml_content(c) {
+            scope.untyped_ml_components.push(c);
+        }
+    }
+    scope
+}
+
+/// Whether a component references a model card via an external reference
+/// (`externalReferences[{type:"model-card"}]`) — a spec-valid alternative to
+/// an inline CycloneDX modelCard object. The parser only copies the URL into
+/// [`crate::model::MlModelInfo::model_card_url`] when a modelCard object
+/// exists, so checks that credit model cards must consult this too.
+pub(crate) fn has_model_card_ref(c: &Component) -> bool {
+    c.external_refs
+        .iter()
+        .any(|r| r.ref_type == ExternalRefType::ModelCard)
+}
+
+/// Heuristic ML-content detection for components that are not declared as
+/// models: a HuggingFace package URL or a model-card external reference is a
+/// strong signal that the component is an ML model.
+fn looks_like_ml_content(c: &Component) -> bool {
+    let hf_purl = c.identifiers.purl.as_deref().is_some_and(|p| {
+        p.get(..16)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("pkg:huggingface/"))
+    });
+    hf_purl || has_model_card_ref(c)
+}
+
+/// Push the shared mistyped-ML warning when the scope contains ML-looking
+/// components that are neither typed `machine-learning-model` nor carry
+/// ML-model metadata. `profile_tag` is the message prefix (`AI-Act` /
+/// `BSI-AI`); `rule_id` must be the per-profile registered rule
+/// (`SBOM-AIACT-UNTYPED-ML` / `SBOM-BSIAI-UNTYPED-ML`).
+pub(crate) fn push_untyped_ml_warning(
+    scope: &AiBomScope<'_>,
+    profile_tag: &str,
+    requirement: &str,
+    rule_id: &'static str,
+    violations: &mut Vec<Violation>,
+) {
+    if scope.untyped_ml_components.is_empty() {
+        return;
+    }
+    let names: Vec<String> = scope
+        .untyped_ml_components
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+    violations.push(Violation {
+        severity: ViolationSeverity::Warning,
+        category: ViolationCategory::ComponentIdentification,
+        message: format!(
+            "[{profile_tag}] ML content detected but not typed machine-learning-model: \
+             {} component(s) carry ML signals (pkg:huggingface PURL or model-card \
+             reference) without ML-model metadata: {}",
+            names.len(),
+            truncate_list(&names, 5)
+        ),
+        element: names.first().cloned(),
+        requirement: requirement.to_string(),
+        rule_id,
+        standard_refs: Vec::new(),
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{DatasetInfo, ExternalReference, MlModelInfo};
+
+    fn component(name: &str) -> Component {
+        Component::new(name.to_string(), name.to_string()).with_version("1.0.0".to_string())
+    }
+
+    fn add(sbom: &mut NormalizedSbom, c: Component) {
+        sbom.components.insert(c.canonical_id.clone(), c);
+    }
+
+    #[test]
+    fn bare_data_component_is_not_an_ai_dataset() {
+        // A `type: data` config bundle without dataset evidence must not make
+        // the AI profiles applicable (the flagship over-match fix).
+        let mut sbom = NormalizedSbom::default();
+        let mut cfg = component("app-config");
+        cfg.component_type = ComponentType::Data;
+        add(&mut sbom, cfg);
+
+        let scope = ai_bom_scope(&sbom);
+        assert!(scope.dataset_components.is_empty());
+        assert!(!scope.is_applicable());
+    }
+
+    #[test]
+    fn dataset_evidence_counts_regardless_of_type() {
+        let mut sbom = NormalizedSbom::default();
+        let mut data = component("training-data");
+        data.component_type = ComponentType::Data;
+        data.dataset = Some(DatasetInfo::default());
+        add(&mut sbom, data);
+
+        let scope = ai_bom_scope(&sbom);
+        assert_eq!(scope.dataset_components.len(), 1);
+        assert!(scope.is_applicable());
+    }
+
+    #[test]
+    fn ml_metadata_counts_even_when_mistyped() {
+        // application-typed component carrying a parsed modelCard must be an
+        // ML component (the under-match / evasion fix).
+        let mut sbom = NormalizedSbom::default();
+        let mut app = component("sentiment-model");
+        app.component_type = ComponentType::Application;
+        app.ml_model = Some(MlModelInfo::default());
+        add(&mut sbom, app);
+
+        let scope = ai_bom_scope(&sbom);
+        assert_eq!(scope.ml_components.len(), 1);
+        assert!(scope.untyped_ml_components.is_empty());
+        assert!(scope.is_applicable());
+    }
+
+    #[test]
+    fn huggingface_purl_without_ml_metadata_is_an_untyped_suspect() {
+        let mut sbom = NormalizedSbom::default();
+        let hf = component("bert-base-uncased")
+            .with_purl("pkg:huggingface/google-bert/bert-base-uncased@1.0.0".to_string());
+        add(&mut sbom, hf);
+
+        let scope = ai_bom_scope(&sbom);
+        assert!(scope.ml_components.is_empty());
+        assert_eq!(scope.untyped_ml_components.len(), 1);
+        assert!(scope.is_applicable());
+    }
+
+    #[test]
+    fn model_card_ref_without_ml_metadata_is_an_untyped_suspect() {
+        let mut sbom = NormalizedSbom::default();
+        let mut c = component("mystery-model");
+        c.external_refs.push(ExternalReference {
+            ref_type: ExternalRefType::ModelCard,
+            url: "https://example.test/card".to_string(),
+            comment: None,
+            hashes: Vec::new(),
+        });
+        add(&mut sbom, c);
+
+        let scope = ai_bom_scope(&sbom);
+        assert!(has_model_card_ref(scope.untyped_ml_components[0]));
+        assert!(scope.is_applicable());
+    }
+
+    #[test]
+    fn plain_library_sbom_is_not_applicable() {
+        let mut sbom = NormalizedSbom::default();
+        let lib = component("express").with_purl("pkg:npm/express@4.19.2".to_string());
+        add(&mut sbom, lib);
+
+        let scope = ai_bom_scope(&sbom);
+        assert!(!scope.is_applicable());
+    }
+}

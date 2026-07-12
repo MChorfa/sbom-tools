@@ -66,11 +66,21 @@ impl VexEnricher {
                 let result = parse_csaf(&content)?;
                 documents_loaded += 1;
                 statements_parsed += result.statements_parsed;
+                // CSAF has no document-wide statements: every product_status
+                // entry is product-scoped. Entries whose product_id did not
+                // resolve to a PURL are dropped in parse_csaf (never promoted
+                // to global scope), so there is no unscoped table to merge.
+                if result.unresolved_products > 0 {
+                    tracing::warn!(
+                        file = %path.display(),
+                        unresolved_products = result.unresolved_products,
+                        "CSAF: skipped product_status entries whose product_id \
+                         did not resolve to a PURL (not applied — a per-product \
+                         statement cannot be safely scoped to a component)"
+                    );
+                }
                 for ((vuln_id, purl), status) in result.scoped {
                     lookup.insert((vuln_id, purl), status);
-                }
-                for (vuln_id, status) in result.unscoped {
-                    vuln_only.insert(vuln_id, status);
                 }
             } else if is_cyclonedx_vex(&content) {
                 let result = parse_cyclonedx_vex(&content)?;
@@ -160,6 +170,11 @@ impl VexEnricher {
             };
 
             let comp_purl = comp.identifiers.purl.clone();
+            // CycloneDX VEX scopes statements by bom-ref, which lands in the
+            // component's format_id — not necessarily its PURL. Match on both
+            // so a component-scoped CDX-VEX statement (keyed by an opaque
+            // bom-ref) actually applies instead of silently missing.
+            let comp_bom_ref = comp.identifiers.format_id.clone();
             let mut comp_had_vex = false;
 
             for vuln in &mut comp.vulnerabilities {
@@ -169,10 +184,16 @@ impl VexEnricher {
                     continue;
                 }
 
-                // Try (vuln_id, purl) match first
+                // Try scoped (vuln_id, purl) then (vuln_id, bom-ref) matches,
+                // then the vuln-only (document-wide) fallback.
                 let matched = comp_purl
                     .as_ref()
                     .and_then(|purl| self.lookup.get(&(vuln.id.clone(), purl.clone())))
+                    .or_else(|| {
+                        (!comp_bom_ref.is_empty())
+                            .then(|| self.lookup.get(&(vuln.id.clone(), comp_bom_ref.clone())))
+                            .flatten()
+                    })
                     .cloned()
                     .or_else(|| self.vuln_only.get(&vuln.id).cloned());
 
@@ -323,6 +344,44 @@ mod tests {
 
         assert_eq!(stats.vulns_matched, 0);
         assert_eq!(stats.components_with_vex, 0);
+    }
+
+    /// A CycloneDX-VEX statement scoped by an opaque bom-ref (which lands in
+    /// the component's format_id, not its PURL) must still apply. Previously
+    /// the lookup only tried the PURL, so such statements silently missed.
+    #[test]
+    fn test_enricher_matches_by_bom_ref_when_purl_absent() {
+        let mut sbom = NormalizedSbom::default();
+        // Component whose bom-ref (format_id) is opaque and NOT a PURL.
+        let mut comp = Component::new("widget".to_string(), "component-42".to_string());
+        comp.vulnerabilities.push(VulnerabilityRef::new(
+            "CVE-2024-5555".to_string(),
+            VulnerabilitySource::Cve,
+        ));
+        sbom.add_component(comp);
+
+        // Scoped entry keyed by (vuln_id, bom-ref) — as CycloneDX VEX produces.
+        let mut lookup = HashMap::new();
+        lookup.insert(
+            ("CVE-2024-5555".to_string(), "component-42".to_string()),
+            VexStatus::new(VexState::NotAffected),
+        );
+        let mut enricher = VexEnricher {
+            lookup,
+            vuln_only: HashMap::new(),
+            stats: VexEnrichmentStats::default(),
+        };
+
+        let stats = enricher.enrich_sbom(&mut sbom);
+        assert_eq!(
+            stats.vulns_matched, 1,
+            "bom-ref-scoped statement must apply"
+        );
+        let comp = sbom.components.values().next().unwrap();
+        assert_eq!(
+            comp.vulnerabilities[0].vex_status.as_ref().unwrap().status,
+            VexState::NotAffected
+        );
     }
 
     #[test]

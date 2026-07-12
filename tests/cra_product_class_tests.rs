@@ -28,10 +28,8 @@ fn vendor_sbom(vendor_total: usize, with_hash: usize) -> NormalizedSbom {
             .with_purl(format!("pkg:cargo/c{i}@1.0"));
         c.supplier = Some(Organization::new(format!("Vendor{i}")));
         if i < with_hash {
-            c.hashes.push(Hash {
-                algorithm: HashAlgorithm::Sha256,
-                value: format!("{:064x}", i + 1),
-            });
+            c.hashes
+                .push(Hash::new(HashAlgorithm::Sha256, format!("{:064x}", i + 1)));
         }
         sbom.add_component(c);
     }

@@ -1,0 +1,44 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-27T00:00:00Z",
+    "tools": [
+      {
+        "vendor": "sbom-tools",
+        "name": "sbom-tools",
+        "version": "0.1.17"
+      }
+    ],
+    "component": {
+      "bom-ref": "root",
+      "type": "application",
+      "name": "sentiment-service",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "model-1",
+      "type": "application",
+      "name": "sentiment-model",
+      "version": "1.0.0",
+      "modelCard": {
+        "modelParameters": {
+          "approach": {
+            "type": "supervised"
+          },
+          "task": "text-classification",
+          "architectureFamily": "transformer",
+          "modelArchitecture": "bert"
+        },
+        "considerations": {
+          "useCases": [
+            "sentiment-analysis"
+          ]
+        }
+      }
+    }
+  ]
+}

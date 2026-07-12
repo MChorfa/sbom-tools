@@ -107,6 +107,136 @@ fn non_ai_sbom_is_not_applicable_and_does_not_fail() {
 }
 
 #[test]
+fn web_app_with_config_data_component_is_not_applicable() {
+    // Flagship over-match fix: a web-app SBOM with one library and one
+    // `type: data` config bundle (no dataset evidence) previously failed
+    // BSI-AI with a blocking SBOM-BSIAI-DATASET-IDENTIFIER Error. It must be
+    // N/A and compliant.
+    let sbom = parse_sbom(&fixture("cyclonedx/webapp-data-config.cdx.json"))
+        .expect("parse webapp-data-config fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    assert!(
+        result.is_compliant,
+        "web-app SBOM must not fail BSI-AI; violations: {:?}",
+        result.violations
+    );
+    assert_eq!(result.error_count, 0, "no blocking errors expected");
+    assert_eq!(
+        result.violations.len(),
+        1,
+        "exactly one informational N/A finding expected; got {:?}",
+        result.violations
+    );
+    assert_eq!(result.violations[0].rule_id, "SBOM-BSIAI-NA");
+    assert_eq!(result.violations[0].severity, ViolationSeverity::Info);
+}
+
+#[test]
+fn cli_validate_bsi_ai_passes_web_app_with_config_data() {
+    // End-to-end guard for the same fix: `validate --standard bsi-ai` on the
+    // web-app SBOM must exit 0 (previously exit 1, NON-COMPLIANT).
+    let output = base_command()
+        .arg("validate")
+        .arg(fixture("cyclonedx/webapp-data-config.cdx.json"))
+        .args(["--standard", "bsi-ai", "--summary"])
+        .output()
+        .expect("validate --standard bsi-ai should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "web-app SBOM must pass bsi-ai; stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+}
+
+#[test]
+fn application_typed_component_with_model_card_is_applicable() {
+    // The parser sets ml_model from the modelCard regardless of the declared
+    // component type; the Models cluster must see it (previously N/A).
+    let sbom = parse_sbom(&fixture("cyclonedx/mistyped-mlbom.cdx.json"))
+        .expect("parse mistyped-mlbom fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
+    assert!(
+        !ids.contains(&"SBOM-BSIAI-NA"),
+        "SBOM with modelCard metadata must not be N/A; got {ids:?}"
+    );
+    // The Models element checks ran (no PURL/hash on the mistyped model).
+    assert!(
+        ids.contains(&"SBOM-BSIAI-MODEL-IDENTIFIER"),
+        "Models cluster should run on the mistyped model; got {ids:?}"
+    );
+}
+
+#[test]
+fn model_card_external_ref_satisfies_model_card_element() {
+    // A machine-learning-model documented via a `model-card` external
+    // reference alone (no modelCard object) must not be flagged as missing
+    // its model card.
+    let sbom = parse_sbom(&fixture("cyclonedx/mlbom-extref-card.cdx.json"))
+        .expect("parse mlbom-extref-card fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-BSIAI-MODEL-CARD"),
+        "model-card external reference must satisfy the model-card element; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn untyped_huggingface_model_is_applicable_with_mistyped_ml_warning() {
+    // Evasion guard: a pkg:huggingface component typed `library` (no
+    // modelCard) keeps the profile applicable and is surfaced.
+    let sbom = parse_sbom(&fixture("cyclonedx/untyped-hf-model.cdx.json"))
+        .expect("parse untyped-hf-model fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-BSIAI-NA"),
+        "huggingface PURL must keep the profile applicable; got {:?}",
+        result.violations
+    );
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-BSIAI-UNTYPED-ML"
+                && v.severity == ViolationSeverity::Warning),
+        "mistyped-ML warning should fire; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn dataset_component_with_dataset_evidence_still_counts() {
+    // Data components WITH dataset structs must keep enrolling (no
+    // regression from requiring dataset evidence).
+    let sbom = parse_sbom(&fixture("cyclonedx/minimal-dataset.cdx.json"))
+        .expect("parse minimal-dataset fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-BSIAI-NA"),
+        "dataset evidence keeps the profile applicable; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
 fn sparse_aibom_fails_specific_element_checks_with_cluster_refs() {
     // minimal-mlbom has model components with no PURL, hash, license, model
     // card, architecture, or limitations — so the corresponding MUST/SHOULD

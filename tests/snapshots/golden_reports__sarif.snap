@@ -403,10 +403,21 @@ expression: "render(&SarifReporter::new())"
               "id": "SBOM-AIACT-ANNEX-IV-2G",
               "name": "AiActValidationMetrics",
               "shortDescription": {
-                "text": "EU AI Act Annex IV §2(g): validation/testing metrics and computational-resources disclosure"
+                "text": "EU AI Act Annex IV §2(g): validation/testing metrics (accuracy, robustness)"
               },
               "defaultConfiguration": {
                 "level": "warning"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng"
+            },
+            {
+              "id": "SBOM-AIACT-ANNEX-IV-2C",
+              "name": "AiActComputationalResources",
+              "shortDescription": {
+                "text": "EU AI Act Annex IV §2(c): computational resources / training-energy disclosure"
+              },
+              "defaultConfiguration": {
+                "level": "note"
               },
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng"
             },
@@ -418,6 +429,17 @@ expression: "render(&SarifReporter::new())"
               },
               "defaultConfiguration": {
                 "level": "note"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng"
+            },
+            {
+              "id": "SBOM-AIACT-UNTYPED-ML",
+              "name": "AiActUntypedMlContent",
+              "shortDescription": {
+                "text": "EU AI Act readiness: ML content detected but not typed machine-learning-model"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
               },
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng"
             },
@@ -495,6 +517,17 @@ expression: "render(&SarifReporter::new())"
               },
               "defaultConfiguration": {
                 "level": "note"
+              },
+              "helpUri": "https://www.bsi.bund.de"
+            },
+            {
+              "id": "SBOM-BSIAI-UNTYPED-ML",
+              "name": "BsiSbomForAiUntypedMlContent",
+              "shortDescription": {
+                "text": "BSI/G7 SBOM-for-AI readiness: ML content detected but not typed machine-learning-model"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
               },
               "helpUri": "https://www.bsi.bund.de"
             }
