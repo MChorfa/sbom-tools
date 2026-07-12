@@ -19,46 +19,8 @@ use crate::model::{Component, ComponentType, DependencyType, Hash, NormalizedSbo
 use super::EmitError;
 use super::fidelity::FidelityReport;
 
-/// CycloneDX spec version emitted by default.
+/// CycloneDX spec version emitted by this module.
 const SPEC_VERSION: &str = "1.7";
-
-/// CycloneDX spec versions this emitter can target.
-///
-/// The two versions share identical ML-BOM definitions (modelCard,
-/// componentData, energyConsumption…), so the document body is the same;
-/// only the `specVersion` marker differs. 1.7-only constructs this emitter
-/// can produce (`isExternal`/`versionRange`) are dropped with a fidelity
-/// note when targeting 1.6.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum CdxSpecVersion {
-    /// CycloneDX 1.6.
-    V1_6,
-    /// CycloneDX 1.7 (default).
-    #[default]
-    V1_7,
-}
-
-impl CdxSpecVersion {
-    /// The `specVersion` document value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::V1_6 => "1.6",
-            Self::V1_7 => SPEC_VERSION,
-        }
-    }
-
-    /// Parse a `--spec-version` value.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim() {
-            "1.6" => Some(Self::V1_6),
-            "1.7" => Some(Self::V1_7),
-            _ => None,
-        }
-    }
-}
 
 /// Emit `sbom` as a CycloneDX 1.7 JSON document plus a fidelity report.
 ///
@@ -67,26 +29,7 @@ impl CdxSpecVersion {
 /// Returns [`EmitError::Serialize`] if the synthesized document fails to
 /// serialize (not expected for well-formed models).
 pub fn emit_cyclonedx(sbom: &NormalizedSbom) -> Result<(String, FidelityReport), EmitError> {
-    emit_cyclonedx_versioned(sbom, CdxSpecVersion::V1_7)
-}
-
-/// Emit `sbom` as a CycloneDX JSON document targeting `version`.
-///
-/// # Errors
-///
-/// Returns [`EmitError::Serialize`] if the synthesized document fails to
-/// serialize (not expected for well-formed models).
-pub fn emit_cyclonedx_versioned(
-    sbom: &NormalizedSbom,
-    version: CdxSpecVersion,
-) -> Result<(String, FidelityReport), EmitError> {
-    let mut report = FidelityReport::new(
-        sbom.document.format.to_string(),
-        match version {
-            CdxSpecVersion::V1_6 => "CycloneDX 1.6",
-            CdxSpecVersion::V1_7 => "CycloneDX 1.7",
-        },
-    );
+    let mut report = FidelityReport::new(sbom.document.format.to_string(), "CycloneDX 1.7");
 
     // Stable bom-ref per component = canonical id value. Canonical ids are
     // unique keys in the components map, so refs never collide.
