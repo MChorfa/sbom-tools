@@ -45,8 +45,8 @@ impl Spdx3Parser {
         // a document deserializes above as an empty Spdx3Document; re-read
         // it as the one element it is.
         if Self::is_bare_element(&doc) {
-            let element: Spdx3Element = serde_json::from_str(content)
-                .map_err(|e| ParseError::JsonError(e.to_string()))?;
+            let element: Spdx3Element =
+                serde_json::from_str(content).map_err(|e| ParseError::JsonError(e.to_string()))?;
             doc.element = Some(vec![element]);
         }
 
@@ -59,10 +59,7 @@ impl Spdx3Parser {
     fn is_bare_element(doc: &Spdx3Document) -> bool {
         doc.element.is_none()
             && doc.graph.is_none()
-            && doc
-                .type_
-                .as_deref()
-                .is_some_and(|t| t != "SpdxDocument")
+            && doc.type_.as_deref().is_some_and(|t| t != "SpdxDocument")
     }
 
     /// Parse from a JSON reader (streaming)
@@ -404,7 +401,10 @@ impl Spdx3Parser {
                 .get(data_license)
                 .cloned()
                 .unwrap_or_else(|| data_license.clone());
-            spdx_ext.insert("dataLicense".to_string(), serde_json::Value::String(resolved));
+            spdx_ext.insert(
+                "dataLicense".to_string(),
+                serde_json::Value::String(resolved),
+            );
         }
         if let Some(ns_map) = &doc.namespace_map
             && !ns_map.is_empty()
