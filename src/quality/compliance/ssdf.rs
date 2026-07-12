@@ -150,22 +150,20 @@ impl ComplianceChecker {
             });
         }
 
-        // RV.1 — Component identification: unique identifiers (PURL/CPE)
+        // RV.1 — Component identification: unique identifiers
+        // (PURL/CPE/SWHID/SWID via `has_cra_identifier`, so SWHID-only SPDX
+        // components are not flagged)
         let without_id = sbom
             .components
             .values()
-            .filter(|c| {
-                c.identifiers.purl.is_none()
-                    && c.identifiers.cpe.is_empty()
-                    && c.identifiers.swid.is_none()
-            })
+            .filter(|c| !c.identifiers.has_cra_identifier())
             .count();
         if without_id > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::ComponentIdentification,
                 message: format!(
-                    "{without_id}/{total} components missing unique identifier (PURL/CPE/SWID)"
+                    "{without_id}/{total} components missing unique identifier (PURL/CPE/SWHID/SWID)"
                 ),
                 element: None,
                 requirement: "NIST SSDF RV.1: Component identification — unique identifiers"
@@ -175,11 +173,17 @@ impl ComplianceChecker {
             });
         }
 
-        // PS.3 — Supplier identification
+        // PS.3 — Supplier identification (placeholder values such as
+        // NOASSERTION do not satisfy the element)
         let without_supplier = sbom
             .components
             .values()
-            .filter(|c| c.supplier.is_none() && c.author.is_none())
+            .filter(|c| {
+                !c.supplier
+                    .as_ref()
+                    .is_some_and(|s| known_value(Some(s.name.as_str())).is_some())
+                    && !has_known_value(&c.author)
+            })
             .count();
         if without_supplier > 0 {
             violations.push(Violation {

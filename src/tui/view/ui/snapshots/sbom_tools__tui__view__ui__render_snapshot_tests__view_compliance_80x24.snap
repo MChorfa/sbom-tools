@@ -12,14 +12,14 @@ sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ NTIA Minimum Elements ───────────────────────────────┐┌ Summary ─────────────┐
 └──────────────────────────────────────────────────────┘└──────────────────────┘
-┌ Violations (grouped: 4 patterns, 20 total┐┌ Affected (9) K/J scroll ─────────┐
+┌ Violations (grouped: 5 patterns, 21 total┐┌ Affected (9) K/J scroll ─────────┐
 │Severi Catego Issue Pattern        Count  ││  Component  missing supplier/... █
 │                                          ││  9 named                         █
 │ERROR  Suppli Component  missing s 9      ││  ──────────────────────────────  █
-│ERROR  Doc Me SBOM must have creat 1      ││  zod                             █
-│ERROR  Deps   SBOM with multiple c 1      ││  axios                           █
-│INFO   Format Component  may be mi 9      ││  dayjs                           █
-│                                          ││  react                           ║
+│ERROR  Comp I Component  missing u 1      ││  zod                             █
+│ERROR  Doc Me SBOM must have creat 1      ││  axios                           █
+│ERROR  Deps   SBOM with multiple c 1      ││  dayjs                           █
+│INFO   Format Component  may be mi 9      ││  react                           ║
 │                                          ││  lodash                          ║
 └──────────────────────────────────────────┘└──────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐

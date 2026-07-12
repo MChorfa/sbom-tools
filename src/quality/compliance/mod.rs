@@ -26,7 +26,7 @@ mod ssdf;
 use context::{ComplianceContext, checker_for};
 use registry::REMEDIATION_GENERIC;
 pub use registry::{RuleMeta, rule_meta};
-use shared::{is_valid_email_format, truncate_list};
+use shared::{has_known_value, is_valid_email_format, known_value, truncate_list};
 
 /// CRA enforcement phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -978,6 +978,312 @@ mod tests {
         assert!(
             !r.violations.iter().any(|v| v.rule_id == "SBOM-CRA-ART-24"),
             "a document-level disclosure URL must satisfy the Art.24 vuln-handling gate"
+        );
+    }
+
+    /// "Other Unique Identifiers" is one of the seven NTIA minimum data
+    /// fields; a component without PURL/CPE/SWHID/SWID must fail NtiaMinimum.
+    #[test]
+    fn ntia_gates_on_missing_identifier() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Organization};
+        let mut without_id = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c =
+            Component::new("lib".to_string(), "lib@1".to_string()).with_version("1.0".to_string());
+        c.supplier = Some(Organization::new("LibCorp".to_string()));
+        without_id.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&without_id);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-IDENTIFIER"
+                    && v.severity == ViolationSeverity::Error),
+            "missing unique identifier must fail NTIA"
+        );
+
+        let mut with_id = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/lib@1.0".to_string());
+        c.supplier = Some(Organization::new("LibCorp".to_string()));
+        with_id.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&with_id);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-IDENTIFIER"),
+            "PURL satisfies the NTIA identifier element"
+        );
+    }
+
+    /// Asserted-as-unknown sentinels (NOASSERTION) must not satisfy the NTIA
+    /// version and supplier gates — SPDX copies versionInfo verbatim.
+    #[test]
+    fn placeholder_values_do_not_satisfy_required_elements() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Organization};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+            .with_version("NOASSERTION".to_string())
+            .with_purl("pkg:cargo/lib@1.0".to_string());
+        c.supplier = Some(Organization::new("NOASSERTION".to_string()));
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-VERSION"),
+            "NOASSERTION version must not satisfy the NTIA version element"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-SUPPLIER"),
+            "NOASSERTION supplier must not satisfy the NTIA supplier element"
+        );
+    }
+
+    /// FDA premarket guidance incorporates the NTIA baseline, so a
+    /// timestamp-less SBOM must fail FdaMedicalDevice like it fails NTIA.
+    #[test]
+    fn fda_gates_on_missing_timestamp() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.created = chrono::DateTime::UNIX_EPOCH;
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-TIMESTAMP"
+                    && v.severity == ViolationSeverity::Error),
+            "missing timestamp must fail FDA (NTIA baseline)"
+        );
+    }
+
+    /// FDA §524B requires level-of-support / end-of-support information;
+    /// its absence must at least warn, and lifecycle properties satisfy it.
+    #[test]
+    fn fda_warns_without_support_lifecycle() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Property};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "missing support-lifecycle info must warn under FDA"
+        );
+
+        let mut with_eol = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/lib@1.0".to_string());
+        c.extensions.properties.push(Property {
+            name: "end-of-support".to_string(),
+            value: "2030-01-01".to_string(),
+        });
+        with_eol.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&with_eol);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "component end-of-support property satisfies the FDA support check"
+        );
+    }
+
+    /// EO 14028 §4(e) mandates the NTIA minimum elements, which include the
+    /// creation timestamp.
+    #[test]
+    fn eo14028_gates_on_missing_timestamp() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.created = chrono::DateTime::UNIX_EPOCH;
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-TIMESTAMP"
+                    && v.severity == ViolationSeverity::Error),
+            "missing timestamp must fail EO 14028"
+        );
+
+        let mut with_ts = NormalizedSbom::new(DocumentMetadata::default());
+        with_ts.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&with_ts);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-TIMESTAMP")
+        );
+    }
+
+    /// SPDX 2.2 is an NTIA-accepted format; the EO 14028 machine-readable
+    /// gate must not error on it (SPDX 2.1 and older still fail).
+    #[test]
+    fn eo14028_accepts_spdx_2_2() {
+        use crate::model::{DocumentMetadata, NormalizedSbom, SbomFormat};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.format = SbomFormat::Spdx;
+        sbom.document.spec_version = "2.2".to_string();
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-FORMAT"),
+            "SPDX 2.2 is machine-readable under EO 14028"
+        );
+
+        sbom.document.spec_version = "2.1".to_string();
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-FORMAT"),
+            "SPDX 2.1 still fails the machine-readable gate"
+        );
+    }
+
+    /// SWHID-only components carry a valid unique identifier; EO 14028 and
+    /// SSDF identifier checks must not flag them.
+    #[test]
+    fn eo14028_and_ssdf_accept_swhid_identifiers() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, SwhidObject};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c =
+            Component::new("lib".to_string(), "lib@1".to_string()).with_version("1.0".to_string());
+        c.identifiers.swhid.push(
+            SwhidObject::parse("swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap(),
+        );
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-IDENTIFIER"),
+            "SWHID satisfies the EO 14028 identifier element"
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::NistSsdf).check(&sbom);
+        assert!(
+            !r.violations.iter().any(|v| v.rule_id == "SBOM-SSDF-RV1"),
+            "SWHID satisfies the SSDF RV.1 identifier check"
+        );
+    }
+
+    /// A single token edge among many components must not satisfy the NTIA
+    /// dependency-relationship element; declared-incomplete SBOMs are exempt.
+    #[test]
+    fn dependency_graph_orphans_warn() {
+        use crate::model::{
+            Component, CompletenessDeclaration, DependencyEdge, DependencyType, DocumentMetadata,
+            NormalizedSbom,
+        };
+        let build = || {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut ids = Vec::new();
+            for i in 0..5 {
+                let c = Component::new(format!("lib{i}"), format!("lib{i}@1"))
+                    .with_version("1.0".to_string())
+                    .with_purl(format!("pkg:cargo/lib{i}@1.0"));
+                ids.push(c.canonical_id.clone());
+                sbom.add_component(c);
+            }
+            // One edge between two leaves; the other three stay orphaned.
+            sbom.edges.push(DependencyEdge::new(
+                ids[0].clone(),
+                ids[1].clone(),
+                DependencyType::DependsOn,
+            ));
+            sbom
+        };
+
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&build());
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.message.contains("participate in no dependency relationship")),
+            "3/5 orphaned components must produce a dependency-coverage warning"
+        );
+
+        let mut declared = build();
+        declared.document.completeness_declaration = CompletenessDeclaration::Incomplete;
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&declared);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.message.contains("participate in no dependency relationship")),
+            "declared-incomplete SBOMs are exempt from the orphan warning"
+        );
+    }
+
+    /// The primary product component must participate in the dependency
+    /// graph — a root with zero relationships does not describe the product.
+    #[test]
+    fn primary_component_must_participate_in_graph() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, NormalizedSbom,
+        };
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let app = Component::new("app".to_string(), "app".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/app@1.0".to_string());
+        let lib_a = Component::new("liba".to_string(), "liba".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/liba@1.0".to_string());
+        let lib_b = Component::new("libb".to_string(), "libb".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/libb@1.0".to_string());
+        let app_id = app.canonical_id.clone();
+        let a_id = lib_a.canonical_id.clone();
+        let b_id = lib_b.canonical_id.clone();
+        sbom.primary_component_id = Some(app_id.clone());
+        sbom.add_component(app);
+        sbom.add_component(lib_a);
+        sbom.add_component(lib_b);
+        // Edge between the two libs only; the primary is disconnected.
+        sbom.edges.push(DependencyEdge::new(
+            a_id.clone(),
+            b_id,
+            DependencyType::DependsOn,
+        ));
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.message.contains("Primary component")
+                    && v.message.contains("no dependency relationship")),
+            "disconnected primary component must warn"
+        );
+
+        // Connect the primary → warning disappears.
+        sbom.edges.push(DependencyEdge::new(
+            app_id,
+            a_id,
+            DependencyType::DependsOn,
+        ));
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.message.contains("Primary component")
+                    && v.message.contains("no dependency relationship"))
         );
     }
 

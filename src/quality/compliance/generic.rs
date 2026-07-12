@@ -283,17 +283,7 @@ impl ComplianceChecker {
             // Check whether the primary component (or any top-level component) has end-of-life
             // or lifecycle information. Currently we check support_end_date at doc level.
             // Also check for lifecycle properties on components.
-            let has_lifecycle_info = sbom.document.support_end_date.is_some()
-                || sbom.components.values().any(|comp| {
-                    comp.extensions.properties.iter().any(|p| {
-                        let name_lower = p.name.to_lowercase();
-                        name_lower.contains("lifecycle")
-                            || name_lower.contains("end-of-life")
-                            || name_lower.contains("eol")
-                            || name_lower.contains("end-of-support")
-                    })
-                });
-            if !has_lifecycle_info {
+            if !self.has_support_lifecycle_evidence(sbom) {
                 violations.push(Violation {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::SecurityInfo,
@@ -385,25 +375,55 @@ impl ComplianceChecker {
                     standard_refs: Vec::new(),
                 });
             }
+
+            // FDA 2023 premarket guidance / FD&C §524B: beyond the NTIA
+            // baseline, the SBOM package must convey each component's level
+            // of support and end-of-support date. The guidance allows this
+            // to accompany the SBOM, so absence is a Warning (not a gating
+            // Error): we accept a document-level support end date, component
+            // lifecycle/EOL properties, or the sidecar's support end date as
+            // evidence.
+            if !self.has_support_lifecycle_evidence(sbom) {
+                violations.push(Violation {
+                    severity: ViolationSeverity::Warning,
+                    category: ViolationCategory::SecurityInfo,
+                    message: "FDA: no level-of-support or end-of-support information found \
+                        (required by the premarket cybersecurity guidance / FD&C §524B; \
+                        add component lifecycle/end-of-support data or provide it alongside the SBOM)"
+                        .to_string(),
+                    element: None,
+                    requirement: "FDA: Level of support and end-of-support date".to_string(),
+                    rule_id: "SBOM-FDA-SUPPORT",
+                    standard_refs: Vec::new(),
+                });
+            }
         }
 
-        // NTIA "Timestamp" is one of the seven required minimum data fields.
+        // NTIA "Timestamp" is one of the seven required minimum data fields,
+        // and the FDA premarket guidance incorporates the NTIA baseline.
         // `DocumentMetadata::created` is never None, but a missing/invalid
         // source timestamp is stored as the UNIX_EPOCH sentinel (see
         // `has_known_timestamp`), so gate on that rather than assuming it is
         // always meaningful.
         if matches!(
             self.level,
-            ComplianceLevel::NtiaMinimum | ComplianceLevel::Comprehensive
+            ComplianceLevel::NtiaMinimum
+                | ComplianceLevel::FdaMedicalDevice
+                | ComplianceLevel::Comprehensive
         ) && !sbom.document.has_known_timestamp()
         {
+            let requirement = if self.level == ComplianceLevel::FdaMedicalDevice {
+                "FDA (NTIA baseline): Timestamp".to_string()
+            } else {
+                "NTIA Minimum Elements: Timestamp".to_string()
+            };
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
                 message: "SBOM is missing a creation timestamp (NTIA required data field)"
                     .to_string(),
                 element: None,
-                requirement: "NTIA Minimum Elements: Timestamp".to_string(),
+                requirement,
                 rule_id: "SBOM-NTIA-TIMESTAMP",
                 standard_refs: Vec::new(),
             });
@@ -431,13 +451,36 @@ impl ComplianceChecker {
         }
     }
 
+    /// Whether the SBOM (or its sidecar) carries any support-lifecycle
+    /// evidence: a document-level support end date, component
+    /// lifecycle/end-of-life/end-of-support properties, or a sidecar
+    /// support end date. Shared by the CRA Art. 13(11) and FDA
+    /// level-of-support checks.
+    fn has_support_lifecycle_evidence(&self, sbom: &NormalizedSbom) -> bool {
+        sbom.document.support_end_date.is_some()
+            || self
+                .sidecar
+                .as_ref()
+                .is_some_and(|s| s.support_end_date.is_some())
+            || sbom.components.values().any(|comp| {
+                comp.extensions.properties.iter().any(|p| {
+                    let name_lower = p.name.to_lowercase();
+                    name_lower.contains("lifecycle")
+                        || name_lower.contains("end-of-life")
+                        || name_lower.contains("eol")
+                        || name_lower.contains("end-of-support")
+                })
+            })
+    }
+
     pub(crate) fn check_components(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
         use crate::model::HashAlgorithm;
 
         for comp in sbom.components.values() {
-            // All levels: component must have a name
-            // (Always true in our model, but check anyway)
-            if comp.name.is_empty() {
+            // All levels: component must have a name. Whitespace-only names
+            // and asserted-as-unknown sentinels (NOASSERTION/NONE) count as
+            // missing — a placeholder cannot satisfy a required element.
+            if known_value(Some(comp.name.as_str())).is_none() {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::ComponentIdentification,
@@ -458,7 +501,7 @@ impl ComplianceChecker {
                     | ComplianceLevel::CraPhase1
                     | ComplianceLevel::CraPhase2
                     | ComplianceLevel::Comprehensive
-            ) && comp.version.is_none()
+            ) && !has_known_value(&comp.version)
             {
                 let (req, msg, rule_id) = match self.level {
                     ComplianceLevel::FdaMedicalDevice => (
@@ -491,11 +534,14 @@ impl ComplianceChecker {
                 });
             }
 
-            // Standard+ & FDA: should have PURL/CPE/SWHID/SWID
-            // CRA prEN 40000-1-3 [PRE-7-RQ-07] explicitly names PURL, CPE, SWHID
+            // NTIA, Standard+ & FDA: should have PURL/CPE/SWHID/SWID
+            // "Other Unique Identifiers" is one of the seven NTIA minimum
+            // data fields; CRA prEN 40000-1-3 [PRE-7-RQ-07] explicitly names
+            // PURL, CPE, SWHID
             if matches!(
                 self.level,
-                ComplianceLevel::Standard
+                ComplianceLevel::NtiaMinimum
+                    | ComplianceLevel::Standard
                     | ComplianceLevel::FdaMedicalDevice
                     | ComplianceLevel::CraPhase1
                     | ComplianceLevel::CraPhase2
@@ -504,7 +550,8 @@ impl ComplianceChecker {
             {
                 let severity = if matches!(
                     self.level,
-                    ComplianceLevel::FdaMedicalDevice
+                    ComplianceLevel::NtiaMinimum
+                        | ComplianceLevel::FdaMedicalDevice
                         | ComplianceLevel::CraPhase1
                         | ComplianceLevel::CraPhase2
                 ) {
@@ -513,6 +560,14 @@ impl ComplianceChecker {
                     ViolationSeverity::Warning
                 };
                 let (message, requirement, rule_id) = match self.level {
+                    ComplianceLevel::NtiaMinimum => (
+                        format!(
+                            "Component '{}' missing unique identifier (PURL/CPE/SWHID/SWID)",
+                            comp.name
+                        ),
+                        "NTIA Minimum Elements: Other Unique Identifiers".to_string(),
+                        "SBOM-NTIA-IDENTIFIER",
+                    ),
                     ComplianceLevel::FdaMedicalDevice => (
                         format!(
                             "Component '{}' missing unique identifier (PURL/CPE/SWHID/SWID)",
@@ -557,8 +612,11 @@ impl ComplianceChecker {
                     | ComplianceLevel::CraPhase1
                     | ComplianceLevel::CraPhase2
                     | ComplianceLevel::Comprehensive
-            ) && comp.supplier.is_none()
-                && comp.author.is_none()
+            ) && !comp
+                .supplier
+                .as_ref()
+                .is_some_and(|s| known_value(Some(s.name.as_str())).is_some())
+                && !has_known_value(&comp.author)
             {
                 let severity = match self.level {
                     ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => {
@@ -714,28 +772,90 @@ impl ComplianceChecker {
             let has_deps = !sbom.edges.is_empty();
             let has_multiple_components = sbom.components.len() > 1;
 
+            let (requirement, rule_id) = match self.level {
+                ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => (
+                    "CRA Annex I: Dependency relationships",
+                    "SBOM-CRA-ANNEX-I-DEPENDENCY",
+                ),
+                _ => ("NTIA: Dependency relationships", "SBOM-NTIA-DEPENDENCY"),
+            };
+
             if has_multiple_components && !has_deps {
-                let (message, requirement, rule_id) = match self.level {
-                    ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => (
+                let message = match self.level {
+                    ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 =>
                         "[CRA Annex I] SBOM with multiple components must include dependency relationships".to_string(),
-                        "CRA Annex I: Dependency relationships".to_string(),
-                        "SBOM-CRA-ANNEX-I-DEPENDENCY",
-                    ),
-                    _ => (
+                    _ =>
                         "SBOM with multiple components must include dependency relationships".to_string(),
-                        "NTIA: Dependency relationships".to_string(),
-                        "SBOM-NTIA-DEPENDENCY",
-                    ),
                 };
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::DependencyInfo,
                     message,
                     element: None,
-                    requirement,
+                    requirement: requirement.to_string(),
                     rule_id,
                     standard_refs: Vec::new(),
                 });
+            } else if has_multiple_components {
+                // Edges exist — check the graph is more than a token gesture.
+                // A single edge among N components used to satisfy the
+                // "dependency relationships" element for the whole SBOM.
+                use std::collections::HashSet;
+                let mut connected: HashSet<&crate::model::CanonicalId> = HashSet::new();
+                for edge in &sbom.edges {
+                    connected.insert(&edge.from);
+                    connected.insert(&edge.to);
+                }
+
+                // The primary product component must participate in the
+                // dependency graph — an SBOM whose root has no declared
+                // relationships does not describe the product's dependencies.
+                if let Some(primary_id) = &sbom.primary_component_id
+                    && let Some(primary) = sbom.components.get(primary_id)
+                    && !connected.contains(primary_id)
+                {
+                    violations.push(Violation {
+                        severity: ViolationSeverity::Warning,
+                        category: ViolationCategory::DependencyInfo,
+                        message: format!(
+                            "Primary component '{}' participates in no dependency relationship",
+                            primary.name
+                        ),
+                        element: Some(primary.name.clone()),
+                        requirement: requirement.to_string(),
+                        rule_id,
+                        standard_refs: Vec::new(),
+                    });
+                }
+
+                // Most components disconnected from the graph → the
+                // dependency information is likely incomplete. Suppressed
+                // when the SBOM explicitly declares an incomplete inventory.
+                use crate::model::CompletenessDeclaration as CD;
+                let declared_incomplete = matches!(
+                    sbom.document.completeness_declaration,
+                    CD::Incomplete | CD::IncompleteFirstPartyOnly | CD::IncompleteThirdPartyOnly
+                );
+                let total = sbom.components.len();
+                let orphans = sbom
+                    .components
+                    .keys()
+                    .filter(|id| !connected.contains(id))
+                    .count();
+                if !declared_incomplete && orphans >= 2 && orphans * 2 > total {
+                    let pct = (orphans * 100) / total.max(1);
+                    violations.push(Violation {
+                        severity: ViolationSeverity::Warning,
+                        category: ViolationCategory::DependencyInfo,
+                        message: format!(
+                            "{orphans}/{total} components ({pct}%) participate in no dependency relationship; dependency information appears incomplete"
+                        ),
+                        element: None,
+                        requirement: requirement.to_string(),
+                        rule_id,
+                        standard_refs: Vec::new(),
+                    });
+                }
             }
         }
 
@@ -746,7 +866,14 @@ impl ComplianceChecker {
             for edge in &sbom.edges {
                 incoming.insert(&edge.to);
             }
-            let root_count = sbom.components.len().saturating_sub(incoming.len());
+            // Count roots among the components that actually exist — edges
+            // may reference ids that are not in the component map, so
+            // `len() - incoming.len()` would undercount.
+            let root_count = sbom
+                .components
+                .keys()
+                .filter(|id| !incoming.contains(id))
+                .count();
             if root_count > 1 {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,

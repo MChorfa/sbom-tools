@@ -731,6 +731,21 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::Eo14028, "EO 14028 §4")],
             remediation: REMEDIATION_EO14028,
         },
+        "SBOM-EO14028-TIMESTAMP" => RuleMeta {
+            sarif_id: "SBOM-EO14028-TIMESTAMP",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Eo14028, "EO 14028 §4"), (K::NtiaMinimum, "Timestamp")],
+            remediation: REMEDIATION_EO14028,
+        },
+        "SBOM-EO14028-NAME" => RuleMeta {
+            sarif_id: "SBOM-EO14028-NAME",
+            default_severity: ViolationSeverity::Error,
+            refs: &[
+                (K::Eo14028, "EO 14028 §4"),
+                (K::NtiaMinimum, "Component Name"),
+            ],
+            remediation: REMEDIATION_EO14028,
+        },
         // ---- BSI TR-03183-2 ----------------------------------------------
         "SBOM-BSI-TR-03183-2-5-1" => RuleMeta {
             sarif_id: "SBOM-BSI-TR-03183-2-5-1",
