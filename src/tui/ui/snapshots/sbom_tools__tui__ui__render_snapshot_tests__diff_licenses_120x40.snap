@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5] Vulnerabilities   │  [6] Quality   │
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Group:  License   Sort: License  │  Risk:  All   │  Compat:  Off   │  Focus:  New   │  [g] grp [s] sort [r] risk [c] com

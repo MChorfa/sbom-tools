@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ bsi-aibom-complete-app │ CycloneDX 1.6 │ [AI-BOM]
 
- [1] Overview   │  [2] Models   │  [3] Datasets   │  [4] AI-Readiness   │  [5] Compliance   │  [6] Source
+[1] Overview  │ [2] Models  │ [3] Datasets  │ [4] AI-Readiness  │ [5] Compliance  │ [6] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ AI Readiness Summary ────────────────────────────────────────────────────────────────────────────────────────────────┐

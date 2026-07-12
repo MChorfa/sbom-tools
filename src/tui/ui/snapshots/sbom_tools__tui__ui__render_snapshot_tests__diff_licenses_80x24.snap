@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5
+« [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  »
 
 ────────────────────────────────────────────────────────────────────────────────
 Group:  License   Sort: License  │  Risk:  All   │  Compat:  Off   │  Focus:  Ne
@@ -25,4 +25,4 @@ Group:  License   Sort: License  │  Risk:  All   │  Compat:  Off   │  Focu
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
- g group  s sort  r risk  c compat  p panel │  Tab switch  / search  e export  ?
+  …  g group  s sort  r risk │  Tab switch  / search  e export  ? help  q quit

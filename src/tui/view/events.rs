@@ -1181,17 +1181,27 @@ pub fn handle_mouse_event(app: &mut ViewApp, mouse: event::MouseEvent) {
 
 /// Handle click on tab bar
 fn handle_tab_click(app: &mut ViewApp, x: u16) {
-    // Derive hit regions from the profile's actual rendered tabs (matches
-    // view/ui.rs render_tabs), rather than a hardcoded SBOM label list that
-    // mis-selected under the CBOM/AI-BOM profiles.
+    // Shared geometry with the last render (windowed): marker clicks select
+    // the adjacent hidden tab, mirroring diff mode.
     let tabs = ViewTab::tabs_for_profile(app.bom_profile);
     let labels: Vec<String> = tabs
         .iter()
         .enumerate()
         .map(|(i, tab)| format!("[{}] {} ", i + 1, tab.title()))
         .collect();
-    if let Some(idx) = crate::tui::shared::tab_bar_hit(&labels, 0, 3, x) {
-        app.select_tab(tabs[idx]);
+    match crate::tui::shared::tab_bar_hit_windowed(&labels, app.tab_window, 0, 3, x) {
+        crate::tui::shared::TabHit::Tab(idx) => app.select_tab(tabs[idx]),
+        crate::tui::shared::TabHit::PrevMarker => {
+            if app.tab_window.start > 0 {
+                app.select_tab(tabs[app.tab_window.start - 1]);
+            }
+        }
+        crate::tui::shared::TabHit::NextMarker => {
+            if app.tab_window.end < tabs.len() {
+                app.select_tab(tabs[app.tab_window.end]);
+            }
+        }
+        crate::tui::shared::TabHit::Miss => {}
     }
 }
 

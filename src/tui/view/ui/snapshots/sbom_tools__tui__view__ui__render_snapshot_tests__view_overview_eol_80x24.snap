@@ -18,11 +18,11 @@ sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 │      High ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││Component                      C M│
 │    Medium ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││                                  │
 │       Low ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││                                  │
-│── Ecosystems ──                          ││                                  │
-│         npm ██████████████████████░░░    ││                                  │
-│       Other 1 more                       ││                                  │
-│── Licenses ──                            ││                                  │
-│         MIT ████████████████░░░░░░░░░    ││                                  │
+│── End-of-Life Status ──                  ││                                  │
+│       EOL ████░░░░░░░░░░░░░░░░    2 (22%)││                                  │
+│  Near EOL ██░░░░░░░░░░░░░░░░░░    1 (11%)││                                  │
+│  Sec Only ██░░░░░░░░░░░░░░░░░░    1 (11%)││                                  │
+│ Supported █████████████████░░░    8 (88%)││                                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
  Components: 9 │ Vulns: 0 │ Licenses: 3
                   Tab switch  / search  e export  ? help  q quit

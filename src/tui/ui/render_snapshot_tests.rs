@@ -890,3 +890,196 @@ fn timeline_filter_resync_clamps_selection() {
         "'f' must clamp the selection into the filtered list"
     );
 }
+
+/// Regression: the Summary "All Changes" panel silently clipped everything
+/// below the fold with a pinned scroll of (0,0) and no key handling — users
+/// read the visible handful as the complete change set.
+#[test]
+fn summary_all_changes_scrolls_below_the_fold() {
+    let mut app = demo_app(TabKind::Summary);
+    let first = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    // '+ dayjs' is an added npm component, priority-sorted below the
+    // modified/removed entries and below the panel's fold.
+    assert!(
+        !first.contains("+ dayjs"),
+        "precondition: the added entry starts below the fold:\n{first}"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::End));
+    assert!(
+        app.summary_state().scroll_offset > 0,
+        "End must move the scroll offset"
+    );
+    let scrolled = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        scrolled.contains("+ dayjs"),
+        "scrolling must reveal the entries below the fold:\n{scrolled}"
+    );
+}
+
+/// all_changes_line_count mirrors render_all_changes' line construction.
+#[test]
+fn all_changes_line_count_matches_fixture() {
+    let (diff, _, _) = demo_diff();
+    // Demo fixture: 5 modified + 4 removed + 4 added, 0 introduced
+    // Critical/High vulns, 2 metadata changes (+1 section header).
+    assert_eq!(crate::tui::views::all_changes_line_count(&diff), 16);
+
+    let empty = crate::diff::DiffResult::default();
+    assert_eq!(
+        crate::tui::views::all_changes_line_count(&empty),
+        1,
+        "empty diff renders the single empty-state line"
+    );
+}
+
+/// The engine's KEV deadline and affected version were discarded before
+/// render; the detail panel must now show both.
+#[test]
+fn diff_vuln_detail_shows_kev_deadline_and_affected_version() {
+    pin_theme();
+    let (mut diff, old, new) = demo_diff();
+
+    let mut vuln = crate::model::VulnerabilityRef::new(
+        "CVE-2024-1234".to_string(),
+        crate::model::VulnerabilitySource::Osv,
+    );
+    vuln.is_kev = true;
+    let comp = crate::model::Component::new("liba".to_string(), "pkg:npm/liba@1.2.3".to_string())
+        .with_version("1.2.3".to_string());
+    let mut detail = crate::diff::VulnerabilityDetail::from_ref(&vuln, &comp);
+    detail.kev_due_date = Some("2026-08-01".to_string());
+    detail.days_until_due = Some(-5);
+    diff.vulnerabilities.introduced.push(detail);
+
+    let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
+    app.active_tab = TabKind::Vulnerabilities;
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("KEV due: 2026-08-01"),
+        "detail panel must show the CISA deadline:\n{text}"
+    );
+    assert!(
+        text.contains("5d overdue"),
+        "overdue urgency must render:\n{text}"
+    );
+    assert!(
+        text.contains("Affects: 1.2.3"),
+        "affected version must render:\n{text}"
+    );
+}
+
+/// VEX transitions must be summarized in the filter bar and marked on rows.
+#[test]
+fn diff_vuln_filter_bar_shows_vex_transitions() {
+    pin_theme();
+    let (mut diff, old, new) = demo_diff();
+
+    let vref = crate::model::VulnerabilityRef::new(
+        "CVE-2024-7777".to_string(),
+        crate::model::VulnerabilitySource::Osv,
+    );
+    let comp = crate::model::Component::new("libv".to_string(), "pkg:npm/libv@1.0.0".to_string());
+    diff.vulnerabilities
+        .persistent
+        .push(crate::diff::VulnerabilityDetail::from_ref(&vref, &comp));
+    diff.vulnerabilities
+        .vex_changes
+        .push(crate::diff::VexStatusChange {
+            vuln_id: "CVE-2024-7777".to_string(),
+            component_name: "libv".to_string(),
+            old_state: Some(crate::model::VexState::UnderInvestigation),
+            new_state: Some(crate::model::VexState::NotAffected),
+        });
+
+    let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
+    app.active_tab = TabKind::Vulnerabilities;
+    // Flat list mode: a collapsed component group would hide the row.
+    app.vulnerabilities_state_mut().group_by_component = false;
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("VEX \u{394}:") && text.contains("1\u{2192}Not Affected"),
+        "filter bar must summarize VEX transitions:\n{text}"
+    );
+    assert!(
+        text.contains("\u{394} CVE-"),
+        "the transitioned row must carry the delta marker (ID may truncate):\n{text}"
+    );
+}
+
+/// Regression: the diff vuln filter bar hard-truncated its View toggle and
+/// hints at 80 cols; the second row must carry them now.
+#[test]
+fn diff_vuln_filter_bar_hints_visible_at_80_cols() {
+    let text = render_tab(TabKind::Vulnerabilities, 80, 24);
+    assert!(
+        text.contains("[f] filter"),
+        "hints must be visible at 80 cols:\n{text}"
+    );
+    assert!(
+        text.contains("View:"),
+        "View toggle must be visible at 80 cols:\n{text}"
+    );
+}
+
+/// Lock the Source detail bottom-strip layout ('d' previously squeezed both
+/// panels to ~30 cols for a six-line side column).
+#[test]
+fn snapshot_source_detail_strip() {
+    let mut app = demo_app(TabKind::Source);
+    handle_key_event(&mut app, key(KeyCode::Char('d')));
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    insta::assert_snapshot!("diff_source_detail_80x24", text);
+}
+
+/// Clicking the tab-bar overflow markers must page hidden tabs into view
+/// (they were previously plain truncation with no affordance at all).
+#[test]
+fn tab_marker_click_selects_adjacent_hidden_tab() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = demo_app(TabKind::Source);
+    // Render at 80 cols so the bar windows around Source (last tab) and the
+    // leading « marker appears; the render stashes the window geometry.
+    let _ = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        app.tab_window.clipped_left,
+        "Source at 80 cols must clip earlier tabs: {:?}",
+        app.tab_window
+    );
+    let before = app.tab_window.start;
+
+    crate::tui::events::handle_mouse_event(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0, // the « marker cell
+            row: 1,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        },
+    );
+    let entries = crate::tui::ui::diff_tab_entries(&app);
+    assert_eq!(
+        app.active_tab,
+        entries[before - 1].0,
+        "« click must select the tab just left of the window"
+    );
+}

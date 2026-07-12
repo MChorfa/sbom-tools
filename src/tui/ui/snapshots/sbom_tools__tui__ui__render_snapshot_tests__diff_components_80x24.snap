@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5
+« [2] Components  │ [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  »
 
 ────────────────────────────────────────────────────────────────────────────────
 Filter:  All   Sort: Name  │  [f] filter  [s] sort  [1/2/3/4/5/6/7/8] quick  [v]
@@ -25,4 +25,4 @@ Filter:  All   Sort: Name  │  [f] filter  [s] sort  [1/2/3/4/5/6/7/8] quick  [
 │   + ADDED     typescript       —  5. n - ▼│Risk Level:  Low                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
- f filter  s sort │  Tab switch  / search  e export  ? help  q quit [y] copy acm
+     …  Tab switch  / search  e export  ? help  q quit [y] copy acme-webapp

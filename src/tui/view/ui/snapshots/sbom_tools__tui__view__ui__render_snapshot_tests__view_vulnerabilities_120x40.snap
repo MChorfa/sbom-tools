@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
- [1] Overview   │  [2] Components   │  [3] Vulns   │  [4] Licenses   │  [5] Deps   │  [6] Quality   │  [7] Compliance
+[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌────────────────────────────┐┌────────────────────────────┐┌────────────────────────────┐┌────────────────────────────┐
@@ -13,8 +13,8 @@ sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 │              0             ││              0             ││              0             ││              0             │
 │ ░░░░░░░░░░░░░░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ │
 └────────────────────────────┘└────────────────────────────┘└────────────────────────────┘└────────────────────────────┘
-Filter:  All   KEV:  Off   Sort:  Severity   Dedupe:  On   Group:  Component   │  [f] filter  [k] kev  [s] sort  [d] ded
-
+Filter:  All  KEV:  Off  Sort:  Severity  Dedupe:  On  Group:  Component
+[f] filter [k] kev [s] sort [d] dedupe [g] group [E/C] fold [Tab] next group
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                                      │
 │                                                           ✓                                                          │

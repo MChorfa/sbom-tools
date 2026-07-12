@@ -20,8 +20,8 @@ use crate::tui::app::{App, AppMode, ComponentFilter, TabKind};
 use crate::tui::app_states::source::SourceDiffState;
 use crate::tui::app_states::{
     ComponentsState, DependenciesState, DiffComplianceState, DiffVulnItem, DiffVulnStatus,
-    GraphChangesState, LicensesState, QualityState, SideBySideState, VulnerabilitiesState,
-    sort_component_changes,
+    GraphChangesState, LicensesState, QualityState, SideBySideState, SummaryState,
+    VulnerabilitiesState, sort_component_changes,
 };
 use crate::tui::security::SecurityAnalysisCache;
 
@@ -68,6 +68,7 @@ pub struct RenderContext<'a> {
     pub compliance: &'a DiffComplianceState,
     pub side_by_side: &'a SideBySideState,
     pub graph_changes: &'a GraphChangesState,
+    pub summary: &'a SummaryState,
     pub source: &'a SourceDiffState,
 
     // === Cross-cutting state ===
@@ -119,6 +120,7 @@ impl<'a> RenderContext<'a> {
             compliance: app.diff_compliance_state(),
             side_by_side: app.side_by_side_state(),
             graph_changes: app.graph_changes_state(),
+            summary: app.summary_state(),
             source: app.source_state(),
 
             security_cache: &app.security_cache,

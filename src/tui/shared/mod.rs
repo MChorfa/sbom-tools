@@ -101,79 +101,189 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Map a click column to a tab index for a `ratatui` `Tabs` bar.
+/// A horizontal window over the tab list: which entries render, and whether
+/// either side is clipped (rendered as a "« "/" »" marker).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TabWindow {
+    pub start: usize,
+    pub end: usize,
+    pub clipped_left: bool,
+    pub clipped_right: bool,
+}
+
+/// What a click on the windowed tab bar hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabHit {
+    /// A visible tab (GLOBAL index into the full entry list).
+    Tab(usize),
+    /// The leading "«" overflow marker.
+    PrevMarker,
+    /// The trailing "»" overflow marker.
+    NextMarker,
+    /// A divider or dead space.
+    Miss,
+}
+
+/// Compute the window of tab labels that fits `avail` columns, always keeping
+/// `selected` visible and growing greedily around it. Two columns per clipped
+/// side are reserved for the "« "/" »" markers.
 ///
-/// `Tabs` renders each tab as `left_pad(1) + title + right_pad(1)` starting at column
-/// `left`, joining consecutive tabs with a `divider_width`-column divider (the default
-/// padding is a single space on each side — see `ratatui`'s `Tabs`). `labels` are the
-/// tab-title strings exactly as rendered, with brackets and inner spaces baked in
-/// (e.g. `"[1] Summary "`). Returns the index of the tab whose rendered span contains
-/// `click_x`, or `None` for a click on a divider, before the first tab, or past the
-/// last — so callers derive hit regions from the real tab set instead of guessing a
-/// fixed width.
+/// The single geometry contract shared by both render paths and both mouse
+/// hit-tests — the ratatui `Tabs` widget's internal truncation silently hid
+/// tabs past the width with no indicator.
 #[must_use]
-pub fn tab_bar_hit(
+pub fn tab_window(
+    label_widths: &[u16],
+    divider_width: u16,
+    selected: usize,
+    avail: u16,
+) -> TabWindow {
+    let n = label_widths.len();
+    if n == 0 {
+        return TabWindow::default();
+    }
+    let selected = selected.min(n - 1);
+
+    let fits = |start: usize, end: usize| -> bool {
+        let labels: u16 = label_widths[start..end].iter().sum();
+        let dividers = divider_width * (end - start).saturating_sub(1) as u16;
+        let markers = u16::from(start > 0) * 2 + u16::from(end < n) * 2;
+        labels + dividers + markers <= avail
+    };
+
+    // Everything fits: no window, no markers.
+    let full: u16 = label_widths.iter().sum::<u16>() + divider_width * (n - 1) as u16;
+    if full <= avail {
+        return TabWindow {
+            start: 0,
+            end: n,
+            clipped_left: false,
+            clipped_right: false,
+        };
+    }
+
+    let (mut start, mut end) = (selected, selected + 1);
+    loop {
+        let can_right = end < n && fits(start, end + 1);
+        let can_left = start > 0 && fits(start - 1, end);
+        if can_right {
+            end += 1;
+        } else if can_left {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+
+    TabWindow {
+        start,
+        end,
+        clipped_left: start > 0,
+        clipped_right: end < n,
+    }
+}
+
+/// Hit-test a click against the WINDOWED tab bar. Mirrors the hand-rolled
+/// render exactly: optional 2-col "« " marker, then `labels[start..end]`
+/// joined by `divider_width`-col dividers, then an optional 2-col " »".
+/// Returned tab indices are GLOBAL (offset by `window.start`).
+#[must_use]
+pub fn tab_bar_hit_windowed(
     labels: &[String],
+    window: TabWindow,
     left: u16,
     divider_width: u16,
     click_x: u16,
-) -> Option<usize> {
+) -> TabHit {
     use unicode_width::UnicodeWidthStr;
 
     if click_x < left {
-        return None;
+        return TabHit::Miss;
     }
-    let last = labels.len().saturating_sub(1);
     let mut cursor = left;
-    for (i, label) in labels.iter().enumerate() {
-        // 1-column left pad + title + 1-column right pad.
-        let span = (UnicodeWidthStr::width(label.as_str()) as u16).saturating_add(2);
+    if window.clipped_left {
+        if click_x < cursor + 2 {
+            return TabHit::PrevMarker;
+        }
+        cursor += 2;
+    }
+    let visible = &labels[window.start..window.end];
+    for (i, label) in visible.iter().enumerate() {
+        let span = UnicodeWidthStr::width(label.as_str()) as u16;
         if click_x >= cursor && click_x < cursor.saturating_add(span) {
-            return Some(i);
+            return TabHit::Tab(window.start + i);
         }
         cursor = cursor.saturating_add(span);
-        if i != last {
+        if i + 1 != visible.len() {
             cursor = cursor.saturating_add(divider_width);
         }
     }
-    None
+    if window.clipped_right && click_x >= cursor && click_x < cursor + 2 {
+        return TabHit::NextMarker;
+    }
+    TabHit::Miss
 }
 
 #[cfg(test)]
-mod tab_bar_hit_tests {
-    use super::tab_bar_hit;
+mod tab_window_tests {
+    use super::{TabHit, TabWindow, tab_bar_hit_windowed, tab_window};
+
+    const W: &[u16] = &[12, 14, 16, 12, 18, 11, 14, 8, 9, 9]; // 10 tabs
 
     #[test]
-    fn maps_clicks_to_tabs_and_rejects_dividers() {
-        // "[1] Summary " => width 12 => span 14 ([0,14)); divider [14,17);
-        // "[2] Components " => width 15 => span 17 ([17,34)).
-        let labels = vec!["[1] Summary ".to_string(), "[2] Components ".to_string()];
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 0), Some(0));
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 13), Some(0));
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 14), None); // divider
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 16), None);
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 17), Some(1));
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 33), Some(1));
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 34), None); // past end
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 200), None);
+    fn tab_window_no_markers_when_fits() {
+        let w = tab_window(W, 3, 0, 400);
+        assert_eq!((w.start, w.end), (0, 10));
+        assert!(!w.clipped_left && !w.clipped_right);
     }
 
     #[test]
-    fn respects_left_offset() {
-        let labels = vec!["[1] A ".to_string()]; // width 6 => span 8
-        assert_eq!(tab_bar_hit(&labels, 5, 3, 4), None); // before left
-        assert_eq!(tab_bar_hit(&labels, 5, 3, 5), Some(0));
-        assert_eq!(tab_bar_hit(&labels, 5, 3, 12), Some(0));
-        assert_eq!(tab_bar_hit(&labels, 5, 3, 13), None);
+    fn tab_window_keeps_selected_visible() {
+        for avail in [40u16, 60, 80, 120, 200] {
+            for selected in [0usize, 4, 9] {
+                let w = tab_window(W, 3, selected, avail);
+                assert!(
+                    (w.start..w.end).contains(&selected),
+                    "selected {selected} outside window {w:?} at avail {avail}"
+                );
+                // Rendered width must fit the budget.
+                let labels: u16 = W[w.start..w.end].iter().sum();
+                let dividers = 3 * (w.end - w.start).saturating_sub(1) as u16;
+                let markers = u16::from(w.clipped_left) * 2 + u16::from(w.clipped_right) * 2;
+                assert!(
+                    labels + dividers + markers <= avail,
+                    "window {w:?} overflows {avail}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn counts_double_width_glyphs() {
-        // "[1] 字 " => width 7 (字 is 2 cells) => span 9 ([0,9)); divider [9,12);
-        // "[2] B " => span 8 ([12,20)).
-        let labels = vec!["[1] 字 ".to_string(), "[2] B ".to_string()];
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 8), Some(0));
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 9), None); // divider
-        assert_eq!(tab_bar_hit(&labels, 0, 3, 12), Some(1));
+    fn tab_window_marks_clipped_sides() {
+        let w = tab_window(W, 3, 4, 60);
+        assert!(w.clipped_left, "tabs before the window need a « marker");
+        assert!(w.clipped_right, "tabs after the window need a » marker");
+    }
+
+    #[test]
+    fn tab_bar_hit_windowed_respects_offset() {
+        let labels: Vec<String> = (0..10).map(|i| format!("[{i}] Tab{i} ")).collect();
+        let window = TabWindow {
+            start: 3,
+            end: 6,
+            clipped_left: true,
+            clipped_right: true,
+        };
+        // Click on the « marker cell.
+        assert_eq!(
+            tab_bar_hit_windowed(&labels, window, 0, 3, 0),
+            TabHit::PrevMarker
+        );
+        // First visible label starts after the 2-col marker; its hit returns
+        // the GLOBAL index 3.
+        assert_eq!(
+            tab_bar_hit_windowed(&labels, window, 0, 3, 3),
+            TabHit::Tab(3)
+        );
     }
 }

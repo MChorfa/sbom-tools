@@ -85,6 +85,7 @@ impl App {
     /// Move selection up
     pub fn select_up(&mut self) {
         match self.active_tab {
+            TabKind::Summary => self.summary_state_mut().select_prev(),
             TabKind::Components => self.components_state_mut().select_prev(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().select_prev(),
             TabKind::Licenses => self.licenses_state_mut().select_prev(),
@@ -96,6 +97,7 @@ impl App {
     /// Move selection down
     pub fn select_down(&mut self) {
         match self.active_tab {
+            TabKind::Summary => self.summary_state_mut().select_next(),
             TabKind::Components => self.components_state_mut().select_next(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().select_next(),
             TabKind::Licenses => self.licenses_state_mut().select_next(),
@@ -107,6 +109,7 @@ impl App {
     /// Move selection to first item
     pub fn select_first(&mut self) {
         match self.active_tab {
+            TabKind::Summary => self.summary_state_mut().go_first(),
             TabKind::Components => self.components_state_mut().go_first(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().go_first(),
             TabKind::Licenses => self.licenses_state_mut().go_first(),
@@ -118,6 +121,7 @@ impl App {
     /// Move selection to last item
     pub fn select_last(&mut self) {
         match self.active_tab {
+            TabKind::Summary => self.summary_state_mut().go_last(),
             TabKind::Components => self.components_state_mut().go_last(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().go_last(),
             TabKind::Licenses => self.licenses_state_mut().go_last(),
@@ -129,6 +133,7 @@ impl App {
     /// Page up
     pub fn page_up(&mut self) {
         match self.active_tab {
+            TabKind::Summary => self.summary_state_mut().page_up(),
             TabKind::Components => self.components_state_mut().page_up(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().page_up(),
             TabKind::Licenses => self.licenses_state_mut().page_up(),
@@ -140,6 +145,7 @@ impl App {
     /// Page down
     pub fn page_down(&mut self) {
         match self.active_tab {
+            TabKind::Summary => self.summary_state_mut().page_down(),
             TabKind::Components => self.components_state_mut().page_down(),
             TabKind::Vulnerabilities => self.vulnerabilities_state_mut().page_down(),
             TabKind::Licenses => self.licenses_state_mut().page_down(),

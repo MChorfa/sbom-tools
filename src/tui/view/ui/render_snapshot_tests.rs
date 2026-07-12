@@ -483,3 +483,70 @@ fn view_tree_filter_empty_state() {
     );
     insta::assert_snapshot!("view_tree_filter_bookmarked_empty_80x24", text);
 }
+
+/// Regression: the vuln filter bar previously rendered as one ~185-column
+/// line, clipping every hint from "[d] dedupe" onward at 80 cols while its
+/// reserved second row sat blank. The hint row must now be fully visible.
+#[test]
+fn filter_bar_hints_all_visible_at_80_cols() {
+    let mut app = epss_kev_view_app();
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("[Tab] next group"),
+        "the tail of the hint row must render at 80 cols:\n{text}"
+    );
+    assert!(
+        text.contains("[E/C]"),
+        "the expand/collapse hint must render at 80 cols:\n{text}"
+    );
+}
+
+/// Regression: at the 80x24 minimum the Overview's Vulnerability Severity
+/// panel rendered as an empty titled box (the stacked bordered layout needed
+/// more height than exists). The compact path must keep the bars visible.
+#[test]
+fn overview_severity_bars_visible_at_min_size() {
+    let mut app = demo_view_app(ViewTab::Overview);
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Critical"),
+        "severity bars must render at 80x24:\n{text}"
+    );
+    assert!(
+        text.contains("Vulnerability Severity"),
+        "severity section header must render at 80x24:\n{text}"
+    );
+}
+
+/// Lock the EOL-enriched compact Overview path (previously untested: the
+/// 5-panel stacked layout never fit 80x24 at all).
+#[test]
+fn view_overview_eol_compact_snapshot() {
+    let mut app = demo_view_app(ViewTab::Overview);
+    app.stats.eol_enriched = true;
+    app.stats.eol_count = 2;
+    app.stats.eol_approaching_count = 1;
+    app.stats.eol_security_only_count = 1;
+    app.stats.eol_supported_count = 8;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("End-of-Life"),
+        "EOL section must render in compact mode:\n{text}"
+    );
+    // Redact the wall-clock-relative document age (same filters as
+    // snapshot_all_view_tabs) so the snapshot doesn't rot with time.
+    let mut settings = insta::Settings::clone_current();
+    settings.add_filter(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\([^│\n]*",
+        "$1 (AGE)",
+    );
+    settings.bind(|| {
+        insta::assert_snapshot!("view_overview_eol_80x24", text);
+    });
+}
