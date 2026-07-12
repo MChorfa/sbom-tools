@@ -61,7 +61,7 @@ fn cra_missing_identifier_and_version_are_errors() {
     assert!(result.violations.iter().any(|v| {
         v.severity == ViolationSeverity::Error
             && v.category == ViolationCategory::ComponentIdentification
-            && v.requirement == "CRA Art. 13(12): Component version"
+            && v.requirement == "CRA Annex I Part II (1): Component version"
     }));
 
     // Updated requirement string to reflect prEN 40000-1-3 [PRE-7-RQ-07] mapping
@@ -117,7 +117,7 @@ fn cra_vulnerability_metadata_warning() {
     assert!(result.violations.iter().any(|v| {
         v.severity == ViolationSeverity::Warning
             && v.category == ViolationCategory::SecurityInfo
-            && v.requirement == "CRA Art. 13(6): Vulnerability metadata completeness"
+            && v.requirement == "CRA Annex I Part II (4): Vulnerability metadata completeness"
     }));
 }
 

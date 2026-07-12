@@ -12,8 +12,8 @@ use super::{StandardKind, ViolationSeverity};
 /// re-bucket a GitHub code-scanning rule or drop a prEN/BSI reference.
 #[derive(Debug, Clone, Copy)]
 pub struct RuleMeta {
-    /// Externally-visible SARIF rule ID (e.g., `SBOM-CRA-ART-13-4`). GitHub
-    /// code scanning dedups on this value, so it must stay stable.
+    /// Externally-visible SARIF rule ID (e.g., `SBOM-CRA-MACHINE-READABLE`).
+    /// GitHub code scanning dedups on this value, so it must stay stable.
     pub sarif_id: &'static str,
     /// Documentation-default severity for the rule. Push sites may still
     /// escalate/relax the concrete [`Violation::severity`] by product class or
@@ -85,46 +85,80 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(CRA, "Art. 13(2)")],
             remediation: REMEDIATION_GENERIC,
         },
-        "SBOM-CRA-ART-13-3" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-3",
+        // SBOM freshness. Formerly cited Art. 13(3), which is the risk-
+        // assessment documentation paragraph; keeping the SBOM current is
+        // the Art. 13(7) systematic-documentation duty applied to the
+        // Annex I Part II (1) SBOM element.
+        "SBOM-CRA-SBOM-FRESHNESS" => RuleMeta {
+            sarif_id: "SBOM-CRA-SBOM-FRESHNESS",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(3)")],
-            remediation: "Regenerate the SBOM when components are added, removed, or updated. CRA Art. 13(3) requires timely updates reflecting the current state of the software.",
+            refs: &[(CRA, "Art. 13(7)"), (ANNEX, "Annex I Part II (1)")],
+            remediation: "Regenerate the SBOM when components are added, removed, or updated. CRA Art. 13(7) requires manufacturers to systematically document relevant cybersecurity aspects, and the Annex I Part II (1) SBOM must reflect the product's current components.",
         },
-        "SBOM-CRA-ART-13-4" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-4",
+        // Machine-readable SBOM format. The mandate for a 'commonly used and
+        // machine-readable format' lives in Annex I Part II (1), not in
+        // Art. 13(4) (which puts the risk assessment into the technical
+        // documentation).
+        "SBOM-CRA-MACHINE-READABLE" => RuleMeta {
+            sarif_id: "SBOM-CRA-MACHINE-READABLE",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(4)"), (PREN, "PRE-7-RQ-04")],
-            remediation: "Ensure the SBOM is produced in CycloneDX 1.4+ (JSON or XML), SPDX 2.3+ (JSON or tag-value), or SPDX 3.0+ (JSON-LD). Older format versions may not be recognized as machine-readable under the CRA.",
+            refs: &[(ANNEX, "Annex I Part II (1)"), (PREN, "PRE-7-RQ-04")],
+            remediation: "Ensure the SBOM is produced in CycloneDX 1.4+ (JSON or XML), SPDX 2.3+ (JSON or tag-value), or SPDX 3.0+ (JSON-LD). Older format versions may not be recognized as machine-readable under CRA Annex I Part II (1).",
         },
+        // Component licence information. The CRA does not list licences as
+        // an SBOM element; they are evidence supporting the Art. 13(5)
+        // third-party due-diligence obligation.
         "SBOM-CRA-ART-13-5" => RuleMeta {
             sarif_id: "SBOM-CRA-ART-13-5",
             default_severity: ViolationSeverity::Warning,
             refs: &[(CRA, "Art. 13(5)")],
-            remediation: "Ensure every component has license information. CycloneDX: use component.licenses[]. SPDX 2.x: use PackageLicenseDeclared / PackageLicenseConcluded. SPDX 3.0: use HAS_DECLARED_LICENSE / HAS_CONCLUDED_LICENSE relationships.",
+            remediation: "Record license information for every component to support the Art. 13(5) due diligence on integrated third-party components. CycloneDX: use component.licenses[]. SPDX 2.x: use PackageLicenseDeclared / PackageLicenseConcluded. SPDX 3.0: use HAS_DECLARED_LICENSE / HAS_CONCLUDED_LICENSE relationships.",
         },
-        "SBOM-CRA-ART-13-6-CONTACT" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-6",
+        // Single point of contact for vulnerability reporting. Formerly
+        // cited Art. 13(6), which is the manufacturer's duty to report
+        // component vulnerabilities UPSTREAM to the component maintainer;
+        // the user-facing contact is Art. 13(17) / Annex I Part II (6) /
+        // Annex II (2).
+        "SBOM-CRA-ART-13-17-CONTACT" => RuleMeta {
+            sarif_id: "SBOM-CRA-ART-13-17-CONTACT",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(6)")],
+            refs: &[
+                (CRA, "Art. 13(17)"),
+                (ANNEX, "Annex I Part II (6)"),
+                (ANNEX, "Annex II (2)"),
+            ],
             remediation: "Add a security contact or vulnerability disclosure URL. CycloneDX: add a component externalReference with type 'security-contact' or set metadata.manufacturer.contact. SPDX: add an SECURITY external reference.",
         },
-        "SBOM-CRA-ART-13-6-METADATA" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-6",
+        // Vulnerability severity/remediation metadata. Anchored to the
+        // Annex I Part II (4) duty to share information about fixed
+        // vulnerabilities (description, impacts, severity, remediation).
+        "SBOM-CRA-VULN-METADATA" => RuleMeta {
+            sarif_id: "SBOM-CRA-VULN-METADATA",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(6)")],
+            refs: &[(ANNEX, "Annex I Part II (4)")],
             remediation: "Add severity (e.g., CVSS score) and remediation details to each vulnerability entry. CycloneDX: use vulnerability.ratings[].score and vulnerability.analysis. SPDX: use annotation or externalRef.",
         },
-        "SBOM-CRA-ART-13-7" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-7",
+        // Coordinated vulnerability disclosure policy. Formerly cited
+        // Art. 13(7) (systematic documentation); the CVD-policy duty is
+        // Annex I Part II (5), reinforced by Art. 13(8).
+        "SBOM-CRA-CVD-POLICY" => RuleMeta {
+            sarif_id: "SBOM-CRA-CVD-POLICY",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(7)"), (PREN, "RLS-2-RQ-03-RE")],
+            refs: &[
+                (ANNEX, "Annex I Part II (5)"),
+                (CRA, "Art. 13(8)"),
+                (PREN, "RLS-2-RQ-03-RE"),
+            ],
             remediation: "Reference a coordinated vulnerability disclosure policy. CycloneDX: add an externalReference of type 'advisories' linking to your disclosure policy. SPDX: add an external document reference.",
         },
         "SBOM-CRA-ART-13-8" => RuleMeta {
             sarif_id: "SBOM-CRA-ART-13-8",
             default_severity: ViolationSeverity::Info,
-            refs: &[(CRA, "Art. 13(8)")],
+            refs: &[
+                (CRA, "Art. 13(8)"),
+                (CRA, "Art. 13(19)"),
+                (ANNEX, "Annex II (7)"),
+            ],
             remediation: "Specify when security updates will no longer be provided. CycloneDX 1.5+: use component.releaseNotes or metadata properties. SPDX: use an annotation with end-of-support date.",
         },
         "SBOM-CRA-ART-13-9" => RuleMeta {
@@ -133,22 +167,31 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(CRA, "Art. 13(9)")],
             remediation: "Include vulnerability data or add a vulnerability-assertion external reference stating no known vulnerabilities. CycloneDX: use the vulnerabilities array. SPDX: use annotations or external references.",
         },
-        "SBOM-CRA-ART-13-11" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-11",
+        // Component lifecycle / end-of-support. Formerly cited Art. 13(11),
+        // which is about OPTIONAL public software archives; lifecycle
+        // handling is the Art. 13(8) support-period duty plus the
+        // Annex II (7) support end-date disclosure.
+        "SBOM-CRA-LIFECYCLE" => RuleMeta {
+            sarif_id: "SBOM-CRA-LIFECYCLE",
             default_severity: ViolationSeverity::Info,
-            refs: &[(CRA, "Art. 13(11)")],
+            refs: &[(CRA, "Art. 13(8)"), (ANNEX, "Annex II (7)")],
             remediation: "Include lifecycle or end-of-support metadata for components. CycloneDX: use component properties (e.g., cdx:lifecycle:status). SPDX: use annotations.",
         },
-        "SBOM-CRA-ART-13-12-PRODUCT" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-12",
+        // Product identification. Formerly cited Art. 13(12) (technical
+        // documentation + conformity assessment + DoC + CE marking); product
+        // identification is Art. 13(15) plus Annex II (3).
+        "SBOM-CRA-ART-13-15-PRODUCT" => RuleMeta {
+            sarif_id: "SBOM-CRA-ART-13-15-PRODUCT",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(12)")],
+            refs: &[(CRA, "Art. 13(15)"), (ANNEX, "Annex II (3)")],
             remediation: "The SBOM must identify the product by name. CycloneDX: set metadata.component.name. SPDX: set documentDescribes with the primary package name.",
         },
-        "SBOM-CRA-ART-13-12-VERSION" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-12",
+        // Component version. Formerly cited Art. 13(12); versions are part
+        // of the Annex I Part II (1) SBOM element inventory.
+        "SBOM-CRA-COMPONENT-VERSION" => RuleMeta {
+            sarif_id: "SBOM-CRA-COMPONENT-VERSION",
             default_severity: ViolationSeverity::Error,
-            refs: &[(CRA, "Art. 13(12)"), (PREN, "PRE-7-RQ-06")],
+            refs: &[(ANNEX, "Annex I Part II (1)"), (PREN, "PRE-7-RQ-06")],
             remediation: "Every component must have a version string. Use the actual release version (e.g., '1.2.3'), not a range or placeholder.",
         },
         "SBOM-CRA-ART-24-SUPPLIER" => RuleMeta {
@@ -157,17 +200,30 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(CRA, "Art. 24")],
             remediation: "Identify each component's supplier as part of the Art. 24 steward SBOM floor. CycloneDX: set component.supplier. SPDX: set PackageSupplier.",
         },
-        "SBOM-CRA-ART-13-15" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-15",
+        // Manufacturer identification. Formerly cited Art. 13(15), which is
+        // PRODUCT identification (type/batch/serial number); manufacturer
+        // identification (name + postal/email/website) is Art. 13(16) plus
+        // Annex II (1).
+        "SBOM-CRA-ART-13-16" => RuleMeta {
+            sarif_id: "SBOM-CRA-ART-13-16",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(15)")],
-            remediation: "Identify the manufacturer/supplier. CycloneDX: set metadata.manufacturer or component.supplier. SPDX: set PackageSupplier.",
+            refs: &[(CRA, "Art. 13(16)"), (ANNEX, "Annex II (1)")],
+            remediation: "Identify the manufacturer. CycloneDX: set metadata.manufacturer. SPDX: add an Organization creator.",
         },
-        "SBOM-CRA-ART-13-15-EMAIL" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-15",
+        "SBOM-CRA-ART-13-16-EMAIL" => RuleMeta {
+            sarif_id: "SBOM-CRA-ART-13-16-EMAIL",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(CRA, "Art. 13(15)")],
+            refs: &[(CRA, "Art. 13(16)"), (ANNEX, "Annex II (1)")],
             remediation: "Provide a valid contact email for the manufacturer. The email must contain an @ sign with valid local and domain parts.",
+        },
+        // Per-component supplier identification. Distinct from the
+        // Art. 13(16) manufacturer-identification obligation: component
+        // suppliers are part of the Annex I Part II (1) SBOM inventory.
+        "SBOM-CRA-COMPONENT-SUPPLIER" => RuleMeta {
+            sarif_id: "SBOM-CRA-COMPONENT-SUPPLIER",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(ANNEX, "Annex I Part II (1)"), (PREN, "PRE-7-RQ-03")],
+            remediation: "Identify each component's supplier. CycloneDX: set component.supplier. SPDX: set PackageSupplier.",
         },
         "SBOM-CRA-ART-14" => RuleMeta {
             sarif_id: "SBOM-CRA-GENERAL",
@@ -208,7 +264,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         "SBOM-CRA-ANNEX-I-INTEGRITY" => RuleMeta {
             sarif_id: "SBOM-CRA-ANNEX-I",
             default_severity: ViolationSeverity::Info,
-            refs: &[(ANNEX, "Annex I")],
+            refs: &[(ANNEX, "Annex I Part I (2)(f)")],
             remediation: "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification.",
         },
         "SBOM-CRA-ANNEX-I-DEPENDENCY" => RuleMeta {
@@ -229,10 +285,14 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(ANNEX, "Annex I")],
             remediation: REMEDIATION_GENERIC,
         },
-        "SBOM-CRA-ANNEX-III" => RuleMeta {
-            sarif_id: "SBOM-CRA-ANNEX-III",
+        // Document-level integrity. Formerly mis-cited Annex III (the
+        // important-products class list); integrity protection is Annex I
+        // Part I (2)(f). The clause covers integrity only — it does not
+        // mention authenticity.
+        "SBOM-CRA-DOC-INTEGRITY" => RuleMeta {
+            sarif_id: "SBOM-CRA-DOC-INTEGRITY",
             default_severity: ViolationSeverity::Info,
-            refs: &[(ANNEX, "Annex III")],
+            refs: &[(ANNEX, "Annex I Part I (2)(f)")],
             remediation: "Add document-level integrity metadata: a serial number (CycloneDX: serialNumber, SPDX: documentNamespace), or a digital signature/attestation with a cryptographic hash.",
         },
         "SBOM-CRA-ANNEX-IV" => RuleMeta {

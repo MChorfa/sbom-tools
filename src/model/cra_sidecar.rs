@@ -79,15 +79,15 @@ pub struct CraSidecarMetadata {
 
     /// Coordinated vulnerability disclosure policy URL.
     /// Distinct from `vulnerability_disclosure_url` (which may point at a
-    /// portal) — this is the published *policy* that meets CRA Art. 13(7)
-    /// and ISO/IEC 29147 expectations.
+    /// portal) — this is the published *policy* that meets CRA Annex I
+    /// Part II (5) / Art. 13(8) and ISO/IEC 29147 expectations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinated_disclosure_policy_url: Option<String>,
 
     // -------- CRA Article 13(2) risk-assessment fields --------
     /// URL or document reference for the documented risk assessment
-    /// required by CRA Art. 13(2). Annex V technical documentation must
-    /// include or reference this assessment.
+    /// required by CRA Art. 13(2); Art. 13(4) requires it to be included
+    /// in the Annex VII technical documentation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk_assessment_url: Option<String>,
 

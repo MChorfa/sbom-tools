@@ -50,19 +50,30 @@ that ends up in SARIF `properties.standardHelpUris`.
 
 ### CRA Article 13 (essential requirements & SBOM-related obligations)
 
-| Requirement string                                              | CRA Article    | prEN 40000-1-3      | BSI TR-03183-2 § | sidecar field that clears it                              |
-|-----------------------------------------------------------------|----------------|---------------------|------------------|-----------------------------------------------------------|
-| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)     | —                   | §4.1             | `riskAssessmentUrl` + `riskAssessmentMethodology`         |
-| `CRA Art. 13(3): SBOM freshness`                                | Art. 13(3)     | PRE-7-RQ-04         | §5.1             | regenerate SBOM on each release                           |
-| `CRA Art. 13(4): SBOM machine-readable format`                  | Art. 13(4)     | PRE-7-RQ-04         | §5.2             | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
-| `CRA Art. 13(5): Licensed component tracking`                   | Art. 13(5)     | PRE-7-RQ-05         | §5.4 (reco.)     | populate component `license` fields                       |
-| `CRA Art. 13(6): Vulnerability disclosure contact`              | Art. 13(6)     | RLS-2-RQ-01         | §5.5 (reco.)     | `securityContact` / `vulnerabilityDisclosureUrl`          |
-| `CRA Art. 13(7): Coordinated vulnerability disclosure policy`   | Art. 13(7)     | RLS-2-RQ-02         | —                | `coordinatedDisclosurePolicyUrl`                          |
-| `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)     | PRE-7-RQ-06         | §5.5             | `supportEndDate` + EOL enrichment                         |
-| `CRA Art. 13(9): Known vulnerabilities statement`               | Art. 13(9)     | RLS-2-RQ-04         | §5.5             | OSV / KEV / VEX enrichment                                |
-| `CRA Art. 13(11): Component lifecycle monitoring`               | Art. 13(11)    | PRE-7-RQ-06         | §5.5             | EOL enrichment + transitive supplier coverage             |
-| `CRA Art. 13(12): Product name and version identification`      | Art. 13(12)    | PRE-7-RQ-06         | §5.3             | SBOM `metadata.component.name` + `version` + sidecar      |
-| `CRA Art. 13(15): Manufacturer identification`                  | Art. 13(15)    | —                   | §5.3             | `manufacturerName` + `manufacturerEmail`                  |
+> Rule citations were re-anchored in 2026-07: the SBOM-facing checks now
+> cite the paragraphs and Annex points that actually carry each
+> obligation in Reg. (EU) 2024/2847 (e.g., the machine-readable SBOM
+> mandate lives in Annex I Part II (1), the vulnerability-reporting
+> contact in Art. 13(17), and manufacturer identification in
+> Art. 13(16)).
+
+| Requirement string                                              | CRA anchor                        | prEN 40000-1-3      | BSI TR-03183-2 § | sidecar field that clears it                              |
+|-----------------------------------------------------------------|-----------------------------------|---------------------|------------------|-----------------------------------------------------------|
+| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)                        | —                   | §4.1             | `riskAssessmentUrl` + `riskAssessmentMethodology`         |
+| `CRA Art. 13(7) / Annex I Part II (1): SBOM freshness`          | Art. 13(7); Annex I Part II (1)   | PRE-7-RQ-04         | §5.1             | regenerate SBOM on each release                           |
+| `CRA Annex I Part II (1): Machine-readable SBOM format`         | Annex I Part II (1)               | PRE-7-RQ-04         | §5.2             | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
+| `CRA Art. 13(5): Third-party due diligence (license tracking)`  | Art. 13(5)                        | PRE-7-RQ-05         | §5.4 (reco.)     | populate component `license` fields                       |
+| `CRA Art. 13(17): Vulnerability disclosure contact`             | Art. 13(17); Annex I Part II (6); Annex II (2) | RLS-2-RQ-01 | §5.5 (reco.)  | `securityContact` / `vulnerabilityDisclosureUrl`          |
+| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` | Annex I Part II (5); Art. 13(8) | RLS-2-RQ-02      | —                | `coordinatedDisclosurePolicyUrl`                          |
+| `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)                        | PRE-7-RQ-06         | §5.5             | `supportEndDate` + EOL enrichment                         |
+| `CRA Art. 13(8) / 13(19): Support period disclosure`            | Art. 13(8); Art. 13(19); Annex II (7) | PRE-7-RQ-06     | §5.5             | `supportEndDate`                                          |
+| `CRA Art. 13(9): Known vulnerabilities statement`               | Art. 13(9)                        | RLS-2-RQ-04         | §5.5             | OSV / KEV / VEX enrichment                                |
+| `CRA Annex II (7): Component lifecycle monitoring/status`       | Art. 13(8); Annex II (7)          | PRE-7-RQ-06         | §5.5             | EOL enrichment + transitive supplier coverage             |
+| `CRA Art. 13(15): Product identification`                       | Art. 13(15); Annex II (3)         | PRE-7-RQ-06         | §5.3             | SBOM `metadata.component.name` + sidecar `productName`    |
+| `CRA Annex I Part II (1): Component version`                    | Annex I Part II (1)               | PRE-7-RQ-06         | §5.3             | component `version` fields                                |
+| `CRA Annex I Part II (1): Component supplier information`       | Annex I Part II (1)               | PRE-7-RQ-03         | §6 (reco.)       | component `supplier` fields                               |
+| `CRA Annex I Part II (4): Vulnerability metadata completeness`  | Annex I Part II (4)               | —                   | §5.5             | vulnerability severity/CVSS + remediation detail          |
+| `CRA Art. 13(16): Manufacturer identification`                  | Art. 13(16); Annex II (1)         | —                   | §5.3             | `manufacturerName` + `manufacturerEmail`                  |
 
 ### CRA Article 14 (reporting obligations, applicable from 2026-09-11)
 
@@ -85,7 +96,8 @@ post-deadline they become `Warning` (or `Error` at
 | `CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through` | Annex I Part II | PRE-7-RQ-07-RE | strong (SHA-256+) hash on vendor-supplied components |
 | `CRA Annex I Part II 1: Component identifier`               | Annex I Part II 1        | PRE-7-RQ-07         | PURL / CPE / SWID / SWHID on each component             |
 | `CRA Annex I Part II: Supply chain transparency`            | Annex I Part II          | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
-| `CRA Annex III: Document signature/integrity`               | Annex III                | —                   | serial number / digital signature / attestation hash    |
+| `CRA Annex I Part I (2)(f): Document signature/integrity`   | Annex I Part I (2)(f)    | —                   | serial number / digital signature / attestation hash    |
+| `CRA Annex I Part I (2)(f): Component integrity information (hash)` | Annex I Part I (2)(f) | —                | cryptographic hash (SHA-256+) per component             |
 | `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | `Certification` external ref with `eucc`/`common-criteria` URL |
 | `CRA Annex VII: Technical documentation`                    | Annex VII                | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
 | `CRA Annex V: EU Declaration of Conformity reference`       | Annex V                  | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
@@ -97,9 +109,9 @@ post-deadline they become `Warning` (or `Error` at
 | Requirement string                                          | CRA reference  | Cleared by                                            |
 |-------------------------------------------------------------|----------------|-------------------------------------------------------|
 | `CRA Art. 24: Vulnerability-handling process (steward floor)` | Art. 24      | `SecurityContact` / `Advisories` / `VulnerabilityAssertion` external ref OR `psirtUrl` / `vulnerabilityDisclosureUrl` |
-| `CRA Art. 13(7): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Art. 13(7) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` |
+| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Annex I Part II (5) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` |
 
-Article 24 *suppresses* manufacturer-only checks (Art. 13(15) email,
+Article 24 *suppresses* manufacturer-only checks (Art. 13(16) email,
 Annex VII DoC, Annex VIII attestation, Article 14 channels, hardware
 [PRE-8-RQ-02], vendor-hash carry-through).
 

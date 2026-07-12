@@ -734,7 +734,7 @@ pub struct ComplianceStatus {
 /// Violations grouped by CRA article
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArticleViolations {
-    /// Article reference (e.g., "Art. 13(6)")
+    /// Article reference (e.g., "Art. 13(17)")
     pub article: String,
     /// Article description
     pub description: String,

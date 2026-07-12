@@ -1,6 +1,6 @@
 ---
 source: tests/golden_reports.rs
-assertion_line: 150
+assertion_line: 151
 expression: "render(&SarifReporter::new())"
 ---
 {
@@ -115,10 +115,10 @@ expression: "render(&SarifReporter::new())"
               }
             },
             {
-              "id": "SBOM-CRA-ART-13-3",
-              "name": "CraUpdateFrequency",
+              "id": "SBOM-CRA-SBOM-FRESHNESS",
+              "name": "CraSbomFreshness",
               "shortDescription": {
-                "text": "CRA Art. 13(3): SBOM update frequency — timely regeneration after changes"
+                "text": "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness — timely regeneration after changes"
               },
               "defaultConfiguration": {
                 "level": "warning"
@@ -126,10 +126,10 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ART-13-4",
+              "id": "SBOM-CRA-MACHINE-READABLE",
               "name": "CraMachineReadableFormat",
               "shortDescription": {
-                "text": "CRA Art. 13(4): SBOM must be in a machine-readable format (CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+)"
+                "text": "CRA Annex I Part II (1): SBOM must be in a commonly used, machine-readable format (CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+)"
               },
               "defaultConfiguration": {
                 "level": "warning"
@@ -137,10 +137,21 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ART-13-6",
-              "name": "CraVulnerabilityDisclosure",
+              "id": "SBOM-CRA-ART-13-17-CONTACT",
+              "name": "CraVulnerabilityContact",
               "shortDescription": {
-                "text": "CRA Art. 13(6): Vulnerability disclosure contact and metadata completeness"
+                "text": "CRA Art. 13(17): Single point of contact for vulnerability reporting (Annex I Part II (6), Annex II (2))"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "id": "SBOM-CRA-VULN-METADATA",
+              "name": "CraVulnerabilityMetadata",
+              "shortDescription": {
+                "text": "CRA Annex I Part II (4): Vulnerability severity and remediation metadata completeness"
               },
               "defaultConfiguration": {
                 "level": "warning"
@@ -151,7 +162,7 @@ expression: "render(&SarifReporter::new())"
               "id": "SBOM-CRA-ART-13-5",
               "name": "CraLicensedComponentTracking",
               "shortDescription": {
-                "text": "CRA Art. 13(5): Licensed component tracking — license information for all components"
+                "text": "CRA Art. 13(5): Third-party due diligence — license information for all components"
               },
               "defaultConfiguration": {
                 "level": "warning"
@@ -159,10 +170,10 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ART-13-7",
+              "id": "SBOM-CRA-CVD-POLICY",
               "name": "CraCoordinatedDisclosure",
               "shortDescription": {
-                "text": "CRA Art. 13(7): Coordinated vulnerability disclosure policy reference"
+                "text": "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy reference"
               },
               "defaultConfiguration": {
                 "level": "warning"
@@ -173,7 +184,7 @@ expression: "render(&SarifReporter::new())"
               "id": "SBOM-CRA-ART-13-8",
               "name": "CraSupportPeriod",
               "shortDescription": {
-                "text": "CRA Art. 13(8): Support period and security update end date"
+                "text": "CRA Art. 13(8) / 13(19): Support period and security update end date (Annex II (7))"
               },
               "defaultConfiguration": {
                 "level": "note"
@@ -181,10 +192,10 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ART-13-11",
+              "id": "SBOM-CRA-LIFECYCLE",
               "name": "CraComponentLifecycle",
               "shortDescription": {
-                "text": "CRA Art. 13(11): Component lifecycle and end-of-support status"
+                "text": "CRA Art. 13(8) / Annex II (7): Component lifecycle and end-of-support status"
               },
               "defaultConfiguration": {
                 "level": "note"
@@ -192,10 +203,21 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ART-13-12",
+              "id": "SBOM-CRA-ART-13-15-PRODUCT",
               "name": "CraProductIdentification",
               "shortDescription": {
-                "text": "CRA Art. 13(12): Product name and version identification"
+                "text": "CRA Art. 13(15): Product identification (Annex II (3))"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "id": "SBOM-CRA-COMPONENT-VERSION",
+              "name": "CraComponentVersion",
+              "shortDescription": {
+                "text": "CRA Annex I Part II (1): Component version identification"
               },
               "defaultConfiguration": {
                 "level": "error"
@@ -203,10 +225,32 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ART-13-15",
+              "id": "SBOM-CRA-ART-13-16",
               "name": "CraManufacturerIdentification",
               "shortDescription": {
-                "text": "CRA Art. 13(15): Manufacturer identification and contact information"
+                "text": "CRA Art. 13(16): Manufacturer identification and contact information (Annex II (1))"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "id": "SBOM-CRA-ART-13-16-EMAIL",
+              "name": "CraManufacturerEmail",
+              "shortDescription": {
+                "text": "CRA Art. 13(16): Valid manufacturer contact email (Annex II (1))"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "id": "SBOM-CRA-COMPONENT-SUPPLIER",
+              "name": "CraComponentSupplier",
+              "shortDescription": {
+                "text": "CRA Annex I Part II (1): Component supplier identification"
               },
               "defaultConfiguration": {
                 "level": "warning"
@@ -236,10 +280,10 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ANNEX-III",
+              "id": "SBOM-CRA-DOC-INTEGRITY",
               "name": "CraDocumentIntegrity",
               "shortDescription": {
-                "text": "CRA Annex III: Document signature/integrity — serial number, hash, or digital signature"
+                "text": "CRA Annex I Part I (2)(f): Document integrity — serial number, hash, or digital signature"
               },
               "defaultConfiguration": {
                 "level": "note"
@@ -665,33 +709,39 @@ expression: "render(&SarifReporter::new())"
           "locations": []
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-ART-13-16",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(15): Manufacturer identification) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(16)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(16): Manufacturer identification) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA:Art. 13(16)",
+              "CRA-Annex:Annex II (1)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-6",
+          "ruleId": "SBOM-CRA-ART-13-17-CONTACT",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(6)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(6): Vulnerability disclosure contact) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(17)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(17): Vulnerability disclosure contact) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(6)"
+              "CRA:Art. 13(17)",
+              "CRA-Annex:Annex I Part II (6)",
+              "CRA-Annex:Annex II (2)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -700,14 +750,18 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-8",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8): Support period disclosure) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8) / 13(19)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8) / 13(19): Support period disclosure) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(8)"
+              "CRA:Art. 13(8)",
+              "CRA:Art. 13(19)",
+              "CRA-Annex:Annex II (7)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -730,34 +784,38 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-7",
+          "ruleId": "SBOM-CRA-CVD-POLICY",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(7)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Art. 13(7): Coordinated vulnerability disclosure policy) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (5)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Annex I Part II (5): Coordinated vulnerability disclosure policy) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(7)",
+              "CRA-Annex:Annex I Part II (5)",
+              "CRA:Art. 13(8)",
               "prEN-40000-1-3:RLS-2-RQ-03-RE"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-11",
+          "ruleId": "SBOM-CRA-LIFECYCLE",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(11)] Consider including component lifecycle/end-of-support information (Requirement: CRA Art. 13(11): Component lifecycle status) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8) / Annex II (7)] Consider including component lifecycle/end-of-support information (Requirement: CRA Annex II (7): Component lifecycle status) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(11)"
+              "CRA:Art. 13(8)",
+              "CRA-Annex:Annex II (7)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -804,15 +862,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -823,12 +882,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -836,15 +895,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: lodash]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: lodash]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -855,12 +915,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: lodash]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: lodash]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -868,15 +928,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'express' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: express]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'express' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: express]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -887,12 +948,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: express]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: express]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -900,15 +961,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'moment' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: moment]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'moment' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: moment]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -919,12 +981,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'moment' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: moment]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'moment' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: moment]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -932,15 +994,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'request' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: request]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'request' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: request]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -951,12 +1014,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'request' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: request]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'request' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: request]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -964,15 +1027,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: axios]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: axios]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -983,12 +1047,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: axios]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: axios]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -996,15 +1060,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'underscore' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: underscore]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'underscore' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: underscore]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1015,12 +1080,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'underscore' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: underscore]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'underscore' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: underscore]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1028,15 +1093,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'jquery' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: jquery]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'jquery' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: jquery]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1047,12 +1113,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'jquery' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: jquery]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'jquery' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: jquery]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1060,15 +1126,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'react' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: react]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'react' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: react]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1079,12 +1146,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: react]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: react]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1180,17 +1247,19 @@ expression: "render(&SarifReporter::new())"
           "locations": []
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-3",
+          "ruleId": "SBOM-CRA-SBOM-FRESHNESS",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(3)] SBOM is [N] days old; CRA requires timely updates when components change (Requirement: CRA Art. 13(3): SBOM update frequency) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(7) / Annex I Part II (1)] SBOM is [N] days old; keep the documented component inventory current when components change (Requirement: CRA Art. 13(7) / Annex I Part II (1): SBOM freshness) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(3)"
+              "CRA:Art. 13(7)",
+              "CRA-Annex:Annex I Part II (1)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -1199,7 +1268,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-5",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(5)] 1/9 components (11%) missing license information (Requirement: CRA Art. 13(5): Licensed component tracking) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(5)] 1/9 components (11%) missing license information needed to evidence third-party due diligence (Requirement: CRA Art. 13(5): Third-party due diligence (license tracking)) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1228,15 +1297,15 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ANNEX-III",
+          "ruleId": "SBOM-CRA-DOC-INTEGRITY",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex III] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex III: Document signature/integrity) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex I Part I (2)(f): Document signature/integrity) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex III"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1332,33 +1401,39 @@ expression: "render(&SarifReporter::new())"
           "locations": []
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-ART-13-16",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(15): Manufacturer identification) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(16)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(16): Manufacturer identification) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA:Art. 13(16)",
+              "CRA-Annex:Annex II (1)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-6",
+          "ruleId": "SBOM-CRA-ART-13-17-CONTACT",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(6)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(6): Vulnerability disclosure contact) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(17)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(17): Vulnerability disclosure contact) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(6)"
+              "CRA:Art. 13(17)",
+              "CRA-Annex:Annex I Part II (6)",
+              "CRA-Annex:Annex II (2)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -1367,14 +1442,18 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-8",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8): Support period disclosure) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8) / 13(19)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8) / 13(19): Support period disclosure) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(8)"
+              "CRA:Art. 13(8)",
+              "CRA:Art. 13(19)",
+              "CRA-Annex:Annex II (7)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -1397,34 +1476,38 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-7",
+          "ruleId": "SBOM-CRA-CVD-POLICY",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(7)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Art. 13(7): Coordinated vulnerability disclosure policy) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (5)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Annex I Part II (5): Coordinated vulnerability disclosure policy) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(7)",
+              "CRA-Annex:Annex I Part II (5)",
+              "CRA:Art. 13(8)",
               "prEN-40000-1-3:RLS-2-RQ-03-RE"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-11",
+          "ruleId": "SBOM-CRA-LIFECYCLE",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(11)] Consider including component lifecycle/end-of-support information (Requirement: CRA Art. 13(11): Component lifecycle status) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8) / Annex II (7)] Consider including component lifecycle/end-of-support information (Requirement: CRA Annex II (7): Component lifecycle status) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(11)"
+              "CRA:Art. 13(8)",
+              "CRA-Annex:Annex II (7)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -1471,15 +1554,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1490,12 +1574,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1503,15 +1587,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: lodash]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: lodash]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1522,12 +1607,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: lodash]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: lodash]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1535,15 +1620,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'express' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: express]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'express' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: express]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1554,12 +1640,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: express]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: express]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1567,15 +1653,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'dayjs' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: dayjs]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'dayjs' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: dayjs]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1586,12 +1673,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'dayjs' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: dayjs]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'dayjs' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: dayjs]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1599,15 +1686,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: axios]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: axios]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1618,12 +1706,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: axios]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: axios]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1631,15 +1719,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'react' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: react]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'react' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: react]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1650,12 +1739,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: react]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: react]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1663,15 +1752,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'typescript' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: typescript]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'typescript' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: typescript]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1682,12 +1772,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'typescript' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: typescript]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'typescript' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: typescript]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1695,15 +1785,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'zod' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: zod]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'zod' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: zod]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1714,12 +1805,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'zod' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: zod]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'zod' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: zod]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1727,15 +1818,16 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-15",
+          "ruleId": "SBOM-CRA-COMPONENT-SUPPLIER",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'prisma' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: prisma]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Component 'prisma' missing supplier/manufacturer (Requirement: CRA Annex I Part II (1): Component supplier information) [Element: prisma]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(15)"
+              "CRA-Annex:Annex I Part II (1)",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1746,12 +1838,12 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'prisma' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: prisma]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Component 'prisma' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I Part I (2)(f): Component integrity information (hash)) [Element: prisma]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1847,17 +1939,19 @@ expression: "render(&SarifReporter::new())"
           "locations": []
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-3",
+          "ruleId": "SBOM-CRA-SBOM-FRESHNESS",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(3)] SBOM is [N] days old; CRA requires timely updates when components change (Requirement: CRA Art. 13(3): SBOM update frequency) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(7) / Annex I Part II (1)] SBOM is [N] days old; keep the documented component inventory current when components change (Requirement: CRA Art. 13(7) / Annex I Part II (1): SBOM freshness) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(3)"
+              "CRA:Art. 13(7)",
+              "CRA-Annex:Annex I Part II (1)"
             ],
             "standardHelpUris": [
+              "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             ]
           }
@@ -1866,7 +1960,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-5",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(5)] 1/9 components (11%) missing license information (Requirement: CRA Art. 13(5): Licensed component tracking) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(5)] 1/9 components (11%) missing license information needed to evidence third-party due diligence (Requirement: CRA Art. 13(5): Third-party due diligence (license tracking)) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1895,15 +1989,15 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ANNEX-III",
+          "ruleId": "SBOM-CRA-DOC-INTEGRITY",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex III] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex III: Document signature/integrity) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part I (2)(f)] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex I Part I (2)(f): Document signature/integrity) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex III"
+              "CRA-Annex:Annex I Part I (2)(f)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"

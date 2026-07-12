@@ -1380,26 +1380,34 @@ fn get_sarif_eo14028_rules() -> Vec<SarifRule> {
 fn get_sarif_compliance_rules() -> Vec<SarifRule> {
     vec![
         SarifRule {
-            id: "SBOM-CRA-ART-13-3".to_string(),
-            name: "CraUpdateFrequency".to_string(),
+            id: "SBOM-CRA-SBOM-FRESHNESS".to_string(),
+            name: "CraSbomFreshness".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(3): SBOM update frequency — timely regeneration after changes".to_string(),
+                text: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness — timely regeneration after changes".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
-            id: "SBOM-CRA-ART-13-4".to_string(),
+            id: "SBOM-CRA-MACHINE-READABLE".to_string(),
             name: "CraMachineReadableFormat".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(4): SBOM must be in a machine-readable format (CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+)".to_string(),
+                text: "CRA Annex I Part II (1): SBOM must be in a commonly used, machine-readable format (CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+)".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
-            id: "SBOM-CRA-ART-13-6".to_string(),
-            name: "CraVulnerabilityDisclosure".to_string(),
+            id: "SBOM-CRA-ART-13-17-CONTACT".to_string(),
+            name: "CraVulnerabilityContact".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(6): Vulnerability disclosure contact and metadata completeness".to_string(),
+                text: "CRA Art. 13(17): Single point of contact for vulnerability reporting (Annex I Part II (6), Annex II (2))".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-CRA-VULN-METADATA".to_string(),
+            name: "CraVulnerabilityMetadata".to_string(),
+            short_description: SarifMessage {
+                text: "CRA Annex I Part II (4): Vulnerability severity and remediation metadata completeness".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
@@ -1407,15 +1415,15 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             id: "SBOM-CRA-ART-13-5".to_string(),
             name: "CraLicensedComponentTracking".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(5): Licensed component tracking — license information for all components".to_string(),
+                text: "CRA Art. 13(5): Third-party due diligence — license information for all components".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
-            id: "SBOM-CRA-ART-13-7".to_string(),
+            id: "SBOM-CRA-CVD-POLICY".to_string(),
             name: "CraCoordinatedDisclosure".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(7): Coordinated vulnerability disclosure policy reference".to_string(),
+                text: "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy reference".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
@@ -1423,31 +1431,55 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             id: "SBOM-CRA-ART-13-8".to_string(),
             name: "CraSupportPeriod".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(8): Support period and security update end date".to_string(),
+                text: "CRA Art. 13(8) / 13(19): Support period and security update end date (Annex II (7))".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },
         SarifRule {
-            id: "SBOM-CRA-ART-13-11".to_string(),
+            id: "SBOM-CRA-LIFECYCLE".to_string(),
             name: "CraComponentLifecycle".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(11): Component lifecycle and end-of-support status".to_string(),
+                text: "CRA Art. 13(8) / Annex II (7): Component lifecycle and end-of-support status".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },
         SarifRule {
-            id: "SBOM-CRA-ART-13-12".to_string(),
+            id: "SBOM-CRA-ART-13-15-PRODUCT".to_string(),
             name: "CraProductIdentification".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(12): Product name and version identification".to_string(),
+                text: "CRA Art. 13(15): Product identification (Annex II (3))".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-CRA-COMPONENT-VERSION".to_string(),
+            name: "CraComponentVersion".to_string(),
+            short_description: SarifMessage {
+                text: "CRA Annex I Part II (1): Component version identification".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Error },
         },
         SarifRule {
-            id: "SBOM-CRA-ART-13-15".to_string(),
+            id: "SBOM-CRA-ART-13-16".to_string(),
             name: "CraManufacturerIdentification".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(15): Manufacturer identification and contact information".to_string(),
+                text: "CRA Art. 13(16): Manufacturer identification and contact information (Annex II (1))".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-CRA-ART-13-16-EMAIL".to_string(),
+            name: "CraManufacturerEmail".to_string(),
+            short_description: SarifMessage {
+                text: "CRA Art. 13(16): Valid manufacturer contact email (Annex II (1))".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-CRA-COMPONENT-SUPPLIER".to_string(),
+            name: "CraComponentSupplier".to_string(),
+            short_description: SarifMessage {
+                text: "CRA Annex I Part II (1): Component supplier identification".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
@@ -1468,10 +1500,10 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
-            id: "SBOM-CRA-ANNEX-III".to_string(),
+            id: "SBOM-CRA-DOC-INTEGRITY".to_string(),
             name: "CraDocumentIntegrity".to_string(),
             short_description: SarifMessage {
-                text: "CRA Annex III: Document signature/integrity — serial number, hash, or digital signature".to_string(),
+                text: "CRA Annex I Part I (2)(f): Document integrity — serial number, hash, or digital signature".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },
@@ -1797,7 +1829,7 @@ struct SarifResult {
 #[serde(rename_all = "camelCase")]
 struct SarifResultProperties {
     /// Standard reference IDs in the form `<standard>:<id>`
-    /// (e.g., `prEN-40000-1-3:PRE-7-RQ-07`, `CRA:Art. 13(4)`).
+    /// (e.g., `prEN-40000-1-3:PRE-7-RQ-07`, `CRA:Art. 13(8)`).
     /// Plural to match SARIF `properties` extensibility convention.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     standard_ids: Vec<String>,

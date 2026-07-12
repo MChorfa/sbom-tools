@@ -488,7 +488,7 @@ fn render_vuln_policy(sbom: &NormalizedSbom, sidecar: Option<&CraSidecarMetadata
          ## 5. SBOM update commitment\n\
          - The SBOM accompanying this product is regenerated and re-signed on \
          every release that introduces, removes, or upgrades a tracked \
-         component (CRA Art. 13(3)).\n\
+         component (CRA Art. 13(7) / Annex I Part II (1)).\n\
          - VEX statements (CSAF v2.0 / OpenVEX / CycloneDX VEX) are published \
          alongside the SBOM whenever a vulnerability affecting a tracked \
          component is acknowledged.\n",

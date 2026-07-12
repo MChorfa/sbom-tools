@@ -60,11 +60,11 @@ impl ComplianceChecker {
                         severity: ViolationSeverity::Info,
                         category: ViolationCategory::DocumentMetadata,
                         message:
-                            "[CRA Art. 13(15)] Manufacturer identified via CRA sidecar (consider adding to the SBOM directly for portability)"
+                            "[CRA Art. 13(16)] Manufacturer identified via CRA sidecar (consider adding to the SBOM directly for portability)"
                                 .to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(15): Manufacturer identification".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-15",
+                        requirement: "CRA Art. 13(16): Manufacturer identification".to_string(),
+                        rule_id: "SBOM-CRA-ART-13-16",
                         standard_refs: Vec::new(),
                     });
                 } else {
@@ -72,11 +72,11 @@ impl ComplianceChecker {
                         severity: ViolationSeverity::Warning,
                         category: ViolationCategory::DocumentMetadata,
                         message:
-                            "[CRA Art. 13(15)] SBOM should identify the manufacturer (organization)"
+                            "[CRA Art. 13(16)] SBOM should identify the manufacturer (organization)"
                                 .to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(15): Manufacturer identification".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-15",
+                        requirement: "CRA Art. 13(16): Manufacturer identification".to_string(),
+                        rule_id: "SBOM-CRA-ART-13-16",
                         standard_refs: Vec::new(),
                     });
                 }
@@ -92,11 +92,11 @@ impl ComplianceChecker {
                         severity: ViolationSeverity::Warning,
                         category: ViolationCategory::DocumentMetadata,
                         message: format!(
-                            "[CRA Art. 13(15)] Manufacturer email '{email}' appears invalid"
+                            "[CRA Art. 13(16)] Manufacturer email '{email}' appears invalid"
                         ),
                         element: None,
-                        requirement: "CRA Art. 13(15): Valid contact information".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-15-EMAIL",
+                        requirement: "CRA Art. 13(16): Valid contact information".to_string(),
+                        rule_id: "SBOM-CRA-ART-13-16-EMAIL",
                         standard_refs: Vec::new(),
                     });
                 }
@@ -111,21 +111,21 @@ impl ComplianceChecker {
                     violations.push(Violation {
                         severity: ViolationSeverity::Info,
                         category: ViolationCategory::DocumentMetadata,
-                        message: "[CRA Art. 13(12)] Product name provided via CRA sidecar (consider adding metadata.component.name to the SBOM)".to_string(),
+                        message: "[CRA Art. 13(15)] Product name provided via CRA sidecar (consider adding metadata.component.name to the SBOM)".to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(12): Product identification".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-12-PRODUCT",
+                        requirement: "CRA Art. 13(15): Product identification".to_string(),
+                        rule_id: "SBOM-CRA-ART-13-15-PRODUCT",
                         standard_refs: Vec::new(),
                     });
                 } else {
                     violations.push(Violation {
                         severity: ViolationSeverity::Warning,
                         category: ViolationCategory::DocumentMetadata,
-                        message: "[CRA Art. 13(12)] SBOM should include the product name"
+                        message: "[CRA Art. 13(15)] SBOM should include the product name"
                             .to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(12): Product identification".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-12-PRODUCT",
+                        requirement: "CRA Art. 13(15): Product identification".to_string(),
+                        rule_id: "SBOM-CRA-ART-13-15-PRODUCT",
                         standard_refs: Vec::new(),
                     });
                 }
@@ -159,20 +159,22 @@ impl ComplianceChecker {
                     violations.push(Violation {
                         severity: ViolationSeverity::Info,
                         category: ViolationCategory::SecurityInfo,
-                        message: "[CRA Art. 13(6)] Security contact provided via CRA sidecar (consider adding a security-contact externalReference to the SBOM)".to_string(),
+                        message: "[CRA Art. 13(17)] Security contact provided via CRA sidecar (consider adding a security-contact externalReference to the SBOM)".to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(6): Vulnerability disclosure contact".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-6-CONTACT",
+                        requirement: "CRA Art. 13(17): Vulnerability disclosure contact"
+                            .to_string(),
+                        rule_id: "SBOM-CRA-ART-13-17-CONTACT",
                         standard_refs: Vec::new(),
                     });
                 } else {
                     violations.push(Violation {
                         severity: ViolationSeverity::Warning,
                         category: ViolationCategory::SecurityInfo,
-                        message: "[CRA Art. 13(6)] SBOM should include a security contact or vulnerability disclosure reference".to_string(),
+                        message: "[CRA Art. 13(17)] SBOM should include a security contact or vulnerability disclosure reference".to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(6): Vulnerability disclosure contact".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-6-CONTACT",
+                        requirement: "CRA Art. 13(17): Vulnerability disclosure contact"
+                            .to_string(),
+                        rule_id: "SBOM-CRA-ART-13-17-CONTACT",
                         standard_refs: Vec::new(),
                     });
                 }
@@ -191,22 +193,26 @@ impl ComplianceChecker {
                 });
             }
 
-            // CRA: Check for support end date (informational)
+            // CRA: Check for support end date (informational). The support
+            // period is determined under Art. 13(8); its end date must be
+            // disclosed at purchase (Art. 13(19)) and accompany the product
+            // (Annex II (7)).
             if sbom.document.support_end_date.is_none() {
                 violations.push(Violation {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::SecurityInfo,
-                    message: "[CRA Art. 13(8)] Consider specifying a support end date for security updates".to_string(),
+                    message: "[CRA Art. 13(8) / 13(19)] Consider specifying a support end date for security updates".to_string(),
                     element: None,
-                    requirement: "CRA Art. 13(8): Support period disclosure".to_string(),
+                    requirement: "CRA Art. 13(8) / 13(19): Support period disclosure".to_string(),
                     rule_id: "SBOM-CRA-ART-13-8",
                     standard_refs: Vec::new(),
                 });
             }
 
-            // CRA Art. 13(4): Machine-readable SBOM format validation
-            // The CRA requires SBOMs in a "commonly used and machine-readable" format.
-            // CycloneDX 1.4+ and SPDX 2.3+ are widely accepted as machine-readable.
+            // CRA Annex I Part II (1): Machine-readable SBOM format validation
+            // The CRA requires SBOMs in a "commonly used and machine-readable"
+            // format (Annex I Part II (1)). CycloneDX 1.4+ and SPDX 2.3+ are
+            // widely accepted as machine-readable.
             let format_ok = match sbom.document.format {
                 SbomFormat::CycloneDx => {
                     let v = &sbom.document.spec_version;
@@ -225,12 +231,13 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::FormatSpecific,
                     message: format!(
-                        "[CRA Art. 13(4)] SBOM format version {} {} may not meet CRA machine-readable requirements; use CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+",
+                        "[CRA Annex I Part II (1)] SBOM format version {} {} may not meet the CRA machine-readable requirement; use CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+",
                         sbom.document.format, sbom.document.spec_version
                     ),
                     element: None,
-                    requirement: "CRA Art. 13(4): Machine-readable SBOM format".to_string(),
-                    rule_id: "SBOM-CRA-ART-13-4",
+                    requirement: "CRA Annex I Part II (1): Machine-readable SBOM format"
+                        .to_string(),
+                    rule_id: "SBOM-CRA-MACHINE-READABLE",
                     standard_refs: Vec::new(),
                 });
             }
@@ -260,7 +267,7 @@ impl ComplianceChecker {
 
         // CRA Phase 2-only checks (full application of the regulation: 11 Dec 2027)
         if matches!(self.level, ComplianceLevel::CraPhase2) {
-            // CRA Art. 13(7): Coordinated vulnerability disclosure policy reference
+            // CRA Annex I Part II (5): Coordinated vulnerability disclosure policy reference
             // Check for a vulnerability disclosure policy URL or advisories reference
             // Component-level Advisories refs count only on the primary/root
             // components — a dependency's upstream advisories URL is not the
@@ -280,26 +287,26 @@ impl ComplianceChecker {
                     violations.push(Violation {
                         severity: ViolationSeverity::Info,
                         category: ViolationCategory::SecurityInfo,
-                        message: "[CRA Art. 13(7)] CVD policy URL provided via CRA sidecar (consider adding an advisories externalReference to the SBOM)".to_string(),
+                        message: "[CRA Annex I Part II (5)] CVD policy URL provided via CRA sidecar (consider adding an advisories externalReference to the SBOM)".to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(7): Coordinated vulnerability disclosure policy".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-7",
+                        requirement: "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy".to_string(),
+                        rule_id: "SBOM-CRA-CVD-POLICY",
                         standard_refs: Vec::new(),
                     });
                 } else {
                     violations.push(Violation {
                         severity: ViolationSeverity::Warning,
                         category: ViolationCategory::SecurityInfo,
-                        message: "[CRA Art. 13(7)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL)".to_string(),
+                        message: "[CRA Annex I Part II (5)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL)".to_string(),
                         element: None,
-                        requirement: "CRA Art. 13(7): Coordinated vulnerability disclosure policy".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-7",
+                        requirement: "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy".to_string(),
+                        rule_id: "SBOM-CRA-CVD-POLICY",
                         standard_refs: Vec::new(),
                     });
                 }
             }
 
-            // CRA Art. 13(11): Component lifecycle status
+            // CRA Art. 13(8) / Annex II (7): Component lifecycle status
             // Check whether the primary component (or any top-level component) has end-of-life
             // or lifecycle information. Currently we check support_end_date at doc level.
             // Also check for lifecycle properties on components.
@@ -307,10 +314,10 @@ impl ComplianceChecker {
                 violations.push(Violation {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::SecurityInfo,
-                    message: "[CRA Art. 13(11)] Consider including component lifecycle/end-of-support information".to_string(),
+                    message: "[CRA Art. 13(8) / Annex II (7)] Consider including component lifecycle/end-of-support information".to_string(),
                     element: None,
-                    requirement: "CRA Art. 13(11): Component lifecycle status".to_string(),
-                    rule_id: "SBOM-CRA-ART-13-11",
+                    requirement: "CRA Annex II (7): Component lifecycle status".to_string(),
+                    rule_id: "SBOM-CRA-LIFECYCLE",
                     standard_refs: Vec::new(),
                 });
             }
@@ -479,8 +486,8 @@ impl ComplianceChecker {
     /// Whether the SBOM (or its sidecar) carries any support-lifecycle
     /// evidence: a document-level support end date, component
     /// lifecycle/end-of-life/end-of-support properties, or a sidecar
-    /// support end date. Shared by the CRA Art. 13(11) and FDA
-    /// level-of-support checks.
+    /// support end date. Shared by the CRA lifecycle (Art. 13(8) /
+    /// Annex II (7)) and FDA level-of-support checks.
     fn has_support_lifecycle_evidence(&self, sbom: &NormalizedSbom) -> bool {
         sbom.document.support_end_date.is_some()
             || self
@@ -559,12 +566,12 @@ impl ComplianceChecker {
                     ComplianceLevel::CraPhase1
                     | ComplianceLevel::CraPhase2
                     | ComplianceLevel::CraOssSteward => (
-                        "CRA Art. 13(12): Component version".to_string(),
+                        "CRA Annex I Part II (1): Component version".to_string(),
                         format!(
-                            "[CRA Art. 13(12)] Component '{}' missing version",
+                            "[CRA Annex I Part II (1)] Component '{}' missing version",
                             comp.name
                         ),
-                        "SBOM-CRA-ART-13-12-VERSION",
+                        "SBOM-CRA-COMPONENT-VERSION",
                     ),
                     _ => (
                         "NTIA: Component version".to_string(),
@@ -680,17 +687,20 @@ impl ComplianceChecker {
                         "FDA: Supplier/manufacturer information".to_string(),
                         "SBOM-FDA-SUPPLIER",
                     ),
+                    // Component suppliers are part of the Annex I Part II (1)
+                    // SBOM inventory — distinct from the document-level
+                    // Art. 13(16) manufacturer-identification obligation.
                     ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2 => (
                         format!(
-                            "[CRA Art. 13(15)] Component '{}' missing supplier/manufacturer",
+                            "[CRA Annex I Part II (1)] Component '{}' missing supplier/manufacturer",
                             comp.name
                         ),
-                        "CRA Art. 13(15): Supplier/manufacturer information".to_string(),
-                        "SBOM-CRA-ART-13-15",
+                        "CRA Annex I Part II (1): Component supplier information".to_string(),
+                        "SBOM-CRA-COMPONENT-SUPPLIER",
                     ),
                     // Steward profile: component supplier info is part of the
                     // Art. 24 SBOM floor, but stewards are exempt from the
-                    // Art. 13(15) manufacturer-identification obligation, so
+                    // Art. 13(16) manufacturer-identification obligation, so
                     // the citation must not reference it.
                     ComplianceLevel::CraOssSteward => (
                         format!(
@@ -805,11 +815,12 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Info,
                     category: ViolationCategory::IntegrityInfo,
                     message: format!(
-                        "[CRA Annex I] Component '{}' missing cryptographic hash (recommended for integrity)",
+                        "[CRA Annex I Part I (2)(f)] Component '{}' missing cryptographic hash (recommended for integrity)",
                         comp.name
                     ),
                     element: Some(comp.name.clone()),
-                    requirement: "CRA Annex I: Component integrity information (hash)".to_string(),
+                    requirement: "CRA Annex I Part I (2)(f): Component integrity information (hash)"
+                        .to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-INTEGRITY",
                     standard_refs: Vec::new(),
                 });
@@ -1027,12 +1038,13 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::SecurityInfo,
                     message: format!(
-                        "[CRA Art. 13(6)] Vulnerability '{}' in '{}' lacks severity or CVSS score",
+                        "[CRA Annex I Part II (4)] Vulnerability '{}' in '{}' lacks severity or CVSS score",
                         vuln.id, comp.name
                     ),
                     element: Some(comp.name.clone()),
-                    requirement: "CRA Art. 13(6): Vulnerability metadata completeness".to_string(),
-                    rule_id: "SBOM-CRA-ART-13-6-METADATA",
+                    requirement: "CRA Annex I Part II (4): Vulnerability metadata completeness"
+                        .to_string(),
+                    rule_id: "SBOM-CRA-VULN-METADATA",
                     standard_refs: Vec::new(),
                 });
             }
@@ -1045,12 +1057,12 @@ impl ComplianceChecker {
                         severity: ViolationSeverity::Info,
                         category: ViolationCategory::SecurityInfo,
                         message: format!(
-                            "[CRA Art. 13(6)] Vulnerability '{}' in '{}' has remediation without details",
+                            "[CRA Annex I Part II (4)] Vulnerability '{}' in '{}' has remediation without details",
                             vuln.id, comp.name
                         ),
                         element: Some(comp.name.clone()),
-                        requirement: "CRA Art. 13(6): Remediation detail".to_string(),
-                        rule_id: "SBOM-CRA-ART-13-6-METADATA",
+                        requirement: "CRA Annex I Part II (4): Remediation detail".to_string(),
+                        rule_id: "SBOM-CRA-VULN-METADATA",
                         standard_refs: Vec::new(),
                     });
             }
