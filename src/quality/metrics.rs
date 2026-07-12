@@ -54,7 +54,18 @@ impl CompletenessMetrics {
         let mut with_licenses = 0;
         let mut with_description = 0;
 
+        // File/snippet inventory entries are not packages: NTIA-style
+        // completeness fields (version, supplier, purl, …) do not apply to
+        // them. Counting them cratered scores for file-cataloguing SBOMs
+        // (thousands of files → ~0% version coverage on an otherwise
+        // complete document).
+        let mut countable = 0;
+
         for comp in sbom.components.values() {
+            if matches!(comp.component_type, crate::model::ComponentType::File) {
+                continue;
+            }
+            countable += 1;
             if comp.version.is_some() {
                 with_version += 1;
             }
@@ -93,7 +104,13 @@ impl CompletenessMetrics {
             }
         }
 
-        let pct = |count: usize| (count as f32 / total as f32) * 100.0;
+        let pct = |count: usize| {
+            if countable == 0 {
+                0.0
+            } else {
+                (count as f32 / countable as f32) * 100.0
+            }
+        };
 
         Self {
             components_with_version: pct(with_version),
@@ -1306,7 +1323,15 @@ impl ProvenanceMetrics {
             .any(|c| c.creator_type == CreatorType::Tool);
         let has_tool_version = doc.creators.iter().any(|c| {
             c.creator_type == CreatorType::Tool
-                && (c.name.contains(' ') || c.name.contains('/') || c.name.contains('@'))
+                && (c.name.contains(' ')
+                    || c.name.contains('/')
+                    || c.name.contains('@')
+                    // SPDX 2.3 §6.8 mandates the hyphen-joined
+                    // "toolidentifier-version" form (e.g. "LicenseFind-1.0"),
+                    // which the separator heuristics above never match.
+                    || c.name
+                        .match_indices('-')
+                        .any(|(i, _)| c.name[i + 1..].starts_with(|ch: char| ch.is_ascii_digit())))
         });
         let has_org_creator = doc
             .creators
@@ -2073,6 +2098,31 @@ fn is_restrictive_license(expr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// File inventory entries (SPDX files/snippets, CycloneDX type=file)
+    /// must not dilute package completeness percentages: files structurally
+    /// lack version/supplier/purl, and a file-cataloguing SBOM with
+    /// thousands of files would otherwise report ~0% coverage on an
+    /// otherwise complete document.
+    #[test]
+    fn file_components_do_not_dilute_completeness() {
+        use crate::model::{Component, ComponentType, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let pkg = Component::new("app".to_string(), "app@1".to_string()).with_version("1.0".to_string());
+        sbom.add_component(pkg);
+        for i in 0..10 {
+            let mut f = Component::new(format!("file-{i}"), format!("file-{i}@x"));
+            f.component_type = ComponentType::File;
+            sbom.add_component(f);
+        }
+
+        let m = CompletenessMetrics::from_sbom(&sbom);
+        assert!(
+            (m.components_with_version - 100.0).abs() < f32::EPSILON,
+            "10 files must not dilute the package's 100% version coverage, got {}",
+            m.components_with_version
+        );
+    }
 
     /// A Cryptographic component with NO cryptoProperties must not count as
     /// crypto inventory — otherwise has_data() is true and the CBOM sub-scores
