@@ -1738,6 +1738,11 @@ impl CryptographyMetrics {
                         // quantum-vulnerable on the family alone — real CBOMs
                         // rarely set nistQuantumSecurityLevel=0, so counting
                         // only Some(0) let classical crypto escape the penalty.
+                        // NOTE: the compliance checkers use the richer shared
+                        // classifier `crate::model::classify_algorithm` (OID,
+                        // name, curve, alias normalization); these
+                        // family-string helpers are kept here so the metrics
+                        // scoring stays stable.
                         if algo.is_classical_quantum_vulnerable()
                             || algo.nist_quantum_security_level == Some(0)
                         {

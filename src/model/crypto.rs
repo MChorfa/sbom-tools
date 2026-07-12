@@ -980,6 +980,533 @@ impl std::fmt::Display for ProtocolType {
     }
 }
 
+// ── Algorithm Classification ────────────────────────────────────────────
+//
+// Canonical, input-robust algorithm classification shared by the compliance
+// checkers (`src/quality/compliance/crypto.rs`). Real-world CBOMs vary wildly
+// in how they identify algorithms: CycloneDX 1.7 has `algorithmFamily`, 1.6
+// does not (only name/OID/primitive/parameter), spellings drift ("SHA1" vs
+// "SHA-1", "TDES" vs "3DES"), and pre-standardization PQC names (Kyber,
+// Dilithium, SPHINCS+) are still common. [`classify_algorithm`] normalizes
+// all of these into one structured classification so no checker needs its own
+// family table. (`CryptographyMetrics` in `src/quality/metrics.rs` still uses
+// the narrower `is_weak`/`is_classical_quantum_vulnerable` helpers below;
+// prefer [`classify_algorithm`] for new code.)
+
+/// NIST-standardized (or SP 800-208) post-quantum algorithm kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PqcKind {
+    /// FIPS 203 module-lattice KEM (formerly CRYSTALS-Kyber).
+    MlKem,
+    /// FIPS 204 module-lattice signature (formerly CRYSTALS-Dilithium).
+    MlDsa,
+    /// FIPS 205 stateless hash-based signature (formerly SPHINCS+).
+    SlhDsa,
+    /// FN-DSA (Falcon) — selected by NIST but not yet standardized.
+    FnDsa,
+    /// SP 800-208 Leighton-Micali signature system.
+    Lms,
+    /// SP 800-208 eXtended Merkle signature scheme.
+    Xmss,
+    /// SP 800-208 hierarchical signature system.
+    Hss,
+}
+
+/// Coarse security class produced by [`classify_algorithm`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AlgorithmClass {
+    /// Classically broken or disallowed per SP 800-131A (MD5, SHA-1, DES,
+    /// 3DES, RC2, RC4, Blowfish, IDEA, CAST5, …).
+    Broken,
+    /// Classical public-key algorithm broken by Shor's algorithm (RSA,
+    /// DSA, DH/DHE, ECDH/ECDHE, ECDSA, EdDSA/Ed25519/Ed448, X25519/X448,
+    /// ElGamal, ECIES, ECMQV, generic EC/ECC).
+    ClassicalQuantumVulnerable,
+    /// Modern symmetric cipher (AES, ChaCha20, Camellia, ARIA, …); strength
+    /// judgments (e.g., CNSA 2.0's AES-256-only rule) are up to the caller.
+    Symmetric,
+    /// SHA-2 family hash; the digest size, when known, is in `parameter`.
+    Sha2,
+    /// SHA-3 family hash/XOF (SHA3-*, SHAKE, Keccak).
+    Sha3,
+    /// Post-quantum algorithm; the parameter set, when known, is in
+    /// `parameter` (e.g., "1024" for ML-KEM-1024, "87" for ML-DSA-87).
+    PostQuantum(PqcKind),
+    /// Not recognized — callers should treat as "cannot verify", never as
+    /// implicitly compliant.
+    Unknown,
+}
+
+/// Structured result of [`classify_algorithm`]: canonical family name,
+/// extracted parameter/size, and coarse security class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlgorithmClassification {
+    /// Canonical family (e.g., "AES", "SHA-2", "ML-KEM", "RSA"), if known.
+    pub family: Option<String>,
+    /// Parameter set / key size / digest size (e.g., "256", "1024", "87").
+    pub parameter: Option<String>,
+    /// Coarse security class.
+    pub class: AlgorithmClass,
+}
+
+impl AlgorithmClassification {
+    /// An unknown classification (no recognizable identity).
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self {
+            family: None,
+            parameter: None,
+            class: AlgorithmClass::Unknown,
+        }
+    }
+
+    /// The parameter parsed as a bit/size number, when numeric.
+    #[must_use]
+    pub fn parameter_bits(&self) -> Option<u32> {
+        self.parameter.as_deref().and_then(|p| p.parse().ok())
+    }
+
+    /// Human-readable label, e.g. "AES-128", "SHA-384", "ML-KEM-1024", "RSA".
+    #[must_use]
+    pub fn label(&self) -> String {
+        let Some(family) = self.family.as_deref() else {
+            return "unclassified".to_string();
+        };
+        match (family, self.parameter.as_deref()) {
+            // "SHA-2" + 384 reads better as "SHA-384".
+            ("SHA-2", Some(p)) => format!("SHA-{p}"),
+            ("SHA-3", Some(p)) => format!("SHA3-{p}"),
+            (f, Some(p)) => format!("{f}-{p}"),
+            (f, None) => f.to_string(),
+        }
+    }
+}
+
+/// Map a canonical family name to its security class.
+fn family_class(canonical: &str) -> AlgorithmClass {
+    use AlgorithmClass as C;
+    match canonical {
+        "MD2" | "MD4" | "MD5" | "SHA-1" | "DES" | "3DES" | "RC2" | "RC4" | "BLOWFISH" | "IDEA"
+        | "CAST5" | "SKIPJACK" => C::Broken,
+        "RSA" | "DSA" | "DH" | "ECDH" | "ECDSA" | "EDDSA" | "ED25519" | "ED448" | "X25519"
+        | "X448" | "ELGAMAL" | "ECIES" | "ECMQV" | "EC" => C::ClassicalQuantumVulnerable,
+        "AES" | "CHACHA20" | "CAMELLIA" | "ARIA" | "SEED" | "SERPENT" | "TWOFISH" => C::Symmetric,
+        "SHA-2" => C::Sha2,
+        "SHA-3" => C::Sha3,
+        "ML-KEM" => C::PostQuantum(PqcKind::MlKem),
+        "ML-DSA" => C::PostQuantum(PqcKind::MlDsa),
+        "SLH-DSA" => C::PostQuantum(PqcKind::SlhDsa),
+        "FN-DSA" => C::PostQuantum(PqcKind::FnDsa),
+        "LMS" => C::PostQuantum(PqcKind::Lms),
+        "XMSS" => C::PostQuantum(PqcKind::Xmss),
+        "HSS" => C::PostQuantum(PqcKind::Hss),
+        _ => C::Unknown,
+    }
+}
+
+/// Alias table: normalized token → (canonical family, implied parameter,
+/// is-round-3-Dilithium). Tokens are uppercased with `_`, ` `, `/`, and `.`
+/// already mapped to `-` by [`normalize_algo_token`].
+fn alias_lookup(token: &str) -> Option<(&'static str, Option<&'static str>, bool)> {
+    let hit: (&'static str, Option<&'static str>) = match token {
+        // Broken / legacy.
+        "MD2" => ("MD2", None),
+        "MD4" => ("MD4", None),
+        "MD5" => ("MD5", None),
+        // Bare "SHA" appears in TLS cipher-suite names and means SHA-1.
+        "SHA-1" | "SHA1" | "SHA" => ("SHA-1", None),
+        "DES" => ("DES", None),
+        "3DES" | "TDES" | "TDEA" | "DES3" | "DESEDE" | "DESEDE3" | "DES-EDE" | "DES-EDE2"
+        | "DES-EDE3" | "3DES-EDE" | "TRIPLE-DES" | "TRIPLEDES" => ("3DES", None),
+        "RC2" => ("RC2", None),
+        "RC4" | "ARC4" | "ARCFOUR" => ("RC4", None),
+        "BLOWFISH" => ("BLOWFISH", None),
+        "IDEA" => ("IDEA", None),
+        "CAST5" | "CAST-128" | "CAST128" => ("CAST5", None),
+        "SKIPJACK" => ("SKIPJACK", None),
+        // Classical public-key (quantum-vulnerable).
+        "RSA" | "RSAES" | "RSASSA" | "RSA-PSS" | "RSA-OAEP" | "RSAES-OAEP" | "RSASSA-PSS" => {
+            ("RSA", None)
+        }
+        "DSA" | "DSS" => ("DSA", None),
+        "DH" | "DHE" | "FFDHE" | "EDH" | "ADH" | "DIFFIE-HELLMAN" => ("DH", None),
+        "ECDH" | "ECDHE" | "XDH" => ("ECDH", None),
+        "ECDSA" => ("ECDSA", None),
+        "EDDSA" => ("EDDSA", None),
+        "ED25519" => ("ED25519", None),
+        "ED448" => ("ED448", None),
+        "X25519" => ("X25519", None),
+        "X448" => ("X448", None),
+        "ELGAMAL" | "EL-GAMAL" => ("ELGAMAL", None),
+        "ECIES" => ("ECIES", None),
+        "ECMQV" => ("ECMQV", None),
+        "EC" | "ECC" => ("EC", None),
+        // Symmetric.
+        "AES" | "RIJNDAEL" => ("AES", None),
+        "CHACHA" | "CHACHA20" | "XCHACHA20" | "CHACHA20-POLY1305" => ("CHACHA20", None),
+        "CAMELLIA" => ("CAMELLIA", None),
+        "ARIA" => ("ARIA", None),
+        "SEED" => ("SEED", None),
+        "SERPENT" => ("SERPENT", None),
+        "TWOFISH" => ("TWOFISH", None),
+        // SHA-2 (digest size carried in the token where present).
+        "SHA-2" | "SHA2" => ("SHA-2", None),
+        "SHA-224" | "SHA224" => ("SHA-2", Some("224")),
+        "SHA-256" | "SHA256" => ("SHA-2", Some("256")),
+        "SHA-384" | "SHA384" => ("SHA-2", Some("384")),
+        "SHA-512" | "SHA512" => ("SHA-2", Some("512")),
+        // SHA-3 family.
+        "SHA-3" | "SHA3" | "KECCAK" | "SHAKE" | "SHAKE128" | "SHAKE256" => ("SHA-3", None),
+        "SHA3-224" => ("SHA-3", Some("224")),
+        "SHA3-256" => ("SHA-3", Some("256")),
+        "SHA3-384" => ("SHA-3", Some("384")),
+        "SHA3-512" => ("SHA-3", Some("512")),
+        // Post-quantum (final and round-3 names).
+        "ML-KEM" | "MLKEM" | "KYBER" | "CRYSTALS-KYBER" => ("ML-KEM", None),
+        "ML-DSA" | "MLDSA" => ("ML-DSA", None),
+        "DILITHIUM" | "CRYSTALS-DILITHIUM" => {
+            return Some(("ML-DSA", None, true));
+        }
+        "SLH-DSA" | "SLHDSA" | "SPHINCS" | "SPHINCS+" | "SPHINCSPLUS" => ("SLH-DSA", None),
+        "FALCON" | "FN-DSA" | "FNDSA" => ("FN-DSA", None),
+        "LMS" | "HSS-LMS" | "LMS-HSS" => ("LMS", None),
+        "XMSS" | "XMSS-MT" | "XMSSMT" => ("XMSS", None),
+        "HSS" => ("HSS", None),
+        _ => return None,
+    };
+    Some((hit.0, hit.1, false))
+}
+
+/// Uppercase and map separator characters (`_`, ` `, `/`, `.`) to `-`.
+fn normalize_algo_token(s: &str) -> String {
+    s.trim()
+        .chars()
+        .map(|c| match c {
+            '_' | ' ' | '/' | '.' => '-',
+            other => other.to_ascii_uppercase(),
+        })
+        .collect()
+}
+
+/// Map round-3 Dilithium parameter sets to the final ML-DSA ones.
+fn map_dilithium_param(p: &str) -> String {
+    match p {
+        "2" => "44".to_string(),
+        "3" => "65".to_string(),
+        "5" => "87".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Classify one normalized token (a family string, or a joined name-token
+/// span): direct alias, then trailing `-<digits>` size split, then a trailing
+/// digit run without separator ("AES128").
+fn classify_token(token: &str) -> Option<(&'static str, Option<String>)> {
+    let t = normalize_algo_token(token);
+
+    let finish = |family: &'static str, param: Option<String>, dilithium: bool| {
+        let param = if dilithium {
+            param.map(|p| map_dilithium_param(&p))
+        } else {
+            param
+        };
+        Some((family, param))
+    };
+
+    if let Some((family, param, dilithium)) = alias_lookup(&t) {
+        return finish(family, param.map(str::to_string), dilithium);
+    }
+
+    // Trailing "-<digits>" size: "ML-KEM-1024", "AES-128", "RSA-2048", "KYBER-768".
+    if let Some((base, digits)) = t.rsplit_once('-')
+        && !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && let Some((family, param, dilithium)) = alias_lookup(base)
+    {
+        let param = param
+            .map(str::to_string)
+            .or_else(|| Some(digits.to_string()));
+        return finish(family, param, dilithium);
+    }
+
+    // Trailing digit run without separator: "AES128", "KYBER768", "RSA2048".
+    // (Counting trailing ASCII-digit bytes keeps the split on a char boundary
+    // even for non-ASCII input.)
+    let digit_start = t.len() - t.bytes().rev().take_while(u8::is_ascii_digit).count();
+    if digit_start > 0 && digit_start < t.len() {
+        let (alpha, digits) = t.split_at(digit_start);
+        if let Some((family, param, dilithium)) = alias_lookup(alpha.trim_end_matches('-')) {
+            let param = param
+                .map(str::to_string)
+                .or_else(|| Some(digits.to_string()));
+            return finish(family, param, dilithium);
+        }
+    }
+
+    None
+}
+
+/// Extract every recognizable algorithm mention from a free-form name using
+/// word-boundary token matching (never bare substrings). Used for cipher-suite
+/// names ("`TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`") and as the guarded
+/// name-based fallback for assets without `algorithmFamily`/OID.
+///
+/// Tokens are split on any non-alphanumeric character (keeping `+` for
+/// "SPHINCS+"); spans of up to three adjacent tokens are joined with `-` and
+/// matched longest-first, so "ML KEM 1024" and "AES 128" resolve as units.
+/// Unrecognized tokens (GCM, CBC, TLS, WITH, …) are simply skipped.
+#[must_use]
+pub fn classify_algorithm_names(name: &str) -> Vec<AlgorithmClassification> {
+    let upper = name.to_uppercase();
+    let tokens: Vec<&str> = upper
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '+'))
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    let mut out: Vec<AlgorithmClassification> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        // A pure number can never start an algorithm mention.
+        if tokens[i].bytes().all(|b| b.is_ascii_digit()) {
+            i += 1;
+            continue;
+        }
+        let max_span = 3.min(tokens.len() - i);
+        let mut advanced = false;
+        for span in (1..=max_span).rev() {
+            let joined = tokens[i..i + span].join("-");
+            if let Some((family, parameter)) = classify_token(&joined) {
+                let cls = AlgorithmClassification {
+                    family: Some(family.to_string()),
+                    parameter,
+                    class: family_class(family),
+                };
+                if !out.contains(&cls) {
+                    out.push(cls);
+                }
+                i += span;
+                advanced = true;
+                break;
+            }
+        }
+        if !advanced {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Classify an algorithm OID. Covers the common arcs emitted by real CBOM
+/// generators; unknown OIDs return `None` (callers treat as unverifiable,
+/// never as compliant).
+fn classify_oid(oid: &str) -> Option<(&'static str, Option<String>)> {
+    let o = oid.trim();
+
+    // Exact matches first.
+    let exact: Option<(&'static str, Option<&'static str>)> = match o {
+        "1.3.14.3.2.26" => Some(("SHA-1", None)),
+        "1.2.840.113549.2.2" => Some(("MD2", None)),
+        "1.2.840.113549.2.4" => Some(("MD4", None)),
+        "1.2.840.113549.2.5" => Some(("MD5", None)),
+        "1.3.14.3.2.7" => Some(("DES", None)),
+        "1.2.840.113549.3.7" => Some(("3DES", None)),
+        "1.2.840.113549.3.2" => Some(("RC2", None)),
+        "1.2.840.113549.3.4" => Some(("RC4", None)),
+        "1.2.840.10040.4.1" | "1.2.840.10040.4.3" => Some(("DSA", None)),
+        "1.2.840.113549.1.3.1" | "1.2.840.10046.2.1" => Some(("DH", None)),
+        "1.3.101.110" => Some(("X25519", None)),
+        "1.3.101.111" => Some(("X448", None)),
+        "1.3.101.112" => Some(("ED25519", None)),
+        "1.3.101.113" => Some(("ED448", None)),
+        // NIST hash algorithm arc (2.16.840.1.101.3.4.2.*).
+        "2.16.840.1.101.3.4.2.1" => Some(("SHA-2", Some("256"))),
+        "2.16.840.1.101.3.4.2.2" => Some(("SHA-2", Some("384"))),
+        "2.16.840.1.101.3.4.2.3" => Some(("SHA-2", Some("512"))),
+        "2.16.840.1.101.3.4.2.4" => Some(("SHA-2", Some("224"))),
+        "2.16.840.1.101.3.4.2.5" => Some(("SHA-2", Some("224"))), // SHA-512/224
+        "2.16.840.1.101.3.4.2.6" => Some(("SHA-2", Some("256"))), // SHA-512/256
+        "2.16.840.1.101.3.4.2.7" => Some(("SHA-3", Some("224"))),
+        "2.16.840.1.101.3.4.2.8" => Some(("SHA-3", Some("256"))),
+        "2.16.840.1.101.3.4.2.9" => Some(("SHA-3", Some("384"))),
+        "2.16.840.1.101.3.4.2.10" => Some(("SHA-3", Some("512"))),
+        "2.16.840.1.101.3.4.2.11" | "2.16.840.1.101.3.4.2.12" => Some(("SHA-3", None)), // SHAKE
+        // SP 800-208 / RFC 8708 stateful hash-based signatures.
+        "1.2.840.113549.1.9.16.3.17" => Some(("LMS", None)), // id-alg-hss-lms-hashsig
+        "0.4.0.127.0.15.1.1.13.0" => Some(("XMSS", None)),
+        _ => None,
+    };
+    if let Some((family, param)) = exact {
+        return Some((family, param.map(str::to_string)));
+    }
+
+    // RSA arc: 1.2.840.113549.1.1.* (rsaEncryption, *WithRSAEncryption, PSS, OAEP).
+    if o.starts_with("1.2.840.113549.1.1.") {
+        return Some(("RSA", None));
+    }
+    // ANSI X9.62 elliptic-curve arc: keys, curves, and ECDSA signatures.
+    if o.starts_with("1.2.840.10045.4.") {
+        return Some(("ECDSA", None));
+    }
+    if o.starts_with("1.2.840.10045.") {
+        return Some(("EC", None));
+    }
+    // SECG named curves (secp256k1, secp384r1, ...).
+    if o.starts_with("1.3.132.") {
+        return Some(("EC", None));
+    }
+    // NIST AES arc: 2.16.840.1.101.3.4.1.<n> — n encodes the key size.
+    if let Some(rest) = o.strip_prefix("2.16.840.1.101.3.4.1.")
+        && let Ok(n) = rest.parse::<u32>()
+    {
+        let bits = match n {
+            1..=10 => Some("128"),
+            21..=30 => Some("192"),
+            41..=50 => Some("256"),
+            _ => None,
+        };
+        return Some(("AES", bits.map(str::to_string)));
+    }
+    // NIST KEM arc: 2.16.840.1.101.3.4.4.<n> (ML-KEM-512/768/1024).
+    if let Some(rest) = o.strip_prefix("2.16.840.1.101.3.4.4.")
+        && let Ok(n) = rest.parse::<u32>()
+    {
+        let param = match n {
+            1 => Some("512"),
+            2 => Some("768"),
+            3 => Some("1024"),
+            _ => None,
+        };
+        return Some(("ML-KEM", param.map(str::to_string)));
+    }
+    // NIST signature-algorithm arc: 2.16.840.1.101.3.4.3.<n>.
+    if let Some(rest) = o.strip_prefix("2.16.840.1.101.3.4.3.")
+        && let Ok(n) = rest.parse::<u32>()
+    {
+        return match n {
+            1..=8 => Some(("DSA", None)),    // dsa-with-sha2/sha3
+            9..=12 => Some(("ECDSA", None)), // ecdsa-with-sha3
+            13..=16 => Some(("RSA", None)),  // rsassa-pkcs1 with sha3
+            17 => Some(("ML-DSA", Some("44".to_string()))),
+            18 => Some(("ML-DSA", Some("65".to_string()))),
+            19 => Some(("ML-DSA", Some("87".to_string()))),
+            20..=35 => Some(("SLH-DSA", None)),
+            _ => None,
+        };
+    }
+
+    None
+}
+
+/// Classify a cryptographic algorithm from whatever identity a CBOM provides.
+///
+/// Sources are consulted in decreasing order of authority:
+///
+/// 1. `family` (CycloneDX 1.7 `algorithmFamily`), normalized through the
+///    alias table (case, `_`/` `/`/` separators, "SHA1"→"SHA-1",
+///    "TDES"→"3DES", "Kyber"→"ML-KEM", …) with trailing sizes extracted
+///    ("ML-KEM-768" → ML-KEM + 768).
+/// 2. `oid` (CycloneDX 1.6+ `cryptoProperties.oid`) via [`classify_oid`].
+/// 3. `elliptic_curve` (CycloneDX 1.7): any named curve marks the asset as
+///    classical elliptic-curve crypto.
+/// 4. `name`: word-boundary token matching via [`classify_algorithm_names`],
+///    used **only** when both `family` and `oid` are absent — bounding
+///    false positives to assets that carry no structured identity at all.
+///    Callers should only pass names of components that actually have
+///    `crypto_properties`.
+///
+/// The explicit `parameter_set` (CycloneDX `parameterSetIdentifier`) fills the
+/// parameter when the identity source did not carry one; failing that, the
+/// component name is mined for a size of the same family ("AES" + name
+/// "AES-256-GCM" → 256). The CycloneDX `primitive` field is deliberately not
+/// used for classification — it cannot distinguish, say, ML-DSA from ECDSA,
+/// and callers that need primitive-based decisions (symmetric-vs-asymmetric
+/// severity) already have it.
+#[must_use]
+pub fn classify_algorithm(
+    family: Option<&str>,
+    name: Option<&str>,
+    oid: Option<&str>,
+    parameter_set: Option<&str>,
+    elliptic_curve: Option<&str>,
+) -> AlgorithmClassification {
+    let fill_parameter = |mut cls: AlgorithmClassification| {
+        if cls.parameter.is_none() {
+            cls.parameter = parameter_set
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string);
+        }
+        // Last resort: mine the component name for a size carried alongside
+        // the same family ("AES" + "AES-256-GCM" → 256).
+        if cls.parameter.is_none()
+            && let Some(n) = name
+            && let Some(named) = classify_algorithm_names(n)
+                .into_iter()
+                .find(|c| c.family == cls.family)
+        {
+            cls.parameter = named.parameter;
+        }
+        cls
+    };
+
+    // 1. Explicit algorithm family.
+    if let Some(f) = family.map(str::trim).filter(|f| !f.is_empty()) {
+        if let Some((canonical, parameter)) = classify_token(f) {
+            return fill_parameter(AlgorithmClassification {
+                family: Some(canonical.to_string()),
+                parameter,
+                class: family_class(canonical),
+            });
+        }
+    } else if let Some(o) = oid.map(str::trim).filter(|o| !o.is_empty()) {
+        // 2. OID (only consulted when no family is declared: a recognized
+        //    family is authoritative over the OID).
+        if let Some((canonical, parameter)) = classify_oid(o) {
+            return fill_parameter(AlgorithmClassification {
+                family: Some(canonical.to_string()),
+                parameter,
+                class: family_class(canonical),
+            });
+        }
+    }
+
+    // Family declared but unrecognized: still try the OID.
+    if family.is_some()
+        && let Some(o) = oid.map(str::trim).filter(|o| !o.is_empty())
+        && let Some((canonical, parameter)) = classify_oid(o)
+    {
+        return fill_parameter(AlgorithmClassification {
+            family: Some(canonical.to_string()),
+            parameter,
+            class: family_class(canonical),
+        });
+    }
+
+    // 3. A named elliptic curve is authoritative that this is EC crypto.
+    if let Some(curve) = elliptic_curve.map(str::trim).filter(|c| !c.is_empty()) {
+        return AlgorithmClassification {
+            family: Some("EC".to_string()),
+            parameter: Some(curve.to_string()),
+            class: AlgorithmClass::ClassicalQuantumVulnerable,
+        };
+    }
+
+    // 4. Guarded name fallback: only when family and OID are both absent.
+    if family.is_none()
+        && oid.is_none()
+        && let Some(n) = name
+        && let Some(cls) = classify_algorithm_names(n).into_iter().next()
+    {
+        return fill_parameter(cls);
+    }
+
+    AlgorithmClassification {
+        family: None,
+        parameter: parameter_set.map(str::to_string),
+        class: AlgorithmClass::Unknown,
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1124,6 +1651,225 @@ mod tests {
         assert_eq!(proto.protocol_type, ProtocolType::Tls);
         assert_eq!(proto.version.as_deref(), Some("1.3"));
         assert_eq!(proto.cipher_suites.len(), 1);
+    }
+
+    // ── classify_algorithm ──────────────────────────────────────────────
+
+    fn cls(
+        family: Option<&str>,
+        name: Option<&str>,
+        oid: Option<&str>,
+        param: Option<&str>,
+        curve: Option<&str>,
+    ) -> AlgorithmClassification {
+        classify_algorithm(family, name, oid, param, curve)
+    }
+
+    #[test]
+    fn classify_family_spelling_variants() {
+        // Aliases and separator styles all land on the canonical family.
+        for (input, family, class) in [
+            ("SHA1", "SHA-1", AlgorithmClass::Broken),
+            ("sha-1", "SHA-1", AlgorithmClass::Broken),
+            ("TDES", "3DES", AlgorithmClass::Broken),
+            ("DES-EDE3", "3DES", AlgorithmClass::Broken),
+            ("3DES-EDE", "3DES", AlgorithmClass::Broken),
+            ("ARC4", "RC4", AlgorithmClass::Broken),
+            ("ARCFOUR", "RC4", AlgorithmClass::Broken),
+            (
+                "Ed25519",
+                "ED25519",
+                AlgorithmClass::ClassicalQuantumVulnerable,
+            ),
+            ("ECIES", "ECIES", AlgorithmClass::ClassicalQuantumVulnerable),
+            ("ECDHE", "ECDH", AlgorithmClass::ClassicalQuantumVulnerable),
+            ("EC", "EC", AlgorithmClass::ClassicalQuantumVulnerable),
+            ("ChaCha20", "CHACHA20", AlgorithmClass::Symmetric),
+            ("Camellia", "CAMELLIA", AlgorithmClass::Symmetric),
+        ] {
+            let c = cls(Some(input), None, None, None, None);
+            assert_eq!(c.family.as_deref(), Some(family), "family for {input}");
+            assert_eq!(c.class, class, "class for {input}");
+        }
+    }
+
+    #[test]
+    fn classify_size_in_family_string() {
+        let c = cls(Some("ML-KEM-768"), None, None, None, None);
+        assert_eq!(c.family.as_deref(), Some("ML-KEM"));
+        assert_eq!(c.parameter.as_deref(), Some("768"));
+        assert_eq!(c.class, AlgorithmClass::PostQuantum(PqcKind::MlKem));
+
+        let c = cls(Some("AES-128"), None, None, None, None);
+        assert_eq!(c.family.as_deref(), Some("AES"));
+        assert_eq!(c.parameter.as_deref(), Some("128"));
+
+        let c = cls(Some("AES128"), None, None, None, None);
+        assert_eq!(c.parameter.as_deref(), Some("128"));
+
+        let c = cls(Some("RSA-2048"), None, None, None, None);
+        assert_eq!(c.family.as_deref(), Some("RSA"));
+        assert_eq!(c.parameter.as_deref(), Some("2048"));
+        assert_eq!(c.class, AlgorithmClass::ClassicalQuantumVulnerable);
+
+        // SHA sizes fold into the SHA-2 family.
+        let c = cls(Some("SHA-256"), None, None, None, None);
+        assert_eq!(c.family.as_deref(), Some("SHA-2"));
+        assert_eq!(c.parameter.as_deref(), Some("256"));
+        assert_eq!(c.class, AlgorithmClass::Sha2);
+        assert_eq!(c.label(), "SHA-256");
+    }
+
+    #[test]
+    fn classify_round3_pqc_names() {
+        let c = cls(Some("Kyber"), None, None, Some("768"), None);
+        assert_eq!(c.family.as_deref(), Some("ML-KEM"));
+        assert_eq!(c.parameter.as_deref(), Some("768"));
+
+        let c = cls(Some("Kyber-1024"), None, None, None, None);
+        assert_eq!(c.parameter.as_deref(), Some("1024"));
+
+        // Round-3 Dilithium parameter sets map to the final ML-DSA ones.
+        let c = cls(Some("Dilithium-3"), None, None, None, None);
+        assert_eq!(c.family.as_deref(), Some("ML-DSA"));
+        assert_eq!(c.parameter.as_deref(), Some("65"));
+
+        let c = cls(Some("SPHINCS+"), None, None, None, None);
+        assert_eq!(c.class, AlgorithmClass::PostQuantum(PqcKind::SlhDsa));
+
+        let c = cls(Some("Falcon"), None, None, None, None);
+        assert_eq!(c.class, AlgorithmClass::PostQuantum(PqcKind::FnDsa));
+    }
+
+    #[test]
+    fn classify_by_oid() {
+        // RSA arc.
+        let c = cls(None, None, Some("1.2.840.113549.1.1.1"), Some("2048"), None);
+        assert_eq!(c.family.as_deref(), Some("RSA"));
+        assert_eq!(c.parameter.as_deref(), Some("2048"));
+        assert_eq!(c.class, AlgorithmClass::ClassicalQuantumVulnerable);
+
+        // SHA-1 / MD5.
+        assert_eq!(
+            cls(None, None, Some("1.3.14.3.2.26"), None, None).class,
+            AlgorithmClass::Broken
+        );
+        assert_eq!(
+            cls(None, None, Some("1.2.840.113549.2.5"), None, None).class,
+            AlgorithmClass::Broken
+        );
+
+        // AES arc encodes the key size: .2 = AES-128-CBC, .46 = AES-256-GCM.
+        let c = cls(None, None, Some("2.16.840.1.101.3.4.1.2"), None, None);
+        assert_eq!(c.family.as_deref(), Some("AES"));
+        assert_eq!(c.parameter.as_deref(), Some("128"));
+        let c = cls(None, None, Some("2.16.840.1.101.3.4.1.46"), None, None);
+        assert_eq!(c.parameter.as_deref(), Some("256"));
+
+        // SHA-2 arc.
+        let c = cls(None, None, Some("2.16.840.1.101.3.4.2.2"), None, None);
+        assert_eq!(c.class, AlgorithmClass::Sha2);
+        assert_eq!(c.parameter.as_deref(), Some("384"));
+
+        // ML-KEM / ML-DSA / SLH-DSA arcs.
+        let c = cls(None, None, Some("2.16.840.1.101.3.4.4.3"), None, None);
+        assert_eq!(c.class, AlgorithmClass::PostQuantum(PqcKind::MlKem));
+        assert_eq!(c.parameter.as_deref(), Some("1024"));
+        let c = cls(None, None, Some("2.16.840.1.101.3.4.3.19"), None, None);
+        assert_eq!(c.class, AlgorithmClass::PostQuantum(PqcKind::MlDsa));
+        assert_eq!(c.parameter.as_deref(), Some("87"));
+        let c = cls(None, None, Some("2.16.840.1.101.3.4.3.24"), None, None);
+        assert_eq!(c.class, AlgorithmClass::PostQuantum(PqcKind::SlhDsa));
+
+        // Edwards / Montgomery curves.
+        assert_eq!(
+            cls(None, None, Some("1.3.101.112"), None, None)
+                .family
+                .as_deref(),
+            Some("ED25519")
+        );
+
+        // ECDSA signature and EC curve arcs.
+        assert_eq!(
+            cls(None, None, Some("1.2.840.10045.4.3.2"), None, None).class,
+            AlgorithmClass::ClassicalQuantumVulnerable
+        );
+        assert_eq!(
+            cls(None, None, Some("1.2.840.10045.3.1.7"), None, None).class,
+            AlgorithmClass::ClassicalQuantumVulnerable
+        );
+    }
+
+    #[test]
+    fn classify_name_fallback_only_without_family_and_oid() {
+        // Name fallback fires when family and OID are both absent...
+        let c = cls(None, Some("AES-128-CBC"), None, None, None);
+        assert_eq!(c.family.as_deref(), Some("AES"));
+        assert_eq!(c.parameter.as_deref(), Some("128"));
+
+        let c = cls(None, Some("RSA-2048-PKCS1"), None, None, None);
+        assert_eq!(c.family.as_deref(), Some("RSA"));
+
+        // ...but never overrides a present (unrecognized) family or OID.
+        let c = cls(
+            Some("proprietary-frobnicator"),
+            Some("RSA-2048"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(c.class, AlgorithmClass::Unknown);
+        let c = cls(None, Some("RSA-2048"), Some("9.9.9.9"), None, None);
+        assert_eq!(c.class, AlgorithmClass::Unknown);
+
+        // Word-boundary matching: "DESCRIPTOR" must not match DES.
+        let c = cls(None, Some("DESCRIPTOR-HANDLER"), None, None, None);
+        assert_eq!(c.class, AlgorithmClass::Unknown);
+    }
+
+    #[test]
+    fn classify_elliptic_curve_field() {
+        // The parsed-but-previously-unread ellipticCurve field marks the
+        // asset as classical EC crypto even without family/OID/name.
+        let c = cls(None, None, None, None, Some("secg/secp256r1"));
+        assert_eq!(c.class, AlgorithmClass::ClassicalQuantumVulnerable);
+        assert_eq!(c.family.as_deref(), Some("EC"));
+        assert_eq!(c.parameter.as_deref(), Some("secg/secp256r1"));
+    }
+
+    #[test]
+    fn classify_name_enriches_missing_parameter() {
+        // Family without a parameter set picks the size up from the name.
+        let c = cls(Some("AES"), Some("AES-256-GCM"), None, None, None);
+        assert_eq!(c.parameter.as_deref(), Some("256"));
+    }
+
+    #[test]
+    fn classify_cipher_suite_names() {
+        let found = classify_algorithm_names("TLS_RSA_WITH_RC4_128_SHA");
+        let families: Vec<_> = found.iter().filter_map(|c| c.family.as_deref()).collect();
+        assert!(families.contains(&"RSA"), "{families:?}");
+        assert!(families.contains(&"RC4"), "{families:?}");
+        assert!(families.contains(&"SHA-1"), "{families:?}");
+
+        // A CNSA 2.0 suite: everything recognized resolves to approved
+        // algorithms, and the noise tokens (TLS/GCM) match nothing.
+        let found = classify_algorithm_names("TLS_AES_256_GCM_SHA384_ML_KEM_1024");
+        assert!(
+            found.iter().any(
+                |c| c.family.as_deref() == Some("AES") && c.parameter.as_deref() == Some("256")
+            )
+        );
+        assert!(
+            found
+                .iter()
+                .any(|c| c.family.as_deref() == Some("SHA-2")
+                    && c.parameter.as_deref() == Some("384"))
+        );
+        assert!(found.iter().any(
+            |c| c.family.as_deref() == Some("ML-KEM") && c.parameter.as_deref() == Some("1024")
+        ));
+        assert!(!found.iter().any(|c| c.class == AlgorithmClass::Broken));
     }
 
     #[test]
