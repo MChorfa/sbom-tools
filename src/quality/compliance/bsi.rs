@@ -73,9 +73,26 @@ impl ComplianceChecker {
             });
         }
 
-        // §5.3 — Component name (mandatory) — already enforced globally;
-        //         we add a BSI-specific message only if many components are
-        //         missing names (extreme case).
+        // §5.3 — Component name (mandatory). The BsiTr03183_2 level dispatches
+        // ONLY to this checker (not the generic component check), so the name
+        // requirement must be enforced here — it is not "already enforced
+        // globally" for this standard.
+        let nameless = sbom
+            .components
+            .values()
+            .filter(|c| c.name.trim().is_empty())
+            .count();
+        if nameless > 0 {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::ComponentIdentification,
+                message: format!("{nameless} component(s) missing a name (BSI §5.3 mandatory)"),
+                element: None,
+                requirement: "BSI TR-03183-2 §5.3: Component name".to_string(),
+                rule_id: "SBOM-BSI-TR-03183-2-5-3",
+                standard_refs: Vec::new(),
+            });
+        }
 
         // §5.3 — Component identifier: PURL or other recognised ID (mandatory).
         // Stricter than CRA: BSI requires a PURL where the ecosystem applies.

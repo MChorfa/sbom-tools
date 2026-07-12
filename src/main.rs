@@ -721,14 +721,15 @@ struct MatrixArgs {
 /// Arguments for the `quality` subcommand
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
-    0  Score meets the --min-score threshold (or no threshold set)
-    1  Overall score below --min-score
+    0  Score meets --min-score (or no threshold) and, with --fail-on-noncompliant, the SBOM is compliant
+    1  Overall score below --min-score, OR (with --fail-on-noncompliant) the SBOM is non-compliant
     3  Error occurred
 
 EXAMPLES:
     sbom-tools quality app.cdx.json                                # Score overview
     sbom-tools quality app.cdx.json --profile security --metrics   # Detailed metrics
     sbom-tools quality app.cdx.json --min-score 70 -o json         # CI gate with export
+    sbom-tools quality app.cdx.json --profile cra --fail-on-noncompliant  # gate on compliance
     sbom-tools quality app.cdx.json --recommendations              # Improvement suggestions")]
 struct QualityArgs {
     /// Path to the SBOM file
@@ -757,6 +758,11 @@ struct QualityArgs {
     /// Fail if quality score is below threshold (0-100)
     #[arg(long)]
     min_score: Option<f32>,
+
+    /// Exit non-zero when the SBOM is non-compliant with the report's
+    /// compliance standard (the score gate `--min-score` ignores compliance).
+    #[arg(long)]
+    fail_on_noncompliant: bool,
 
     /// Path to a CRA sidecar metadata file (JSON or YAML).
     /// Consulted by the embedded CRA compliance check when running
@@ -1880,6 +1886,7 @@ fn main() -> Result<()> {
                 args.recommendations,
                 args.metrics,
                 args.min_score,
+                args.fail_on_noncompliant,
                 resolve_bool(cli.no_color, app.output.no_color),
                 args.cra_sidecar,
                 args.cra_product_class,
