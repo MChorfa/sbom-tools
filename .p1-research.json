@@ -1,0 +1,258 @@
+{
+ "bsi": {
+  "facts": [
+   {
+    "topic": "Canonical URL and identity of v2.1.0",
+    "finding": "The English v2.1.0 PDF is 'Technical Guideline BSI TR-03183: Cyber Resilience Requirements for Manufacturers and Products, Part 2: Software Bill of Materials (SBOM)', 37 pages, published by the Federal Office for Information Security (BSI). Document history (Table 1) row: '2.1.0 | 2025-08-20'. Canonical download URL: https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5 . BSI's own shortlink printed in the document imprint: 'Internet: https://bsi.bund.de/dok/TR-03183-en'. The BSI TR-03183 overview page presents 2.1.0 as the current version of Part 2 (archive lists 1.0, 1.1, 2.0.0 as outdated).",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q1: Eligible SBOM formats and minimum versions (section 4)",
+    "finding": "Audit claim CONFIRMED. Section 4 'SBOM formats' (p.11), verbatim: 'A newly generated or updated SBOM MUST be in JSON- or XML-format and a valid SBOM according to one of the following specifications in one of the specified versions: \u2022 CycloneDX, version 1.6 or higher \u2022 System Package Data Exchange (SPDX), version 3.0.1 or higher. Only officially released versions of these specifications MUST be used. The transitional system of this Technical Guideline is specified in section 7.' So under v2.1.0, CycloneDX < 1.6 and SPDX < 3.0.1 (including SPDX 2.x) are non-compliant for newly generated or updated SBOMs.",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q1 (cont): Transitional system for older versions (section 7)",
+    "finding": "Section 7 'Transitional system' (p.17), verbatim: 'The version with the highest version number of this Technical Guideline available on BSI's website is called the \"most recent version\". To be compliant to this Technical Guideline, the most recent version MUST be used for the generation of SBOMs. Any previous version MUST NOT be applied, except for the immediately preceding version which MAY be applied to generate SBOMs compliant to this Technical Guideline up to six months after a new \"most recent version\" has been issued according to the document history in table 1.' And: 'Unless otherwise defined, an SBOM version compliant to this Technical Guideline at the delivery date of this SBOM version remains complaint [sic] to the Technical Guideline, even if new versions of this Technical Guideline have been published afterwards.' Practical effect: v2.0.0 rules (CycloneDX >= 1.5 / SPDX >= 2.2.1) were only permitted for SBOM generation until 2026-02-20 (six months after 2025-08-20); as of 2026-07-12 new SBOMs must satisfy v2.1.0. Previously delivered compliant SBOMs stay compliant (grandfathered).",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q2: Mandatory document-level fields (section 5.2.1, Table 2)",
+    "finding": "Exactly TWO required data fields for the SBOM itself. Section 5.2.1 'Required data fields for the SBOM itself' (p.12): 'Each SBOM MUST contain at least the following information:' Table 2: (1) 'Creator of the SBOM \u2014 Email address of the entity that created the SBOM. If no email address is available this MUST be a \"Uniform Resource Locator (URL)\", e.g. the creator's home page or the project's web page.' (2) 'Timestamp \u2014 Date and time of the SBOM data compilation according to the specification of the formats (see section 4). Note: It is recommended to only use timestamps in UTC (\"Zulu\" time).' Table footnote: 'Note: An SBOM format specification may require additional data fields to generate a valid SBOM in this format.' There is NO required signature field and NO required generation-tool field.",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q3: Mandatory per-component fields (section 5.2.2, Table 3)",
+    "finding": "Section 5.2.2 (p.13-14): 'For each component included in an SBOM, at least the following information MUST be provided:' Table 3 lists exactly TEN fields: (1) Component creator \u2014 'Email address of the entity that created and, if applicable, maintains the respective component. If no email address is available this MUST be a \"Uniform Resource Locator (URL)\"...'; (2) Component name \u2014 'Name assigned to the component by the component creator. If no name is assigned this MUST be the actual filename.'; (3) Component version \u2014 'Identifier used by the creator to specify changes in the component to a previously created version.' (ordered rules: existing identifiers MUST NOT be changed; SemVer/CalVer SHOULD be used; 'If no version is assigned this MUST be the modification date of the file expressed as date-time according to RFC 3339 section 5.6'); (4) Filename of the component \u2014 'The actual filename of the component (i.e. not its file system path)'; (5) Dependencies on other components \u2014 'Enumeration of all components on which this component is directly dependent... Furthermore, the completeness of this enumeration MUST be clearly indicated.'; (6) Distribution licences \u2014 'Distribution licence(s) of the component under which it can be used by a licensee.'; (7) Hash value of the deployable component (see separate hash fact); (8) Executable property \u2014 'possible values are \"executable\" and \"non-executable\"'; (9) Archive property \u2014 'possible values are \"archive\" and \"no archive\"'; (10) Structured property \u2014 'possible values are \"structured\" and \"unstructured\"; ... If a component contains both structured and unstructured parts the value \"structured\" MUST be used.' Caveat from section 3.2.1 (p.7): 'Information that is not available due to the way a component is assembled has to be omitted even if it is specified as a required data field, e.g. the hash or filename of the component.'",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q3 (cont): Reduced field sets for logical / identified / referenced components",
+    "finding": "Not every component needs all ten fields. Section 3.2.2 (logical components): 'To fully describe logical components, only the following data fields (see section 5.2) MUST be addressed as specified in section 5.1: \u2022 Component creator \u2022 Component name \u2022 Component version \u2022 Dependencies on other components \u2022 Distribution licences \u2022 Other unique identifiers \u2022 Original licences \u2022 Effective licence \u2022 URL of the security.txt' (i.e., no filename/hash/executable/archive/structured for logical components). Section 3.2.4 (identified components): 'the following data fields ... MUST be addressed ...: \u2022 Component creator \u2022 Component name \u2022 Component version \u2022 Other unique identifiers'. Section 3.2.5 (referenced components): 'the following data fields ... MUST be extracted from the component description of the referenced component and added in the referencing SBOM in addition to the referred BOM: \u2022 Component creator \u2022 Component name \u2022 Component version', and 'If inconsistent component information exists in both, the referencing and the referenced BOM, the information of the referenced BOM prevails.' Section 5.1 ordering: '1. Referenced component (see section 3.2.5) 2. Identified component (see section 3.2.4) 3. Fully described component (see section 5.2)'.",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q4: Hash requirement \u2014 SHA-512 is specifically mandated",
+    "finding": "The reviewer claiming SHA-512 is correct. Section 5.2.2, Table 3, row 'Hash value of the deployable component', verbatim: 'Cryptographically secure checksum (hash value) of the deployed/deployable component (i.e. as a file on a mass storage device) as SHA-512; see also section 3.2.1'. SHA-512 is named in the normative clause itself, so SHA-256 (or any other algorithm) alone does NOT satisfy this required field. The mapping tables confirm: SPDX v3.0.1 mapping uses '\"algorithm\": \"sha512\"' and CycloneDX v1.6 mapping uses '\"alg\": \"SHA-512\"' (Appendix 8.2, Table 9, p.26). Additional hashes in other algorithms MAY coexist: Appendix 8.2 note (p.21): 'data fields beyond these requirements ... may be included at the SBOM creator's convenience; this also covers additional instances of data fields, e.g. hash values.' Separately, the OPTIONAL 'Hash value of the source code of the component' (section 5.2.5, Table 6) has NO determined algorithm: 'A specific algorithm how to create a hash value of multiple source files or a source code tree, and which hash algorithm is utilised for that has not yet been determined.' (though its mapping examples in 8.2 Table 12 also show sha512/SHA-512).",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q5: Tier structure (Required / Additional / Optional)",
+    "finding": "Three tiers in section 5.2: REQUIRED (5.2.1 for the SBOM itself, 5.2.2 per component): unconditional 'MUST contain at least'. ADDITIONAL (5.2.3 for the SBOM itself, 5.2.4 per component): conditional-mandatory \u2014 5.2.3 verbatim: 'Each SBOM MUST additionally include the following information, if it exists and fulfils the requirements of an SBOM format specification for the specific data field'; 5.2.4 verbatim: 'For each component included in an SBOM, the following information MUST additionally be provided, if it exists and fulfils the requirements of an SBOM format specification for the specific data field'. OPTIONAL (5.2.5 per component): 'Each SBOM MAY additionally include the following information, if it exists and fulfils the requirements of an SBOM format specification for the specific data field' with footnote 'Note: This list is not meant to be exhaustive.' Tier assignment of the queried fields: SBOM-URI = Additional, document-level (5.2.3 Table 4: '\"Uniform Resource Identifier (URI)\" of this SBOM'); Source code URI = Additional (5.2.4 Table 5); 'URI of the deployable form of the component' (v2.0.0 renamed this from 'URI of the executable form') = Additional (5.2.4 Table 5: 'URI which points directly to the deployable (e.g. downloadable) form of the component'); Other unique identifiers (purl/CPE) = Additional (5.2.4 Table 5: 'Other identifiers that can be used to identify the component or to look it up in relevant databases, such as Common Platform Enumeration (CPE) or Package URL (purl)'); Original licences = Additional (5.2.4); Distribution licences = REQUIRED (5.2.2 Table 3); Effective licence = Optional (5.2.5 Table 6); Hash of source code = Optional (5.2.5); URL of security.txt = Optional (5.2.5).",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q6: Creator contact required; generation tool NOT required; signature NOT required",
+    "finding": "Creator contact IS required at document level: 'Creator of the SBOM \u2014 Email address of the entity that created the SBOM. If no email address is available this MUST be a \"Uniform Resource Locator (URL)\", e.g. the creator's home page or the project's web page.' (5.2.1, Table 2). Email is preferred; URL is the fallback. The same email-or-URL pattern is required per component for 'Component creator' (5.2.2). Identifying the GENERATION TOOL is NOT mandated anywhere in section 5.2 \u2014 no tool/generator field exists in any tier (Required/Additional/Optional); the mapping for 'Creator of the SBOM' maps to SPDX Person XOR Organization and CycloneDX metadata.manufacturer (Table 8, p.22), not to metadata.tools. Digital signatures are NOT required: the only mention is non-normative Appendix 8.1.15 (p.21): 'Ideally, SBOMs should be digitally signed so recipients can verify their authenticity.' \u2014 the appendix explicitly states (section 8, p.18): 'While the sections 3 to 5 set normative requirements for contents, extent and format of a Software Bill of Materials (SBOM), this section is intended to provide helpful information on these requirements.'",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Q7: v2.0.0 -> v2.1.0 changelog deltas (Document history, Table 1)",
+    "finding": "Verbatim changelog entry for 2.1.0 (dated 2025-08-20): 'Add some definitions and updates in \"Terms used\", \"Licence information\", \"Data fields\", and \"Explanations\"; restructure \"Data fields\"; update CycloneDX minimum version requirement from 1.5 to 1.6, update SPDX minimum version requirement from 2.2.1 to 3.0.1; introduce and define logical and identified components, clarify usage of BOM references; add section \"Mapping of individual data fields\"'. (For context, the 2.0.0 entry dated 2024-09-20 had added: required fields actual filename, executable/archive/structured properties; additional field concluded licences; moved source code hash from additional to optional; added optional declared licences; CycloneDX 1.4->1.5; SPDX 2.3->2.2.1; renamed 'hash value of executable component' to 'hash value of deployable component' and 'URI of the executable form' to 'URI of the deployable form'. Note the licence-field NAMES changed in 2.1.0: section 3.2.8 now defines Original licence(s) / Distribution licence(s) / Effective licence, explicitly avoiding the terms 'declared'/'concluded': 'The terms \"concluded licences\" and \"declared licences\" are not defined and used consistently throughout different SBOM standards and implementations. To avoid inconsistencies and confusion and allow for an easy mapping this Technical Guideline uses different terms.')",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Licence identification rules (section 6.1) \u2014 relevant to compliance checks",
+    "finding": "Section 6.1 'Licence identifiers and expressions' (p.16): '1. Licences MUST be referred to (in the sense of \"named\") by their appropriate SPDX licence identifier or licence expression based on such an identifier.' 'While the SPDX and CycloneDX specifications allow for including licence text of components in SBOMs, this MUST NOT be used as a substitute for a licence identifier.' Fallback chain: '2. ... the licence database \"Scancode LicenseDB AboutCode\" MUST be consulted next. Identifiers from this database use the prefix LicenseRef-scancode-[...]'; '3. ... the prefix LicenseRef-<licence_inventorising_entity>-[...] MUST be used according to \"Annex B. SPDX license expressions\"'. Also: exception clauses 'MUST be attached to a licence identifier with WITH'; multiple licensing/choices 'MUST be mapped with SPDX operators'.",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "Other document-level MUSTs relevant to compliance checks (sections 3.1, 5.1)",
+    "finding": "Section 3.1: 'An SBOM MUST contain certain minimum information (see section 5).' 'A separate SBOM MUST be generated for each software version. An updated version of the SBOM for a given software version MUST be generated if and only if additional information on the included components is provided or errors in the SBOM data are corrected.' 'An SBOM MUST NOT contain vulnerability information ... a document containing both SBOM and vulnerability information does not conform to this Technical Guideline.' Section 5.1 (level of detail): 'recursive dependency resolution MUST be performed at least for each component included in the scope of delivery on each path downward ... at least up to and including the first component that is outside the scope of delivery'; 'If the primary component depends on multiple instances of a component which have different meta-information, all these instances MUST be listed separately'; 'SBOMs of used components MAY be referenced instead of being merged ... if and only if they are compliant with this Technical Guideline'; 'An SBOM compliant with this Technical Guideline MUST contain the same information as available during the build process or equivalent information where the build process does not exist'. CycloneDX filename/executable/archive/structured/effectiveLicense values are carried via BSI's property taxonomy keys 'bsi:component:filename', 'bsi:component:executable', 'bsi:component:archive', 'bsi:component:structured', 'bsi:component:effectiveLicense' (Appendix 8.2 mapping tables; taxonomy repo https://github.com/BSI-Bund/tr-03183-cyclonedx-property-taxonomy).",
+    "source_url": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_1_0.pdf?__blob=publicationFile&v=5",
+    "confidence": "high"
+   },
+   {
+    "topic": "No TR version 2.2.0 exists; misleading BSI URL",
+    "finding": "The URL https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TR03183/BSI-TR-03183-2_v2_2_0.pdf (which appears in search results and looks like 'v2.2.0') actually serves the OLD 17-page document whose history ends at version 1.1 (2023-11-28) \u2014 verified by downloading it and reading its Document History. The BSI TR-03183 overview page confirms 2.1.0 is the current Part 2 version and lists that '_v2_2_0' file as the archived version 1.1; no version 2.2.0 of Part 2 exists as of 2026-07-12. Do not treat that URL as a newer standard.",
+    "source_url": "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/tr-03183.html",
+    "confidence": "high"
+   }
+  ],
+  "unresolved": [
+   "The optional 'Hash value of the source code' field has no normatively determined algorithm ('has not yet been determined', section 5.2.5), yet the Appendix 8.2 mapping examples show sha512/SHA-512 \u2014 a checker should not enforce an algorithm for this optional field.",
+   "The German-language edition (BSI-TR-03183-2.pdf, DE) was not compared against the English v2.1.0; BSI publishes both, and which text is legally authoritative was not established (the English PDF is BSI's own official translation).",
+   "The 'Additional' tier's condition 'if it exists and fulfils the requirements of an SBOM format specification' makes machine-checkable pass/fail ambiguous when the data plausibly exists but is absent from the SBOM \u2014 the TR gives no procedure for a consumer to verify existence; a compliance tool can only warn, not hard-fail, on missing Additional fields.",
+   "Section 3.2.1 allows omitting even required fields (e.g. hash, filename) 'if information is not available due to the way a component is assembled' \u2014 the TR gives no machine-readable way to distinguish a legitimate omission from a violation."
+  ]
+ },
+ "cra": {
+  "facts": [
+   {
+    "topic": "Article 71 \u2014 entry into force and application dates",
+    "finding": "Article 71 'Entry into force and application' reads in full: '1. This Regulation shall enter into force on the twentieth day following that of its publication in the Official Journal of the European Union. 2. This Regulation shall apply from 11 December 2027. However, Article 14 shall apply from 11 September 2026 and Chapter IV (Articles 35 to 51) shall apply from 11 June 2026.' Published OJ L 20.11.2024 (per footnote 'OJ L, 2024/2847, 20.11.2024'), so entry into force = 10 December 2024. Summary: 11 June 2026 = Chapter IV (Arts 35\u201351, notification of conformity assessment bodies); 11 September 2026 = Article 14 (manufacturers' reporting obligations for actively exploited vulnerabilities and severe incidents); 11 December 2027 = full application. Audit's '11 December 2027' full-application date is CORRECT.",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "No 2029 milestone",
+    "finding": "CONFIRMED: the string '2029' appears NOWHERE in the entire regulation text (grep over the full downloaded EUR-Lex HTML/text returned zero matches). There is no 2029 application milestone in Regulation (EU) 2024/2847. The only dates in Article 71 are 11 December 2027, 11 September 2026, and 11 June 2026 (plus entry into force 20 days after 20.11.2024 publication).",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "Annexes I\u2013VIII official titles",
+    "finding": "Exact annex titles as printed: ANNEX I 'ESSENTIAL CYBERSECURITY REQUIREMENTS' \u2014 containing exactly two parts: 'Part I Cybersecurity requirements relating to the properties of products with digital elements' and 'Part II Vulnerability handling requirements' (no Part III). ANNEX II 'INFORMATION AND INSTRUCTIONS TO THE USER'. ANNEX III 'IMPORTANT PRODUCTS WITH DIGITAL ELEMENTS' \u2014 'Class I' (19 items) and 'Class II' (4 items: hypervisors/container runtimes, firewalls/IDS/IPS, tamper-resistant microprocessors, tamper-resistant microcontrollers). ANNEX IV 'CRITICAL PRODUCTS WITH DIGITAL ELEMENTS' (3 items: hardware devices with security boxes; smart meter gateways/devices for advanced security purposes incl. secure cryptoprocessing; smartcards or similar devices incl. secure elements). ANNEX V 'EU DECLARATION OF CONFORMITY' (referred to in Article 28; 8 numbered elements). ANNEX VI 'SIMPLIFIED EU DECLARATION OF CONFORMITY' (referred to in Article 13(20)). ANNEX VII 'CONTENT OF THE TECHNICAL DOCUMENTATION' (referred to in Article 31; 8 numbered points). ANNEX VIII 'CONFORMITY ASSESSMENT PROCEDURES' \u2014 Part I internal control (module A), Part II EU-type examination (module B), Part III conformity to type based on internal production control (module C), Part IV conformity based on full quality assurance (module H). All eight audit assumptions confirmed; note Annex VII's title includes 'CONTENT OF', it is not just 'technical documentation'.",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "Annex I Part I \u2014 numbered points and integrity citation",
+    "finding": "Annex I Part I has TWO numbered points: (1) 'Products with digital elements shall be designed, developed and produced in such a way that they ensure an appropriate level of cybersecurity based on the risks.' and (2) 'On the basis of the cybersecurity risk assessment referred to in Article 13(2) and where applicable, products with digital elements shall:' followed by sub-points (a)\u2013(m). Integrity protection is Part I, point (2)(f): 'protect the integrity of stored, transmitted or otherwise processed data, personal or other, commands, programs and configuration against any manipulation or modification not authorised by the user, and report on corruptions;'. CAUTION: (2)(f) says 'integrity' only \u2014 the word 'authenticity' does NOT appear in Annex I Part I (it appears in Art 14(5)(a) severity criteria); a document-integrity check should cite 'Annex I, Part I, point (2)(f)'. Related sub-points: (a) no known exploitable vulnerabilities; (b) secure by default configuration; (c) security updates incl. automatic updates with opt-out; (d) protection from unauthorised access (authentication, identity/access management); (e) confidentiality of data (encryption at rest/in transit); (g) data minimisation; (h) availability of essential functions, DoS resilience; (i) minimise negative impact on other devices/networks; (j) limit attack surfaces; (k) exploitation mitigation mechanisms; (l) security-related information by recording/monitoring internal activity with opt-out; (m) secure permanent removal of data and settings.",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "Annex I Part II \u2014 vulnerability handling points and SBOM mandate",
+    "finding": "Annex I Part II ('Vulnerability handling requirements') opens 'Manufacturers of products with digital elements shall:' and has 8 numbered points. The SBOM is point (1): 'identify and document vulnerabilities and components contained in products with digital elements, including by drawing up a software bill of materials in a commonly used and machine-readable format covering at the very least the top-level dependencies of the products;'. Others: (2) address and remediate vulnerabilities without delay incl. security updates, delivered separately from functionality updates where technically feasible; (3) effective and regular tests and reviews of product security; (4) once a security update is available, share and publicly disclose information about fixed vulnerabilities (description, affected-product identification, impacts, severity, remediation info; publication may be delayed in duly justified cases); (5) 'put in place and enforce a policy on coordinated vulnerability disclosure;'; (6) 'take measures to facilitate the sharing of information about potential vulnerabilities \u2026 including by providing a contact address for the reporting of the vulnerabilities discovered in the product with digital elements;'; (7) mechanisms to securely distribute updates; (8) security updates disseminated without delay and (unless agreed otherwise for tailor-made products) free of charge, with advisory messages. Correct SBOM citation: 'Annex I, Part II, point (1)'. Also: Article 13(24) empowers the Commission via implementing acts to 'specify the format and elements of the software bill of materials referred to in Part II, point (1), of Annex I'.",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "Annex II \u2014 manufacturer contact and support-period end date",
+    "finding": "YES to both. Annex II opens 'At minimum, the product with digital elements shall be accompanied by:'. Point 1: 'the name, registered trade name or registered trademark of the manufacturer, and the postal address, the email address or other digital contact as well as, where available, the website at which the manufacturer can be contacted;' (manufacturer name/contact). Point 2: 'the single point of contact where information about vulnerabilities of the product with digital elements can be reported and received, and where the manufacturer's policy on coordinated vulnerability disclosure can be found;'. Point 7: 'the type of technical security support offered by the manufacturer and the end-date of the support period during which users can expect vulnerabilities to be handled and to receive security updates;' (support-period end date). Other points: 3 = 'name and type and any additional information enabling the unique identification of the product'; 4 = intended purpose; 5 = known/foreseeable circumstances leading to significant cybersecurity risks; 6 = internet address of EU DoC (where applicable); 8 = detailed instructions (a)\u2013(f); 9 = 'If the manufacturer decides to make available the software bill of materials to the user, information on where the software bill of materials can be accessed.' (SBOM-to-user disclosure is optional).",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "Article 13 paragraph one-liners (13(2)\u201313(8))",
+    "finding": "Art 13 = 'Obligations of manufacturers'. 13(2): manufacturers shall undertake an assessment of the cybersecurity risks of the product and take its outcome into account during planning, design, development, production, delivery and maintenance. 13(3): the cybersecurity risk assessment shall be documented and updated as appropriate during the support period; it shall indicate whether/how the Part I point (2) requirements of Annex I are applicable and how Part I point (1) and Part II requirements are applied. 13(4): the risk assessment shall be included in the technical documentation (Article 31 / Annex VII); where certain essential requirements are not applicable, a clear justification must be included. 13(5): due diligence when integrating third-party components, incl. free and open-source components not made available in the course of commercial activity, so they do not compromise product cybersecurity. 13(6): upon identifying a vulnerability in an integrated component (incl. open-source), report the vulnerability UPSTREAM 'to the person or entity manufacturing or maintaining the component', remediate per Annex I Part II, and share fix code/documentation with the component maintainer. 13(7): systematically document relevant cybersecurity aspects incl. vulnerabilities they become aware of and third-party information; update the risk assessment. 13(8): handle vulnerabilities effectively for the support period per Annex I Part II; determine the support period (expected use time, user expectations, product nature); 'the support period shall be at least five years' unless expected use is shorter; document determination inputs in the technical documentation; have coordinated-vulnerability-disclosure policies.",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "Article 13 paragraph one-liners (13(11), 13(12), 13(15), 13(18)) + Art 14 + Art 24",
+    "finding": "13(11): manufacturers MAY maintain public software archives enhancing user access to historical versions; users must be clearly informed of risks of using unsupported software. 13(12): before placing on the market, draw up the technical documentation (Article 31), carry out the chosen conformity assessment procedure (Article 32), then draw up the EU declaration of conformity (Article 28) and affix CE marking (Article 30). 13(15): 'Manufacturers shall ensure that their products with digital elements bear a type, batch or serial number or other element allowing their identification, or, where that is not possible, that that information is provided on their packaging or in a document accompanying the product' \u2014 i.e., PRODUCT identification/traceability. 13(18): products shall be accompanied by the Annex II information and instructions to the user, in paper or electronic form, in easily understood language, kept available at least 10 years or the support period, whichever is longer. Article 14 = 'Reporting obligations of manufacturers': notify actively exploited vulnerabilities and severe incidents simultaneously to the coordinating CSIRT and ENISA via the single reporting platform (24h early warning, 72h vulnerability/incident notification, final report within 14 days of a corrective measure / 1 month of incident notification), and inform impacted users (14(8)); applies from 11 September 2026. Article 24 = 'Obligations of open-source software stewards': put in place and document a verifiable cybersecurity policy fostering secure development and effective vulnerability handling, cooperate with market surveillance authorities, with Art 14(1)/(3)/(8) applying only to the limited extents in 24(3).",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "MISATTRIBUTION FLAGS for rule messages citing Art 13",
+    "finding": "Three flags. (1) 13(6) is NOT the user-facing vulnerability-disclosure contact \u2014 it is the manufacturer's duty to report component vulnerabilities upstream to the component's maker/maintainer. The vulnerability-reporting contact address is Annex I Part II point (6) ('providing a contact address for the reporting of the vulnerabilities'), and the user-facing 'single point of contact' is Article 13(17) ('manufacturers shall designate a single point of contact to enable users to communicate directly and rapidly with them, including in order to facilitate reporting on vulnerabilities') plus Annex II point 2. (2) 13(15) is PRODUCT identification (type/batch/serial number), NOT manufacturer identification \u2014 manufacturer identification (name, registered trade name/trademark, postal address, email, website) is Article 13(16) plus Annex II point 1. So a rule citing 13(15) for manufacturer name/contact is misattributed, and a rule citing 13(12) for product identification is misattributed (13(12) is technical documentation + conformity assessment + DoC + CE marking; product identification is 13(15)). (3) Support-period end-date disclosure at time of purchase is Article 13(19) ('the end date of the support period \u2026 including at least the month and the year, is clearly and understandably specified at the time of purchase') plus Annex II point 7; the support-period determination itself is 13(8).",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   },
+   {
+    "topic": "SBOM in technical documentation (Annex VII)",
+    "finding": "Annex VII point 2(b) requires the technical documentation to contain 'necessary information and specifications of the vulnerability handling processes put in place by the manufacturer, including the software bill of materials, the coordinated vulnerability disclosure policy, evidence of the provision of a contact address for the reporting of the vulnerabilities and a description of the technical solutions chosen for the secure distribution of updates'. Annex VII point 8: 'where applicable, the software bill of materials, further to a reasoned request from a market surveillance authority provided that it is necessary in order for that authority to be able to check compliance with the essential cybersecurity requirements set out in Annex I.' \u2014 SBOM goes to authorities on reasoned request, not mandatorily to users (users: Annex II point 9, optional).",
+    "source_url": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R2847",
+    "confidence": "high"
+   }
+  ],
+  "unresolved": [
+   "Annex I Part I point (2)(f) covers 'integrity' of data/commands/programs/configuration but does not use the word 'authenticity'; if a rule message claims 'integrity/authenticity' under Annex I Part I, the 'authenticity' half has no exact clause anchor in Part I (closest are Part I (2)(d) unauthorised-access protection and Art 14(5)(a) which lists 'availability, authenticity, integrity or confidentiality' as incident-severity criteria).",
+   "Quotes are from the original OJ text (CELEX 32024R2847, OJ L 20.11.2024); no consolidated/corrigendum version was checked, though none affecting these clauses is known as of 2026-07."
+  ]
+ },
+ "us": {
+  "facts": [
+   {
+    "topic": "1. NIST IR 8547 status",
+    "finding": "NIST IR 8547 'Transition to Post-Quantum Cryptography Standards' is STILL A DRAFT as of 2026-07-12. Only the Initial Public Draft exists (released 11/12/2024; public comment period closed 1/10/2025; CSRC page states 'public comment period is CLOSED' and document history shows only '11/12/24: IR 8547 (Draft)'). https://csrc.nist.gov/pubs/ir/8547/final returns HTTP 404, and a CSRC publications search for 8547 returns exactly one record with status 'Draft (Initial Public Draft)'. Cite as: NIST IR 8547 ipd (Initial Public Draft), November 2024 \u2014 do NOT cite as final.",
+    "source_url": "https://csrc.nist.gov/pubs/ir/8547/ipd",
+    "confidence": "high"
+   },
+   {
+    "topic": "2a. FIPS 203 registry string",
+    "finding": "FIPS 203, 'Module-Lattice-Based Key-Encapsulation Mechanism Standard' (specifies ML-KEM; parameter sets ML-KEM-512/-768/-1024). Status: Final, published August 13, 2024.",
+    "source_url": "https://csrc.nist.gov/pubs/fips/203/final",
+    "confidence": "high"
+   },
+   {
+    "topic": "2b. FIPS 204 registry string",
+    "finding": "FIPS 204, 'Module-Lattice-Based Digital Signature Standard' (specifies ML-DSA). Status: Final, published August 13, 2024.",
+    "source_url": "https://csrc.nist.gov/pubs/fips/204/final",
+    "confidence": "high"
+   },
+   {
+    "topic": "2c. FIPS 205 registry string",
+    "finding": "FIPS 205, 'Stateless Hash-Based Digital Signature Standard' (specifies SLH-DSA, based on SPHINCS+). Status: Final, published August 13, 2024.",
+    "source_url": "https://csrc.nist.gov/pubs/fips/205/final",
+    "confidence": "high"
+   },
+   {
+    "topic": "2d. NIST SP 800-208 registry string",
+    "finding": "NIST SP 800-208, 'Recommendation for Stateful Hash-Based Signature Schemes' (LMS and XMSS plus multi-tree variants HSS/XMSS^MT). Status: Final, published October 29, 2020 (dated October 2020).",
+    "source_url": "https://csrc.nist.gov/pubs/sp/800/208/final",
+    "confidence": "high"
+   },
+   {
+    "topic": "3. NIST SP 800-131A current revision",
+    "finding": "Current final revision is Rev. 2: NIST SP 800-131A Rev. 2, 'Transitioning the Use of Cryptographic Algorithms and Key Lengths', March 2019 \u2014 still active, not withdrawn (page states it 'Supersedes: SP 800-131A Rev. 1 (11/06/2015)'). A Revision 3 exists ONLY as an Initial Public Draft (released October 21, 2024; comments closed December 4, 2024; DOI https://doi.org/10.6028/NIST.SP.800-131Ar3.ipd); https://csrc.nist.gov/pubs/sp/800/131/a/r3/final returns 404. Cite Rev 2 as the current standard; Rev 3 is draft-only.",
+    "source_url": "https://csrc.nist.gov/pubs/sp/800/131/a/r2/final",
+    "confidence": "high"
+   },
+   {
+    "topic": "4a. FDA premarket cybersecurity guidance \u2014 June 2025 final",
+    "finding": "YES: FDA issued a final guidance 'Cybersecurity in Medical Devices: Quality System Considerations and Content of Premarket Submissions' on June 27, 2025 (Federal Register notice 2025-11669, published 2025-06-27), superseding the September 27, 2023 final of the same title and finalizing the March 13, 2024 draft 'Select Updates for the Premarket Cybersecurity Guidance: Section 524B of the FD&C Act'. HOWEVER, the June 2025 final has ITSELF been superseded \u2014 see next finding. Do not cite the June 2025 edition as current.",
+    "source_url": "https://www.federalregister.gov/documents/2025/06/27/2025-11669/cybersecurity-in-medical-devices-quality-system-considerations-and-content-of-premarket-submissions",
+    "confidence": "high"
+   },
+   {
+    "topic": "4b. FDA premarket cybersecurity guidance \u2014 CURRENT edition (Feb 2026)",
+    "finding": "The CURRENT final guidance is retitled 'Cybersecurity in Medical Devices: Quality Management System Considerations and Content of Premarket Submissions' (note 'Quality Management System', not 'Quality System'), Guidance for Industry and FDA Staff, 'Document issued on February 3, 2026.' Cover page states verbatim: 'This document supersedes \"Cybersecurity in Medical Devices: Quality System Considerations and Content of Premarket Submissions,\" issued June 27, 2025.' Docket FDA-2021-D-1158; FDA document number GUI00001825; 64-page PDF at https://www.fda.gov/media/119933/download. Note: fda.gov returns 403 to non-browser user agents; the page and PDF fetch fine with a browser UA.",
+    "source_url": "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-management-system-considerations-and-content-premarket",
+    "confidence": "high"
+   },
+   {
+    "topic": "4c. FDA guidance SBOM section content (level of support / end of support)",
+    "finding": "The SBOM elements are materially UNCHANGED in the current (Feb 3, 2026) edition. It still requires machine-readable SBOMs 'consistent with the minimum elements (also referred to as \"baseline attributes\") identified in the October 2021 National Telecommunications and Information Administration (NTIA) ... \"Framing Software Component Transparency: Establishing a Common Software Bill of Materials (SBOM)\"', and states verbatim: 'In addition to the minimum elements identified by NTIA, for each software component contained within the SBOM, manufacturers should include in the premarket submission: \u00b7 The software level of support provided through monitoring and maintenance from the software component manufacturer (e.g., the software is actively maintained, no longer maintained, abandoned); and \u00b7 The software component's end-of-support date.' It also states 'For cyber devices, an SBOM is required (see section 524B(b)(3) of the FD&C Act ...)' and asks manufacturers to identify known vulnerabilities including those in CISA's Known Exploited Vulnerabilities Catalog. The two extra per-component elements (level of support, end-of-support date) match the Sept 2023 final's wording; the substantive additions since 2023 are the Section 524B statutory framing (SBOM mandatory for cyber devices) rather than changes to the SBOM element list.",
+    "source_url": "https://www.fda.gov/media/119933/download",
+    "confidence": "high"
+   },
+   {
+    "topic": "5. CEN/CENELEC prEN 40000-1-3 (CRA vulnerability-handling/SBOM standard)",
+    "finding": "Exact title: 'Cybersecurity requirements for products with digital elements - Part 1-3: Vulnerability Handling' (English version prEN 40000-1-3:2025); responsible committee CEN/CLC/JTC 13 'Cybersecurity and Data Protection' (WG 9, project team PT3), developed under CRA standardisation request M/606 (Commission decision C(2025)618). It covers CRA Annex I Part II (vulnerability handling), including identification/documentation of vulnerabilities and components by drawing up an SBOM. Stage as of 2026-07: ENQUIRY CLOSED, NOT YET PUBLISHED \u2014 prEN dispatched for CEN public enquiry ~December 2025/January 20 2026, enquiry/vote closed (genorma mirror of CEN data shows stage 40.60 'Close of voting' as of March 5, 2026, status 'Draft'/'IN_DEVELOPMENT'); enquiry comment deadline was 9 February 2026 (Agoria national announcement); now in comment resolution ahead of Formal Vote. National mirror draft: DIN EN 40000-1-3 (Draft) 2026-02. Expected publication: M/606 target for the vulnerability-handling deliverable is ~30 August 2026 per CRA trackers, with CEN/CENELEC 'CRA Unlocked' webinar slides (March 2026) indicating ESO publication of the horizontal EN 40000 series in H2 2026 (companion prEN 40000-1-4 timeline slide shows publication as late as Oct 2026\u2013Oct 2027) \u2014 treat the publication date as not yet committed.",
+    "source_url": "https://genorma.com/en/standards/pren-40000-1-3",
+    "confidence": "medium"
+   },
+   {
+    "topic": "6. OASIS CSAF 2.1 status",
+    "finding": "CSAF 2.1 ('Common Security Advisory Framework Version 2.1') is NOT yet an OASIS Standard. Latest stage: Committee Specification Draft 02 (csd02), dated 25 February 2026 \u2014 front matter of the latest-version page states 'Committee Specification Draft 02, 25 February 2026'. The docs.oasis-open.org/csaf/csaf/v2.1/ directory contains only csd01/ (28-May-2025) and csd02/ (25-Feb-2026); no cs01 or os stage exists. The normative OASIS Standard remains CSAF 2.0 (OASIS Standard 18 November 2022; also approved as ISO/IEC 20153 in May 2025 per OASIS announcement). Canonical latest-version URL for 2.1: https://docs.oasis-open.org/csaf/csaf/v2.1/csaf-v2.1.html",
+    "source_url": "https://docs.oasis-open.org/csaf/csaf/v2.1/csaf-v2.1.html",
+    "confidence": "high"
+   },
+   {
+    "topic": "7. CISA 2025 Minimum Elements for SBOM",
+    "finding": "STILL DRAFT as of 2026-07-12. CISA's own resource page (fetched live 2026-07-12) is titled '2025 Minimum Elements for a Software Bill of Materials (SBOM)', Publish Date August 22, 2025, and still carries the request-for-comment framing: 'CISA is requesting public comment on its updated guidance...' and 'The draft offers the public an opportunity to provide their knowledge to improve the guidance before it is finalized. The public comment period begins today and concludes on October 3, 2025.' No finalized version has been posted; the only PDF on the page is the August 2025 draft at https://www.cisa.gov/sites/default/files/2025-08/2025_CISA_SBOM_Minimum_Elements.pdf. Federal Register RFC: 90 FR (2025-08-22), doc 2025-16147. Cite as draft; the 2021 NTIA report remains the operative final 'minimum elements' baseline.",
+    "source_url": "https://www.cisa.gov/resources-tools/resources/2025-minimum-elements-software-bill-materials-sbom",
+    "confidence": "high"
+   },
+   {
+    "topic": "8. NTIA 2021 minimum-elements report canonical URL",
+    "finding": "Canonical host is now ntia.gov (not ntia.doc.gov). Live canonical page: https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom \u2014 title 'The Minimum Elements For a Software Bill of Materials (SBOM)', dated July 12, 2021, issued under Executive Order 14028. PDF: https://www.ntia.gov/sites/default/files/publications/sbom_minimum_elements_report_0.pdf. The legacy URL https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf returns HTTP 301 to https://www.ntia.gov/files/ntia/publications/sbom_minimum_elements_report.pdf, which returns 200 \u2014 old ntia.doc.gov links still resolve via redirect, but citations should use ntia.gov.",
+    "source_url": "https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom",
+    "confidence": "high"
+   },
+   {
+    "topic": "9. BSI/G7 'SBOM for AI \u2014 Minimum Elements' joint publication",
+    "finding": "YES \u2014 final joint G7 guidance published 12 May 2026. Title on BSI PDF cover: 'SOFTWARE BILL OF MATERIALS FOR AI \u2014 Minimum Elements' (G7/France 2026 branding); CISA resource page 'Software Bill of Materials for AI - Minimum Elements' shows 'Publish Date May 12, 2026' and describes it as joint guidance by CISA and G7 partners (Germany, Canada, France, Italy, Japan, United Kingdom, and the European Union). PDF front matter states verbatim it was 'written thanks to the support provided by the G7 Presidencies of Canada (2025) and France (2026), under the work stream \"Artificial Intelligence: SBOM for AI\" co-led by Italy (ACN) and Germany (BSI)', in collaboration with the EU Commission; publishers include BSI, ACN, ANSSI, CSE, CISA, NCSC-UK, and Japan's NCO. Content: 26-page document defining AI-specific minimum-element clusters (metadata, models, KPIs, infrastructure, security properties, system-level properties, dataset properties) ADDITIVE to general SBOM minimum elements; explicitly non-mandatory. Best canonical URLs: CISA page https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements (stable slug; links to BSI as host) and BSI direct PDF https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/KI/SBOM-for-AI_minimum-elements.pdf?__blob=publicationFile&v=4 (BSI landing: .../SBOM-for-AI_minimum-elements.html).",
+    "source_url": "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements",
+    "confidence": "high"
+   },
+   {
+    "topic": "Context: IR 8547 referenced by 2026 federal policy (unverified from primary)",
+    "finding": "Search-result summaries indicate June 2026 federal actions (an 'Executive Order 14412' and 'OMB M-26-15') direct agencies to align PQC migration with IR 8547's 2030/2035 timeline, which would make the draft IR 8547 operationally load-bearing even though unfinalized. NOT verified against whitehouse.gov/omb primary text \u2014 verify before citing.",
+    "source_url": "https://csrc.nist.gov/projects/post-quantum-cryptography",
+    "confidence": "low"
+   }
+  ],
+  "unresolved": [
+   "Firm publication date for EN 40000-1-3: the ~30 August 2026 target comes from M/606-tracking secondary sources (craevidence.com, compliance blogs); CEN's official catalog entry (standards.cencenelec.eu) was not directly reachable and CEN webinar slides suggest the horizontal EN 40000 timeline may slip into 2027 \u2014 treat 'expected H2 2026, subject to slip' as the safest citation.",
+   "Verbatim diff of the SBOM section between the Sept 27, 2023 final and the June 27, 2025 final FDA guidance: only the current Feb 3, 2026 PDF text was verified verbatim; the claim that level-of-support/end-of-support wording is unchanged since 2023 rests on the Feb 2026 text plus recollection of the 2023 text (superseded PDFs no longer at stable FDA URLs; check archive.org if exactness matters).",
+   "EO 14412 / OMB M-26-15 (June 2026) references to NIST IR 8547 were seen only in search snippets, not verified from whitehouse.gov/omb.gov primary documents.",
+   "Whether CISA plans to issue the finalized 2025 SBOM Minimum Elements imminently \u2014 no CISA announcement found post-October 2025 comment close; re-check before shipping citations that assume the 2021 NTIA baseline remains operative."
+  ]
+ }
+}

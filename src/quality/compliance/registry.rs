@@ -61,6 +61,9 @@ const REMEDIATION_BSIAI_DATASETS: &str = "Declare the BSI/G7 SBOM-for-AI Dataset
 /// BSI/G7 SBOM-for-AI document/metadata/system/infra/security remediation.
 const REMEDIATION_BSIAI_GENERAL: &str = "Declare the BSI/G7 SBOM-for-AI minimum elements: document author, data-format name + version, timestamp, generation tool, and signature; the primary AI system, its producer, and its data-flow/usage; runtime/framework infrastructure links; and AI-specific security controls / exploitability references where they can be expressed.";
 
+/// EUCC Substantial remediation, shared by the EUCC evidence rules.
+const REMEDIATION_EUCC: &str = "Provide the Common Criteria evidence Implementing Regulation (EU) 2024/482 (EUCC) expects alongside the SBOM: set the sidecar fields eucc_protection_profile_id (Protection Profile), eucc_target_of_evaluation (ToE), eucc_itsef_identifier (evaluating ITSEF), and eucc_valid_until (certificate validity), and reference the EUCC certificate via a Certification/Attestation external reference.";
+
 /// CNSA 2.0 allowlist remediation, shared by the CNSA rules.
 const REMEDIATION_CNSA2: &str = "Migrate to the CNSA 2.0 suite: AES-256, SHA-384/SHA-512, ML-KEM-1024, ML-DSA-87, or SP 800-208 stateful hash-based signatures (LMS/XMSS/HSS); use TLS 1.3 for network protocols. Unclassifiable algorithms cannot be verified — declare an algorithmFamily, OID, or recognizable name.";
 
@@ -291,11 +294,35 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             remediation: REMEDIATION_GENERIC,
         },
         // ---- EUCC Substantial (reference-only profile) -------------------
-        "SBOM-EUCC" => RuleMeta {
-            sarif_id: "SBOM-CRA-GENERAL",
+        "SBOM-EUCC-PP" => RuleMeta {
+            sarif_id: "SBOM-EUCC-PP",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Eucc, "Protection Profile")],
+            remediation: REMEDIATION_EUCC,
+        },
+        "SBOM-EUCC-TOE" => RuleMeta {
+            sarif_id: "SBOM-EUCC-TOE",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Eucc, "ToE")],
+            remediation: REMEDIATION_EUCC,
+        },
+        "SBOM-EUCC-ITSEF" => RuleMeta {
+            sarif_id: "SBOM-EUCC-ITSEF",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Eucc, "ITSEF")],
+            remediation: REMEDIATION_EUCC,
+        },
+        "SBOM-EUCC-VALIDITY" => RuleMeta {
+            sarif_id: "SBOM-EUCC-VALIDITY",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Eucc, "Certificate validity")],
+            remediation: REMEDIATION_EUCC,
+        },
+        "SBOM-EUCC-CERTREF" => RuleMeta {
+            sarif_id: "SBOM-EUCC-CERTREF",
             default_severity: ViolationSeverity::Warning,
-            refs: &[],
-            remediation: REMEDIATION_GENERIC,
+            refs: &[(K::Eucc, "Certification reference")],
+            remediation: REMEDIATION_EUCC,
         },
         // ---- EU AI Act Annex IV technical-documentation readiness --------
         "SBOM-AIACT-NA" => RuleMeta {

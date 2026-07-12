@@ -2,7 +2,7 @@
 //! P5.5 (controls-assertion sidecar block), and P5.7 (TUI presets).
 
 use sbom_tools::model::{ControlAssertion, CraSidecarMetadata};
-use sbom_tools::quality::{ComplianceChecker, ComplianceLevel, ViolationSeverity};
+use sbom_tools::quality::{ComplianceChecker, ComplianceLevel, StandardKind, ViolationSeverity};
 use std::collections::BTreeMap;
 
 // ============================================================================
@@ -112,6 +112,100 @@ fn eucc_substantial_near_expiry_is_warning() {
             .any(|v| v.severity == ViolationSeverity::Warning
                 && v.message.contains("expires within"))
     );
+}
+
+#[test]
+fn eucc_substantial_checks_fire_under_their_own_rule_ids() {
+    let sbom = sbom_tools::model::NormalizedSbom::default();
+    let result = ComplianceChecker::new(ComplianceLevel::EuccSubstantial).check(&sbom);
+    for (requirement, rule_id) in [
+        ("Protection Profile reference", "SBOM-EUCC-PP"),
+        ("Target of Evaluation reference", "SBOM-EUCC-TOE"),
+        ("ITSEF identifier", "SBOM-EUCC-ITSEF"),
+        ("certificate valid-until date", "SBOM-EUCC-VALIDITY"),
+        ("Certification external reference", "SBOM-EUCC-CERTREF"),
+    ] {
+        let v = result
+            .violations
+            .iter()
+            .find(|v| v.requirement.contains(requirement))
+            .unwrap_or_else(|| panic!("expected a violation for {requirement:?}"));
+        assert_eq!(
+            v.rule_id, rule_id,
+            "the {requirement:?} check must fire under its own rule id"
+        );
+    }
+}
+
+#[test]
+fn eucc_validity_variants_share_the_validity_rule_id() {
+    let expired = CraSidecarMetadata {
+        eucc_protection_profile_id: Some("PP".to_string()),
+        eucc_target_of_evaluation: Some("toe".to_string()),
+        eucc_itsef_identifier: Some("itsef".to_string()),
+        eucc_valid_until: Some(
+            chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        ),
+        ..Default::default()
+    };
+    let sbom = sbom_tools::model::NormalizedSbom::default();
+    let result = ComplianceChecker::new(ComplianceLevel::EuccSubstantial)
+        .with_sidecar(expired)
+        .check(&sbom);
+    let v = result
+        .violations
+        .iter()
+        .find(|v| v.message.contains("expired"))
+        .expect("expired-certificate violation expected");
+    assert_eq!(v.rule_id, "SBOM-EUCC-VALIDITY");
+    assert_eq!(v.severity, ViolationSeverity::Error);
+
+    let near_expiry = CraSidecarMetadata {
+        eucc_protection_profile_id: Some("PP".to_string()),
+        eucc_target_of_evaluation: Some("toe".to_string()),
+        eucc_itsef_identifier: Some("itsef".to_string()),
+        eucc_valid_until: Some(chrono::Utc::now() + chrono::Duration::days(60)),
+        ..Default::default()
+    };
+    let result = ComplianceChecker::new(ComplianceLevel::EuccSubstantial)
+        .with_sidecar(near_expiry)
+        .check(&sbom);
+    let v = result
+        .violations
+        .iter()
+        .find(|v| v.message.contains("expires within"))
+        .expect("near-expiry violation expected");
+    assert_eq!(v.rule_id, "SBOM-EUCC-VALIDITY");
+    assert_eq!(v.severity, ViolationSeverity::Warning);
+}
+
+#[test]
+fn eucc_violations_carry_eucc_standard_refs_with_2024_482_url() {
+    let sbom = sbom_tools::model::NormalizedSbom::default();
+    let result = ComplianceChecker::new(ComplianceLevel::EuccSubstantial).check(&sbom);
+    let eucc_violations: Vec<_> = result
+        .violations
+        .iter()
+        .filter(|v| v.rule_id.starts_with("SBOM-EUCC-"))
+        .collect();
+    assert!(
+        !eucc_violations.is_empty(),
+        "sidecar-less EuccSubstantial run must fire EUCC violations"
+    );
+    for v in &eucc_violations {
+        assert!(
+            v.standard_refs
+                .iter()
+                .any(|r| r.standard == StandardKind::Eucc
+                    && r.help_uri.as_deref()
+                        == Some("https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng")),
+            "violation {:?} must carry a StandardKind::Eucc ref with the 2024/482 URL; got {:?}",
+            v.rule_id,
+            v.standard_refs
+        );
+    }
 }
 
 // ============================================================================

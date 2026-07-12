@@ -31,7 +31,7 @@ impl ComplianceChecker {
                 message: "[EUCC] Missing Common Criteria Protection Profile reference — set sidecar `eucc_protection_profile_id`".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: Protection Profile reference".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-PP",
                 standard_refs: Vec::new(),
             });
         }
@@ -47,7 +47,7 @@ impl ComplianceChecker {
                 message: "[EUCC] Missing Target of Evaluation reference — set sidecar `eucc_target_of_evaluation`".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: Target of Evaluation reference".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-TOE",
                 standard_refs: Vec::new(),
             });
         }
@@ -63,7 +63,7 @@ impl ComplianceChecker {
                 message: "[EUCC] Missing ITSEF (IT Security Evaluation Facility) identifier — set sidecar `eucc_itsef_identifier`".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: ITSEF identifier".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-ITSEF",
                 standard_refs: Vec::new(),
             });
         }
@@ -77,7 +77,7 @@ impl ComplianceChecker {
                     message: "[EUCC] Missing certificate valid-until date — set sidecar `eucc_valid_until`".to_string(),
                     element: None,
                     requirement: "EUCC Substantial: certificate valid-until date".to_string(),
-                    rule_id: "SBOM-EUCC",
+                    rule_id: "SBOM-EUCC-VALIDITY",
                     standard_refs: Vec::new(),
                 });
             }
@@ -91,7 +91,7 @@ impl ComplianceChecker {
                     ),
                     element: None,
                     requirement: "EUCC Substantial: certificate validity".to_string(),
-                    rule_id: "SBOM-EUCC",
+                    rule_id: "SBOM-EUCC-VALIDITY",
                     standard_refs: Vec::new(),
                 });
             }
@@ -105,7 +105,7 @@ impl ComplianceChecker {
                     ),
                     element: None,
                     requirement: "EUCC Substantial: certificate validity".to_string(),
-                    rule_id: "SBOM-EUCC",
+                    rule_id: "SBOM-EUCC-VALIDITY",
                     standard_refs: Vec::new(),
                 });
             }
@@ -132,7 +132,7 @@ impl ComplianceChecker {
                 message: "[EUCC] No Certification/Attestation external reference points at an EUCC URL (recommended)".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: Certification external reference".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-CERTREF",
                 standard_refs: Vec::new(),
             });
         }
