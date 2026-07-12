@@ -10,7 +10,10 @@
 use crate::model::{NormalizedSbom, SbomFormat};
 use serde::{Deserialize, Serialize};
 
-mod ai_shared;
+// `pub(crate)` so the AI-readiness scorer (quality/scorer.rs) shares the exact
+// ML-component applicability semantics of the AI compliance profiles instead
+// of re-deriving them (and drifting, as the type-only filter once did).
+pub(crate) mod ai_shared;
 mod bsi;
 mod bsi_sbom_for_ai;
 mod context;

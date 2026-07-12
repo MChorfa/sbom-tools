@@ -2239,6 +2239,10 @@ struct CdxComponentXml {
     properties: Option<CdxPropertiesXml>,
     /// Package URL Version Range syntax (1.7+)
     version_range: Option<String>,
+    /// Dataset metadata (CycloneDX 1.5+): repeated `<data>` componentData
+    /// elements directly under `<component>` (no wrapper element in XML).
+    #[serde(rename = "data", default)]
+    data: Vec<CdxDataXml>,
     /// Cryptographic properties (1.6+, camelCase in XML)
     #[serde(rename = "cryptoProperties")]
     crypto_properties: Option<CdxCryptoProperties>,
@@ -2317,10 +2321,12 @@ impl From<CdxComponentXml> for CdxComponent {
             properties,
             is_external: false,
             version_range: xml.version_range,
-            // XML deserialization of modelCard/data is not supported yet;
-            // AI/ML BOM metadata is only parsed from JSON documents.
+            // XML deserialization of modelCard is not supported yet; ML-model
+            // metadata is only parsed from JSON documents. Dataset evidence
+            // (`<data>` componentData) IS parsed, so the AI compliance gates
+            // see XML AI-BOM datasets exactly like their JSON equivalents.
             model_card: None,
-            data_components: Vec::new(),
+            data_components: xml.data.into_iter().map(CdxDataComponent::from).collect(),
             crypto_properties: xml.crypto_properties,
         }
     }
@@ -2388,6 +2394,91 @@ struct CdxPropertyXml {
     name: String,
     #[serde(rename = "$value")]
     value: String,
+}
+
+/// componentData element for XML format (CycloneDX 1.5+ `<data>` child of
+/// `<component>`): `<type>` / repeated `<sensitiveData>` / `<governance>`
+/// child elements instead of JSON object keys.
+#[derive(Debug, Deserialize)]
+struct CdxDataXml {
+    #[serde(rename = "type")]
+    data_type: Option<String>,
+    #[serde(rename = "sensitiveData", default)]
+    sensitive_data: Vec<String>,
+    governance: Option<CdxDataGovernanceXml>,
+}
+
+impl From<CdxDataXml> for CdxDataComponent {
+    fn from(xml: CdxDataXml) -> Self {
+        Self {
+            data_type: xml.data_type,
+            sensitivity_data: xml.sensitive_data,
+            governance: xml.governance.map(CdxDataGovernance::from),
+        }
+    }
+}
+
+/// dataGovernance element for XML format: unlike JSON, each responsible-party
+/// list is wrapped (`<owners><owner>…</owner></owners>` etc.).
+#[derive(Debug, Deserialize)]
+struct CdxDataGovernanceXml {
+    owners: Option<CdxGovOwnersXml>,
+    custodians: Option<CdxGovCustodiansXml>,
+    stewards: Option<CdxGovStewardsXml>,
+}
+
+impl From<CdxDataGovernanceXml> for CdxDataGovernance {
+    fn from(xml: CdxDataGovernanceXml) -> Self {
+        Self {
+            owners: xml
+                .owners
+                .map_or_else(Vec::new, |w| w.owner.into_iter().map(Into::into).collect()),
+            custodians: xml.custodians.map_or_else(Vec::new, |w| {
+                w.custodian.into_iter().map(Into::into).collect()
+            }),
+            stewards: xml.stewards.map_or_else(Vec::new, |w| {
+                w.steward.into_iter().map(Into::into).collect()
+            }),
+        }
+    }
+}
+
+/// Owners wrapper element for XML data governance
+#[derive(Debug, Deserialize)]
+struct CdxGovOwnersXml {
+    #[serde(rename = "owner", default)]
+    owner: Vec<CdxGovPartyXml>,
+}
+
+/// Custodians wrapper element for XML data governance
+#[derive(Debug, Deserialize)]
+struct CdxGovCustodiansXml {
+    #[serde(rename = "custodian", default)]
+    custodian: Vec<CdxGovPartyXml>,
+}
+
+/// Stewards wrapper element for XML data governance
+#[derive(Debug, Deserialize)]
+struct CdxGovStewardsXml {
+    #[serde(rename = "steward", default)]
+    steward: Vec<CdxGovPartyXml>,
+}
+
+/// Responsible-party element for XML data governance: a choice of
+/// `<organization>` or `<contact>` (spec `dataGovernanceResponsiblePartyType`).
+#[derive(Debug, Deserialize)]
+struct CdxGovPartyXml {
+    organization: Option<CdxGovOrganization>,
+    contact: Option<CdxGovContact>,
+}
+
+impl From<CdxGovPartyXml> for CdxGovParty {
+    fn from(xml: CdxGovPartyXml) -> Self {
+        Self::Structured(CdxGovPartyObj {
+            organization: xml.organization,
+            contact: xml.contact,
+        })
+    }
 }
 
 /// Dependencies wrapper element for XML format
@@ -2821,6 +2912,91 @@ mod tests {
                 .swhid
                 .iter()
                 .any(|s| s.to_string().contains("swh:1:rel:"))
+        );
+    }
+
+    /// XML `<data>` componentData must populate `Component::dataset` exactly
+    /// like the JSON `component.data` path, so the AI compliance dataset gates
+    /// (`dataset.is_some()`) see XML AI-BOMs. Regression: the XML converter
+    /// previously hardcoded `data_components: Vec::new()`, silently dropping
+    /// spec-valid `<data>` evidence and the entire BSI-AI Datasets cluster.
+    #[test]
+    fn test_xml_component_data_populates_dataset() {
+        let sbom = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="data" bom-ref="dataset-1">
+      <name>training-corpus</name>
+      <version>1.0.0</version>
+      <data>
+        <type>dataset</type>
+        <sensitiveData>pii</sensitiveData>
+        <sensitiveData>phi</sensitiveData>
+        <governance>
+          <custodians>
+            <custodian>
+              <organization>
+                <name>ML Ops</name>
+              </organization>
+            </custodian>
+          </custodians>
+          <stewards>
+            <steward>
+              <contact>
+                <email>steward@example.com</email>
+              </contact>
+            </steward>
+          </stewards>
+          <owners>
+            <owner>
+              <organization>
+                <name>Data Platform Team</name>
+              </organization>
+            </owner>
+            <owner>
+              <contact>
+                <name>Jane Doe</name>
+                <email>jane@example.com</email>
+              </contact>
+            </owner>
+          </owners>
+        </governance>
+      </data>
+    </component>
+    <component type="data" bom-ref="config-1">
+      <name>app-config</name>
+      <version>1.0.0</version>
+    </component>
+  </components>
+</bom>"#,
+        );
+
+        let dataset = component(&sbom, "training-corpus")
+            .dataset
+            .as_ref()
+            .expect("XML <data> element must populate Component::dataset");
+        assert_eq!(dataset.dataset_type.as_deref(), Some("dataset"));
+        assert_eq!(
+            dataset.sensitivity_classifications,
+            vec!["pii".to_string(), "phi".to_string()]
+        );
+        // Owners, custodians and stewards all contribute governance names,
+        // matching the JSON conversion.
+        assert_eq!(
+            dataset.governance_owners,
+            vec![
+                "Data Platform Team".to_string(),
+                "Jane Doe".to_string(),
+                "ML Ops".to_string(),
+                "steward@example.com".to_string(),
+            ]
+        );
+
+        // A bare `type: data` component without a <data> element stays out of
+        // the AI dataset scope, exactly like the JSON de-scoping.
+        assert!(
+            component(&sbom, "app-config").dataset.is_none(),
+            "no <data> evidence must mean no DatasetInfo"
         );
     }
 

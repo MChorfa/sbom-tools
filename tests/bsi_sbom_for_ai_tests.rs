@@ -237,6 +237,92 @@ fn dataset_component_with_dataset_evidence_still_counts() {
 }
 
 #[test]
+fn xml_dataset_evidence_reaches_the_datasets_cluster() {
+    // Regression: the CycloneDX XML converter hardcoded `data_components:
+    // Vec::new()`, so `dataset.is_some()` never held for XML AI-BOMs and the
+    // entire Datasets cluster — including the MUST-level identifier check —
+    // was silently skipped (format-dependent false pass). A spec-valid
+    // `<data>` element must now enroll the component like its JSON twin.
+    let sbom = parse_sbom(&fixture("cyclonedx/aibom-dataset-gap.cdx.xml"))
+        .expect("parse aibom-dataset-gap XML fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
+    assert!(
+        ids.contains(&"SBOM-BSIAI-DATASET-IDENTIFIER"),
+        "identifier-less XML dataset must fail the MUST identifier element; got {ids:?}"
+    );
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-BSIAI-DATASET-IDENTIFIER"
+                && v.severity == ViolationSeverity::Error
+                && v.message.contains("training-corpus")),
+        "the dataset identifier Error should name the XML dataset; got {:?}",
+        result.violations
+    );
+    assert!(
+        !result.is_compliant,
+        "an XML AI-BOM with a MUST dataset gap must be non-compliant, matching the JSON path"
+    );
+}
+
+#[test]
+fn xml_documented_dataset_passes_datasets_cluster() {
+    // Silent counterpart: a fully documented XML dataset (identifier, hash,
+    // license, sensitivity, governance) must satisfy every Datasets element,
+    // and dataset evidence alone must keep the XML SBOM applicable.
+    let sbom = parse_sbom(&fixture("cyclonedx/aibom-dataset-complete.cdx.xml"))
+        .expect("parse aibom-dataset-complete XML fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
+    assert!(
+        !ids.contains(&"SBOM-BSIAI-NA"),
+        "XML dataset evidence must keep the profile applicable; got {ids:?}"
+    );
+    for rule in [
+        "SBOM-BSIAI-DATASET-NAME",
+        "SBOM-BSIAI-DATASET-IDENTIFIER",
+        "SBOM-BSIAI-DATASET-HASH",
+        "SBOM-BSIAI-DATASET-LICENSE",
+        "SBOM-BSIAI-DATASET-SENSITIVITY",
+        "SBOM-BSIAI-DATASET-PROVENANCE",
+    ] {
+        assert!(
+            !ids.contains(&rule),
+            "documented XML dataset unexpectedly flagged {rule}; got {:?}",
+            result.violations
+        );
+    }
+}
+
+#[test]
+fn huggingface_dataset_with_evidence_is_not_flagged_as_untyped_ml() {
+    // A HuggingFace-hosted DATASET — typed `data`, full componentData
+    // evidence — is legitimate, fully classified AI-BOM content. The
+    // untyped-ML evasion heuristic (which also matches pkg:huggingface) must
+    // not warn on it: the warning would be false and prescribe retyping a
+    // correct dataset as machine-learning-model.
+    let sbom = parse_sbom(&fixture("cyclonedx/hf-dataset-aibom.cdx.json"))
+        .expect("parse hf-dataset-aibom fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+
+    let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
+    assert!(
+        !ids.contains(&"SBOM-BSIAI-UNTYPED-ML"),
+        "dataset evidence must exempt the HF dataset from the untyped-ML warning; got {:?}",
+        result.violations
+    );
+    // It stays enrolled as a dataset (profile applicable, no N/A).
+    assert!(
+        !ids.contains(&"SBOM-BSIAI-NA"),
+        "the HF dataset must keep the profile applicable; got {ids:?}"
+    );
+}
+
+#[test]
 fn sparse_aibom_fails_specific_element_checks_with_cluster_refs() {
     // minimal-mlbom has model components with no PURL, hash, license, model
     // card, architecture, or limitations — so the corresponding MUST/SHOULD
