@@ -267,18 +267,11 @@ impl DependenciesView {
                 self.inner.toggle_filter_mode();
                 EventResult::Consumed
             }
-            KeyCode::Char('f') => {
-                self.inner.toggle_filter_mode();
-                EventResult::Consumed
-            }
-            KeyCode::Char('n') => {
-                self.inner.next_match();
-                EventResult::Consumed
-            }
-            KeyCode::Char('N') => {
-                self.inner.prev_match();
-                EventResult::Consumed
-            }
+            // Plain chars — including 'f', 'n', 'N' — append to the query
+            // while typing; intercepting them here made any query containing
+            // those letters impossible ("leaf" became "lea" with filter mode
+            // silently toggled). Match cycling lives in the persistent-search
+            // branch of handle_key, after Enter confirms.
             KeyCode::Char(c) => {
                 self.inner.search_push(c);
                 // Bridge will update search matches
