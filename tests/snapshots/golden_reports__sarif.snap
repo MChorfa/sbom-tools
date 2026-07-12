@@ -290,6 +290,61 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
+              "id": "SBOM-EUCC-PP",
+              "name": "EuccProtectionProfile",
+              "shortDescription": {
+                "text": "EUCC (Reg. (EU) 2024/482): Common Criteria Protection Profile reference — sidecar eucc_protection_profile_id"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng"
+            },
+            {
+              "id": "SBOM-EUCC-TOE",
+              "name": "EuccTargetOfEvaluation",
+              "shortDescription": {
+                "text": "EUCC (Reg. (EU) 2024/482): Target of Evaluation reference — sidecar eucc_target_of_evaluation"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng"
+            },
+            {
+              "id": "SBOM-EUCC-ITSEF",
+              "name": "EuccItsefIdentifier",
+              "shortDescription": {
+                "text": "EUCC (Reg. (EU) 2024/482): ITSEF (IT Security Evaluation Facility) identifier — sidecar eucc_itsef_identifier"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng"
+            },
+            {
+              "id": "SBOM-EUCC-VALIDITY",
+              "name": "EuccCertificateValidity",
+              "shortDescription": {
+                "text": "EUCC (Reg. (EU) 2024/482): certificate valid-until date present, not expired, not near expiry — sidecar eucc_valid_until"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng"
+            },
+            {
+              "id": "SBOM-EUCC-CERTREF",
+              "name": "EuccCertificationReference",
+              "shortDescription": {
+                "text": "EUCC (Reg. (EU) 2024/482): Certification/Attestation external reference to an EUCC certificate (recommended)"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng"
+            },
+            {
               "id": "SBOM-BSI-TR-03183-2-5-1",
               "name": "BsiTr03183AuthorTool",
               "shortDescription": {

@@ -295,6 +295,9 @@ pub enum StandardKind {
     EuAiAct,
     /// BSI/G7 "SBOM for AI — Minimum Elements" (Feb 2026)
     BsiSbomForAi,
+    /// EUCC — European cybersecurity certification scheme on Common Criteria,
+    /// Implementing Regulation (EU) 2024/482
+    Eucc,
     /// Other / unrecognised standard
     Other,
 }
@@ -317,6 +320,7 @@ impl StandardKind {
             Self::NistPqc => "NIST PQC",
             Self::EuAiAct => "EU AI Act",
             Self::BsiSbomForAi => "BSI/G7 AI-SBOM",
+            Self::Eucc => "EUCC",
             Self::Other => "Other",
         }
     }
@@ -408,6 +412,9 @@ impl StandardKind {
             Self::EuAiAct => "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng",
             // BSI/G7 "SBOM for AI — Minimum Elements" — BSI is the publishing body.
             Self::BsiSbomForAi => "https://www.bsi.bund.de",
+            // EUCC Implementing Regulation (EU) 2024/482 — EUR-Lex ELI is the
+            // canonical home.
+            Self::Eucc => "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng",
             Self::Other => return None,
         };
         Some(url.to_string())

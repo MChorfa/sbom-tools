@@ -753,7 +753,11 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
 /// `None` for rule families that do not map to a single regulation /
 /// specification (e.g., `SBOM-TOOLS-*` change-tracking rules).
 fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
-    if rule_id.starts_with("SBOM-CRA-") {
+    // EUCC before any more-generic prefix: these rules cite Implementing
+    // Regulation (EU) 2024/482, not the CRA regulation.
+    if rule_id.starts_with("SBOM-EUCC") {
+        Some("https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng")
+    } else if rule_id.starts_with("SBOM-CRA-") {
         Some("https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng")
     } else if rule_id.starts_with("SBOM-BSI-") {
         Some(
@@ -806,6 +810,7 @@ fn sarif_standard_label(kind: crate::quality::StandardKind) -> &'static str {
         StandardKind::NistPqc => "NIST-PQC",
         StandardKind::EuAiAct => "EU-AI-Act",
         StandardKind::BsiSbomForAi => "BSI-G7-SBOM-for-AI",
+        StandardKind::Eucc => "EUCC",
         StandardKind::Other => "Other",
     }
 }
@@ -1506,6 +1511,47 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             short_description: SarifMessage {
                 text: "CRA prEN 40000-1-3 [PRE-7-RQ-07-RE]: Upstream vendor-supplied component hashes must be carried through into the SBOM"
                     .to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        // EUCC Substantial (Implementing Regulation (EU) 2024/482).
+        SarifRule {
+            id: "SBOM-EUCC-PP".to_string(),
+            name: "EuccProtectionProfile".to_string(),
+            short_description: SarifMessage {
+                text: "EUCC (Reg. (EU) 2024/482): Common Criteria Protection Profile reference — sidecar eucc_protection_profile_id".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-EUCC-TOE".to_string(),
+            name: "EuccTargetOfEvaluation".to_string(),
+            short_description: SarifMessage {
+                text: "EUCC (Reg. (EU) 2024/482): Target of Evaluation reference — sidecar eucc_target_of_evaluation".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-EUCC-ITSEF".to_string(),
+            name: "EuccItsefIdentifier".to_string(),
+            short_description: SarifMessage {
+                text: "EUCC (Reg. (EU) 2024/482): ITSEF (IT Security Evaluation Facility) identifier — sidecar eucc_itsef_identifier".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-EUCC-VALIDITY".to_string(),
+            name: "EuccCertificateValidity".to_string(),
+            short_description: SarifMessage {
+                text: "EUCC (Reg. (EU) 2024/482): certificate valid-until date present, not expired, not near expiry — sidecar eucc_valid_until".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Error },
+        },
+        SarifRule {
+            id: "SBOM-EUCC-CERTREF".to_string(),
+            name: "EuccCertificationReference".to_string(),
+            short_description: SarifMessage {
+                text: "EUCC (Reg. (EU) 2024/482): Certification/Attestation external reference to an EUCC certificate (recommended)".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
