@@ -639,6 +639,7 @@ impl QualityScorer {
             &hash_quality_metrics,
             &provenance_metrics,
             &lifecycle_metrics,
+            &auditability_metrics,
             &compliance,
             total_components,
         );
@@ -1014,6 +1015,7 @@ impl QualityScorer {
         hashes: &HashQualityMetrics,
         provenance: &ProvenanceMetrics,
         lifecycle: &LifecycleMetrics,
+        auditability: &AuditabilityMetrics,
         compliance: &ComplianceResult,
         total_components: usize,
     ) -> Vec<Recommendation> {
@@ -1175,11 +1177,10 @@ impl QualityScorer {
             });
         }
 
-        // Priority 3: VCS URL coverage
+        // Priority 3: VCS URL coverage — derived from the actual VCS
+        // reference count, not hash coverage (an unrelated field).
         if total_components > 0 {
-            let missing_vcs = total_components.saturating_sub(
-                ((completeness.components_with_hashes / 100.0) * total_components as f32) as usize,
-            );
+            let missing_vcs = total_components.saturating_sub(auditability.components_with_vcs);
             if missing_vcs > total_components / 2 {
                 recommendations.push(Recommendation {
                     priority: 3,

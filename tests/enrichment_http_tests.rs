@@ -381,3 +381,87 @@ fn expired_cache_with_network_failure_yields_no_vulns_and_error() {
     assert!(components[0].vulnerabilities.is_empty());
     assert!(cache.get(&key).is_none());
 }
+
+// ============================================================================
+// Attachment integrity: results are matched to queries positionally, so the
+// result count MUST equal the query count or attachment is unsafe.
+// ============================================================================
+
+/// A querybatch response with FEWER results than queries must not attach by
+/// position (which would misattribute or silently drop vulns). Fail-safe:
+/// no attachment, an error recorded.
+#[test]
+fn truncated_querybatch_response_does_not_misattribute() {
+    let server = MockServer::start();
+    let cache_dir = tempfile::tempdir().unwrap();
+
+    // Two components queried, but the server returns only ONE result.
+    let batch_mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/querybatch");
+        then.status(200)
+            .json_body(querybatch_stub_body(&[&[VULN_ID]]));
+    });
+
+    let enricher =
+        OsvEnricher::new(enricher_config(&server, cache_dir.path().to_path_buf())).unwrap();
+    let mut components = vec![
+        make_component("lodash", "4.17.20"),
+        make_component("express", "4.17.1"),
+    ];
+    let stats = enricher.enrich(&mut components).unwrap();
+
+    batch_mock.assert();
+    // Neither component may receive the single result — a positional zip would
+    // have attached VULN_ID to lodash (possibly the wrong component) and
+    // dropped express entirely.
+    assert!(
+        components.iter().all(|c| c.vulnerabilities.is_empty()),
+        "count mismatch must skip attachment, not guess by position"
+    );
+    assert_eq!(stats.components_with_vulns, 0);
+    assert!(
+        stats.has_errors(),
+        "the contract violation must be recorded"
+    );
+}
+
+/// The well-formed control: one result per query, in order, attaches
+/// correctly to each component.
+#[test]
+fn well_formed_multi_component_response_attaches_correctly() {
+    let server = MockServer::start();
+    let cache_dir = tempfile::tempdir().unwrap();
+
+    let batch_mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/querybatch");
+        // One result per query: express has a vuln, moment does not.
+        then.status(200)
+            .json_body(querybatch_stub_body(&[&[VULN_ID], &[]]));
+    });
+    let vuln_mock = server.mock(|when, then| {
+        when.method(GET).path(format!("/v1/vulns/{VULN_ID}"));
+        then.status(200).json_body(full_vuln_body(VULN_ID));
+    });
+
+    let enricher =
+        OsvEnricher::new(enricher_config(&server, cache_dir.path().to_path_buf())).unwrap();
+    let mut components = vec![
+        make_component("express", "4.17.1"),
+        make_component("moment", "2.29.1"),
+    ];
+    let stats = enricher.enrich(&mut components).unwrap();
+
+    batch_mock.assert();
+    vuln_mock.assert();
+    assert_eq!(stats.components_with_vulns, 1);
+    assert_eq!(
+        components[0].vulnerabilities.len(),
+        1,
+        "express gets the vuln"
+    );
+    assert!(
+        components[1].vulnerabilities.is_empty(),
+        "moment stays clean"
+    );
+    assert!(!stats.has_errors());
+}
