@@ -20,6 +20,14 @@ use response::{OsvQuery, OsvVulnerability};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Maximum number of per-vulnerability hydration GETs issued in a single
+/// enrichment run. The querybatch response supplies the vuln-stub count per
+/// component, so an unbounded (hostile or buggy) response could otherwise
+/// drive unbounded sequential requests. Generous for real SBOMs (a component
+/// rarely has more than a handful of advisories), so it only bites on
+/// pathological input.
+const MAX_HYDRATION_REQUESTS: usize = 10_000;
+
 /// Configuration for OSV enricher.
 #[derive(Debug, Clone)]
 pub struct OsvEnricherConfig {
@@ -135,6 +143,8 @@ impl OsvEnricher {
         &self,
         stubs: &[OsvVulnerability],
         stats: &mut EnrichmentStats,
+        request_budget: &mut usize,
+        budget_hit: &mut bool,
     ) -> (Vec<VulnerabilityRef>, bool) {
         let mut vulns = Vec::with_capacity(stubs.len());
         let mut complete = true;
@@ -150,6 +160,20 @@ impl OsvEnricher {
                 vulns.push(vuln);
                 continue;
             }
+
+            // Bound the total network fan-out per run: a hostile querybatch
+            // response could list an unbounded number of vuln stubs. When the
+            // budget is exhausted, fall back to the id-only stub and mark the
+            // result incomplete so it is NOT cached as authoritative.
+            // `budget_hit` distinguishes real exhaustion from a budget that
+            // merely landed on 0 after exactly N legitimate hydrations.
+            if *request_budget == 0 {
+                *budget_hit = true;
+                complete = false;
+                vulns.push(mapper::map_osv_to_vulnerability_ref(stub));
+                continue;
+            }
+            *request_budget -= 1;
 
             stats.api_calls += 1;
             match self.client.get_vulnerability(&stub.id) {
@@ -227,26 +251,56 @@ impl VulnerabilityEnricher for OsvEnricher {
 
             match self.client.query_batch(&queries_only) {
                 Ok(batch_responses) => {
-                    // Match results back to components
-                    for ((idx, key, _), result) in to_fetch.into_iter().zip(
-                        batch_responses
-                            .into_iter()
-                            .flat_map(|r| r.results.into_iter()),
-                    ) {
-                        let (vulns, complete) = self.hydrate_vulns(&result.vulns, &mut stats);
+                    let results: Vec<_> = batch_responses
+                        .into_iter()
+                        .flat_map(|r| r.results.into_iter())
+                        .collect();
 
-                        // Cache the result (even if empty), but only when
-                        // fully hydrated so failures are retried next run
-                        if complete && let Err(e) = self.cache.set(&key, &vulns) {
-                            stats
-                                .errors
-                                .push(EnrichmentError::CacheError(e.to_string()));
+                    // Attachment is positional: result[i] belongs to
+                    // to_fetch[i]. query_batch already validates one result
+                    // per query per chunk, so counts match here — but guard
+                    // it anyway: on any mismatch, skip attachment entirely
+                    // (fail-safe) rather than misattribute vulns to the wrong
+                    // components.
+                    if results.len() != to_fetch.len() {
+                        stats.errors.push(EnrichmentError::ApiError(format!(
+                            "OSV result count {} != query count {}; skipping \
+                             attachment to avoid misattribution",
+                            results.len(),
+                            to_fetch.len()
+                        )));
+                    } else {
+                        let mut request_budget = MAX_HYDRATION_REQUESTS;
+                        let mut budget_hit = false;
+                        for ((idx, key, _), result) in to_fetch.into_iter().zip(results) {
+                            let (vulns, complete) = self.hydrate_vulns(
+                                &result.vulns,
+                                &mut stats,
+                                &mut request_budget,
+                                &mut budget_hit,
+                            );
+
+                            // Cache the result (even if empty), but only when
+                            // fully hydrated so failures/truncations are
+                            // retried next run.
+                            if complete && let Err(e) = self.cache.set(&key, &vulns) {
+                                stats
+                                    .errors
+                                    .push(EnrichmentError::CacheError(e.to_string()));
+                            }
+
+                            if !vulns.is_empty() {
+                                stats.components_with_vulns += 1;
+                                stats.total_vulns_found += vulns.len();
+                                merge_vulnerabilities(&mut components[idx], vulns);
+                            }
                         }
-
-                        if !vulns.is_empty() {
-                            stats.components_with_vulns += 1;
-                            stats.total_vulns_found += vulns.len();
-                            merge_vulnerabilities(&mut components[idx], vulns);
+                        if budget_hit {
+                            tracing::warn!(
+                                limit = MAX_HYDRATION_REQUESTS,
+                                "OSV hydration request budget exhausted; remaining \
+                                 advisories left as id-only stubs (not cached)"
+                            );
                         }
                     }
                 }
@@ -344,6 +398,41 @@ mod tests {
             ..Default::default()
         })
         .expect("enricher")
+    }
+
+    /// When the per-run hydration budget is exhausted, hydrate_vulns must
+    /// stop issuing network requests and fall back to id-only stubs, marking
+    /// the result incomplete so it is not cached as authoritative. This
+    /// bounds request amplification from a hostile querybatch response.
+    #[test]
+    fn hydrate_vulns_respects_exhausted_request_budget() {
+        let enricher = test_enricher();
+        let stubs: Vec<OsvVulnerability> = ["GHSA-aaaa", "GHSA-bbbb", "GHSA-cccc"]
+            .iter()
+            .map(|id| serde_json::from_value(serde_json::json!({ "id": id })).unwrap())
+            .collect();
+
+        // Budget 0: no GET may be issued (test_enricher points at the real OSV
+        // base URL, so a network call would either hang or fail — the test
+        // passing quickly proves none happened).
+        let mut stats = EnrichmentStats::new();
+        let mut budget = 0usize;
+        let mut budget_hit = false;
+        let (vulns, complete) =
+            enricher.hydrate_vulns(&stubs, &mut stats, &mut budget, &mut budget_hit);
+
+        assert!(budget_hit, "exhaustion must be flagged");
+        assert_eq!(
+            vulns.len(),
+            3,
+            "all stubs are returned as id-only fallbacks"
+        );
+        assert!(
+            !complete,
+            "budget-exhausted hydration is incomplete (not cached)"
+        );
+        assert_eq!(stats.api_calls, 0, "no network requests when budget is 0");
+        assert_eq!(budget, 0);
     }
 
     #[test]

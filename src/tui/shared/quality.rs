@@ -122,13 +122,14 @@ pub fn explain_integrity_score(report: &QualityReport) -> String {
 }
 
 pub fn explain_provenance_score(report: &QualityReport) -> String {
+    // Freshness is display-only metadata and deliberately NOT part of the
+    // provenance score, so the score explanation must not cite it — a
+    // stale-but-complete document scores full provenance.
     let m = &report.provenance_metrics;
-    if m.has_tool_creator && m.has_org_creator && m.is_fresh {
+    if m.has_tool_creator && m.has_org_creator {
         "Good provenance".to_string()
     } else if !m.has_tool_creator {
         "No tool info".to_string()
-    } else if !m.is_fresh {
-        "Stale SBOM".to_string()
     } else {
         "Partial provenance".to_string()
     }

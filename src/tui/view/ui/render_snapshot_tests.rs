@@ -688,6 +688,12 @@ fn cbom_view_app(active_tab: ViewTab) -> ViewApp {
 /// so they lock a clean baseline for the following data-surfacing PRs.
 #[test]
 fn snapshot_cbom_tabs() {
+    // The certificate detail's "Remaining: N days" is wall-clock relative
+    // (fixture expiry minus today) and would decay the baseline daily.
+    let mut settings = insta::Settings::clone_current();
+    settings.add_filter(r"Remaining:  \d+ days *", "Remaining:  [N] days   ");
+    let _guard = settings.bind_to_scope();
+
     let tabs = [
         ("crypto", ViewTab::Crypto),
         ("algorithms", ViewTab::Algorithms),

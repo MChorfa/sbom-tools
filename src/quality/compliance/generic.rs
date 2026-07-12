@@ -387,13 +387,26 @@ impl ComplianceChecker {
             }
         }
 
-        // NTIA requires timestamp
+        // NTIA "Timestamp" is one of the seven required minimum data fields.
+        // `DocumentMetadata::created` is never None, but a missing/invalid
+        // source timestamp is stored as the UNIX_EPOCH sentinel (see
+        // `has_known_timestamp`), so gate on that rather than assuming it is
+        // always meaningful.
         if matches!(
             self.level,
             ComplianceLevel::NtiaMinimum | ComplianceLevel::Comprehensive
-        ) {
-            // Timestamp is always set in our model, but check if it's meaningful
-            // For now, we'll skip this check as we always set a timestamp
+        ) && !sbom.document.has_known_timestamp()
+        {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::DocumentMetadata,
+                message: "SBOM is missing a creation timestamp (NTIA required data field)"
+                    .to_string(),
+                element: None,
+                requirement: "NTIA Minimum Elements: Timestamp".to_string(),
+                rule_id: "SBOM-NTIA-TIMESTAMP",
+                standard_refs: Vec::new(),
+            });
         }
 
         // Standard+ requires serial number/document ID
