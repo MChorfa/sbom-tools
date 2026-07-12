@@ -48,14 +48,7 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // Determine height for insights + policy merged row
     let has_quality_delta = result.quality_delta.is_some();
     let has_match_metrics = result.match_metrics.is_some();
-    let has_vex_data = result
-        .vulnerabilities
-        .introduced
-        .iter()
-        .chain(&result.vulnerabilities.resolved)
-        .chain(&result.vulnerabilities.persistent)
-        .any(|v| v.vex_state.is_some())
-        || !result.vulnerabilities.vex_changes.is_empty();
+    let has_vex_data = diff_total_vulns(result) > 0;
     let insights_policy_h: u16 = if has_quality_delta || has_match_metrics || has_vex_data {
         5
     } else {
@@ -193,18 +186,7 @@ fn summary_layout_plan(
 fn render_insights_row(frame: &mut Frame, area: Rect, result: &crate::diff::DiffResult) {
     let has_quality = result.quality_delta.is_some();
     let has_matching = result.match_metrics.is_some();
-    let total_vulns = result.vulnerabilities.introduced.len()
-        + result.vulnerabilities.resolved.len()
-        + result.vulnerabilities.persistent.len();
-    let has_vex = total_vulns > 0
-        && (result
-            .vulnerabilities
-            .introduced
-            .iter()
-            .chain(&result.vulnerabilities.resolved)
-            .chain(&result.vulnerabilities.persistent)
-            .any(|v| v.vex_state.is_some())
-            || !result.vulnerabilities.vex_changes.is_empty());
+    let has_vex = diff_total_vulns(result) > 0;
 
     // Split row into columns for each present insight card
     let col_count = usize::from(has_quality) + usize::from(has_matching) + usize::from(has_vex);
@@ -230,7 +212,7 @@ fn render_insights_row(frame: &mut Frame, area: Rect, result: &crate::diff::Diff
 
     // --- 1.2: Match Metrics card ---
     if let Some(mm) = &result.match_metrics {
-        render_match_metrics_card(frame, chunks[col], mm);
+        render_match_metrics_card(frame, chunks[col], mm, result);
         col += 1;
     }
 
@@ -310,7 +292,12 @@ fn render_quality_delta_card(frame: &mut Frame, area: Rect, qd: &crate::diff::Qu
 }
 
 /// Render match metrics card (item 1.2).
-fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::MatchMetrics) {
+fn render_match_metrics_card(
+    frame: &mut Frame,
+    area: Rect,
+    mm: &crate::diff::MatchMetrics,
+    result: &crate::diff::DiffResult,
+) {
     let scheme = colors();
     let total_matched = mm.exact_matches + mm.fuzzy_matches + mm.rule_matches;
 
@@ -375,6 +362,29 @@ fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::Ma
                 }),
             ),
         ]));
+        // Name the shakiest pairing (the likeliest source of a bogus
+        // "modified" row) — but only when something is actually inexact:
+        // <0.995 keeps exact-only diffs from naming an arbitrary component.
+        if mm.min_match_score < 0.995
+            && let Some((_, name)) = result
+                .components
+                .modified
+                .iter()
+                .filter_map(|c| c.match_info.as_ref().map(|m| (m.score, c.name.as_str())))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+            && let Some(last) = lines.last_mut()
+        {
+            last.push_span(Span::styled(
+                format!(
+                    " ({})",
+                    crate::tui::widgets::truncate_str(
+                        name,
+                        (area.width as usize).saturating_sub(31)
+                    )
+                ),
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
     }
 
     let paragraph = Paragraph::new(lines).block(
@@ -384,6 +394,15 @@ fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::Ma
             .border_style(Style::default().fg(scheme.secondary)),
     );
     frame.render_widget(paragraph, area);
+}
+
+/// Total vulnerability rows in the diff (introduced + resolved + persistent):
+/// the VEX card's visibility gate — a diff whose new vulns have ZERO VEX
+/// coverage (the pure gap case) must still show the card.
+fn diff_total_vulns(result: &crate::diff::DiffResult) -> usize {
+    result.vulnerabilities.introduced.len()
+        + result.vulnerabilities.resolved.len()
+        + result.vulnerabilities.persistent.len()
 }
 
 /// Render VEX coverage card (item 1.3).
@@ -411,26 +430,62 @@ fn render_vex_coverage_card(frame: &mut Frame, area: Rect, result: &crate::diff:
         ),
     ])];
 
-    if vex.actionable > 0 {
+    // The security worklist: newly introduced vulns with no triage at all
+    // (computed by vex_summary, previously never rendered).
+    if vex.introduced_without_vex > 0 || vex.persistent_without_vex > 0 {
         lines.push(Line::from(vec![
+            Span::styled("Gaps: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!("{} new", vex.introduced_without_vex),
+                Style::default().fg(scheme.error).bold(),
+            ),
+            Span::styled(" \u{b7} ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!("{} ongoing", vex.persistent_without_vex),
+                Style::default().fg(scheme.warning),
+            ),
+            Span::styled(" (no VEX)", Style::default().fg(scheme.text_muted)),
+        ]));
+    }
+
+    if vex.actionable > 0
+        || !result.vulnerabilities.vex_changes.is_empty()
+        || !vex.by_state.is_empty()
+    {
+        let mut spans = vec![
             Span::styled("Actionable: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
                 format!("{}", vex.actionable),
                 Style::default().fg(scheme.warning).bold(),
             ),
-            Span::styled(" require attention", Style::default().fg(scheme.text_muted)),
-        ]));
-    }
-
-    let vex_changes_count = result.vulnerabilities.vex_changes.len();
-    if vex_changes_count > 0 {
-        lines.push(Line::from(vec![
-            Span::styled("VEX transitions: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
-                format!("{vex_changes_count}"),
-                Style::default().fg(scheme.accent).bold(),
+                format!(
+                    " \u{b7} \u{394}{}",
+                    result.vulnerabilities.vex_changes.len()
+                ),
+                Style::default().fg(scheme.accent),
             ),
-        ]));
+        ];
+        // Compact by_state tail, most-actionable-first so the important
+        // counts survive clipping in the ~26-col card (codes/colors match
+        // render_vex_badge_spans).
+        use crate::model::VexState;
+        for (state, code, color) in [
+            (VexState::Affected, "AF", scheme.critical),
+            (VexState::UnderInvestigation, "UI", scheme.medium),
+            (VexState::NotAffected, "NA", scheme.low),
+            (VexState::Fixed, "FX", scheme.low),
+        ] {
+            if let Some(n) = vex.by_state.get(&state)
+                && *n > 0
+            {
+                spans.push(Span::styled(
+                    format!(" {code}:{n}"),
+                    Style::default().fg(color),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
     }
 
     let paragraph = Paragraph::new(lines).block(
@@ -531,6 +586,9 @@ fn count_findings(result: &crate::diff::DiffResult) -> usize {
     {
         count += 1;
     }
+
+    // ML regressions (up to 3 lines + one overflow line)
+    count += result.ml_regressions.len().min(3) + usize::from(result.ml_regressions.len() > 3);
 
     // Added components
     if !result.components.added.is_empty() {
@@ -780,6 +838,35 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 Style::default().fg(scheme.warning),
             ),
         ]));
+    }
+    // ML performance regressions (CLI --fail-on-ml-regression gate data,
+    // previously invisible interactively)
+    for reg in result.ml_regressions.iter().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                " \u{25bc} ML REGRESSION ",
+                Style::default()
+                    .fg(scheme.badge_fg_light)
+                    .bg(scheme.error)
+                    .bold(),
+            ),
+            Span::styled(
+                format!(
+                    " {} {}: {:.2} \u{2192} {:.2}",
+                    reg.component, reg.metric, reg.previous_value, reg.new_value
+                ),
+                Style::default().fg(scheme.error),
+            ),
+        ]));
+    }
+    if result.ml_regressions.len() > 3 {
+        lines.push(Line::styled(
+            format!(
+                "   \u{2026} +{} more ML regressions",
+                result.ml_regressions.len() - 3
+            ),
+            Style::default().fg(scheme.muted),
+        ));
     }
     // Added/removed summaries
     let added_count = result.components.added.len();
@@ -1065,18 +1152,7 @@ fn render_insights_policy_row(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
     let has_quality = result.quality_delta.is_some();
     let has_matching = result.match_metrics.is_some();
-    let total_vulns = result.vulnerabilities.introduced.len()
-        + result.vulnerabilities.resolved.len()
-        + result.vulnerabilities.persistent.len();
-    let has_vex = total_vulns > 0
-        && (result
-            .vulnerabilities
-            .introduced
-            .iter()
-            .chain(&result.vulnerabilities.resolved)
-            .chain(&result.vulnerabilities.persistent)
-            .any(|v| v.vex_state.is_some())
-            || !result.vulnerabilities.vex_changes.is_empty());
+    let has_vex = diff_total_vulns(result) > 0;
     let has_insights = has_quality || has_matching || has_vex;
 
     if has_insights {

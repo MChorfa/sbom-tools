@@ -58,7 +58,8 @@ impl ComponentsState {
         self.sort_by = match self.sort_by {
             ComponentSort::Name => ComponentSort::Version,
             ComponentSort::Version => ComponentSort::Ecosystem,
-            ComponentSort::Ecosystem => ComponentSort::Name,
+            ComponentSort::Ecosystem => ComponentSort::MatchScore,
+            ComponentSort::MatchScore => ComponentSort::Name,
         };
     }
 
@@ -148,6 +149,7 @@ pub enum ComponentSort {
     Name,
     Version,
     Ecosystem,
+    MatchScore,
 }
 
 pub fn sort_component_changes(
@@ -155,6 +157,19 @@ pub fn sort_component_changes(
     sort_by: ComponentSort,
 ) {
     match sort_by {
+        // Ascending by match score: the shakiest matched pairs surface first;
+        // added/removed rows (no match_info) sink to the bottom via 2.0.
+        ComponentSort::MatchScore => {
+            let score = |c: &crate::diff::ComponentChange| {
+                c.match_info.as_ref().map_or(2.0_f64, |m| m.score)
+            };
+            items.sort_by(|a, b| {
+                score(a).total_cmp(&score(b)).then_with(|| {
+                    (a.name.to_lowercase(), a.id.to_lowercase())
+                        .cmp(&(b.name.to_lowercase(), b.id.to_lowercase()))
+                })
+            });
+        }
         ComponentSort::Name => {
             items.sort_by_key(|comp| {
                 (
@@ -197,6 +212,49 @@ pub fn sort_component_changes(
 mod tests {
     use super::*;
     use crate::tui::state::ListNavigation;
+
+    /// Weakest matched pairs first; unmatched added/removed rows sink last.
+    #[test]
+    fn match_score_sort_orders_low_confidence_first() {
+        let old = crate::model::Component::new("fuzzy-lib".to_string(), "fuzzy-lib".to_string())
+            .with_version("1.0".to_string());
+        let new = old.clone();
+        let fuzzy = crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 1)
+            .with_match_info(crate::diff::MatchInfo::simple(0.62, "Fuzzy", "test"));
+
+        let old = crate::model::Component::new("exact-lib".to_string(), "exact-lib".to_string())
+            .with_version("1.0".to_string());
+        let new = old.clone();
+        let exact = crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 1)
+            .with_match_info(crate::diff::MatchInfo::simple(1.0, "NameIdentity", "test"));
+
+        // Alphabetically first so score, not name, must drive the order.
+        let comp = crate::model::Component::new("aaa-new".to_string(), "aaa-new".to_string());
+        let added = crate::diff::ComponentChange::added(&comp, 1);
+
+        let mut items = vec![&added, &exact, &fuzzy];
+        sort_component_changes(&mut items, ComponentSort::MatchScore);
+        let names: Vec<&str> = items.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["fuzzy-lib", "exact-lib", "aaa-new"],
+            "ascending score, unmatched last"
+        );
+    }
+
+    #[test]
+    fn sort_cycling_includes_match_score() {
+        let mut state = ComponentsState::new(0);
+        assert_eq!(state.sort_by, ComponentSort::Name);
+        state.toggle_sort();
+        assert_eq!(state.sort_by, ComponentSort::Version);
+        state.toggle_sort();
+        assert_eq!(state.sort_by, ComponentSort::Ecosystem);
+        state.toggle_sort();
+        assert_eq!(state.sort_by, ComponentSort::MatchScore);
+        state.toggle_sort();
+        assert_eq!(state.sort_by, ComponentSort::Name, "cycle closes");
+    }
 
     #[test]
     fn component_filter_labels() {

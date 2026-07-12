@@ -299,6 +299,161 @@ fn crypto_list_scrolls_the_selection_into_view() {
     );
 }
 
+/// Regression: the component-detail scroll was an unbounded saturating_add —
+/// over-scrolling emptied the panel. The render-side clamp must write back.
+#[test]
+fn component_detail_scroll_clamps_to_content() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    // First render builds the tree cache the key handler navigates over.
+    render_to_text(80, 24, |frame| render(frame, &mut app));
+    handle_key_event(&mut app, key(KeyCode::Down));
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.get_selected_component().is_some(),
+        "Down+Enter must select the first leaf component"
+    );
+    app.component_detail_scroll = 999;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        app.component_detail_scroll < 999,
+        "render must clamp the over-scrolled offset, got {}",
+        app.component_detail_scroll
+    );
+    assert!(
+        text.contains("fields"),
+        "clamped panel must still show content (the completeness line):
+{text}"
+    );
+}
+
+/// Regression: the Overview tab buried vulns/EOL/staleness below PURL/hash
+/// plumbing; risk must render first and the hash lives on the [2] tab only.
+#[test]
+fn overview_tab_orders_risk_before_identifiers() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let mut comp = Component::new("kev-lib".to_string(), "kev-ref".to_string())
+        .with_version("1.0.0".to_string());
+    let mut v = VulnerabilityRef::new("CVE-2024-0001".to_string(), VulnerabilitySource::Nvd);
+    v.severity = Some(Severity::Critical);
+    comp.vulnerabilities.push(v);
+    comp.eol = Some(crate::model::EolInfo {
+        status: crate::model::EolStatus::EndOfLife,
+        product: "kev-lib".to_string(),
+        cycle: "1.0".to_string(),
+        eol_date: None,
+        support_end_date: None,
+        is_lts: false,
+        latest_in_cycle: None,
+        latest_release_date: None,
+        days_until_eol: Some(-30),
+    });
+    comp.staleness = Some(crate::model::StalenessInfo {
+        level: crate::model::StalenessLevel::Stale,
+        last_published: None,
+        is_deprecated: false,
+        is_archived: false,
+        deprecation_message: None,
+        days_since_update: Some(700),
+        latest_version: None,
+    });
+    comp.identifiers.purl = Some("pkg:npm/kev-lib@1.0.0".to_string());
+    comp.hashes.push(crate::model::Hash::new(
+        crate::model::HashAlgorithm::Sha256,
+        "abc123".to_string(),
+    ));
+    let id = CanonicalId::from_name_version("kev-lib", None);
+    sbom.components.insert(id.clone(), comp);
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Tree;
+    app.selected_component = Some(id.value().to_string());
+    app.focus_panel = crate::tui::view::app::FocusPanel::Right;
+    // 120x40: the EOL block is tall enough that PURL would fall below the
+    // fold at 80x24, making the ordering assertions vacuous.
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    // Risk-summary badges under the name: vulns + EOL + staleness.
+    assert!(text.contains("1 vulns"), "vuln badge must render:\n{text}");
+    assert!(
+        text.contains(crate::model::EolStatus::EndOfLife.label()),
+        "EOL badge must render:\n{text}"
+    );
+    assert!(
+        text.contains(crate::model::StalenessLevel::Stale.label()),
+        "staleness badge must render:\n{text}"
+    );
+    assert!(
+        !text.contains("no known risk signals"),
+        "all-clear line must not render alongside risk badges:\n{text}"
+    );
+    let vulns_at = text.find("Vulns:").expect("Vulns section must render");
+    let eol_at = text.find("End-of-Life:").expect("EOL section must render");
+    let purl_at = text.find("PURL:").expect("PURL must render");
+    assert!(
+        vulns_at < purl_at && eol_at < purl_at,
+        "risk sections must precede identifier plumbing:\n{text}"
+    );
+    assert!(
+        !text.contains("Hash:"),
+        "the hash belongs to the Identifiers tab, not Overview:\n{text}"
+    );
+}
+
+/// Lock the risk-first component detail panel (badge line, reordered
+/// sections, scrollbar) at the minimum supported size.
+#[test]
+fn view_tree_component_detail_80x24() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    render_to_text(80, 24, |frame| render(frame, &mut app));
+    handle_key_event(&mut app, key(KeyCode::Down));
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    insta::assert_snapshot!("view_tree_component_detail_80x24", text);
+}
+
+#[test]
+fn pqc_selection_scrolls_into_view() {
+    let (sbom, profile) = crate::tui::test_support::cbom_single();
+    let mut app = ViewApp::new(sbom, crate::tui::test_support::CBOM, profile);
+    app.active_tab = ViewTab::PqcCompliance;
+
+    app.pqc_selected = 0;
+    let top = render_to_text(80, 24, |frame| render(frame, &mut app));
+    app.go_last();
+    assert!(app.pqc_selected > 0, "fixture must have several algorithms");
+    let scrolled = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert_ne!(
+        top, scrolled,
+        "selecting the last algorithm must scroll it into view / update the detail pane"
+    );
+}
+
+#[test]
+fn ai_readiness_scroll_reveals_rows_below_fold() {
+    let (sbom, profile) = crate::tui::test_support::aibom_single();
+    let mut app = ViewApp::new(sbom, AIBOM_BSI, profile);
+    app.active_tab = ViewTab::AiReadiness;
+
+    app.ai_readiness_scroll = 0;
+    let top = render_to_text(80, 24, |frame| render(frame, &mut app));
+    app.go_last();
+    assert!(
+        app.ai_readiness_scroll > 0,
+        "fixture must overflow the fold"
+    );
+    let scrolled = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert_ne!(
+        top, scrolled,
+        "scrolling must reveal checks/recommendations below the fold"
+    );
+}
+
 #[test]
 fn view_list_click_selects_the_item_under_the_cursor() {
     use crate::tui::view::events::handle_mouse_event;
@@ -752,4 +907,116 @@ fn view_vuln_compact_80x24_shows_full_triage_line() {
         "the EPSS triage count must survive 80 cols:\n{text}"
     );
     insta::assert_snapshot!("view_vuln_compact_80x24", text);
+}
+
+/// Regression: at 80 cols the single-line crypto header clipped its most
+/// severe token (Compromised) and never rendered QVuln/WeakKeys/Expiring at
+/// all. The two-line danger-first header must surface every non-zero danger
+/// metric at the minimum supported width.
+#[test]
+fn crypto_header_surfaces_danger_counts_at_80_cols() {
+    use crate::model::{
+        AlgorithmProperties, CertificateProperties, CryptoAssetType, CryptoMaterialState,
+        CryptoMaterialType, CryptoPrimitive, CryptoProperties, RelatedCryptoMaterialProperties,
+    };
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let mut add = |name: &str, cp: CryptoProperties| {
+        let mut c = Component::new(name.to_string(), format!("{name}-ref"));
+        c.component_type = crate::model::ComponentType::Cryptographic;
+        c.crypto_properties = Some(cp);
+        sbom.components
+            .insert(CanonicalId::from_name_version(name, None), c);
+    };
+    add(
+        "MD5",
+        CryptoProperties::new(CryptoAssetType::Algorithm)
+            .with_algorithm_properties(AlgorithmProperties::new(CryptoPrimitive::Hash)),
+    );
+    add(
+        "RSA-2048",
+        CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+            AlgorithmProperties::new(CryptoPrimitive::Pke).with_nist_quantum_security_level(0),
+        ),
+    );
+    add(
+        "expired-cert",
+        CryptoProperties::new(CryptoAssetType::Certificate).with_certificate_properties(
+            CertificateProperties::new()
+                .with_not_valid_after(chrono::Utc::now() - chrono::Duration::days(30)),
+        ),
+    );
+    add(
+        "expiring-cert",
+        CryptoProperties::new(CryptoAssetType::Certificate).with_certificate_properties(
+            CertificateProperties::new()
+                .with_not_valid_after(chrono::Utc::now() + chrono::Duration::days(30)),
+        ),
+    );
+    add(
+        "compromised-key",
+        CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+            .with_related_crypto_material_properties(
+                RelatedCryptoMaterialProperties::new(CryptoMaterialType::PrivateKey)
+                    .with_state(CryptoMaterialState::Compromised),
+            ),
+    );
+    add(
+        "small-key",
+        CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+            .with_related_crypto_material_properties(
+                RelatedCryptoMaterialProperties::new(CryptoMaterialType::PrivateKey)
+                    .with_size(1024),
+            ),
+    );
+
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+    app.active_tab = ViewTab::Crypto;
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    for token in [
+        "Compromised:1",
+        "Weak:1",
+        "QVuln:1",
+        "Expired:1",
+        "WeakKeys:1",
+        "Expiring:1",
+    ] {
+        assert!(
+            text.contains(token),
+            "danger header must surface {token}:\n{text}"
+        );
+    }
+}
+
+/// The single-SBOM License tab previously threw away the engine's pairwise
+/// SPDX conflicts; the list header must count them and the detail panel must
+/// name the clashing pair.
+#[test]
+fn license_tab_surfaces_compat_conflicts() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    for (name, lic) in [("gpl-lib", "GPL-2.0-only"), ("apache-lib", "Apache-2.0")] {
+        let mut comp =
+            Component::new(name.to_string(), format!("{name}-ref")).with_version("1.0".to_string());
+        comp.licenses
+            .add_declared(crate::model::LicenseExpression::new(lic.to_string()));
+        sbom.components
+            .insert(CanonicalId::from_name_version(name, None), comp);
+    }
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Licenses;
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("conflicts"),
+        "list header must count conflicts:\n{text}"
+    );
+    assert!(
+        text.contains("Compatibility"),
+        "detail panel must render the Compatibility section:\n{text}"
+    );
+    insta::assert_snapshot!("view_licenses_conflicts_120x40", text);
 }

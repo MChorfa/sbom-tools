@@ -280,18 +280,6 @@ fn determine_exit_code(config: &DiffConfig, result: &crate::diff::DiffResult) ->
 }
 
 fn find_ml_regressions(result: &crate::diff::DiffResult) -> Vec<crate::diff::MlRegression> {
-    fn direction(metric: &str) -> Option<bool> {
-        let metric = metric.split('@').next().unwrap_or(metric);
-        match metric {
-            "accuracy" | "f1" | "f1_score" | "precision" | "recall" | "auc" | "roc_auc"
-            | "bleu" | "rouge" => Some(true),
-            "loss" | "error" | "error_rate" | "perplexity" | "latency" | "latency_ms" => {
-                Some(false)
-            }
-            _ => None,
-        }
-    }
-
     result
         .components
         .modified
@@ -299,7 +287,7 @@ fn find_ml_regressions(result: &crate::diff::DiffResult) -> Vec<crate::diff::MlR
         .flat_map(|component| {
             component.field_changes.iter().filter_map(move |change| {
                 let metric = change.field.strip_prefix("ml_metric:")?;
-                let higher_is_better = direction(metric)?;
+                let higher_is_better = crate::diff::ml_metric_higher_is_better(metric)?;
                 let previous_value = change.old_value.as_deref()?.parse::<f64>().ok()?;
                 let new_value = change.new_value.as_deref()?.parse::<f64>().ok()?;
                 let regressed = if higher_is_better {

@@ -65,6 +65,7 @@ pub use multi_engine::MultiDiffEngine;
 // builds don't carry an unused re-export.
 #[cfg(feature = "tui")]
 pub(crate) use multi_engine::classify_version_strings;
+pub use result::ml_metric_higher_is_better;
 pub use result::{
     CategoryDelta, ChangeSet, ChangeType, ComponentChange, ComponentLicenseChange,
     ConfidenceInterval, DependencyChange, DependencyChangeType, DependencyGraphChange, DiffResult,

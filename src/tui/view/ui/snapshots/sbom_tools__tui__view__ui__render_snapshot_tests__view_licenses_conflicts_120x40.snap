@@ -2,37 +2,37 @@
 source: src/tui/view/ui/render_snapshot_tests.rs
 expression: text
 ---
-sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
+sbom-tools  VIEW  │ SBOM │ CycloneDX  │ [SBOM]
 
 [1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License Details ───────────────────────────────────┐
-✓ 8  ⚠ 0  ? 1  │  3 total                                         │MIT                                                 │
+✓ 1  ⚠ 1  ? 0  │  2 total  │  ⚡  1 conflicts                      │Apache-2.0                                          │
                                                                   │                                                    │
-┌ Licenses (3) ──────────────────────────────────────────────────┐│Category: Permissive                                │
+┌ Licenses (2) ──────────────────────────────────────────────────┐│Category: Permissive                                │
 │  License                         Count          Category       ││Risk: Low                                           │
-│▶ MIT                                6 ████████  ✓ Permissive   ││Family: MIT                                         │
-│  Apache-2.0                         2 ███       ✓ Permissive   ││Components: 6                                       │
-│  Unknown                            1 ██        ? Unknown      ││                                                    │
+│▶ Apache-2.0                         1 ████████  ✓ Permissive   ││Family: Apache                                      │
+│  GPL-2.0-only                       1 ████████  © Copyleft     ││Components: 1                                       │
+│                                                                ││                                                    │
 │                                                                ││Characteristics:                                    │
 │                                                                ││✓ Commercial use allowed                            │
 │                                                                ││✓ Modification allowed                              │
 │                                                                ││✓ Distribution allowed                              │
-│                                                                ││✗ Patent grant                                      │
+│                                                                ││✓ Patent grant                                      │
 │                                                                ││✗ Copyleft/Share-alike                              │
 │                                                                ││                                                    │
 │                                                                ││Compatibility:                                      │
-│                                                                ││✓ No conflicts with 1 other licenses                │
+│                                                                ││⚠ vs GPL-2.0-only: Apache-2.0 has patent clauses    │
+│                                                                ││incompatible with GPL-2.0                           │
 │                                                                ││                                                    │
-│                                                                ││Components: 6                                       │
+│                                                                ││Components: 1                                       │
 │                                                                ││[Enter] jump to component  [K/J] scroll             │
-│                                                                ││L axios@1.4.0                                       │
-│                                                                ││L dayjs@1.11.7                                      │
-│                                                                ││L express@4.18.2                                    │
-│                                                                ││L lodash@4.17.21                                    │
-│                                                                ││L react@18.2.0                                      │
-│                                                                ││L zod@3.21.4                                        │
+│                                                                ││L apache-lib@1.0                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 │                                                                ││                                                    │
@@ -40,5 +40,5 @@ Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License 
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 └────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3
+ Components: 2 │ Vulns: 0 │ Licenses: 2
          g group  Enter inspect  K/J scroll │  Tab switch  / search  e export  ? help  q quit [y] copy Apache-2.0

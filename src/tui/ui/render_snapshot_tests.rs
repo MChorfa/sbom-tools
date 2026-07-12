@@ -559,6 +559,184 @@ mod diff_alignment {
         result
     }
 
+    /// Build a modified model-a change with one ml_metric field change.
+    fn ml_metric_change(metric: &str, old_v: &str, new_v: &str) -> DiffResult {
+        let old = Component::new("model-a".to_string(), "model-a".to_string())
+            .with_version("1.0.0".to_string());
+        let new = old.clone();
+        let mut change = crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 0);
+        change.field_changes = vec![FieldChange {
+            field: format!("ml_metric:{metric}"),
+            old_value: Some(old_v.to_string()),
+            new_value: Some(new_v.to_string()),
+        }];
+        let mut result = DiffResult::new();
+        result.components.modified.push(change);
+        result.calculate_summary();
+        result
+    }
+
+    /// The CLI's --fail-on-ml-regression signal must be visible interactively:
+    /// the Summary names each regressed metric with its transition.
+    #[test]
+    fn summary_lists_ml_regressions() {
+        let mut result = DiffResult::default();
+        result.ml_regressions.push(crate::diff::MlRegression {
+            component: "model-a".to_string(),
+            metric: "accuracy".to_string(),
+            previous_value: 0.9,
+            new_value: 0.8,
+        });
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("ML REGRESSION"),
+            "summary must badge the regression:\n{text}"
+        );
+        assert!(
+            text.contains("model-a accuracy: 0.90 \u{2192} 0.80"),
+            "summary must name the component, metric and transition:\n{text}"
+        );
+    }
+
+    /// Regression for the inverted-color bug: a dropped accuracy previously
+    /// painted green (added). Text snapshots drop color, so the direction
+    /// arrow is the observable contract.
+    #[test]
+    fn component_detail_ml_metric_regression_shows_down_arrow() {
+        let mut result = ml_metric_change("accuracy", "0.9", "0.8");
+        // The CLI populates ml_regressions for regressed components; the
+        // detail panel must badge them.
+        result.ml_regressions.push(crate::diff::MlRegression {
+            component: "model-a".to_string(),
+            metric: "accuracy".to_string(),
+            previous_value: 0.9,
+            new_value: 0.8,
+        });
+        let mut app = app_with_result(result, TabKind::Components);
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("ML REGRESSION"),
+            "detail panel must badge the regressed component:\n{text}"
+        );
+        assert!(
+            text.contains("\u{25bc}"),
+            "regressed metric must carry a down arrow:\n{text}"
+        );
+        assert!(
+            !text.contains("\u{25b2}"),
+            "regressed metric must not carry an up arrow:\n{text}"
+        );
+
+        let mut app = app_with_result(
+            ml_metric_change("accuracy", "0.8", "0.9"),
+            TabKind::Components,
+        );
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("\u{25b2}"),
+            "improved metric must carry an up arrow:\n{text}"
+        );
+    }
+
+    /// A fuzzy match must expose its confidence interval and normalization
+    /// audit trail; previously a fuzzy 0.75 rendered identically to a
+    /// near-exact 0.75.
+    #[test]
+    fn match_panel_shows_ci_and_normalizations() {
+        let old = Component::new("fuzzy-lib".to_string(), "fuzzy-lib".to_string())
+            .with_version("1.0".to_string());
+        let new = old.clone();
+        let mut mi = crate::diff::MatchInfo::simple(0.75, "Fuzzy", "name similarity");
+        mi.normalizations = vec!["lowercase".to_string(), "suffix_stripped".to_string()];
+        let change =
+            crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 0).with_match_info(mi);
+        let mut result = DiffResult::new();
+        result.components.modified.push(change);
+        result.calculate_summary();
+
+        let mut app = app_with_result(result, TabKind::Components);
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("CI: 0.67\u{2013}0.83 (95%)"),
+            "Fuzzy tier margin is 0.08 -> CI 0.67-0.83:\n{text}"
+        );
+        assert!(
+            text.contains("Normalized: lowercase, suffix_stripped"),
+            "normalization audit trail must render:\n{text}"
+        );
+    }
+
+    fn vuln_detail(
+        id: &str,
+        vex: Option<crate::model::VexState>,
+    ) -> crate::diff::VulnerabilityDetail {
+        let vref = crate::model::VulnerabilityRef::new(
+            id.to_string(),
+            crate::model::VulnerabilitySource::Osv,
+        );
+        let comp =
+            crate::model::Component::new("libv".to_string(), "pkg:npm/libv@1.0.0".to_string());
+        let mut detail = crate::diff::VulnerabilityDetail::from_ref(&vref, &comp);
+        detail.vex_state = vex;
+        detail
+    }
+
+    /// introduced_without_vex is the security worklist; it is computed but was
+    /// never rendered. The card must show gap counts and the by_state tail.
+    #[test]
+    fn vex_card_lists_gap_counts() {
+        let mut result = DiffResult::default();
+        result
+            .vulnerabilities
+            .introduced
+            .push(vuln_detail("CVE-2024-0001", None));
+        result
+            .vulnerabilities
+            .introduced
+            .push(vuln_detail("CVE-2024-0002", None));
+        result
+            .vulnerabilities
+            .persistent
+            .push(vuln_detail("CVE-2024-0003", None));
+        result.vulnerabilities.introduced.push(vuln_detail(
+            "CVE-2024-0004",
+            Some(crate::model::VexState::Affected),
+        ));
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        for needle in ["Gaps:", "2 new", "1 ongoing", "AF:1"] {
+            assert!(
+                text.contains(needle),
+                "VEX card must render {needle}:\n{text}"
+            );
+        }
+    }
+
+    /// Regression for the gate relaxation: a diff whose vulns have ZERO VEX
+    /// coverage — the pure gap case — previously hid the card entirely.
+    #[test]
+    fn vex_card_renders_with_zero_coverage() {
+        let mut result = DiffResult::default();
+        result
+            .vulnerabilities
+            .introduced
+            .push(vuln_detail("CVE-2024-0001", None));
+        let mut app = app_with_result(result, TabKind::Summary);
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("VEX: 0%"),
+            "zero-coverage card must render with 0%:\n{text}"
+        );
+        assert!(
+            text.contains("Gaps:") && text.contains("1 new"),
+            "gap line must render:\n{text}"
+        );
+    }
+
     #[test]
     fn component_detail_flags_training_dataset_removal() {
         let mut app = app_with_result(training_dataset_removal_change(), TabKind::Components);
