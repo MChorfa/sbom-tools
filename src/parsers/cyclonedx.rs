@@ -169,8 +169,7 @@ impl CycloneDxParser {
                     {
                         if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
                             sbom.document.support_end_date = Some(dt.with_timezone(&Utc));
-                        } else if let Ok(dt) =
-                            chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                        } else if let Ok(dt) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
                         {
                             sbom.document.support_end_date = Some(
                                 dt.and_hms_opt(0, 0, 0)
@@ -579,7 +578,9 @@ impl CycloneDxParser {
         // are unaddressable and skipped.
         if let Some(props) = &cdx.properties {
             for prop in props {
-                let Some(name) = prop.name.clone() else { continue };
+                let Some(name) = prop.name.clone() else {
+                    continue;
+                };
                 comp.extensions.properties.push(Property {
                     name,
                     value: prop.value.clone().unwrap_or_default(),
@@ -1078,7 +1079,9 @@ impl CycloneDxParser {
         }
         if let Some(props) = &svc.properties {
             for prop in props {
-                let Some(name) = prop.name.clone() else { continue };
+                let Some(name) = prop.name.clone() else {
+                    continue;
+                };
                 comp.extensions.properties.push(Property {
                     name,
                     value: prop.value.clone().unwrap_or_default(),
@@ -1292,9 +1295,7 @@ impl CycloneDxParser {
                         // are kept, not dropped.
                         v.affected_versions = versions
                             .iter()
-                            .filter(|ver| {
-                                matches!(ver.status.as_deref(), None | Some("affected"))
-                            })
+                            .filter(|ver| matches!(ver.status.as_deref(), None | Some("affected")))
                             .filter_map(|ver| ver.version.clone().or_else(|| ver.range.clone()))
                             .collect();
                     }
@@ -3495,7 +3496,10 @@ mod tests {
         );
         let comp = component(&sbom, "lib");
         let ids: Vec<&str> = comp.vulnerabilities.iter().map(|v| v.id.as_str()).collect();
-        assert!(ids.contains(&"GHSA-xxxx-yyyy-zzzz"), "reference id fallback, got {ids:?}");
+        assert!(
+            ids.contains(&"GHSA-xxxx-yyyy-zzzz"),
+            "reference id fallback, got {ids:?}"
+        );
         let ghsa = comp
             .vulnerabilities
             .iter()
@@ -3573,7 +3577,9 @@ mod tests {
         let leaf_id = component(&sbom, "leaf").canonical_id.clone();
         let app_id = component(&sbom, "app").canonical_id.clone();
         assert!(
-            sbom.edges.iter().any(|e| e.from == app_id && e.to == leaf_id),
+            sbom.edges
+                .iter()
+                .any(|e| e.from == app_id && e.to == leaf_id),
             "dependency to a nested bom-ref must resolve"
         );
         let outer_id = component(&sbom, "outer").canonical_id.clone();
@@ -3604,16 +3610,24 @@ mod tests {
         assert_eq!(sbom.component_count(), 3, "app + 2 services");
         let svc = component(&sbom, "api-gateway");
         assert!(matches!(&svc.component_type, ComponentType::Other(t) if t == "service"));
-        assert_eq!(svc.supplier.as_ref().map(|s| s.name.as_str()), Some("Acme SaaS"));
+        assert_eq!(
+            svc.supplier.as_ref().map(|s| s.name.as_str()),
+            Some("Acme SaaS")
+        );
         assert!(
-            svc.licenses.declared.iter().any(|l| l.expression == "Apache-2.0"),
+            svc.licenses
+                .declared
+                .iter()
+                .any(|l| l.expression == "Apache-2.0"),
             "declared service licenses must be kept"
         );
         component(&sbom, "auth");
         let app_id = component(&sbom, "app").canonical_id.clone();
         let svc_id = svc.canonical_id.clone();
         assert!(
-            sbom.edges.iter().any(|e| e.from == app_id && e.to == svc_id),
+            sbom.edges
+                .iter()
+                .any(|e| e.from == app_id && e.to == svc_id),
             "dependency on a service bom-ref must resolve"
         );
     }
