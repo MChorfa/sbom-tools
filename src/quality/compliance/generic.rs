@@ -258,7 +258,7 @@ impl ComplianceChecker {
             }
         }
 
-        // CRA Phase 2-only checks (deadline: 11 Dec 2029)
+        // CRA Phase 2-only checks (full application of the regulation: 11 Dec 2027)
         if matches!(self.level, ComplianceLevel::CraPhase2) {
             // CRA Art. 13(7): Coordinated vulnerability disclosure policy reference
             // Check for a vulnerability disclosure policy URL or advisories reference
@@ -315,7 +315,7 @@ impl ComplianceChecker {
                 });
             }
 
-            // CRA Annex VII: EU Declaration of Conformity reference
+            // CRA Annex V: EU Declaration of Conformity reference
             // Check for an attestation, certification, or declaration-of-conformity reference
             let has_conformity_ref = sbom.components.values().any(|comp| {
                 comp.external_refs.iter().any(|r| {
@@ -338,12 +338,12 @@ impl ComplianceChecker {
                     severity,
                     category: ViolationCategory::DocumentMetadata,
                     message: format!(
-                        "[CRA Annex VII] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class {}",
+                        "[CRA Annex V] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class {}",
                         self.effective_product_class().label()
                     ),
                     element: None,
-                    requirement: "CRA Annex VII: EU Declaration of Conformity reference".to_string(),
-                    rule_id: "SBOM-CRA-ANNEX-VII",
+                    requirement: "CRA Annex V: EU Declaration of Conformity reference".to_string(),
+                    rule_id: "SBOM-CRA-ANNEX-V",
                     standard_refs: Vec::new(),
                 });
             }

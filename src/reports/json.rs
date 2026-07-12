@@ -323,9 +323,9 @@ struct CraArticleSummary {
     /// Annex I - Technical documentation
     #[serde(rename = "annex_i_technical_documentation")]
     annex_i: usize,
-    /// Annex VII - EU Declaration of Conformity
-    #[serde(rename = "annex_vii_declaration_of_conformity")]
-    annex_vii: usize,
+    /// Annex V - EU Declaration of Conformity
+    #[serde(rename = "annex_v_declaration_of_conformity")]
+    annex_v: usize,
 }
 
 impl CraComplianceDetail {
@@ -339,7 +339,7 @@ impl CraComplianceDetail {
             art_13_12: 0,
             art_13_15: 0,
             annex_i: 0,
-            annex_vii: 0,
+            annex_v: 0,
         };
 
         // Count violations by article reference
@@ -359,8 +359,11 @@ impl CraComplianceDetail {
                 summary.art_13_12 += 1;
             } else if req.contains("art. 13(15)") || req.contains("art.13(15)") {
                 summary.art_13_15 += 1;
-            } else if req.contains("annex vii") {
-                summary.annex_vii += 1;
+            } else if req.contains("annex viii") {
+                // Annex VIII (conformity assessment) has no bucket; the
+                // check must precede the "annex v" prefix match below.
+            } else if req.contains("annex v") {
+                summary.annex_v += 1;
             } else if req.contains("annex i") || req.contains("annex_i") {
                 summary.annex_i += 1;
             }

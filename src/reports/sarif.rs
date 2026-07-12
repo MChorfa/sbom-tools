@@ -1476,10 +1476,10 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },
         SarifRule {
-            id: "SBOM-CRA-ANNEX-VII".to_string(),
+            id: "SBOM-CRA-ANNEX-V".to_string(),
             name: "CraDeclarationOfConformity".to_string(),
             short_description: SarifMessage {
-                text: "CRA Annex VII: EU Declaration of Conformity reference".to_string(),
+                text: "CRA Annex V: EU Declaration of Conformity reference".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },

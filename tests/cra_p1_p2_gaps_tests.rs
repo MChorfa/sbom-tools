@@ -4,7 +4,7 @@
 //! exercised by the unit tests landed in P1/P2:
 //! - sidecar auto-discovery preference vs. explicit flag
 //! - invalid sidecar YAML must not panic
-//! - Annex I Part III transitive=Warning under CraPhase1
+//! - Annex I Part II transitive=Warning under CraPhase1
 //! - SBOM-side ExternalRefType::RiskAssessment satisfies Art. 13(2)
 //! - multi-standard `--standard bsi,cra,ntia` produces independent results
 

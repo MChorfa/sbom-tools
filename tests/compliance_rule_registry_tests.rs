@@ -151,7 +151,7 @@ fn sarif_rule_ids_are_stable_for_cra_noncompliant_fixture() {
         "SBOM-CRA-ART-13-15",
         "SBOM-CRA-ANNEX-I",
         "SBOM-CRA-ANNEX-III",
-        "SBOM-CRA-ANNEX-VII",
+        "SBOM-CRA-ANNEX-V",
         "SBOM-CRA-PRE-7-RQ-07-RE",
         "SBOM-CRA-GENERAL",
     ]

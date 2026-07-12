@@ -199,7 +199,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             default_severity: ViolationSeverity::Warning,
             refs: &[
                 (ANNEX, "Annex I Part II"),
-                (ANNEX, "Annex I Part III"),
+                (ANNEX, "Annex I Part II"),
                 (PREN, "PRE-7-RQ-01"),
                 (PREN, "PRE-7-RQ-03"),
             ],
@@ -241,15 +241,14 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(ANNEX, "Annex IV")],
             remediation: REMEDIATION_GENERIC,
         },
-        "SBOM-CRA-ANNEX-VII" => RuleMeta {
-            sarif_id: "SBOM-CRA-ANNEX-VII",
+        "SBOM-CRA-ANNEX-V" => RuleMeta {
+            sarif_id: "SBOM-CRA-ANNEX-V",
             default_severity: ViolationSeverity::Info,
-            refs: &[(ANNEX, "Annex VII")],
+            refs: &[(ANNEX, "Annex V")],
             remediation: "Reference the EU Declaration of Conformity. CycloneDX: add an externalReference of type 'attestation' or 'certification'. SPDX: add an external document reference.",
         },
         "SBOM-CRA-ANNEX-VIII" => RuleMeta {
-            // Historically matched the "annex vii" substring of "annex viii".
-            sarif_id: "SBOM-CRA-ANNEX-VII",
+            sarif_id: "SBOM-CRA-ANNEX-VIII",
             default_severity: ViolationSeverity::Info,
             refs: &[(ANNEX, "Annex VIII")],
             remediation: REMEDIATION_GENERIC,

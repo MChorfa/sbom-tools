@@ -1,5 +1,6 @@
 ---
 source: tests/golden_reports.rs
+assertion_line: 150
 expression: "render(&SarifReporter::new())"
 ---
 {
@@ -246,10 +247,10 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ANNEX-VII",
+              "id": "SBOM-CRA-ANNEX-V",
               "name": "CraDeclarationOfConformity",
               "shortDescription": {
-                "text": "CRA Annex VII: EU Declaration of Conformity reference"
+                "text": "CRA Annex V: EU Declaration of Conformity reference"
               },
               "defaultConfiguration": {
                 "level": "note"
@@ -659,7 +660,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "error",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): SBOM must have creator/tool information (Requirement: Document creator identification) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): SBOM must have creator/tool information (Requirement: Document creator identification) [Element: unknown]"
           },
           "locations": []
         },
@@ -667,7 +668,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(15): Manufacturer identification) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(15): Manufacturer identification) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -683,7 +684,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-6",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(6)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(6): Vulnerability disclosure contact) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(6)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(6): Vulnerability disclosure contact) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -699,7 +700,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-8",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(8)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8): Support period disclosure) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8): Support period disclosure) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -715,7 +716,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I, Part II, 1: Product identifier traceability across updates) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I, Part II, 1: Product identifier traceability across updates) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -732,7 +733,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-7",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(7)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Art. 13(7): Coordinated vulnerability disclosure policy) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(7)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Art. 13(7): Coordinated vulnerability disclosure policy) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -749,7 +750,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-11",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(11)] Consider including component lifecycle/end-of-support information (Requirement: CRA Art. 13(11): Component lifecycle status) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(11)] Consider including component lifecycle/end-of-support information (Requirement: CRA Art. 13(11): Component lifecycle status) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -762,15 +763,15 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ANNEX-VII",
+          "ruleId": "SBOM-CRA-ANNEX-V",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex VII] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default (Requirement: CRA Annex VII: EU Declaration of Conformity reference) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex V] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default (Requirement: CRA Annex V: EU Declaration of Conformity reference) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex VII"
+              "CRA-Annex:Annex V"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -781,7 +782,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): SBOM should have a serial number/unique identifier (Requirement: Document unique identification) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): SBOM should have a serial number/unique identifier (Requirement: Document unique identification) [Element: unknown]"
           },
           "locations": []
         },
@@ -789,7 +790,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "error",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I, [PRE-7-RQ-07]] Component 'acme-webapp' missing unique identifier (PURL/CPE/SWHID/SWID) (Requirement: CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier (PURL/CPE/SWHID/SWID)) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I, [PRE-7-RQ-07]] Component 'acme-webapp' missing unique identifier (PURL/CPE/SWHID/SWID) (Requirement: CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier (PURL/CPE/SWHID/SWID)) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -806,7 +807,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -822,7 +823,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -838,7 +839,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: lodash]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: lodash]"
           },
           "locations": [],
           "properties": {
@@ -854,7 +855,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: lodash]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: lodash]"
           },
           "locations": [],
           "properties": {
@@ -870,7 +871,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'express' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: express]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'express' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: express]"
           },
           "locations": [],
           "properties": {
@@ -886,7 +887,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: express]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: express]"
           },
           "locations": [],
           "properties": {
@@ -902,7 +903,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'moment' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: moment]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'moment' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: moment]"
           },
           "locations": [],
           "properties": {
@@ -918,7 +919,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'moment' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: moment]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'moment' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: moment]"
           },
           "locations": [],
           "properties": {
@@ -934,7 +935,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'request' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: request]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'request' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: request]"
           },
           "locations": [],
           "properties": {
@@ -950,7 +951,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'request' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: request]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'request' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: request]"
           },
           "locations": [],
           "properties": {
@@ -966,7 +967,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: axios]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: axios]"
           },
           "locations": [],
           "properties": {
@@ -982,7 +983,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: axios]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: axios]"
           },
           "locations": [],
           "properties": {
@@ -998,7 +999,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'underscore' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: underscore]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'underscore' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: underscore]"
           },
           "locations": [],
           "properties": {
@@ -1014,7 +1015,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'underscore' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: underscore]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'underscore' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: underscore]"
           },
           "locations": [],
           "properties": {
@@ -1030,7 +1031,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'jquery' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: jquery]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'jquery' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: jquery]"
           },
           "locations": [],
           "properties": {
@@ -1046,7 +1047,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'jquery' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: jquery]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'jquery' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: jquery]"
           },
           "locations": [],
           "properties": {
@@ -1062,7 +1063,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'react' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: react]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'react' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: react]"
           },
           "locations": [],
           "properties": {
@@ -1078,7 +1079,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: react]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: react]"
           },
           "locations": [],
           "properties": {
@@ -1094,7 +1095,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "error",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex I] SBOM with multiple components must include dependency relationships (Requirement: CRA Annex I: Dependency relationships) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] SBOM with multiple components must include dependency relationships (Requirement: CRA Annex I: Dependency relationships) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1110,7 +1111,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'acme-webapp' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'acme-webapp' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: acme-webapp]"
           },
           "locations": []
         },
@@ -1118,7 +1119,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'lodash' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: lodash]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'lodash' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: lodash]"
           },
           "locations": []
         },
@@ -1126,7 +1127,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'express' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: express]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'express' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: express]"
           },
           "locations": []
         },
@@ -1134,7 +1135,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'moment' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: moment]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'moment' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: moment]"
           },
           "locations": []
         },
@@ -1142,7 +1143,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'request' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: request]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'request' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: request]"
           },
           "locations": []
         },
@@ -1150,7 +1151,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'axios' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: axios]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'axios' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: axios]"
           },
           "locations": []
         },
@@ -1158,7 +1159,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'underscore' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: underscore]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'underscore' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: underscore]"
           },
           "locations": []
         },
@@ -1166,7 +1167,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'jquery' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: jquery]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'jquery' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: jquery]"
           },
           "locations": []
         },
@@ -1174,7 +1175,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): Component 'react' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: react]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'react' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: react]"
           },
           "locations": []
         },
@@ -1182,7 +1183,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-3",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(3)] SBOM is [N] days old; CRA requires timely updates when components change (Requirement: CRA Art. 13(3): SBOM update frequency) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(3)] SBOM is [N] days old; CRA requires timely updates when components change (Requirement: CRA Art. 13(3): SBOM update frequency) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1198,7 +1199,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-5",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(5)] 1/9 components (11%) missing license information (Requirement: CRA Art. 13(5): Licensed component tracking) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(5)] 1/9 components (11%) missing license information (Requirement: CRA Art. 13(5): Licensed component tracking) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1214,7 +1215,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-9",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Art. 13(9): Known vulnerabilities statement) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Art. 13(9): Known vulnerabilities statement) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1230,7 +1231,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-III",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Annex III] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex III: Document signature/integrity) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex III] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex III: Document signature/integrity) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1246,7 +1247,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(2)] No documented risk assessment referenced — add an externalReference of type 'risk-assessment' or supply riskAssessmentUrl in the CRA sidecar (Requirement: CRA Art. 13(2): Documented risk assessment) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(2)] No documented risk assessment referenced — add an externalReference of type 'risk-assessment' or supply riskAssessmentUrl in the CRA sidecar (Requirement: CRA Art. 13(2): Documented risk assessment) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1262,7 +1263,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 14] PSIRT URL missing — [ART14] (Requirement: CRA Art. 14: PSIRT contact for external vulnerability reports) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14] PSIRT URL missing — [ART14] (Requirement: CRA Art. 14: PSIRT contact for external vulnerability reports) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1278,7 +1279,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14] (Requirement: CRA Art. 14(1): 24-hour early-warning channel) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14] (Requirement: CRA Art. 14(1): 24-hour early-warning channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1294,7 +1295,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14] (Requirement: CRA Art. 14(2): 72-hour incident-report channel) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14] (Requirement: CRA Art. 14(2): 72-hour incident-report channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1310,7 +1311,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2029): [CRA Art. 14(7)] No ENISA single reporting platform identifier — track ENISA publication and add `enisaReportingPlatformId` to the CRA sidecar when available (Requirement: CRA Art. 14(7): ENISA single reporting platform) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(7)] No ENISA single reporting platform identifier — track ENISA publication and add `enisaReportingPlatformId` to the CRA sidecar when available (Requirement: CRA Art. 14(7): ENISA single reporting platform) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1326,7 +1327,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "error",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): SBOM must have creator/tool information (Requirement: Document creator identification) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): SBOM must have creator/tool information (Requirement: Document creator identification) [Element: unknown]"
           },
           "locations": []
         },
@@ -1334,7 +1335,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(15): Manufacturer identification) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] SBOM should identify the manufacturer (organization) (Requirement: CRA Art. 13(15): Manufacturer identification) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1350,7 +1351,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-6",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(6)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(6): Vulnerability disclosure contact) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(6)] SBOM should include a security contact or vulnerability disclosure reference (Requirement: CRA Art. 13(6): Vulnerability disclosure contact) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1366,7 +1367,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-8",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(8)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8): Support period disclosure) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(8)] Consider specifying a support end date for security updates (Requirement: CRA Art. 13(8): Support period disclosure) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1382,7 +1383,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I, Part II, 1: Product identifier traceability across updates) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I, Part II, 1: Product identifier traceability across updates) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -1399,7 +1400,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-7",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(7)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Art. 13(7): Coordinated vulnerability disclosure policy) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(7)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL) (Requirement: CRA Art. 13(7): Coordinated vulnerability disclosure policy) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1416,7 +1417,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-11",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(11)] Consider including component lifecycle/end-of-support information (Requirement: CRA Art. 13(11): Component lifecycle status) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(11)] Consider including component lifecycle/end-of-support information (Requirement: CRA Art. 13(11): Component lifecycle status) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1429,15 +1430,15 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ANNEX-VII",
+          "ruleId": "SBOM-CRA-ANNEX-V",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex VII] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default (Requirement: CRA Annex VII: EU Declaration of Conformity reference) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex V] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default (Requirement: CRA Annex V: EU Declaration of Conformity reference) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex VII"
+              "CRA-Annex:Annex V"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1448,7 +1449,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): SBOM should have a serial number/unique identifier (Requirement: Document unique identification) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): SBOM should have a serial number/unique identifier (Requirement: Document unique identification) [Element: unknown]"
           },
           "locations": []
         },
@@ -1456,7 +1457,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "error",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I, [PRE-7-RQ-07]] Component 'acme-webapp' missing unique identifier (PURL/CPE/SWHID/SWID) (Requirement: CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier (PURL/CPE/SWHID/SWID)) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I, [PRE-7-RQ-07]] Component 'acme-webapp' missing unique identifier (PURL/CPE/SWHID/SWID) (Requirement: CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier (PURL/CPE/SWHID/SWID)) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -1473,7 +1474,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'acme-webapp' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -1489,7 +1490,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'acme-webapp' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -1505,7 +1506,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: lodash]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'lodash' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: lodash]"
           },
           "locations": [],
           "properties": {
@@ -1521,7 +1522,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: lodash]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'lodash' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: lodash]"
           },
           "locations": [],
           "properties": {
@@ -1537,7 +1538,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'express' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: express]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'express' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: express]"
           },
           "locations": [],
           "properties": {
@@ -1553,7 +1554,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: express]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'express' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: express]"
           },
           "locations": [],
           "properties": {
@@ -1569,7 +1570,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'dayjs' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: dayjs]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'dayjs' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: dayjs]"
           },
           "locations": [],
           "properties": {
@@ -1585,7 +1586,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'dayjs' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: dayjs]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'dayjs' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: dayjs]"
           },
           "locations": [],
           "properties": {
@@ -1601,7 +1602,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: axios]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'axios' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: axios]"
           },
           "locations": [],
           "properties": {
@@ -1617,7 +1618,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: axios]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'axios' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: axios]"
           },
           "locations": [],
           "properties": {
@@ -1633,7 +1634,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'react' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: react]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'react' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: react]"
           },
           "locations": [],
           "properties": {
@@ -1649,7 +1650,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: react]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'react' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: react]"
           },
           "locations": [],
           "properties": {
@@ -1665,7 +1666,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'typescript' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: typescript]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'typescript' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: typescript]"
           },
           "locations": [],
           "properties": {
@@ -1681,7 +1682,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'typescript' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: typescript]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'typescript' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: typescript]"
           },
           "locations": [],
           "properties": {
@@ -1697,7 +1698,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'zod' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: zod]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'zod' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: zod]"
           },
           "locations": [],
           "properties": {
@@ -1713,7 +1714,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'zod' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: zod]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'zod' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: zod]"
           },
           "locations": [],
           "properties": {
@@ -1729,7 +1730,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-15",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(15)] Component 'prisma' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: prisma]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(15)] Component 'prisma' missing supplier/manufacturer (Requirement: CRA Art. 13(15): Supplier/manufacturer information) [Element: prisma]"
           },
           "locations": [],
           "properties": {
@@ -1745,7 +1746,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] Component 'prisma' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: prisma]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] Component 'prisma' missing cryptographic hash (recommended for integrity) (Requirement: CRA Annex I: Component integrity information (hash)) [Element: prisma]"
           },
           "locations": [],
           "properties": {
@@ -1761,7 +1762,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "error",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex I] SBOM with multiple components must include dependency relationships (Requirement: CRA Annex I: Dependency relationships) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] SBOM with multiple components must include dependency relationships (Requirement: CRA Annex I: Dependency relationships) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1777,7 +1778,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'acme-webapp' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'acme-webapp' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: acme-webapp]"
           },
           "locations": []
         },
@@ -1785,7 +1786,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'lodash' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: lodash]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'lodash' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: lodash]"
           },
           "locations": []
         },
@@ -1793,7 +1794,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'express' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: express]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'express' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: express]"
           },
           "locations": []
         },
@@ -1801,7 +1802,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'dayjs' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: dayjs]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'dayjs' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: dayjs]"
           },
           "locations": []
         },
@@ -1809,7 +1810,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'axios' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: axios]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'axios' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: axios]"
           },
           "locations": []
         },
@@ -1817,7 +1818,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'react' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: react]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'react' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: react]"
           },
           "locations": []
         },
@@ -1825,7 +1826,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'typescript' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: typescript]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'typescript' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: typescript]"
           },
           "locations": []
         },
@@ -1833,7 +1834,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'zod' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: zod]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'zod' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: zod]"
           },
           "locations": []
         },
@@ -1841,7 +1842,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): Component 'prisma' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: prisma]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Component 'prisma' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: prisma]"
           },
           "locations": []
         },
@@ -1849,7 +1850,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-3",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(3)] SBOM is [N] days old; CRA requires timely updates when components change (Requirement: CRA Art. 13(3): SBOM update frequency) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(3)] SBOM is [N] days old; CRA requires timely updates when components change (Requirement: CRA Art. 13(3): SBOM update frequency) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1865,7 +1866,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-5",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(5)] 1/9 components (11%) missing license information (Requirement: CRA Art. 13(5): Licensed component tracking) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(5)] 1/9 components (11%) missing license information (Requirement: CRA Art. 13(5): Licensed component tracking) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1881,7 +1882,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ART-13-9",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Art. 13(9): Known vulnerabilities statement) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Art. 13(9): Known vulnerabilities statement) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1897,7 +1898,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-III",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Annex III] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex III: Document signature/integrity) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex III] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash) (Requirement: CRA Annex III: Document signature/integrity) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1913,7 +1914,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 13(2)] No documented risk assessment referenced — add an externalReference of type 'risk-assessment' or supply riskAssessmentUrl in the CRA sidecar (Requirement: CRA Art. 13(2): Documented risk assessment) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(2)] No documented risk assessment referenced — add an externalReference of type 'risk-assessment' or supply riskAssessmentUrl in the CRA sidecar (Requirement: CRA Art. 13(2): Documented risk assessment) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1929,7 +1930,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 14] PSIRT URL missing — [ART14] (Requirement: CRA Art. 14: PSIRT contact for external vulnerability reports) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14] PSIRT URL missing — [ART14] (Requirement: CRA Art. 14: PSIRT contact for external vulnerability reports) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1945,7 +1946,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14] (Requirement: CRA Art. 14(1): 24-hour early-warning channel) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14] (Requirement: CRA Art. 14(1): 24-hour early-warning channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1961,7 +1962,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14] (Requirement: CRA Art. 14(2): 72-hour incident-report channel) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14] (Requirement: CRA Art. 14(2): 72-hour incident-report channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1977,7 +1978,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2029): [CRA Art. 14(7)] No ENISA single reporting platform identifier — track ENISA publication and add `enisaReportingPlatformId` to the CRA sidecar when available (Requirement: CRA Art. 14(7): ENISA single reporting platform) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(7)] No ENISA single reporting platform identifier — track ENISA publication and add `enisaReportingPlatformId` to the CRA sidecar when available (Requirement: CRA Art. 14(7): ENISA single reporting platform) [Element: unknown]"
           },
           "locations": [],
           "properties": {

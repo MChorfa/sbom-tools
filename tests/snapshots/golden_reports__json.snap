@@ -1,5 +1,6 @@
 ---
 source: tests/golden_reports.rs
+assertion_line: 143
 expression: "render(&JsonReporter::new())"
 ---
 {
@@ -142,13 +143,13 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Info",
           "category": "DocumentMetadata",
-          "message": "[CRA Annex VII] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default",
+          "message": "[CRA Annex V] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default",
           "element": null,
-          "requirement": "CRA Annex VII: EU Declaration of Conformity reference",
+          "requirement": "CRA Annex V: EU Declaration of Conformity reference",
           "standard_refs": [
             {
               "standard": "CraAnnex",
-              "id": "Annex VII",
+              "id": "Annex V",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ]
@@ -646,7 +647,7 @@ expression: "render(&JsonReporter::new())"
         "art_13_12_product_identification": 0,
         "art_13_15_manufacturer_identification": 10,
         "annex_i_technical_documentation": 13,
-        "annex_vii_declaration_of_conformity": 1
+        "annex_v_declaration_of_conformity": 1
       }
     },
     "new": {
@@ -755,13 +756,13 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Info",
           "category": "DocumentMetadata",
-          "message": "[CRA Annex VII] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default",
+          "message": "[CRA Annex V] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default",
           "element": null,
-          "requirement": "CRA Annex VII: EU Declaration of Conformity reference",
+          "requirement": "CRA Annex V: EU Declaration of Conformity reference",
           "standard_refs": [
             {
               "standard": "CraAnnex",
-              "id": "Annex VII",
+              "id": "Annex V",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ]
@@ -1259,7 +1260,7 @@ expression: "render(&JsonReporter::new())"
         "art_13_12_product_identification": 0,
         "art_13_15_manufacturer_identification": 10,
         "annex_i_technical_documentation": 13,
-        "annex_vii_declaration_of_conformity": 1
+        "annex_v_declaration_of_conformity": 1
       }
     }
   },

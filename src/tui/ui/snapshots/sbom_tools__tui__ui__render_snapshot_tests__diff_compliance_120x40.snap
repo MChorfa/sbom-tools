@@ -1,5 +1,6 @@
 ---
 source: src/tui/ui/render_snapshot_tests.rs
+assertion_line: 89
 expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
@@ -10,7 +11,7 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
  Compliance Standards (←/→)
  ✓ Min  │  ✗ Std  │  ✗ NTIA  │  ✗ CRA-1  │  ✗ CRA-2  │  ✗ FDA  │  ✗ SSDF  │  ✗ EO14028  │  ✗ CNSA2  │  ✗ PQC  │  ✗ BSI
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-┌ EU CRA Phase 1 (2027): FAIL 54% → FAIL 54%  unchanged ───────────────────────────────────────────────────────────────┐
+┌ EU CRA Phase 1 (2026): FAIL 54% → FAIL 54%  unchanged ───────────────────────────────────────────────────────────────┐
 │Errors: 3  Warnings: 14  Info: 26  │  New: 13  Resolved: 13                                                           │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Compliance Diff Overview ────────────────────────────────────────────────────────────────────────────────────────────┐

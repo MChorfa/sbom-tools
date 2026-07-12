@@ -21,17 +21,16 @@ ENISA / industry guidance. Use it to:
 
 | Date          | Event                                                         |
 |---------------|---------------------------------------------------------------|
-| 2024-12-10    | CRA enters into force (Regulation (EU) 2024/2847)             |
-| 2026-09-11    | Article 14 reporting obligations apply                        |
-| 2027-12-11    | Phase 1 deadline (`ComplianceLevel::CraPhase1`)               |
-| 2029-12-11    | Phase 2 deadline (`ComplianceLevel::CraPhase2`)               |
+| 2024-12-10    | CRA enters into force (Regulation (EU) 2024/2847)                                  |
+| 2026-09-11    | Article 14 reporting obligations apply (`ComplianceLevel::CraPhase1`) — Art. 71(2) |
+| 2027-12-11    | Regulation applies in full (`ComplianceLevel::CraPhase2`) — Art. 71(2)             |
 
 ## Compliance levels
 
 | `ComplianceLevel`           | sbom-tools `--standard` alias                                                                       | Scope                                                                                                            |
 |-----------------------------|-----------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
-| `CraPhase1`                 | `cra` (defaults to Phase 2; pin Phase 1 via the `Cra` profile)                                      | CRA Phase 1 reporting obligations (deadline 2027-12-11)                                                          |
-| `CraPhase2`                 | `cra`                                                                                               | Full CRA compliance (deadline 2029-12-11)                                                                        |
+| `CraPhase1`                 | `cra` (defaults to Phase 2; pin Phase 1 via the `Cra` profile)                                      | CRA Phase 1 — Art. 14 reporting obligations (apply from 2026-09-11)                                                          |
+| `CraPhase2`                 | `cra`                                                                                               | Full CRA compliance (regulation fully applies from 2027-12-11)                                                                        |
 | `CraOssSteward`             | `oss-steward`, `cra-oss-steward`, `cra-oss`, `cra-art24`, `art24`                                   | Article 24 lighter profile for open-source software stewards                                                     |
 | `BsiTr03183_2`              | `bsi`, `tr-03183`, `tr03183`, `bsi-tr-03183-2`                                                      | BSI TR-03183-2 (German national CRA-aligned baseline)                                                            |
 | `Cnsa2`                     | `cnsa2`, `cnsa-2`, `cnsa_2`, `cnsa2.0`                                                              | NSA CNSA 2.0 (post-quantum mandate for US national-security systems)                                             |
@@ -85,11 +84,11 @@ post-deadline they become `Warning` (or `Error` at
 |-------------------------------------------------------------|--------------------------|---------------------|---------------------------------------------------------|
 | `CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through` | Annex I Part II | PRE-7-RQ-07-RE | strong (SHA-256+) hash on vendor-supplied components |
 | `CRA Annex I Part II 1: Component identifier`               | Annex I Part II 1        | PRE-7-RQ-07         | PURL / CPE / SWID / SWHID on each component             |
-| `CRA Annex I Part III: Supply chain transparency`           | Annex I Part III         | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
+| `CRA Annex I Part II: Supply chain transparency`            | Annex I Part II          | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
 | `CRA Annex III: Document signature/integrity`               | Annex III                | —                   | serial number / digital signature / attestation hash    |
 | `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | `Certification` external ref with `eucc`/`common-criteria` URL |
-| `CRA Annex V: Technical documentation`                      | Annex V                  | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
-| `CRA Annex VII: EU Declaration of Conformity reference`     | Annex VII                | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
+| `CRA Annex VII: Technical documentation`                    | Annex VII                | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
+| `CRA Annex V: EU Declaration of Conformity reference`       | Annex V                  | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
 | `CRA Annex VIII: <Module> attestation reference`            | Annex VIII (Module B+C/H/EUCC) | —             | Module-specific `Attestation`/`Certification` external ref |
 | `CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware component inventory` | Annex I Part II   | PRE-8-RQ-02         | producer + identifier + firmware version on hardware    |
 
@@ -117,7 +116,7 @@ overridable via sidecar `conformityAssessmentRoute`.
 | Vendor-hash severity           | Warning | Warning     | Error       | Error    |
 | EOL components                 | Warning | Warning     | Error       | Error    |
 | Cycles                         | Warning | Warning     | Error       | Error    |
-| Annex VII DoC reference        | Info    | Warning     | Error       | Error    |
+| Annex V DoC reference          | Info    | Warning     | Error       | Error    |
 | EUCC reference                 | n/a     | n/a         | Info        | Error    |
 | PSIRT documented               | Warning | Warning     | Error       | Error    |
 | Module attestation reference   | n/a     | Warning (B+C) | Error (B+C/H) | Error (EUCC) |
@@ -182,7 +181,7 @@ sbom-tools validate sbom.json --standard oss-steward
 # SARIF output for CI (with helpUri populated)
 sbom-tools validate sbom.json --standard cra -o sarif -O compliance.sarif
 
-# Generate CRA technical-documentation dossier (Annex V)
+# Generate CRA conformity dossier (Annex V DoC + Annex VII technical documentation)
 sbom-tools cra-docs sbom.json --output dossier/ --cra-sidecar sbom.cra.yaml
 
 # Apply CSAF advisories to enrich SBOM with VEX data
@@ -249,5 +248,5 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
   for `runs[].tool.driver.rules[].helpUri`.
 - `ComplianceChecker::class_severity()` in `src/quality/compliance.rs` —
   P3.2 calibration table.
-- `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V dossier
+- `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V DoC + Annex VII tech-doc dossier
   generator.

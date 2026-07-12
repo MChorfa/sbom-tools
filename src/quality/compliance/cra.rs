@@ -131,7 +131,7 @@ impl ComplianceChecker {
         }
     }
 
-    /// CRA gap checks: Art. 13(3), 13(5), 13(9), Annex I Part III, Annex III
+    /// CRA gap checks: Art. 13(3), 13(5), 13(9), Annex I Part II supply chain, document integrity
     pub(crate) fn check_cra_gaps(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
         // B1: Art. 13(3) — Update frequency / SBOM freshness. A missing
         // timestamp (epoch sentinel) is a freshness gap in its own right, but
@@ -234,7 +234,7 @@ impl ComplianceChecker {
             });
         }
 
-        // B4: Annex I Part III — Supply-chain transparency.
+        // B4: Annex I Part II — Supply-chain transparency.
         //
         // prEN 40000-1-3 [PRE-7-RQ-03] makes direct dependencies *mandatory*
         // and transitive dependencies *recommended*. We split the cohort
@@ -269,11 +269,11 @@ impl ComplianceChecker {
                     severity,
                     category: ViolationCategory::SupplierInfo,
                     message: format!(
-                        "[CRA Annex I, Part III / [PRE-7-RQ-03]] {n} direct dependencies missing supplier (mandatory): {}",
+                        "[CRA Annex I Part II / [PRE-7-RQ-03]] {n} direct dependencies missing supplier (mandatory): {}",
                         truncate_list(&direct_missing, 5)
                     ),
                     element: None,
-                    requirement: "CRA Annex I, Part III / prEN 40000-1-3 [PRE-7-RQ-03]: Direct dependency supplier (mandatory)"
+                    requirement: "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Direct dependency supplier (mandatory)"
                         .to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN",
                     standard_refs: Vec::new(),
@@ -293,11 +293,11 @@ impl ComplianceChecker {
                     severity,
                     category: ViolationCategory::SupplierInfo,
                     message: format!(
-                        "[CRA Annex I, Part III / [PRE-7-RQ-03]] {transitive_n}/{denom} transitive dependencies ({pct}%) missing supplier (recommended): {}",
+                        "[CRA Annex I Part II / [PRE-7-RQ-03]] {transitive_n}/{denom} transitive dependencies ({pct}%) missing supplier (recommended): {}",
                         truncate_list(&transitive_missing, 5)
                     ),
                     element: None,
-                    requirement: "CRA Annex I, Part III / prEN 40000-1-3 [PRE-7-RQ-03]: Transitive dependency supplier (recommended)"
+                    requirement: "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Transitive dependency supplier (recommended)"
                         .to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN",
                     standard_refs: Vec::new(),
@@ -1028,7 +1028,7 @@ impl ComplianceChecker {
 
         // -- Explicitly NOT enforced ----------------------------------------
         // - Manufacturer email contact (Art. 13(15))
-        // - EU Declaration of Conformity reference (Annex VII)
+        // - EU Declaration of Conformity reference (Annex V)
         // - Conformity-assessment module attestation
         // - Article 14 reporting channels (24h / 72h / ENISA)
         // - Hardware component requirements

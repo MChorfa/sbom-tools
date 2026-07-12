@@ -38,26 +38,28 @@ use shared::{
 /// CRA enforcement phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CraPhase {
-    /// Phase 1: Reporting obligations — deadline 11 December 2027
-    /// Basic SBOM requirements: product/component identification, manufacturer, version, format
+    /// Phase 1: Article 14 reporting obligations — apply from 11 September 2026
+    /// (Reg. (EU) 2024/2847 Art. 71(2)). Basic SBOM requirements:
+    /// product/component identification, manufacturer, version, format
     Phase1,
-    /// Phase 2: Full compliance — deadline 11 December 2029
-    /// Adds: vulnerability metadata, lifecycle/end-of-support, disclosure policy, EU `DoC`
+    /// Phase 2: full application of the regulation — from 11 December 2027
+    /// (Art. 71(2)). Adds: vulnerability metadata, lifecycle/end-of-support,
+    /// disclosure policy, EU `DoC`
     Phase2,
 }
 
 impl CraPhase {
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Phase1 => "Phase 1 (2027)",
-            Self::Phase2 => "Phase 2 (2029)",
+            Self::Phase1 => "Phase 1 (2026)",
+            Self::Phase2 => "Phase 2 (2027)",
         }
     }
 
     pub const fn deadline(self) -> &'static str {
         match self {
-            Self::Phase1 => "11 December 2027",
-            Self::Phase2 => "11 December 2029",
+            Self::Phase1 => "11 September 2026",
+            Self::Phase2 => "11 December 2027",
         }
     }
 }
@@ -72,9 +74,9 @@ pub enum ComplianceLevel {
     Standard,
     /// NTIA Minimum Elements compliance
     NtiaMinimum,
-    /// EU CRA Phase 1 — Reporting obligations (deadline: 11 Dec 2027)
+    /// EU CRA Phase 1 — Art. 14 reporting obligations (apply from 11 Sep 2026)
     CraPhase1,
-    /// EU CRA Phase 2 — Full compliance (deadline: 11 Dec 2029)
+    /// EU CRA Phase 2 — full application of the regulation (from 11 Dec 2027)
     CraPhase2,
     /// FDA Medical Device SBOM requirements
     FdaMedicalDevice,
@@ -130,8 +132,8 @@ impl ComplianceLevel {
             Self::Minimum => "Minimum",
             Self::Standard => "Standard",
             Self::NtiaMinimum => "NTIA Minimum Elements",
-            Self::CraPhase1 => "EU CRA Phase 1 (2027)",
-            Self::CraPhase2 => "EU CRA Phase 2 (2029)",
+            Self::CraPhase1 => "EU CRA Phase 1 (2026)",
+            Self::CraPhase2 => "EU CRA Phase 2 (2027)",
             Self::FdaMedicalDevice => "FDA Medical Device",
             Self::NistSsdf => "NIST SSDF (SP 800-218)",
             Self::Eo14028 => "EO 14028 Section 4",
@@ -177,10 +179,10 @@ impl ComplianceLevel {
             Self::Standard => "Recommended fields for general use",
             Self::NtiaMinimum => "NTIA minimum elements for software transparency",
             Self::CraPhase1 => {
-                "CRA reporting obligations — product ID, SBOM format, manufacturer (deadline: 11 Dec 2027)"
+                "CRA reporting obligations — product ID, SBOM format, manufacturer (Art. 14 applies from 11 Sep 2026)"
             }
             Self::CraPhase2 => {
-                "Full CRA compliance — adds vulnerability metadata, lifecycle, disclosure (deadline: 11 Dec 2029)"
+                "Full CRA compliance — adds vulnerability metadata, lifecycle, disclosure (regulation fully applies from 11 Dec 2027)"
             }
             Self::FdaMedicalDevice => "FDA premarket submission requirements for medical devices",
             Self::NistSsdf => {
@@ -680,7 +682,7 @@ pub enum ClassCheck {
     EolComponents,
     /// Dependency cycles detected.
     Cycles,
-    /// Annex VII Declaration-of-Conformity reference missing.
+    /// Annex V Declaration-of-Conformity reference missing.
     DocReference,
     /// EUCC (Common Criteria) reference missing.
     EuccReference,
@@ -1798,8 +1800,8 @@ mod tests {
     fn test_compliance_level_names() {
         assert_eq!(ComplianceLevel::Minimum.name(), "Minimum");
         assert_eq!(ComplianceLevel::NtiaMinimum.name(), "NTIA Minimum Elements");
-        assert_eq!(ComplianceLevel::CraPhase1.name(), "EU CRA Phase 1 (2027)");
-        assert_eq!(ComplianceLevel::CraPhase2.name(), "EU CRA Phase 2 (2029)");
+        assert_eq!(ComplianceLevel::CraPhase1.name(), "EU CRA Phase 1 (2026)");
+        assert_eq!(ComplianceLevel::CraPhase2.name(), "EU CRA Phase 2 (2027)");
         assert_eq!(ComplianceLevel::NistSsdf.name(), "NIST SSDF (SP 800-218)");
         assert_eq!(ComplianceLevel::Eo14028.name(), "EO 14028 Section 4");
     }
@@ -2954,8 +2956,8 @@ mod tests {
         let refs = refs_for("SBOM-CRA-ANNEX-I-SUPPLY-CHAIN");
         assert!(
             refs.iter()
-                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part III"),
-            "expected Annex I Part III; got {refs:?}"
+                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part II"),
+            "expected Annex I Part II; got {refs:?}"
         );
         assert!(
             refs.iter()

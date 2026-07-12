@@ -81,7 +81,7 @@ impl StandardChecker for GenericChecker {
         // Check format-specific requirements
         checker.check_format_specific(sbom, &mut violations);
 
-        // Check CRA-specific gap requirements (Art. 13(3), 13(5), 13(9), Annex I Part III, Annex III)
+        // Check CRA-specific gap requirements (Art. 13(3), 13(5), 13(9), Annex I Part II, document integrity)
         if checker.level.is_cra() {
             checker.check_cra_gaps(sbom, &mut violations);
             checker.check_hardware_components(sbom, &mut violations);

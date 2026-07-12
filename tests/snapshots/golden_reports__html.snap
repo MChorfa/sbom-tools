@@ -1,5 +1,6 @@
 ---
 source: tests/golden_reports.rs
+assertion_line: 164
 expression: "render(&HtmlReporter::new())"
 ---
 <!DOCTYPE html>
@@ -378,7 +379,7 @@ expression: "render(&HtmlReporter::new())"
         <tbody>
             <tr><td><strong>Status</strong></td><td><span class="badge badge-removed">Non-compliant</span></td><td><span class="badge badge-removed">Non-compliant</span></td><td></td></tr>
             <tr><td><strong>Score</strong></td><td>60%</td><td>60%</td><td></td></tr>
-            <tr><td><strong>Level</strong></td><td>EU CRA Phase 2 (2029)</td><td>EU CRA Phase 2 (2029)</td><td></td></tr>
+            <tr><td><strong>Level</strong></td><td>EU CRA Phase 2 (2027)</td><td>EU CRA Phase 2 (2027)</td><td></td></tr>
             <tr><td><strong>Errors</strong></td><td>3</td><td>3</td><td></td></tr>
             <tr><td><strong>Warnings</strong></td><td>[N]</td><td>[N]</td><td></td></tr>
         </tbody>

@@ -86,12 +86,12 @@ fn oss_steward_does_not_require_manufacturer_email() {
         "OSS steward must not fire Article 14 reporting checks"
     );
 
-    // Steward profile: should not fire EU DoC (Annex VII) check
+    // Steward profile: should not fire EU DoC (Annex V) check
     assert!(
         !res_steward
             .violations
             .iter()
-            .any(|v| v.requirement.contains("Annex VII")
+            .any(|v| v.requirement.contains("Annex V:")
                 || v.requirement.contains("Declaration of Conformity")),
         "OSS steward must not fire EU DoC checks"
     );
@@ -109,7 +109,7 @@ fn oss_steward_does_not_require_manufacturer_email() {
     // manufacturer-only checks the steward profile relaxes.
     let phase2_has_manufacturer_only = res_phase2.violations.iter().any(|v| {
         v.requirement.contains("Art. 14")
-            || v.requirement.contains("Annex VII")
+            || v.requirement.contains("Annex V:")
             || v.requirement.contains("PRE-7-RQ-07-RE")
     });
     assert!(
