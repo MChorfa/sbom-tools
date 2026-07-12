@@ -53,6 +53,15 @@ const REMEDIATION_BSIAI_DATASETS: &str = "Declare the BSI/G7 SBOM-for-AI Dataset
 /// BSI/G7 SBOM-for-AI document/metadata/system/infra/security remediation.
 const REMEDIATION_BSIAI_GENERAL: &str = "Declare the BSI/G7 SBOM-for-AI minimum elements: document author, data-format name + version, timestamp, generation tool, and signature; the primary AI system, its producer, and its data-flow/usage; runtime/framework infrastructure links; and AI-specific security controls / exploitability references where they can be expressed.";
 
+/// CNSA 2.0 allowlist remediation, shared by the CNSA rules.
+const REMEDIATION_CNSA2: &str = "Migrate to the CNSA 2.0 suite: AES-256, SHA-384/SHA-512, ML-KEM-1024, ML-DSA-87, or SP 800-208 stateful hash-based signatures (LMS/XMSS/HSS); use TLS 1.3 for network protocols. Unclassifiable algorithms cannot be verified — declare an algorithmFamily, OID, or recognizable name.";
+
+/// NIST PQC protocol remediation.
+const REMEDIATION_PQC_PROTO: &str = "Disable SSL and TLS versions below 1.2 (SP 800-52 Rev. 2) and remove broken (SP 800-131A) or quantum-vulnerable (IR 8547) algorithms from negotiated cipher suites and IKEv2 transforms.";
+
+/// NIST PQC certificate remediation.
+const REMEDIATION_PQC_CERT: &str = "Re-issue the certificate with a NIST-approved post-quantum signature algorithm (FIPS 204 ML-DSA, FIPS 205 SLH-DSA, or SP 800-208 LMS/XMSS/HSS).";
+
 /// Look up the static [`RuleMeta`] for a stable internal rule key.
 ///
 /// The key is the [`Violation::rule_id`] set at each check site. Returns
@@ -847,11 +856,50 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::Cnsa2, "CNSA 2.0")],
             remediation: REMEDIATION_GENERIC,
         },
+        // Broken/legacy algorithm (SHA-1, MD5, DES, RC4, ...) under the CNSA
+        // 2.0 allowlist.
+        "SBOM-CNSA2-ALG-005" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-ALG-005",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
+        },
+        // Recognized algorithm that is simply not on the CNSA 2.0 allowlist
+        // (ChaCha20, Camellia, SHA-3, SLH-DSA, Falcon, ...).
+        "SBOM-CNSA2-ALG-008" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-ALG-008",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
+        },
+        // Unclassifiable algorithm asset — CNSA 2.0 compliance cannot be
+        // verified (Warning, never a silent pass).
+        "SBOM-CNSA2-ALG-UNKNOWN" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-ALG-UNKNOWN",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
+        },
         "SBOM-CNSA2-CERT-001" => RuleMeta {
             sarif_id: "SBOM-CNSA2-CERT-001",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
             remediation: REMEDIATION_GENERIC,
+        },
+        // Protocol version gate: CNSA 2.0 network protocols require TLS 1.3.
+        "SBOM-CNSA2-PROTO-001" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-PROTO-001",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
+        },
+        // Protocol cipher suites / IKEv2 transforms / crypto refs must use
+        // CNSA 2.0 algorithms.
+        "SBOM-CNSA2-PROTO-002" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-PROTO-002",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
         },
         // ---- NIST PQC ----------------------------------------------------
         "SBOM-PQC-000" => RuleMeta {
@@ -901,6 +949,28 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             default_severity: ViolationSeverity::Error,
             refs: &[],
             remediation: REMEDIATION_GENERIC,
+        },
+        // Certificate signed with a broken or quantum-vulnerable algorithm.
+        "SBOM-PQC-CERT-001" => RuleMeta {
+            sarif_id: "SBOM-PQC-CERT-001",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::NistPqc, "IR 8547")],
+            remediation: REMEDIATION_PQC_CERT,
+        },
+        // Protocol version gate: SSL / TLS below 1.2 disallowed.
+        "SBOM-PQC-PROTO-001" => RuleMeta {
+            sarif_id: "SBOM-PQC-PROTO-001",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::NistPqc, "SP 800-52 Rev. 2")],
+            remediation: REMEDIATION_PQC_PROTO,
+        },
+        // Protocol cipher suites / IKEv2 transforms / crypto refs contain
+        // broken or quantum-vulnerable algorithms.
+        "SBOM-PQC-PROTO-002" => RuleMeta {
+            sarif_id: "SBOM-PQC-PROTO-002",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::NistPqc, "SP 800-131A / IR 8547")],
+            remediation: REMEDIATION_PQC_PROTO,
         },
         _ => return None,
     };

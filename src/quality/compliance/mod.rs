@@ -1729,6 +1729,435 @@ mod tests {
         );
     }
 
+    /// CNSA 2.0 is an exclusive allowlist: everything recognized but not on
+    /// it must Error — broken hashes, classical PK (including the families the
+    /// old blocklist missed: Ed25519/ECIES), non-CNSA symmetric ciphers,
+    /// sub-1024 or parameterless ML-KEM, and round-3 PQC names.
+    #[test]
+    fn cnsa2_allowlist_rejects_non_cnsa_algorithms() {
+        for (family, param, expected_rule) in [
+            ("SHA-1", None, "SBOM-CNSA2-ALG-005"),
+            ("DES", None, "SBOM-CNSA2-ALG-005"),
+            ("ChaCha20", None, "SBOM-CNSA2-ALG-008"),
+            ("Ed25519", None, "SBOM-CNSA2-ALG-006"),
+            ("ECIES", None, "SBOM-CNSA2-ALG-006"),
+            ("EC", None, "SBOM-CNSA2-ALG-006"),
+            ("Kyber", Some("768"), "SBOM-CNSA2-ALG-003"),
+            ("ML-KEM-768", None, "SBOM-CNSA2-ALG-003"),
+            ("ML-KEM", None, "SBOM-CNSA2-ALG-003"), // absent parameter set
+            ("ML-DSA", Some("65"), "SBOM-CNSA2-ALG-004"),
+            ("SLH-DSA", None, "SBOM-CNSA2-ALG-008"),
+            ("SHA-3", Some("256"), "SBOM-CNSA2-ALG-008"),
+            ("AES-128", None, "SBOM-CNSA2-ALG-001"), // size in family string
+        ] {
+            let sbom = make_crypto_sbom(&[("asset", family, param, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                result.violations.iter().any(|v| {
+                    v.severity == ViolationSeverity::Error && v.rule_id == expected_rule
+                }),
+                "{family}/{param:?} must fail CNSA 2.0 with {expected_rule}; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+            assert!(!result.is_compliant, "{family} must not be CNSA compliant");
+        }
+    }
+
+    /// The full CNSA 2.0 suite passes the allowlist with zero errors:
+    /// AES-256, SHA-384, ML-KEM-1024, ML-DSA-87, and SP 800-208 LMS.
+    #[test]
+    fn cnsa2_allowlist_accepts_full_cnsa_suite() {
+        let sbom = make_crypto_sbom(&[
+            ("AES-256-GCM", "AES", Some("256"), Some(1)),
+            ("SHA-384", "SHA-2", Some("384"), Some(2)),
+            ("ML-KEM-1024", "ML-KEM", Some("1024"), Some(5)),
+            ("ML-DSA-87", "ML-DSA", Some("87"), Some(5)),
+            ("LMS", "LMS", None, Some(5)),
+        ]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        let errors: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.severity == ViolationSeverity::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "full CNSA 2.0 suite must have zero errors, got {:?}",
+            errors
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(result.is_compliant);
+    }
+
+    /// Unrecognizable algorithms must not silently pass CNSA 2.0: they get a
+    /// "cannot verify" Warning (not an Error, not a pass).
+    #[test]
+    fn cnsa2_unknown_algorithm_warns() {
+        let sbom = make_crypto_sbom(&[("mystery", "proprietary-frobnicator", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning && v.rule_id == "SBOM-CNSA2-ALG-UNKNOWN"
+            }),
+            "unknown algorithm must produce the cannot-verify warning"
+        );
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Error
+                    && v.rule_id.starts_with("SBOM-CNSA2-ALG")),
+            "unknown algorithm must not produce an algorithm Error"
+        );
+    }
+
+    /// A CycloneDX 1.6-style asset (no algorithmFamily) must still be
+    /// classified — via OID, or via the component name when both family and
+    /// OID are absent.
+    #[test]
+    fn cnsa2_classifies_without_algorithm_family() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+        };
+        let mut sbom = NormalizedSbom::default();
+        // RSA via OID only.
+        let mut rsa = crate::model::Component::new("RSA-2048".into(), "algo-1".into());
+        rsa.component_type = ComponentType::Cryptographic;
+        rsa.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm)
+                .with_oid("1.2.840.113549.1.1.1".into())
+                .with_algorithm_properties(AlgorithmProperties::new(CryptoPrimitive::Pke)),
+        );
+        sbom.add_component(rsa);
+        // AES-128 via name only.
+        let mut aes = crate::model::Component::new("AES-128-CBC".into(), "algo-2".into());
+        aes.component_type = ComponentType::Cryptographic;
+        aes.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm)
+                .with_algorithm_properties(AlgorithmProperties::new(CryptoPrimitive::BlockCipher)),
+        );
+        sbom.add_component(aes);
+
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-006" && v.message.contains("RSA")),
+            "RSA must be flagged via OID without algorithmFamily"
+        );
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-001" && v.message.contains("AES-128")),
+            "AES-128 must be flagged via name without algorithmFamily/OID"
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-001" && v.message.contains("RSA")),
+            "PQC must flag OID-only RSA as quantum-vulnerable"
+        );
+    }
+
+    /// Spelling variants of broken algorithms must not escape SP 800-131A
+    /// detection under PQC.
+    #[test]
+    fn pqc_flags_broken_spelling_variants() {
+        for family in ["SHA1", "TDES", "ARC4"] {
+            let sbom = make_crypto_sbom(&[("legacy", family, None, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-PQC-005"),
+                "{family} must fail SP 800-131A broken-algorithm detection"
+            );
+        }
+        // Silent case: a healthy modern hash raises no broken-algorithm error.
+        let ok = make_crypto_sbom(&[("hash", "SHA-384", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-005"),
+            "SHA-384 must not be reported broken"
+        );
+    }
+
+    fn make_protocol_sbom(version: &str, suite_name: &str, suite_algos: &[&str]) -> NormalizedSbom {
+        use crate::model::{
+            CipherSuite, ComponentType, CryptoAssetType, CryptoProperties, ProtocolProperties,
+            ProtocolType,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = crate::model::Component::new("tls-endpoint".into(), "proto-1".into());
+        c.component_type = ComponentType::Cryptographic;
+        c.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Protocol).with_protocol_properties(
+                ProtocolProperties::new(ProtocolType::Tls)
+                    .with_version(version.to_string())
+                    .with_cipher_suites(vec![CipherSuite {
+                        name: Some(suite_name.to_string()),
+                        algorithms: suite_algos.iter().map(ToString::to_string).collect(),
+                        identifiers: Vec::new(),
+                    }]),
+            ),
+        );
+        sbom.add_component(c);
+        sbom
+    }
+
+    /// A TLS 1.0 protocol asset with a legacy cipher suite must fail BOTH
+    /// standards — previously protocols satisfied the inventory gate but
+    /// received zero evaluation.
+    #[test]
+    fn protocol_tls10_rc4_fails_both_standards() {
+        let sbom = make_protocol_sbom("1.0", "TLS_RSA_WITH_RC4_128_SHA", &[]);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(!cnsa.is_compliant, "TLS 1.0 must fail CNSA 2.0");
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "TLS 1.0 must trip the CNSA TLS-1.3 version gate"
+        );
+        assert!(
+            cnsa.violations.iter().any(|v| {
+                v.rule_id == "SBOM-CNSA2-PROTO-002"
+                    && v.message.contains("RC4")
+                    && v.message.contains("RSA")
+            }),
+            "cipher-suite scan must flag RC4 and RSA; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| v.message.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(!pqc.is_compliant, "TLS 1.0 must fail PQC readiness");
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-001"),
+            "TLS 1.0 must trip the PQC minimum-version gate"
+        );
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-002" && v.message.contains("broken")),
+            "cipher-suite scan must flag broken algorithms under PQC"
+        );
+    }
+
+    /// Silent case: TLS 1.3 with a CNSA 2.0 cipher suite passes both
+    /// standards' protocol checks.
+    #[test]
+    fn protocol_tls13_cnsa_suite_passes() {
+        let sbom = make_protocol_sbom("1.3", "TLS_AES_256_GCM_SHA384", &[]);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            !cnsa
+                .violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-CNSA2-PROTO")),
+            "TLS 1.3 + CNSA suite must raise no CNSA protocol violations; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| v.message.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(cnsa.is_compliant);
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            !pqc.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-PQC-PROTO")),
+            "TLS 1.3 + CNSA suite must raise no PQC protocol violations"
+        );
+    }
+
+    /// TLS 1.2 fails the CNSA 2.0 TLS-1.3 gate but passes the PQC
+    /// minimum-version gate (>= 1.2).
+    #[test]
+    fn protocol_tls12_fails_cnsa_only() {
+        let sbom = make_protocol_sbom("1.2", "TLS_AES_256_GCM_SHA384", &[]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "TLS 1.2 must fail the CNSA 2.0 version gate"
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            !pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-001"),
+            "TLS 1.2 must pass the PQC minimum-version gate"
+        );
+    }
+
+    /// Cipher-suite algorithm bom-refs are resolved through the SBOM index
+    /// and classified — even when the ref string itself is opaque.
+    #[test]
+    fn protocol_resolves_cipher_suite_algorithm_refs() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+        };
+        let mut sbom = make_protocol_sbom("1.3", "OPAQUE_SUITE_1", &["suite-algo-7"]);
+        let mut rsa = crate::model::Component::new("legacy-kx".into(), "suite-algo-7".into());
+        rsa.component_type = ComponentType::Cryptographic;
+        rsa.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                AlgorithmProperties::new(CryptoPrimitive::Pke).with_algorithm_family("RSA".into()),
+            ),
+        );
+        sbom.add_component(rsa);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| { v.rule_id == "SBOM-CNSA2-PROTO-002" && v.message.contains("RSA") }),
+            "resolved suite algorithm ref must be classified; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| v.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    fn make_cert_sbom(sig_ref: &str, algo_family: Option<&str>) -> NormalizedSbom {
+        use crate::model::{
+            AlgorithmProperties, CertificateProperties, ComponentType, CryptoAssetType,
+            CryptoPrimitive, CryptoProperties,
+        };
+        let mut sbom = NormalizedSbom::default();
+        if let Some(family) = algo_family {
+            let mut algo = crate::model::Component::new("sig-algorithm".into(), sig_ref.into());
+            algo.component_type = ComponentType::Cryptographic;
+            algo.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                    AlgorithmProperties::new(CryptoPrimitive::Signature)
+                        .with_algorithm_family(family.to_string()),
+                ),
+            );
+            sbom.add_component(algo);
+        }
+        let mut cert = crate::model::Component::new("server-cert".into(), "cert-1".into());
+        cert.component_type = ComponentType::Cryptographic;
+        cert.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Certificate).with_certificate_properties(
+                CertificateProperties::new().with_signature_algorithm_ref(sig_ref.to_string()),
+            ),
+        );
+        sbom.add_component(cert);
+        sbom
+    }
+
+    /// CERT-001 must resolve an OPAQUE signature-algorithm bom-ref through
+    /// the index to the referenced algorithm — the old substring heuristic
+    /// ("rsa" in the ref string) gave opaque refs zero checks.
+    #[test]
+    fn cnsa2_cert_resolves_opaque_signature_ref() {
+        let sbom = make_cert_sbom("sig-algo-42", Some("RSA"));
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "opaque ref resolving to RSA must fire CERT-001; got {:?}",
+            result
+                .violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-CERT-001"),
+            "opaque ref resolving to RSA must fire the PQC certificate rule"
+        );
+    }
+
+    /// Silent case: a certificate signed with ML-DSA-87 passes CERT-001, and
+    /// an unresolvable ref still gets the word-boundary fallback on the raw
+    /// ref string.
+    #[test]
+    fn cnsa2_cert_approved_and_fallback_cases() {
+        let ok = make_cert_sbom("sig-algo-42", Some("ML-DSA-87"));
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "ML-DSA-87-signed certificate must pass CERT-001"
+        );
+
+        // Unresolvable ref: fall back to token-matching the ref string.
+        let dangling = make_cert_sbom("crypto/algorithm/ecdsa-p256", None);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&dangling);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "unresolvable ECDSA-named ref must still fire CERT-001 via token fallback"
+        );
+    }
+
+    /// Key material alone must not satisfy the crypto-inventory gate — it
+    /// receives no CNSA 2.0 evaluation.
+    #[test]
+    fn cnsa2_key_material_alone_does_not_satisfy_inventory_gate() {
+        use crate::model::{
+            ComponentType, CryptoAssetType, CryptoMaterialType, CryptoProperties,
+            RelatedCryptoMaterialProperties,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut key = crate::model::Component::new("some-key".into(), "key-1".into());
+        key.component_type = ComponentType::Cryptographic;
+        key.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+                .with_related_crypto_material_properties(
+                    RelatedCryptoMaterialProperties::new(CryptoMaterialType::PublicKey)
+                        .with_size(2048),
+                ),
+        );
+        sbom.add_component(key);
+
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-000"),
+            "unevaluable key material must not satisfy the CNSA2-000 inventory gate"
+        );
+        assert!(!result.is_compliant);
+    }
+
     fn refs_for(rule_id: &'static str) -> Vec<StandardRef> {
         let v = Violation {
             severity: ViolationSeverity::Warning,
