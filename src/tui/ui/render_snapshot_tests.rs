@@ -288,12 +288,85 @@ fn graph_details_column_gated_by_width() {
 
 #[test]
 fn help_overlay_toggles() {
+    // '?' and K are one surface now: the shortcuts overlay with a This-Tab
+    // section from the active tab's ViewState::shortcuts().
     let mut app = demo_app(TabKind::Summary);
     handle_key_event(&mut app, key(KeyCode::Char('?')));
-    assert!(app.overlays.show_help);
-    // Any key while help is open with '?' toggles it back off.
+    assert!(app.overlays.shortcuts.visible);
+    assert_eq!(
+        app.overlays.shortcuts.context,
+        crate::tui::app::ShortcutsContext::Diff
+    );
+    assert_eq!(app.overlays.shortcuts.tab_title.as_deref(), Some("Summary"));
+    assert!(!app.overlays.shortcuts.tab_items.is_empty());
     handle_key_event(&mut app, key(KeyCode::Char('?')));
-    assert!(!app.overlays.show_help);
+    assert!(!app.overlays.shortcuts.visible, "'?' must toggle closed");
+
+    // K opens the same surface and closes on K.
+    handle_key_event(&mut app, key(KeyCode::Char('K')));
+    assert!(app.overlays.shortcuts.visible);
+    handle_key_event(&mut app, key(KeyCode::Char('K')));
+    assert!(
+        !app.overlays.shortcuts.visible,
+        "K must close the overlay it opened (was dead code behind has_overlay)"
+    );
+
+    // Regression: the Dependencies tab used to swallow '?' for its own
+    // bespoke help overlay, so the unified surface never opened there.
+    let mut app = demo_app(TabKind::Dependencies);
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    assert!(
+        app.overlays.shortcuts.visible,
+        "'?' on Dependencies must open the unified shortcuts overlay"
+    );
+    assert_eq!(
+        app.overlays.shortcuts.tab_title.as_deref(),
+        Some("Dependencies")
+    );
+    assert!(
+        app.overlays
+            .shortcuts
+            .tab_items
+            .iter()
+            .any(|(k, _)| k == "y"),
+        "the old deps-help rows (e.g. y/copy path) must live in shortcuts()"
+    );
+}
+
+#[test]
+fn shortcuts_overlay_scrolls_when_clipped() {
+    // At 80x24 the box is 20 rows; the Diff context + This-Tab section
+    // exceeds that, so j/k must reveal the hidden tail instead of clipping.
+    pin_theme();
+    let mut app = demo_app(TabKind::Summary);
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        app.overlays.shortcuts.max_scroll > 0,
+        "content taller than the box must expose a scroll range:\n{text}"
+    );
+    assert!(
+        text.contains("more"),
+        "the clipped overlay must advertise its hidden rows:\n{text}"
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(app.overlays.shortcuts.scroll, 1, "j must scroll down");
+    handle_key_event(&mut app, key(KeyCode::Up));
+    assert_eq!(app.overlays.shortcuts.scroll, 0, "Up must scroll back");
+    for _ in 0..500 {
+        handle_key_event(&mut app, key(KeyCode::Down));
+    }
+    assert_eq!(
+        app.overlays.shortcuts.scroll, app.overlays.shortcuts.max_scroll,
+        "scroll must clamp to the measured ceiling"
+    );
+    // Reopening resets the offset.
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    assert_eq!(app.overlays.shortcuts.scroll, 0);
 }
 
 #[test]
@@ -2302,4 +2375,209 @@ fn snapshot_multi_mode_chrome() {
         "empty component history must use the shared no-results state:\n{text}"
     );
     insta::assert_snapshot!("timeline_filter_no_results_80x24", text);
+}
+
+/// Lock the diff search overlay: mode badge + the [^R] regex discoverability
+/// hint (the toggle worked but was invisible).
+#[test]
+fn diff_search_overlay_shows_regex_hint() {
+    pin_theme();
+    let mut app = demo_app(TabKind::Components);
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    for c in "ax".chars() {
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+    }
+    let text = render_to_text(80, 24, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("[^R]") && text.contains("regex"),
+        "the regex toggle must be discoverable:\n{text}"
+    );
+    assert!(
+        text.contains("[substring]"),
+        "the mode badge must render:\n{text}"
+    );
+    insta::assert_snapshot!("diff_search_overlay_80x24", text);
+}
+
+/// The unified search contract in the multi modes: Up/Down live-preview the
+/// selection, Enter confirms, n/N cycle in place, Ctrl+R toggles regex.
+#[test]
+fn multi_search_previews_and_cycles() {
+    use crate::tui::test_support::{demo_matrix, demo_timeline};
+    use crossterm::event::KeyModifiers;
+
+    pin_theme();
+    // Timeline: 3 versions all matching "v": Down previews the next match
+    // BEFORE Enter.
+    let mut app = App::new_timeline(demo_timeline());
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    handle_key_event(&mut app, key(KeyCode::Char('v')));
+    assert_eq!(app.tabs.timeline.search.matches.len(), 3);
+    handle_key_event(&mut app, key(KeyCode::Down));
+    assert_eq!(
+        app.tabs.timeline.selected_version, 1,
+        "Down must live-preview the second match before Enter"
+    );
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    assert!(!app.tabs.timeline.search.active);
+    // n/N cycle in place after confirm.
+    handle_key_event(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(app.tabs.timeline.selected_version, 2);
+    handle_key_event(&mut app, key(KeyCode::Char('N')));
+    assert_eq!(app.tabs.timeline.selected_version, 1);
+
+    // Matrix: Ctrl+R toggles regex; an invalid pattern sets the error.
+    let mut app = App::new_matrix(demo_matrix());
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    handle_key_event(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.tabs.matrix.search.mode,
+        crate::tui::app_states::SearchMode::Regex
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('(')));
+    handle_key_event(&mut app, key(KeyCode::Char('(')));
+    assert!(app.tabs.matrix.search.error.is_some());
+    assert!(app.tabs.matrix.search.matches.is_empty());
+    // Regex that matches: "gam.a"
+    for _ in 0..2 {
+        handle_key_event(&mut app, key(KeyCode::Backspace));
+    }
+    for c in "gam.a".chars() {
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.tabs.matrix.search.matches.len(), 1);
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    let result = app.data.matrix_result.as_ref().unwrap();
+    let order = crate::tui::views::ordered_sbom_indices(result, &app.tabs.matrix);
+    assert!(
+        result.sboms[order[app.tabs.matrix.selected_row]]
+            .name
+            .contains("gamma")
+    );
+
+    // MultiDiff: the same contract — Ctrl+R toggles regex (with error
+    // reporting), Down live-previews, and S recomputes the display-space
+    // matches so n still lands on the right target after a resort.
+    let mut app = App::new_multi_diff(crate::tui::test_support::demo_multi_diff());
+    let selected_name = |app: &App| {
+        let result = app.data.multi_diff_result.as_ref().unwrap();
+        let order = crate::tui::views::ordered_comparison_indices(result, &app.tabs.multi_diff);
+        result.comparisons[order[app.tabs.multi_diff.selected_target]]
+            .target
+            .name
+            .clone()
+    };
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    handle_key_event(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.tabs.multi_diff.search.mode,
+        crate::tui::app_states::SearchMode::Regex
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('(')));
+    assert!(app.tabs.multi_diff.search.error.is_some());
+    assert!(app.tabs.multi_diff.search.matches.is_empty());
+    handle_key_event(&mut app, key(KeyCode::Backspace));
+    for c in "web.pp".chars() {
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.tabs.multi_diff.search.matches.len(), 1);
+    handle_key_event(&mut app, key(KeyCode::Down));
+    assert_eq!(
+        selected_name(&app),
+        "webapp",
+        "Down must live-preview the match before Enter"
+    );
+    handle_key_event(&mut app, key(KeyCode::Enter));
+    assert!(!app.tabs.multi_diff.search.active);
+    // S reverses the display order; matches are display positions, so a
+    // stale set would send n to the wrong row after the resort.
+    handle_key_event(&mut app, key(KeyCode::Char('S')));
+    handle_key_event(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(
+        selected_name(&app),
+        "webapp",
+        "n must follow the match through the resort"
+    );
+}
+
+/// The sync guarantee the three-sources bug violated: every diff tab's
+/// rendered footer carries each of its ViewState::shortcuts() primary keys
+/// (width permitting) ahead of the global tail — both surfaces now read the
+/// same data.
+#[test]
+fn footer_primary_hints_match_viewstate_shortcuts() {
+    pin_theme();
+    for tab in [
+        TabKind::Summary,
+        TabKind::Components,
+        TabKind::Dependencies,
+        TabKind::Licenses,
+        TabKind::Vulnerabilities,
+        TabKind::Quality,
+        TabKind::Compliance,
+        TabKind::SideBySide,
+        TabKind::GraphChanges,
+        TabKind::Source,
+    ] {
+        let mut app = demo_app(tab);
+        // 200 cols: wide enough that the width fitter drops nothing.
+        let text = render_to_text(200, 40, |frame| {
+            app.prepare_render();
+            render(frame, &mut app);
+        });
+        let footer = text.lines().last().unwrap_or("").to_string();
+        let full_text = text.clone();
+        let primaries: Vec<(String, String)> = app
+            .active_view_state()
+            .expect("diff tabs have view states")
+            .shortcuts()
+            .into_iter()
+            .filter(|s| s.primary)
+            .map(|s| (s.key, s.description))
+            .collect();
+        assert!(!primaries.is_empty(), "{tab:?} must have primary shortcuts");
+        for (key, desc) in &primaries {
+            // The footer renders each hint as " key desc" — asserting the
+            // pair (not just the key) catches a hint whose key merely
+            // appears inside some other description.
+            assert!(
+                footer.contains(&format!(" {key} {desc}")),
+                "{tab:?} footer must show primary hint '{key} {desc}':\n{full_text}"
+            );
+        }
+        assert!(
+            footer.contains("q") && footer.contains("?"),
+            "{tab:?} footer keeps the global tail"
+        );
+    }
+}
+
+/// '?' renders the unified shortcuts overlay (the old prose help is gone).
+#[test]
+fn diff_help_via_question_mark() {
+    pin_theme();
+    let mut app = demo_app(TabKind::Components);
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Keyboard Shortcuts (Diff"),
+        "'?' must render the shortcuts overlay:\n{text}"
+    );
+    assert!(
+        text.contains("This Tab") && text.contains("Components"),
+        "the This-Tab section must name the active tab:\n{text}"
+    );
+    insta::assert_snapshot!("diff_help_via_question_mark_120x40", text);
 }

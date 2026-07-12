@@ -1069,3 +1069,48 @@ fn snapshot_cbom_empty_algorithms() {
     insta::assert_snapshot!("cbom_empty_algorithms_80x24", text);
 }
 
+/// Regression: regex search was unavailable in view mode. Ctrl+R toggles the
+/// mode, the badge + hint render, and invalid patterns surface an error.
+#[test]
+fn view_global_search_ctrl_r_toggles_regex() {
+    pin_theme();
+    let mut app = demo_view_app(ViewTab::Overview);
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    handle_key_event(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.search_state.mode,
+        crate::tui::app_states::SearchMode::Regex
+    );
+    for c in "ax.*s".chars() {
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+    }
+    assert!(
+        app.search_state
+            .results
+            .iter()
+            .any(|r| matches!(r, crate::tui::view::app::SearchResult::Component { name, .. } if name == "axios")),
+        "regex 'ax.*s' must match axios: {:?}",
+        app.search_state.results.len()
+    );
+
+    // Invalid pattern sets the error and empties results.
+    for _ in 0..5 {
+        handle_key_event(&mut app, key(KeyCode::Backspace));
+    }
+    handle_key_event(&mut app, key(KeyCode::Char('(')));
+    handle_key_event(&mut app, key(KeyCode::Char('(')));
+    assert!(app.search_state.search_error.is_some(), "error must be set");
+    assert!(app.search_state.results.is_empty());
+
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("[regex]") && text.contains("invalid pattern"),
+        "badge + error must render:\n{text}"
+    );
+    insta::assert_snapshot!("view_search_overlay_error_80x24", text);
+}

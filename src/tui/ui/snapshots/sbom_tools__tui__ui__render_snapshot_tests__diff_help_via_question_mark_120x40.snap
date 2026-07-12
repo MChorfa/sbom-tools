@@ -1,0 +1,44 @@
+---
+source: src/tui/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
+
+« [2] Components  │ [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  »
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Filter:  All   Sort: Name┌──────────────────── Keyboard Shortcuts (Diff) ─────────────────────┐
+                         │This Tab — Components                                               │
+─────────────────────────│                                                                    │─────────────────────────
+┌ Components (13) ───────│f  filter                                                           │────────────────────────┐
+│               Name     │s  sort                                                             │7                       │
+│▶  ~ MODIFIED  acme-weba│F  flag                                                             │                        │
+│   ~ MODIFIED  axios    │o  CVE                                                              │                        │
+│   + ADDED     dayjs    │n  note                                                             │                        │
+│   ~ MODIFIED  express  │j/k  Navigate                                                       │                        │
+│   - REMOVED   jquery   │d  Dependencies                                                     │                        │
+│   ~ MODIFIED  lodash   │v  Multi-select                                                     │                        │
+│   - REMOVED   moment   │1-8  Quick filters                                                  │                        │
+│   + ADDED     prisma   │y  Copy                                                             │                        │
+│   ~ MODIFIED  react    │                                                                    │names: 'acme-webapp'    │
+│   - REMOVED   request  │Global                                                              │_name                   │
+│   + ADDED     typescrip│                                                                    │                        │
+│   - REMOVED   underscor│q  Quit application                                                 │                        │
+│   + ADDED     zod      │?  Toggle help                                                      │                        │
+│                        │e  Export dialog                                                    │dents)                  │
+│                        │l  Color legend                                                     │wn                      │
+│                        │T  Toggle theme                                                     │                        │
+│                        │/  Search                                                           │                        │
+│                        │K  Keyboard shortcuts                                               │                        │
+│                        │V  View switcher (multi-views)                                      │                        │
+│                        │D  Component deep dive                                              │                        │
+│                        │y/Ctrl+C  Copy selected to clipboard                                │                        │
+│                        │Shift+drag  Select text with mouse                                  │                        │
+│                        │b/Backspace  Navigate back                                          │                        │
+│                        │                                                                    │                        │
+│                        └───────────────────────────────────────── ↓ 28 more — ↑↓/j/k scroll ┘                        │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+└────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘
+ Components: 15 │ Vulns: 0 │ Score: 53.5
+      f filter  s sort  F flag  o CVE  n note │  Tab switch  / search  e export  ? help  q quit [y] copy acme-webapp
