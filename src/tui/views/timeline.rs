@@ -436,7 +436,7 @@ pub(crate) fn ordered_version_indices(
         // Descending base = newest-first, so the shared Ascending reverse
         // below yields oldest-first (the identity) under the default.
         TimelineSortBy::Chronological => idx.reverse(),
-        TimelineSortBy::Changes => idx.sort_by(|a, b| changes(*b).cmp(&changes(*a))),
+        TimelineSortBy::Changes => idx.sort_by_key(|b| std::cmp::Reverse(changes(*b))),
         TimelineSortBy::ComponentCount => idx.sort_by(|a, b| {
             result.sboms[*b]
                 .component_count

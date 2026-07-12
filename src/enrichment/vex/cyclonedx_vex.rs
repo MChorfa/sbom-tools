@@ -135,7 +135,9 @@ pub(crate) fn parse_cyclonedx_vex(content: &str) -> Result<CdxVexResult, VexPars
             unscoped.insert(vuln_id.clone(), status);
         } else {
             for affect in &vuln.affects {
-                if let Some(ref bom_ref) = affect.bom_ref {
+                if let Some(ref bom_ref) = affect.bom_ref
+                    && !bom_ref.is_empty()
+                {
                     scoped.insert((vuln_id.clone(), bom_ref.clone()), status.clone());
                 }
             }
@@ -159,13 +161,17 @@ pub(crate) struct CdxVexResult {
     pub statements_parsed: usize,
 }
 
-/// Map CycloneDX analysis state to internal `VexState`.
+/// Map CycloneDX `impactAnalysisState` to internal `VexState`.
+///
+/// Mirrors the CycloneDX SBOM parser's mapping so an external CDX-VEX and an
+/// embedded analysis block resolve a given state identically. `exploitable`
+/// must map to Affected (it is a live, actionable threat), NOT collapse to
+/// UnderInvestigation.
 fn parse_cdx_state(s: &str) -> VexState {
     match s {
         "not_affected" | "false_positive" => VexState::NotAffected,
-        "affected" => VexState::Affected,
-        "fixed" | "resolved" => VexState::Fixed,
-        "in_triage" => VexState::UnderInvestigation,
+        "affected" | "exploitable" => VexState::Affected,
+        "fixed" | "resolved" | "resolved_with_pedigree" => VexState::Fixed,
         _ => VexState::UnderInvestigation,
     }
 }
@@ -377,6 +383,10 @@ mod tests {
         assert_eq!(parse_cdx_state("false_positive"), VexState::NotAffected);
         assert_eq!(parse_cdx_state("resolved"), VexState::Fixed);
         assert_eq!(parse_cdx_state("unknown"), VexState::UnderInvestigation);
+        // exploitable is a live, actionable threat — must be Affected, not
+        // collapsed to UnderInvestigation (matches the SBOM parser).
+        assert_eq!(parse_cdx_state("exploitable"), VexState::Affected);
+        assert_eq!(parse_cdx_state("resolved_with_pedigree"), VexState::Fixed);
     }
 
     #[test]

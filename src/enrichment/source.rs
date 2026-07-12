@@ -160,6 +160,12 @@ pub fn http_client(timeout: Duration) -> reqwest::Result<reqwest::blocking::Clie
 /// server-provided `Retry-After`.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
+/// Maximum a cache entry may be served *past its TTL* in offline mode before
+/// it is treated as a hard miss. Stale-if-offline keeps air-gapped runs
+/// working, but security data this far out of date must not be presented as
+/// current (90 days past TTL is generous — enrichment TTLs are ~24h).
+const MAX_OFFLINE_STALENESS: Duration = Duration::from_secs(90 * 24 * 3600);
+
 /// Upper bound on a single enrichment response body, in bytes.
 ///
 /// Enrichment responses are read fully into memory (the EPSS CSV into a
@@ -376,6 +382,26 @@ impl CacheKey {
     }
 }
 
+/// Derive a collision-free, traversal-safe cache filename from an arbitrary
+/// (possibly untrusted) string key, via SHA256 → hex.
+///
+/// A `replace(['/', ':'], "_")`-style sanitizer is NOT injective — `a/b`,
+/// `a:b`, and `a_b` all collapse to one file, so metadata for one package
+/// could be served for another — and it misses `\\` (Windows traversal).
+/// Hashing the full key makes distinct keys distinct and the name is always
+/// `[0-9a-f]{64}.json`.
+#[must_use]
+pub(crate) fn key_to_filename(key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    let hex: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("{hex}.json")
+}
+
 // ============================================================================
 // Generic versioned file cache
 // ============================================================================
@@ -474,9 +500,14 @@ where
         if age > self.ttl {
             // Online: an expired entry is a miss and is evicted on read (the
             // E1 cache tests assert this). Offline: keep it and serve it so an
-            // air-gapped run has a stale-if-offline fallback.
-            if is_offline() {
-                stale_by = Some(age - self.ttl);
+            // air-gapped run has a stale-if-offline fallback — but BOUND how
+            // stale. Presenting security data (vuln/KEV/EPSS) that is many
+            // months past its TTL as if current is misleading; beyond
+            // MAX_OFFLINE_STALENESS it is a hard miss even offline, forcing
+            // the operator to notice the data is too old to trust.
+            let past_ttl = age - self.ttl;
+            if is_offline() && past_ttl <= MAX_OFFLINE_STALENESS {
+                stale_by = Some(past_ttl);
             } else {
                 let _ = fs::remove_file(&path);
                 return None;
@@ -645,6 +676,31 @@ mod tests {
             value: 7,
             label: "hello".to_string(),
         }
+    }
+
+    /// Distinct keys that a `replace(['/', ':'], "_")` sanitizer would collapse
+    /// into one file must map to DISTINCT cache filenames — otherwise metadata
+    /// for one package could be served for another.
+    #[test]
+    fn key_to_filename_is_collision_free() {
+        let a = key_to_filename("npm:lodash");
+        let b = key_to_filename("npm/lodash");
+        let c = key_to_filename("npm_lodash");
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(b, c);
+        // Deterministic and traversal-safe: only [0-9a-f] + ".json".
+        assert_eq!(a, key_to_filename("npm:lodash"));
+        assert!(
+            a.strip_suffix(".json")
+                .unwrap()
+                .chars()
+                .all(|ch| ch.is_ascii_hexdigit()),
+            "filename must be hex only (no separators / traversal)"
+        );
+        // A traversal attempt cannot escape the directory.
+        let evil = key_to_filename("../../etc/passwd");
+        assert!(!evil.contains('/') && !evil.contains(".."));
     }
 
     #[test]

@@ -360,10 +360,10 @@ fn overview_tab_orders_risk_before_identifiers() {
         latest_version: None,
     });
     comp.identifiers.purl = Some("pkg:npm/kev-lib@1.0.0".to_string());
-    comp.hashes.push(crate::model::Hash {
-        algorithm: crate::model::HashAlgorithm::Sha256,
-        value: "abc123".to_string(),
-    });
+    comp.hashes.push(crate::model::Hash::new(
+        crate::model::HashAlgorithm::Sha256,
+        "abc123".to_string(),
+    ));
     let id = CanonicalId::from_name_version("kev-lib", None);
     sbom.components.insert(id.clone(), comp);
 

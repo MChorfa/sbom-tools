@@ -1,7 +1,7 @@
 //! OSV API HTTP client.
 
 use super::response::{OsvBatchRequest, OsvBatchResponse, OsvQuery};
-use crate::enrichment::source::{get_with_retry, http_client};
+use crate::enrichment::source::{backoff_delay, get_with_retry, http_client, read_bounded};
 use crate::error::{EnrichmentErrorKind, Result, SbomDiffError};
 use reqwest::blocking::Client;
 use std::time::Duration;
@@ -74,6 +74,24 @@ impl OsvClient {
 
         for chunk in queries.chunks(self.config.batch_size) {
             let response = self.query_batch_internal(chunk)?;
+            // OSV querybatch returns exactly one result per query, in query
+            // order (https://google.github.io/osv.dev/post-v1-querybatch/).
+            // Attachment downstream is purely positional, so a response whose
+            // result count does not match the query count would silently
+            // misattribute vulnerabilities to the wrong components (or drop
+            // them). Reject the contract violation instead — fail-safe: no
+            // enrichment beats wrong enrichment.
+            if response.results.len() != chunk.len() {
+                return Err(SbomDiffError::enrichment(
+                    "parsing response",
+                    EnrichmentErrorKind::InvalidResponse(format!(
+                        "OSV querybatch returned {} results for {} queries \
+                         (expected one result per query, in order)",
+                        response.results.len(),
+                        chunk.len()
+                    )),
+                ));
+            }
             results.push(response);
         }
 
@@ -91,8 +109,11 @@ impl OsvClient {
 
         for attempt in 0..=self.config.max_retries {
             if attempt > 0 {
-                // Exponential backoff: 1s, 2s, 4s, ...
-                let delay = Duration::from_secs(1 << (attempt - 1));
+                // Shared checked/capped backoff (1s, 2s, 4s, … up to
+                // MAX_BACKOFF). The previous `1 << (attempt - 1)` overflowed
+                // for a large configured max_retries (debug panic / uncapped
+                // multi-year sleep).
+                let delay = backoff_delay(u32::from(attempt), None);
                 std::thread::sleep(delay);
                 tracing::debug!("Retry attempt {} after {:?}", attempt, delay);
             }
@@ -125,7 +146,12 @@ impl OsvClient {
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().unwrap_or_default();
+            // Bound the error body too: an error response is still
+            // attacker-controlled and unbounded text() would OOM.
+            let body = read_bounded(response)
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(api_error(format!(
                 "OSV API returned error status {}: {}",
                 status.as_u16(),
@@ -133,7 +159,11 @@ impl OsvClient {
             )));
         }
 
-        let batch_response: OsvBatchResponse = response.json().map_err(|e| {
+        // Bound the response body (256 MiB) before parsing — a hostile,
+        // MITM'd, or config-overridden api_base could otherwise OOM the
+        // process with an unbounded body. Matches the KEV/EPSS/HF path.
+        let bytes = read_bounded(response)?;
+        let batch_response: OsvBatchResponse = serde_json::from_slice(&bytes).map_err(|e| {
             SbomDiffError::enrichment(
                 "parsing response",
                 EnrichmentErrorKind::InvalidResponse(e.to_string()),
@@ -163,7 +193,8 @@ impl OsvClient {
             )));
         }
 
-        let vuln = response.json().map_err(|e| {
+        let bytes = read_bounded(response)?;
+        let vuln = serde_json::from_slice(&bytes).map_err(|e| {
             SbomDiffError::enrichment(
                 "parsing vulnerability",
                 EnrichmentErrorKind::InvalidResponse(e.to_string()),
