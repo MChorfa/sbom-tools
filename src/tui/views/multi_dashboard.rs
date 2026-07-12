@@ -1030,30 +1030,7 @@ fn render_variable_drill_down(
 
 /// Render search overlay
 fn render_search_overlay(f: &mut Frame, area: Rect, state: &MultiDiffState) {
-    let scheme = colors();
-
-    // Search bar at bottom of screen
-    let search_area = Rect::new(area.x, area.height - 3, area.width, 3);
-    f.render_widget(Clear, search_area);
-
-    let search_text = Line::from(vec![
-        Span::styled("Search: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(&state.search.query, Style::default().fg(scheme.text)),
-        Span::styled("│", Style::default().fg(scheme.accent)), // Cursor
-        Span::raw("  "),
-        Span::styled(
-            state.search.match_position(),
-            Style::default().fg(scheme.text_muted),
-        ),
-    ]);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
-
-    let paragraph = Paragraph::new(search_text).block(block);
-    f.render_widget(paragraph, search_area);
+    crate::tui::views::render_multi_search_bar(f, area, "Search: ", &state.search);
 }
 
 /// Panels in the multi-dashboard

@@ -744,4 +744,79 @@ mod indent_tests {
             "selected (row 0) and non-selected (row 1) labels must align"
         );
     }
+
+    /// Depth>=2 component labels must take scheme.text_muted while depth 0|1 keep
+    /// scheme.text (the depth cue the theme backbone moved off the hardcoded
+    /// Rgb(180,180,180)); flattening the depth match to one slot loses the cue
+    /// with no snapshot noticing, because text snapshots strip styles.
+    #[test]
+    fn depth_two_labels_use_muted_theme_text() {
+        crate::tui::test_support::pin_theme();
+        let leaf = |name: &str| TreeNode::Component {
+            id: format!("id-{name}"),
+            name: name.to_string(),
+            version: None,
+            vuln_count: 0,
+            max_severity: None,
+            component_type: None,
+            ecosystem: None,
+            is_bookmarked: false,
+        };
+        let roots = [TreeNode::Group {
+            id: "g1".to_string(),
+            label: "outer".to_string(),
+            children: vec![
+                TreeNode::Group {
+                    id: "g2".to_string(),
+                    label: "inner".to_string(),
+                    children: vec![leaf("deep-leaf")],
+                    item_count: 1,
+                    vuln_count: 0,
+                },
+                leaf("mid-leaf"),
+            ],
+            item_count: 2,
+            vuln_count: 0,
+        }];
+        let mut state = TreeState::new();
+        state.expand("g1");
+        state.expand("g2");
+        // Selection stays on the root group header so neither leaf takes the
+        // selection style.
+        state.selected = 0;
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        Tree::new(&roots).render(area, &mut buf, &mut state);
+
+        // Find a label's first cell and return its fg (byte offset converted to a
+        // display column: the tree prefix glyphs are multi-byte, single-column).
+        let label_fg = |label: &str| {
+            for y in 0..area.height {
+                let text: String = (0..area.width)
+                    .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect();
+                if let Some(byte_idx) = text.find(label) {
+                    let col = text[..byte_idx].chars().count() as u16;
+                    return buf.cell((col, y)).and_then(|c| c.style().fg);
+                }
+            }
+            panic!("label {label:?} not rendered in the tree buffer");
+        };
+        let scheme = colors();
+        assert_ne!(
+            scheme.text, scheme.text_muted,
+            "precondition: the pinned theme must distinguish text from text_muted"
+        );
+        assert_eq!(
+            label_fg("deep-leaf"),
+            Some(scheme.text_muted),
+            "depth-2 component labels must use the themed text_muted fg (depth cue lost or re-slotted)"
+        );
+        assert_eq!(
+            label_fg("mid-leaf"),
+            Some(scheme.text),
+            "depth-1 component labels must keep the full text fg (the muted boundary sits at depth 2)"
+        );
+    }
 }

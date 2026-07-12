@@ -92,7 +92,6 @@ pub struct ModeStates {
 ///
 /// Groups all overlay visibility flags and complex overlay states.
 pub struct AppOverlays {
-    pub(crate) show_help: bool,
     pub(crate) show_export: bool,
     pub(crate) show_legend: bool,
     pub(crate) search: DiffSearchState,
@@ -105,7 +104,6 @@ pub struct AppOverlays {
 impl AppOverlays {
     pub fn new() -> Self {
         Self {
-            show_help: false,
             show_export: false,
             show_legend: false,
             search: DiffSearchState::new(),
@@ -116,18 +114,9 @@ impl AppOverlays {
         }
     }
 
-    pub const fn toggle_help(&mut self) {
-        self.show_help = !self.show_help;
-        if self.show_help {
-            self.show_export = false;
-            self.show_legend = false;
-        }
-    }
-
     pub const fn toggle_export(&mut self) {
         self.show_export = !self.show_export;
         if self.show_export {
-            self.show_help = false;
             self.show_legend = false;
         }
     }
@@ -135,13 +124,11 @@ impl AppOverlays {
     pub const fn toggle_legend(&mut self) {
         self.show_legend = !self.show_legend;
         if self.show_legend {
-            self.show_help = false;
             self.show_export = false;
         }
     }
 
     pub const fn close_all(&mut self) {
-        self.show_help = false;
         self.show_export = false;
         self.show_legend = false;
         self.search.active = false;
@@ -152,8 +139,7 @@ impl AppOverlays {
     }
 
     pub const fn has_active(&self) -> bool {
-        self.show_help
-            || self.show_export
+        self.show_export
             || self.show_legend
             || self.search.active
             || self.threshold_tuning.visible
@@ -254,6 +240,27 @@ pub struct App {
 }
 
 impl App {
+    /// The active tab's `ViewState` — the single source for its footer
+    /// primaries and the ?/K overlay's This-Tab section. `None` in the multi
+    /// modes (their `active_tab` is a stale preference restore).
+    pub(crate) fn active_view_state(&self) -> Option<&dyn crate::tui::traits::ViewState> {
+        if !matches!(self.mode, AppMode::Diff | AppMode::View) {
+            return None;
+        }
+        Some(match self.active_tab {
+            TabKind::Summary | TabKind::Overview | TabKind::Tree => &self.summary_view,
+            TabKind::Components => &self.components_view,
+            TabKind::Dependencies => &self.dependencies_view,
+            TabKind::Licenses => &self.licenses_view,
+            TabKind::Vulnerabilities => &self.vulnerabilities_view,
+            TabKind::Quality => &self.quality_view,
+            TabKind::Compliance => &self.compliance_view,
+            TabKind::SideBySide => &self.sidebyside_view,
+            TabKind::GraphChanges => &self.graph_changes_view,
+            TabKind::Source => &self.source_view,
+        })
+    }
+
     /// Lazily compute compliance results for all standards when first needed.
     ///
     /// The optional CRA sidecar is threaded into every checker so sidecar-driven
@@ -292,11 +299,6 @@ impl App {
                 checker.check(sbom)
             })
             .collect()
-    }
-
-    /// Toggle help overlay
-    pub const fn toggle_help(&mut self) {
-        self.overlays.toggle_help();
     }
 
     /// Toggle export dialog
@@ -773,7 +775,18 @@ impl App {
         self.overlays.close_all();
 
         match kind {
-            OverlayKind::Help => self.overlays.show_help = true,
+            OverlayKind::Help => {
+                // The hardcoded help overlay is gone; Help IS the shortcuts
+                // overlay now (context derived from the mode).
+                let context = match self.mode {
+                    AppMode::MultiDiff => ShortcutsContext::MultiDiff,
+                    AppMode::Timeline => ShortcutsContext::Timeline,
+                    AppMode::Matrix => ShortcutsContext::Matrix,
+                    AppMode::Diff => ShortcutsContext::Diff,
+                    AppMode::View => ShortcutsContext::View,
+                };
+                self.overlays.shortcuts.show(context);
+            }
             OverlayKind::Export => self.overlays.show_export = true,
             OverlayKind::Legend => self.overlays.show_legend = true,
             OverlayKind::Search => {
@@ -788,42 +801,6 @@ impl App {
     #[must_use]
     pub const fn current_tab_target(&self) -> super::traits::TabTarget {
         super::traits::TabTarget::from_tab_kind(self.active_tab)
-    }
-
-    /// Get keyboard shortcuts for the current view
-    #[must_use]
-    pub fn current_shortcuts(&self) -> Vec<super::traits::Shortcut> {
-        use super::traits::Shortcut;
-
-        let mut shortcuts = vec![
-            Shortcut::primary("?", "Help"),
-            Shortcut::primary("q", "Quit"),
-            Shortcut::primary("Tab", "Next tab"),
-            Shortcut::primary("/", "Search"),
-        ];
-
-        // Add view-specific shortcuts
-        match self.active_tab {
-            TabKind::Components => {
-                shortcuts.push(Shortcut::new("f", "Filter"));
-                shortcuts.push(Shortcut::new("s", "Sort"));
-                shortcuts.push(Shortcut::new("m", "Multi-select"));
-            }
-            TabKind::Dependencies => {
-                shortcuts.push(Shortcut::new("t", "Transitive"));
-                shortcuts.push(Shortcut::new("+/-", "Depth"));
-            }
-            TabKind::Vulnerabilities => {
-                shortcuts.push(Shortcut::new("f", "Filter"));
-                shortcuts.push(Shortcut::new("s", "Sort"));
-            }
-            TabKind::Quality => {
-                shortcuts.push(Shortcut::new("v", "View mode"));
-            }
-            _ => {}
-        }
-
-        shortcuts
     }
 
     // ========================================================================

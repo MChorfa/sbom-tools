@@ -1,7 +1,7 @@
 //! Timeline mode event handlers.
 
 use crate::tui::App;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
     // Handle search input mode
@@ -66,6 +66,20 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
         // Search
         KeyCode::Char('/') => {
             app.tabs.timeline.search.start();
+        }
+
+        // In-place match cycling after Enter confirmed a search.
+        KeyCode::Char('n') if !app.tabs.timeline.search.matches.is_empty() => {
+            app.tabs.timeline.search.next_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
+        }
+        KeyCode::Char('N') if !app.tabs.timeline.search.matches.is_empty() => {
+            app.tabs.timeline.search.prev_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
         }
 
         // Sort and filter
@@ -184,11 +198,27 @@ pub(super) fn handle_timeline_search(app: &mut App, key: KeyEvent) {
             app.tabs.timeline.search.pop();
             update_timeline_search_matches(app);
         }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.tabs.timeline.search.toggle_mode();
+            update_timeline_search_matches(app);
+            app.set_status_message(format!(
+                "Search mode: {}",
+                app.tabs.timeline.search.mode.label()
+            ));
+        }
+        // Live preview: Up/Down move the visible selection through the
+        // matches before Enter confirms (one mental model everywhere).
         KeyCode::Down => {
             app.tabs.timeline.search.next_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
         }
         KeyCode::Up => {
             app.tabs.timeline.search.prev_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
         }
         KeyCode::Char(c) => {
             app.tabs.timeline.search.push(c);
@@ -199,14 +229,29 @@ pub(super) fn handle_timeline_search(app: &mut App, key: KeyEvent) {
 }
 
 pub(super) fn update_timeline_search_matches(app: &mut App) {
-    let query = app.tabs.timeline.search.query.to_lowercase();
+    let query = &app.tabs.timeline.search.query;
     if query.is_empty() {
+        app.tabs.timeline.search.error = None;
         app.tabs.timeline.search.update_matches(vec![]);
         return;
     }
 
+    // Shared matcher: same substring/regex semantics as every other search.
+    let matcher =
+        match crate::tui::app_states::SearchMatcher::build(query, app.tabs.timeline.search.mode) {
+            Ok(m) => {
+                app.tabs.timeline.search.error = None;
+                m
+            }
+            Err(e) => {
+                app.tabs.timeline.search.error = Some(e);
+                app.tabs.timeline.search.update_matches(vec![]);
+                return;
+            }
+        };
+
     // Matches are DISPLAY positions so Enter selects the highlighted row
-    // under any sort (mirrors update_multi_diff_search_matches).
+    // under any sort.
     let matches: Vec<usize> = app
         .data
         .timeline_result
@@ -215,7 +260,7 @@ pub(super) fn update_timeline_search_matches(app: &mut App) {
             crate::tui::views::ordered_version_indices(result, &app.tabs.timeline)
                 .iter()
                 .enumerate()
-                .filter(|(_, raw)| result.sboms[**raw].name.to_lowercase().contains(&query))
+                .filter(|(_, raw)| matcher.is_match(&result.sboms[**raw].name))
                 .map(|(display, _)| display)
                 .collect()
         });

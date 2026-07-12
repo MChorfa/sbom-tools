@@ -293,12 +293,12 @@ pub trait ViewState: Send {
 
     /// Get keyboard shortcuts for this view.
     ///
-    /// NOTE: currently UNUSED by any render path. The help overlay
-    /// (`tui::views::overlays::render_shortcuts_overlay`) and footer hints
-    /// (`tui::theme::FooterHints`) are hand-maintained per profile/tab rather
-    /// than driven from this method. Wiring those to `shortcuts()` as the
-    /// single source of truth is a deliberate future refactor; until then this
-    /// is exercised only by unit tests.
+    /// This is the single source of truth for per-tab key bindings in diff
+    /// mode: `primary` rows render as the footer hints (`render_footer` in
+    /// `tui::ui`) and all rows populate the "This Tab" section of the ?/K
+    /// overlay (`tui::views::overlays::render_shortcuts_overlay`). Keep the
+    /// rows in sync with the tab's actual event handling — a binding added
+    /// to `handle_key` without a row here is invisible to users.
     fn shortcuts(&self) -> Vec<Shortcut>;
 
     /// Called when this view becomes active.

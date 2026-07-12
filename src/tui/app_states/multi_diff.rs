@@ -16,6 +16,10 @@ pub struct MultiViewSearchState {
     pub matches: Vec<usize>,
     /// Current match index
     pub current_match: usize,
+    /// Substring or regex (Ctrl+R toggles, same contract as the diff overlay)
+    pub mode: super::search::SearchMode,
+    /// Error from an invalid regex pattern
+    pub error: Option<String>,
 }
 
 impl MultiViewSearchState {
@@ -28,12 +32,22 @@ impl MultiViewSearchState {
         self.query.clear();
         self.matches.clear();
         self.current_match = 0;
+        self.error = None;
     }
 
     pub fn cancel(&mut self) {
         self.active = false;
         self.query.clear();
         self.matches.clear();
+        self.error = None;
+    }
+
+    pub fn toggle_mode(&mut self) {
+        use super::search::SearchMode;
+        self.mode = match self.mode {
+            SearchMode::Substring => SearchMode::Regex,
+            SearchMode::Regex => SearchMode::Substring,
+        };
     }
 
     pub const fn confirm(&mut self) {

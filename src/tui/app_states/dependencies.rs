@@ -113,7 +113,6 @@ pub struct DependenciesState {
     /// Show breadcrumb bar
     pub show_breadcrumbs: bool,
     /// Show dependencies-specific help overlay
-    pub show_deps_help: bool,
 
     // === Transitive filtering and sorting ===
     /// Direct dependencies (depth 1 from roots)
@@ -171,7 +170,6 @@ impl DependenciesState {
             // Phase C: UX improvements
             breadcrumb_trail: Vec::new(),
             show_breadcrumbs: true,
-            show_deps_help: false,
             // Transitive filtering and sorting
             cached_direct_deps: HashSet::new(),
             cached_reverse_graph: HashMap::new(),
@@ -533,11 +531,6 @@ impl DependenciesState {
     /// Toggle breadcrumb display
     pub const fn toggle_breadcrumbs(&mut self) {
         self.show_breadcrumbs = !self.show_breadcrumbs;
-    }
-
-    /// Toggle dependencies help overlay
-    pub const fn toggle_deps_help(&mut self) {
-        self.show_deps_help = !self.show_deps_help;
     }
 
     /// Update breadcrumb trail based on current selection

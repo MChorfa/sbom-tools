@@ -41,4 +41,4 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │ ~ acme-webapp 1.0.0 → 2.0.0 MAJOR                                                                                    ▼
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
-                                      Tab switch  / search  e export  ? help  q quit
+                               j/k scroll │  Tab switch  / search  e export  ? help  q quit

@@ -103,13 +103,15 @@ impl ViewState for ComponentsView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
+            Shortcut::primary("f", "filter"),
+            Shortcut::primary("s", "sort"),
+            Shortcut::primary("F", "flag"),
+            Shortcut::primary("o", "CVE"),
+            Shortcut::primary("n", "note"),
+            Shortcut::new("j/k", "Navigate"),
             Shortcut::new("d", "Dependencies"),
-            Shortcut::new("f", "Filter"),
-            Shortcut::new("s", "Sort"),
             Shortcut::new("v", "Multi-select"),
             Shortcut::new("1-8", "Quick filters"),
-            Shortcut::new("F", "Flag"),
             Shortcut::new("y", "Copy"),
         ]
     }

@@ -2,7 +2,7 @@
 
 use super::app::{App, TabKind};
 use super::app_states::{
-    ChangeType, ComponentFilter, DiffSearchResult, SearchMode, VulnChangeType, VulnFilter, VulnSort,
+    ChangeType, ComponentFilter, DiffSearchResult, VulnChangeType, VulnFilter, VulnSort,
 };
 
 impl App {
@@ -10,7 +10,6 @@ impl App {
     pub fn start_search(&mut self) {
         self.overlays.search.active = true;
         self.overlays.search.clear();
-        self.overlays.show_help = false;
         self.overlays.show_export = false;
         self.overlays.show_legend = false;
     }
@@ -37,38 +36,22 @@ impl App {
             return;
         }
 
-        let query = &self.overlays.search.query;
-        let query_lower = query.to_lowercase();
-        let search_mode = self.overlays.search.mode;
-
-        // Build a regex matcher when in regex mode; show error on invalid patterns.
-        let regex_matcher = if search_mode == SearchMode::Regex {
-            match regex::RegexBuilder::new(query)
-                .case_insensitive(true)
-                .build()
-            {
-                Ok(re) => {
-                    self.overlays.search.search_error = None;
-                    Some(re)
-                }
-                Err(e) => {
-                    self.overlays.search.search_error = Some(format!("Invalid regex: {e}"));
-                    self.overlays.search.results.clear();
-                    return;
-                }
+        // One shared matching semantic across every search surface.
+        let matcher = match crate::tui::app_states::SearchMatcher::build(
+            &self.overlays.search.query,
+            self.overlays.search.mode,
+        ) {
+            Ok(m) => {
+                self.overlays.search.search_error = None;
+                m
             }
-        } else {
-            self.overlays.search.search_error = None;
-            None
-        };
-
-        // Closure that performs the appropriate match depending on mode.
-        let matches_query = |text: &str| -> bool {
-            match search_mode {
-                SearchMode::Substring => text.to_lowercase().contains(&query_lower),
-                SearchMode::Regex => regex_matcher.as_ref().is_some_and(|re| re.is_match(text)),
+            Err(e) => {
+                self.overlays.search.search_error = Some(e);
+                self.overlays.search.results.clear();
+                return;
             }
         };
+        let matches_query = |text: &str| -> bool { matcher.is_match(text) };
 
         let mut results = Vec::new();
 

@@ -258,15 +258,15 @@ impl ViewState for SideBySideView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Scroll"),
-            Shortcut::new("J/K", "Sync scroll"),
-            Shortcut::new("p/\u{2190}\u{2192}", "Panel focus"),
-            Shortcut::new("a", "Alignment"),
+            Shortcut::primary("a", "align"),
+            Shortcut::primary("n/N", "change"),
+            Shortcut::primary("Enter", "detail"),
+            Shortcut::primary("\u{2190}\u{2192}/p", "panel"),
+            Shortcut::primary("J/K", "scroll"),
+            Shortcut::new("j/k", "Scroll"),
             Shortcut::new("s", "Sync mode"),
             Shortcut::new("/", "Search"),
-            Shortcut::new("n/N", "Next/Prev change (or search match)"),
             Shortcut::new("1-3", "Filter toggles"),
-            Shortcut::new("Enter", "Detail"),
         ]
     }
 }
@@ -527,6 +527,40 @@ mod grouped_gating_tests {
             result,
             EventResult::Ignored,
             "second Esc falls through to the global fallback"
+        );
+    }
+
+    /// Pins: 'p'/Left/Right in Unified mode must NOT toggle panel focus
+    /// (Unified renders a single panel) and must explain themselves with the
+    /// "Unified view is a single panel" status; Aligned keeps the toggle.
+    #[test]
+    fn unified_gates_panel_focus_toggle_with_status() {
+        let mut ctx = make_ctx();
+        let mut view = SideBySideView::new();
+        view.inner_mut().alignment_mode = AlignmentMode::Unified;
+
+        for code in [KeyCode::Char('p'), KeyCode::Left, KeyCode::Right] {
+            let result = view.handle_key(make_key(code), &mut ctx);
+            assert!(
+                !view.inner().focus_right,
+                "{code:?} must not toggle panel focus in Unified mode"
+            );
+            assert!(
+                matches!(&result, EventResult::StatusMessage(m) if m.contains("single panel")),
+                "{code:?} must return the single-panel status, got {result}"
+            );
+        }
+
+        // Control: Aligned mode still toggles focus through 'p', so the guard
+        // cannot pass by disabling the binding outright.
+        view.inner_mut().alignment_mode = AlignmentMode::Aligned;
+        assert_eq!(
+            view.handle_key(make_key(KeyCode::Char('p')), &mut ctx),
+            EventResult::Consumed
+        );
+        assert!(
+            view.inner().focus_right,
+            "'p' must still toggle panel focus in Aligned mode"
         );
     }
 }

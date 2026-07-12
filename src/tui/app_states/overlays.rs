@@ -200,6 +200,14 @@ pub struct ShortcutsOverlayState {
     /// section and "Jump to tab" range in the overlay (view mode only —
     /// `None` falls back to the generic hint).
     pub profile: Option<crate::model::BomProfile>,
+    /// Title of the active tab, shown on the This-Tab section.
+    pub tab_title: Option<String>,
+    /// The active tab's `ViewState::shortcuts()` (key, description) rows.
+    pub tab_items: Vec<(String, String)>,
+    /// Vertical scroll offset (rows) when content exceeds the box.
+    pub scroll: u16,
+    /// Scroll ceiling measured at render time; `scroll_down` clamps to it.
+    pub max_scroll: u16,
 }
 
 /// Context for showing relevant shortcuts
@@ -219,12 +227,40 @@ impl ShortcutsOverlayState {
         Self::default()
     }
 
-    pub const fn show(&mut self, context: ShortcutsContext) {
+    pub fn show(&mut self, context: ShortcutsContext) {
+        self.show_with_tab(context, None, Vec::new());
+    }
+
+    /// Show the overlay with a per-tab section derived from the active
+    /// tab's `ViewState::shortcuts()`.
+    pub fn show_with_tab(
+        &mut self,
+        context: ShortcutsContext,
+        tab_title: Option<String>,
+        tab_items: Vec<(String, String)>,
+    ) {
         self.visible = true;
         self.context = context;
+        self.tab_title = tab_title;
+        self.tab_items = tab_items;
+        self.scroll = 0;
+        self.max_scroll = 0;
     }
 
     pub const fn hide(&mut self) {
         self.visible = false;
+    }
+
+    /// Scroll the overlay content up one row.
+    pub const fn scroll_up(&mut self) {
+        self.scroll = self.scroll.saturating_sub(1);
+    }
+
+    /// Scroll the overlay content down one row, clamped to the ceiling
+    /// measured on the last render.
+    pub const fn scroll_down(&mut self) {
+        if self.scroll < self.max_scroll {
+            self.scroll += 1;
+        }
     }
 }

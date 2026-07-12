@@ -1072,29 +1072,7 @@ fn render_component_history_modal(
 
 /// Render search overlay
 fn render_search_overlay(f: &mut Frame, area: Rect, state: &TimelineState) {
-    let scheme = colors();
-
-    let search_area = Rect::new(area.x, area.height - 3, area.width, 3);
-    f.render_widget(Clear, search_area);
-
-    let search_text = Line::from(vec![
-        Span::styled("Search: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(&state.search.query, Style::default().fg(scheme.text)),
-        Span::styled("│", Style::default().fg(scheme.accent)),
-        Span::raw("  "),
-        Span::styled(
-            state.search.match_position(),
-            Style::default().fg(scheme.text_muted),
-        ),
-    ]);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
-
-    let paragraph = Paragraph::new(search_text).block(block);
-    f.render_widget(paragraph, search_area);
+    crate::tui::views::render_multi_search_bar(f, area, "Search: ", &state.search);
 }
 
 /// Render jump overlay

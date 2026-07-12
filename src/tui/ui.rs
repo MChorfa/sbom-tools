@@ -191,10 +191,6 @@ fn render(frame: &mut Frame, app: &mut App) {
     render_footer(frame, chunks[4], app);
 
     // Render overlays
-    if app.overlays.show_help {
-        render_help_overlay(frame, area, diff_tab_count(app));
-    }
-
     if app.overlays.search.active {
         render_search_overlay(frame, area, &app.overlays.search);
     }
@@ -429,32 +425,6 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(tabs, area);
 }
 
-/// Number of number-key-addressable tabs currently shown in the diff-mode tab
-/// bar. Mirrors the tab set assembled in [`render_tabs`] so the help overlay's
-/// "Jump to tab" hint never advertises a number the user cannot reach.
-fn diff_tab_count(app: &App) -> usize {
-    // Base tabs: Summary, Components, Dependencies, Licenses, Vulnerabilities,
-    // Quality (always present).
-    let mut count = 6;
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
-        // Compliance + Side-by-side.
-        count += 2;
-    }
-    if app
-        .data
-        .diff_result
-        .as_ref()
-        .is_some_and(|r| !r.graph_changes.is_empty())
-    {
-        count += 1;
-    }
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
-        // Source.
-        count += 1;
-    }
-    count
-}
-
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let (comp_count, vuln_count, score) = match app.mode {
         AppMode::Diff => {
@@ -566,22 +536,24 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Get tab-specific hints based on mode
-    let tab_name = match app.active_tab {
-        TabKind::Summary | TabKind::Overview => "summary",
-        TabKind::Tree => "components",
-        TabKind::Components => "components",
-        TabKind::Dependencies => "dependencies",
-        TabKind::Licenses => "licenses",
-        TabKind::Vulnerabilities => "vulnerabilities",
-        TabKind::Quality => "quality",
-        TabKind::Compliance => "compliance",
-        TabKind::SideBySide => "sidebyside",
-        TabKind::GraphChanges => "graph",
-        TabKind::Source => "source",
-    };
-
-    let hints = FooterHints::for_diff_tab(tab_name);
+    // Tab-specific hints come from the active tab's ViewState::shortcuts()
+    // primaries — the same source that feeds the ?/K overlay, so the footer
+    // and the help surface can no longer drift.
+    let owned: Vec<(String, String)> = app
+        .active_view_state()
+        .map(|v| {
+            v.shortcuts()
+                .into_iter()
+                .filter(|s| s.primary)
+                .map(|s| (s.key, s.description))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut hints: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(k, d)| (k.as_str(), d.as_str()))
+        .collect();
+    hints.extend(FooterHints::global());
 
     // Budget the row: reserve the yank preview's width, keep the global
     // ?/q tail intact by dropping tab-specific hints (marked with a leading
@@ -633,195 +605,18 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(footer, area);
 }
 
-fn render_help_overlay(frame: &mut Frame, area: Rect, tab_count: usize) {
-    let popup_area = centered_rect(65, 80, area);
-    frame.render_widget(Clear, popup_area);
-
-    // Pad to the fixed-width key column used elsewhere in this overlay so the
-    // descriptions stay aligned regardless of the digit count.
-    let jump_key = if tab_count <= 1 {
-        "1".to_string()
-    } else {
-        format!("1-{tab_count}")
-    };
-    let jump_key = format!("  {jump_key:<15}");
-
-    let help_text = vec![
-        Line::styled(
-            "━━━ Keyboard Shortcuts ━━━",
-            Style::default().fg(colors().accent).bold(),
-        ),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Navigation",
-            Style::default().fg(colors().primary).bold(),
-        )]),
-        Line::from(vec![
-            Span::styled("  Tab/Shift+Tab  ", Style::default().fg(colors().accent)),
-            Span::styled("Switch between views", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled(jump_key, Style::default().fg(colors().accent)),
-            Span::styled("Jump to specific tab", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  ↑/↓ or j/k     ", Style::default().fg(colors().accent)),
-            Span::styled("Navigate items up/down", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  PgUp/PgDown    ", Style::default().fg(colors().accent)),
-            Span::styled("Page up/down (page)", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Home/End       ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Jump to start/end of list",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  p / ←→         ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Toggle panel focus (Side-by-side)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  J/K            ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Scroll both panels (Side-by-side)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Actions",
-            Style::default().fg(colors().primary).bold(),
-        )]),
-        Line::from(vec![
-            Span::styled("  Enter          ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "View details / Expand node / Go to component",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  b / Backspace  ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Navigate back (follow breadcrumb trail)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  c              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Go to component (from Dependencies)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  /              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Search components & vulnerabilities",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  f              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Cycle filter (All→Added→Removed→Modified)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  s              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Cycle sort (Name→Version→Ecosystem→MatchScore)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  g              ", Style::default().fg(colors().accent)),
-            Span::styled("Cycle grouping mode", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  t              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Toggle transitive dependencies",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  e              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Export report (JSON/SARIF/Markdown/HTML)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  l              ", Style::default().fg(colors().accent)),
-            Span::styled("Show color legend", Style::default().fg(colors().text)),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "General",
-            Style::default().fg(colors().primary).bold(),
-        )]),
-        Line::from(vec![
-            Span::styled("  T              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Toggle theme (dark/light/high-contrast)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  y / Ctrl+C     ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Copy selected item to clipboard",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Shift+drag     ", Style::default().fg(colors().accent)),
-            Span::styled("Select text with mouse", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?              ", Style::default().fg(colors().accent)),
-            Span::styled("Toggle this help", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  q              ", Style::default().fg(colors().accent)),
-            Span::styled("Quit", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Esc            ", Style::default().fg(colors().accent)),
-            Span::styled("Close overlay / cancel", Style::default().fg(colors().text)),
-        ]),
-        Line::from(""),
-        Line::styled(
-            "Press any key to close",
-            Style::default().fg(colors().text_muted),
-        ),
-    ];
-
-    let help = Paragraph::new(help_text)
-        .block(
-            Block::default()
-                .title(" Help ")
-                .title_style(Style::default().fg(colors().accent).bold())
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors().accent)),
-        )
-        .style(Style::default().fg(colors().text));
-
-    frame.render_widget(help, popup_area);
-}
-
 fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearchState) {
     // Calculate popup size based on results (add 1 for error line if present)
     let result_count = search_state.results.len().min(10);
     let error_lines = u16::from(search_state.search_error.is_some());
-    let popup_height = (result_count as u16 + 5 + error_lines).max(5 + error_lines);
+    // With results: input + blank + results + blank + help line + 2 borders
+    // (the previous +5 clipped the help hints whenever any result rendered).
+    // Without results there is no trailing blank line, so one row less.
+    let popup_height = if result_count > 0 {
+        result_count as u16 + 6 + error_lines
+    } else {
+        5 + error_lines
+    };
 
     let popup_area = Rect {
         x: area.x + 2,
@@ -997,7 +792,9 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearc
         Span::styled("[Enter]", Style::default().fg(colors().accent)),
         Span::raw(" select "),
         Span::styled("[Esc]", Style::default().fg(colors().accent)),
-        Span::raw(" close"),
+        Span::raw(" close "),
+        Span::styled("[^R]", Style::default().fg(colors().accent)),
+        Span::raw(" regex"),
     ]));
 
     let search = Paragraph::new(lines).block(
@@ -1164,12 +961,12 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 /// Render cross-view overlays (view switcher, shortcuts, component deep dive)
-fn render_cross_view_overlays(frame: &mut Frame, app: &App) {
+fn render_cross_view_overlays(frame: &mut Frame, app: &mut App) {
     // Render view switcher overlay
     views::render_view_switcher(frame, &app.overlays.view_switcher);
 
     // Render shortcuts overlay
-    views::render_shortcuts_overlay(frame, &app.overlays.shortcuts);
+    views::render_shortcuts_overlay(frame, &mut app.overlays.shortcuts);
 
     // Render component deep dive modal
     views::render_component_deep_dive(frame, &app.overlays.component_deep_dive);

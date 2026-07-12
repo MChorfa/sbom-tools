@@ -222,6 +222,12 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.close_overlays(),
             KeyCode::Char('?') if app.show_help => app.toggle_help(),
+            KeyCode::Down | KeyCode::Char('j') if app.show_help => {
+                app.help_scroll = (app.help_scroll + 1).min(app.help_max_scroll);
+            }
+            KeyCode::Up | KeyCode::Char('k') if app.show_help => {
+                app.help_scroll = app.help_scroll.saturating_sub(1);
+            }
             KeyCode::Char('e') if app.show_export => app.toggle_export(),
             KeyCode::Char('l') if app.show_legend => app.toggle_legend(),
             // Export format selection
@@ -1056,6 +1062,15 @@ fn handle_search_key(app: &mut ViewApp, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.stop_search();
+        }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            use crate::tui::app_states::SearchMode;
+            app.search_state.mode = match app.search_state.mode {
+                SearchMode::Substring => SearchMode::Regex,
+                SearchMode::Regex => SearchMode::Substring,
+            };
+            app.execute_search();
+            app.set_status_message(format!("Search mode: {}", app.search_state.mode.label()));
         }
         KeyCode::Enter => {
             // Jump to selected result

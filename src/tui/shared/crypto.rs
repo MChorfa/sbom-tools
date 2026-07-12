@@ -439,4 +439,36 @@ mod tests {
             .join("\n");
         assert!(text.contains("Padding:"), "{text}");
     }
+
+    /// Stronger leg for the unified quantum indicator: the '!' weak arm has
+    /// no coverage anywhere (no unit case, no snapshot row). MD5-class names
+    /// must render '!', and weakness must outrank the quantum-safe check.
+    #[test]
+    fn quantum_indicator_weak_by_name_is_exclamation() {
+        crate::tui::test_support::pin_theme();
+        let mut comp = Component::new("MD5".to_string(), "md5-ref".to_string());
+        comp.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm)
+                .with_algorithm_properties(AlgorithmProperties::new(CryptoPrimitive::Hash)),
+        );
+        assert_eq!(
+            quantum_indicator(&comp).content,
+            "!",
+            "weak-by-name algorithms (is_weak_by_name matches the MD5 prefix) \
+                 must show the weak indicator, not fall through to '?'"
+        );
+
+        // Weakness outranks quantum safety: even with a PQC security level
+        // the weak arm is checked first, so MD5 still reads '!' not 'Q'.
+        comp.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                AlgorithmProperties::new(CryptoPrimitive::Hash).with_nist_quantum_security_level(3),
+            ),
+        );
+        assert_eq!(
+            quantum_indicator(&comp).content,
+            "!",
+            "the weak arm must take precedence over the quantum-safe 'Q' arm"
+        );
+    }
 }

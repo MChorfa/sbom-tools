@@ -26,6 +26,7 @@ pub use graph_changes::render_graph_changes;
 pub use licenses::render_licenses;
 pub(crate) use matrix::extend_with_status_or_hints as matrix_status_tail;
 pub(crate) use matrix::ordered_sbom_indices;
+pub(crate) use matrix::render_multi_search_bar;
 pub use matrix::{MatrixPanel, render_matrix};
 pub(crate) use multi_dashboard::ordered_comparison_indices;
 pub use multi_dashboard::{MultiDashboardPanel, render_multi_dashboard};

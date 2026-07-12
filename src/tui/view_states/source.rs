@@ -355,18 +355,18 @@ impl ViewState for SourceView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
-            Shortcut::new("v", "Tree/Raw"),
-            Shortcut::new("w", "Switch side"),
+            Shortcut::primary("u", "collapse"),
+            Shortcut::primary("a", "align"),
+            Shortcut::primary("z", "fold"),
+            Shortcut::primary("m", "mark"),
+            Shortcut::primary("w", "panel"),
+            Shortcut::primary("v", "tree/raw"),
+            Shortcut::new("j/k", "Navigate"),
             Shortcut::new("s", "Sync"),
             Shortcut::new("/", "Search"),
             Shortcut::new("H/L", "Collapse/Expand all"),
             Shortcut::new("!/@@/#", "Fold depth"),
-            Shortcut::new("z/Z", "Fold/Unfold"),
             Shortcut::new("%", "Match bracket"),
-            Shortcut::new("m", "Bookmark"),
-            Shortcut::new("a", "Align panels"),
-            Shortcut::new("u", "Collapse unchanged"),
             Shortcut::new("d", "Detail"),
         ]
     }
@@ -683,5 +683,72 @@ mod tests {
 
         assert_eq!(state.old_panel.cached_flat_items.len(), old_count);
         assert_eq!(state.new_panel.cached_flat_items.len(), new_count);
+    }
+
+    /// ']' and '[' scroll the open Source detail strip (writing detail_scroll,
+    /// which previously had a scrollbar but no producer); both keys are gated
+    /// on show_detail and revert to Ignored when the strip is closed.
+    #[test]
+    fn test_detail_strip_scroll_keys() {
+        let mut view = SourceView::new();
+        let mut ctx = make_ctx();
+
+        // Strip closed: the keys are not claimed by the Source view.
+        assert_eq!(
+            view.handle_key(make_key(KeyCode::Char(']')), &mut ctx),
+            EventResult::Ignored,
+            "']' must be ignored while the detail strip is closed"
+        );
+        assert_eq!(view.inner().detail_scroll, 0);
+
+        // 'd' opens the strip.
+        view.handle_key(make_key(KeyCode::Char('d')), &mut ctx);
+        assert!(view.inner().show_detail, "'d' must open the detail strip");
+
+        assert_eq!(
+            view.handle_key(make_key(KeyCode::Char(']')), &mut ctx),
+            EventResult::Consumed,
+            "']' must be consumed while the strip is open"
+        );
+        assert_eq!(
+            view.inner().detail_scroll,
+            1,
+            "']' must scroll the open detail strip down"
+        );
+        view.handle_key(make_key(KeyCode::Char(']')), &mut ctx);
+        assert_eq!(view.inner().detail_scroll, 2);
+
+        assert_eq!(
+            view.handle_key(make_key(KeyCode::Char('[')), &mut ctx),
+            EventResult::Consumed,
+            "'[' must be consumed while the strip is open"
+        );
+        assert_eq!(
+            view.inner().detail_scroll,
+            1,
+            "'[' must scroll the open detail strip back up"
+        );
+        view.handle_key(make_key(KeyCode::Char('[')), &mut ctx);
+        view.handle_key(make_key(KeyCode::Char('[')), &mut ctx);
+        assert_eq!(
+            view.inner().detail_scroll,
+            0,
+            "'[' must saturate at 0, not underflow"
+        );
+
+        // Closing the strip re-gates the keys and resets the offset.
+        view.handle_key(make_key(KeyCode::Char(']')), &mut ctx);
+        view.handle_key(make_key(KeyCode::Char('d')), &mut ctx);
+        assert!(!view.inner().show_detail);
+        assert_eq!(
+            view.handle_key(make_key(KeyCode::Char(']')), &mut ctx),
+            EventResult::Ignored,
+            "']' must be ignored again once the strip is closed"
+        );
+        assert_eq!(
+            view.inner().detail_scroll,
+            0,
+            "toggle_detail must zero the scroll when the strip closes"
+        );
     }
 }

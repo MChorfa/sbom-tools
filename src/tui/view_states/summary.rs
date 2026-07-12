@@ -77,7 +77,10 @@ impl ViewState for SummaryView {
     }
 
     fn shortcuts(&self) -> Vec<Shortcut> {
-        vec![Shortcut::primary("j/k", "Scroll changes")]
+        vec![
+            Shortcut::primary("j/k", "scroll"),
+            Shortcut::new("Home/End", "Jump to start/end"),
+        ]
     }
 }
 
