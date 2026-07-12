@@ -42,7 +42,9 @@ pub use overlays::{
     ShortcutsContext, ShortcutsOverlayState, ViewSwitcherState,
 };
 pub use quality::{QualityState, QualityViewMode};
-pub use search::{ChangeType, DiffSearchResult, DiffSearchState, SearchMode, VulnChangeType};
+pub use search::{
+    ChangeType, DiffSearchResult, DiffSearchState, SearchMatcher, SearchMode, VulnChangeType,
+};
 pub use sidebyside::{
     AlignedRow, AlignmentMode, ChangeTypeFilter, ScrollSyncMode, SideBySideState,
     UnifiedChangeType, UnifiedEntry,

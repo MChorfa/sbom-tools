@@ -991,28 +991,58 @@ fn render_clustering_detail_modal(
 
 /// Render search overlay
 fn render_search_overlay(f: &mut Frame, area: Rect, state: &MatrixState) {
+    render_multi_search_bar(f, area, "Search SBOM: ", &state.search);
+}
+
+/// Shared bottom search bar for the multi modes: query + mode badge +
+/// match position + the unified [^R]/[n/N] hints, plus regex errors.
+pub(crate) fn render_multi_search_bar(
+    f: &mut Frame,
+    area: Rect,
+    label: &str,
+    search: &crate::tui::app::MultiViewSearchState,
+) {
     let scheme = colors();
 
     let search_area = Rect::new(area.x, area.height - 3, area.width, 3);
     f.render_widget(Clear, search_area);
 
-    let search_text = Line::from(vec![
-        Span::styled("Search SBOM: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(&state.search.query, Style::default().fg(scheme.text)),
-        Span::styled("│", Style::default().fg(scheme.accent)),
-        Span::raw("  "),
+    let mode_label = match search.mode {
+        crate::tui::app_states::SearchMode::Substring => "[substring]",
+        crate::tui::app_states::SearchMode::Regex => "[regex]",
+    };
+    let mut spans = vec![
+        Span::styled(label.to_string(), Style::default().fg(scheme.text_muted)),
         Span::styled(
-            state.search.match_position(),
+            format!("{mode_label} "),
             Style::default().fg(scheme.text_muted),
         ),
-    ]);
+        Span::styled(search.query.clone(), Style::default().fg(scheme.text)),
+        Span::styled("\u{2502}", Style::default().fg(scheme.accent)),
+        Span::raw("  "),
+        Span::styled(
+            search.match_position(),
+            Style::default().fg(scheme.text_muted),
+        ),
+    ];
+    if let Some(err) = &search.error {
+        spans.push(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(scheme.error),
+        ));
+    } else {
+        spans.push(Span::styled(
+            "  [^R] regex  [n/N] match",
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.accent))
         .style(Style::default().bg(scheme.muted));
 
-    let paragraph = Paragraph::new(search_text).block(block);
+    let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, search_area);
 }
 
