@@ -10,6 +10,7 @@
 use crate::model::{NormalizedSbom, SbomFormat};
 use serde::{Deserialize, Serialize};
 
+mod ai_shared;
 mod bsi;
 mod bsi_sbom_for_ai;
 mod context;

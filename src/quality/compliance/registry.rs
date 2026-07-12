@@ -40,6 +40,10 @@ const REMEDIATION_AIACT_NA: &str = "EU AI Act Annex IV readiness applies only to
 /// BSI/G7 SBOM-for-AI not-applicable remediation.
 const REMEDIATION_BSIAI_NA: &str = "BSI/G7 SBOM-for-AI minimum-elements readiness applies only to SBOMs that describe AI/ML systems. Add machine-learning-model or dataset components (CycloneDX 1.5+ AI/ML BOM, or an SPDX 3.0 AI/Dataset profile) to enable the assessment.";
 
+/// Mistyped-ML remediation, shared by the EU AI Act and BSI/G7 SBOM-for-AI
+/// applicability guards.
+const REMEDIATION_UNTYPED_ML: &str = "Components with pkg:huggingface PURLs or model-card references look like ML models; leaving them untyped hides them from every AI-BOM readiness check. Set their type to 'machine-learning-model' and attach the AI metadata (CycloneDX 1.5+ modelCard, or the SPDX 3.0 AI profile).";
+
 /// BSI/G7 SBOM-for-AI Models-cluster remediation.
 const REMEDIATION_BSIAI_MODELS: &str = "Declare the BSI/G7 SBOM-for-AI Models minimum elements for each MachineLearningModel component: name, version, a unique identifier (PURL/CPE/SWHID/SWID), a model-weight hash using a NIST-approved algorithm (SHA-256+), a model card, the architecture, training datasets, limitations, and a license.";
 
@@ -305,10 +309,15 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::EuAiAct, "Annex IV §2(g)")],
             remediation: "Record validation/testing metrics (accuracy, robustness). CycloneDX: set modelCard.quantitativeAnalysis.performanceMetrics.",
         },
-        "SBOM-AIACT-ANNEX-IV-2G-ENERGY" => RuleMeta {
-            sarif_id: "SBOM-AIACT-ANNEX-IV-2G",
+        // Energy / computational-resources disclosure lives in Annex IV
+        // §2(c) ("the computational resources used to develop, train, test
+        // and validate the AI system"), NOT §2(g), which covers validation
+        // and testing procedures/metrics. Explicit energy reporting is the
+        // GPAI technical documentation (Annex XI).
+        "SBOM-AIACT-ANNEX-IV-2C-ENERGY" => RuleMeta {
+            sarif_id: "SBOM-AIACT-ANNEX-IV-2C",
             default_severity: ViolationSeverity::Info,
-            refs: &[(K::EuAiAct, "Annex IV §2(g)")],
+            refs: &[(K::EuAiAct, "Annex IV §2(c)")],
             remediation: "Disclose computational resources / training energy. CycloneDX: set modelCard.considerations.environmentalConsiderations.energyConsumptions.",
         },
         "SBOM-AIACT-ANNEX-IV-3-LIMITATIONS" => RuleMeta {
@@ -317,12 +326,24 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::EuAiAct, "Annex IV §3")],
             remediation: "State the foreseeable limitations and risks of the model, including ethical and fairness considerations. CycloneDX: set modelCard.considerations.technicalLimitations / ethicalConsiderations / fairnessAssessments.",
         },
+        "SBOM-AIACT-UNTYPED-ML" => RuleMeta {
+            sarif_id: "SBOM-AIACT-UNTYPED-ML",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::EuAiAct, "Annex IV: applicability")],
+            remediation: REMEDIATION_UNTYPED_ML,
+        },
         // ---- BSI/G7 SBOM-for-AI Minimum Elements readiness ---------------
         "SBOM-BSIAI-NA" => RuleMeta {
             sarif_id: "SBOM-BSIAI-NA",
             default_severity: ViolationSeverity::Info,
             refs: &[(K::BsiSbomForAi, "Applicability")],
             remediation: REMEDIATION_BSIAI_NA,
+        },
+        "SBOM-BSIAI-UNTYPED-ML" => RuleMeta {
+            sarif_id: "SBOM-BSIAI-UNTYPED-ML",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::BsiSbomForAi, "Applicability")],
+            remediation: REMEDIATION_UNTYPED_ML,
         },
         // Metadata cluster
         "SBOM-BSIAI-META-AUTHOR" => RuleMeta {

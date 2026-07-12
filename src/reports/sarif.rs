@@ -1508,9 +1508,17 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             id: "SBOM-AIACT-ANNEX-IV-2G".to_string(),
             name: "AiActValidationMetrics".to_string(),
             short_description: SarifMessage {
-                text: "EU AI Act Annex IV §2(g): validation/testing metrics and computational-resources disclosure".to_string(),
+                text: "EU AI Act Annex IV §2(g): validation/testing metrics (accuracy, robustness)".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        },
+        SarifRule {
+            id: "SBOM-AIACT-ANNEX-IV-2C".to_string(),
+            name: "AiActComputationalResources".to_string(),
+            short_description: SarifMessage {
+                text: "EU AI Act Annex IV §2(c): computational resources / training-energy disclosure".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },
         SarifRule {
             id: "SBOM-AIACT-ANNEX-IV-3".to_string(),
@@ -1519,6 +1527,14 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
                 text: "EU AI Act Annex IV §3: foreseeable limitations and risks".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
+        },
+        SarifRule {
+            id: "SBOM-AIACT-UNTYPED-ML".to_string(),
+            name: "AiActUntypedMlContent".to_string(),
+            short_description: SarifMessage {
+                text: "EU AI Act readiness: ML content detected but not typed machine-learning-model".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         // BSI/G7 SBOM-for-AI Minimum Elements readiness (7 clusters).
         SarifRule {
@@ -1576,6 +1592,14 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
                 text: "BSI/G7 SBOM-for-AI Security cluster: AI-specific security controls, exploitability references".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
+        },
+        SarifRule {
+            id: "SBOM-BSIAI-UNTYPED-ML".to_string(),
+            name: "BsiSbomForAiUntypedMlContent".to_string(),
+            short_description: SarifMessage {
+                text: "BSI/G7 SBOM-for-AI readiness: ML content detected but not typed machine-learning-model".to_string(),
+            },
+            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
     ]
 }
