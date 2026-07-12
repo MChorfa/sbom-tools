@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" serialNumber="urn:uuid:0f4a3c1e-8d2b-45f6-9a70-1c2d3e4f5a6b" version="1">
+  <metadata>
+    <timestamp>2026-03-27T00:00:00Z</timestamp>
+    <component type="application" bom-ref="root">
+      <name>nlp-pipeline</name>
+      <version>1.0.0</version>
+    </component>
+  </metadata>
+  <components>
+    <component type="machine-learning-model" bom-ref="model-1">
+      <name>sentiment-classifier</name>
+      <version>2.1.0</version>
+      <purl>pkg:huggingface/example/sentiment-classifier@2.1.0</purl>
+    </component>
+    <component type="data" bom-ref="dataset-1">
+      <name>training-corpus</name>
+      <version>1.0.0</version>
+      <data>
+        <type>dataset</type>
+      </data>
+    </component>
+  </components>
+</bom>

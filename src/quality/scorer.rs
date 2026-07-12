@@ -676,16 +676,21 @@ impl QualityScorer {
 
     /// Score ML model-card completeness for the AI-readiness profile.
     ///
-    /// Filters to `MachineLearningModel` components and evaluates eleven checks
-    /// (AI-001..AI-011): AI-001..AI-009 cover model-card transparency, AI-010 is
-    /// a weight-hash integrity check, and AI-011 verifies the component is
-    /// connected to the vulnerability/exploitability tooling stack. The
-    /// returned `QualityReport` has all standard category scores zeroed/`None`;
-    /// the rich data lives in `ai_readiness_metrics`.
-    /// When the SBOM has no ML components the report is marked not-applicable.
+    /// Selects ML components with the same applicability semantics as the AI
+    /// compliance profiles ([`super::compliance::ai_shared::ai_bom_scope`]):
+    /// components typed `machine-learning-model` OR carrying parsed ML-model
+    /// metadata (CycloneDX modelCard / SPDX 3.0 AI profile), plus ML-looking
+    /// suspects (a `pkg:huggingface` PURL or `model-card` reference without
+    /// metadata), so "untype your models" cannot turn the profile N/A and
+    /// bypass `--min-score`. Each selected component is evaluated against
+    /// eleven checks (AI-001..AI-011): AI-001..AI-009 cover model-card
+    /// transparency, AI-010 is a weight-hash integrity check, and AI-011
+    /// verifies the component is connected to the vulnerability/exploitability
+    /// tooling stack. The returned `QualityReport` has all standard category
+    /// scores zeroed/`None`; the rich data lives in `ai_readiness_metrics`.
+    /// When the SBOM has no ML components (by type, metadata, or ML content
+    /// signals) the report is marked not-applicable.
     fn score_ai_readiness(&self, sbom: &NormalizedSbom) -> QualityReport {
-        use crate::model::ComponentType;
-
         // Standard metrics are still computed so the report is structurally valid.
         let completeness_metrics = CompletenessMetrics::from_sbom(sbom);
         let identifier_metrics = IdentifierMetrics::from_sbom(sbom);
@@ -731,10 +736,19 @@ impl QualityScorer {
             ai_readiness_metrics: Some(metrics),
         };
 
-        let ml_components: Vec<_> = sbom
-            .components
-            .values()
-            .filter(|c| c.component_type == ComponentType::MachineLearningModel)
+        // Shared AI-BOM scope (same classification as `validate --standard
+        // ai-act/bsi-ai`): ML components by type OR parsed ML-model metadata,
+        // and untyped ML suspects. Suspects are scored rather than exempted —
+        // they carry no model card, so they score what they document — which
+        // keeps the profile applicable exactly when the compliance profiles
+        // consider the SBOM to contain ML content. Dataset-evidenced
+        // components are neither models nor suspects and are never scored.
+        let scope = super::compliance::ai_shared::ai_bom_scope(sbom);
+        let ml_components: Vec<_> = scope
+            .ml_components
+            .iter()
+            .chain(scope.untyped_ml_components.iter())
+            .copied()
             .collect();
 
         if ml_components.is_empty() {
@@ -742,7 +756,9 @@ impl QualityScorer {
                 ml_component_count: 0,
                 not_applicable: true,
                 na_reason: Some(
-                    "No machine-learning-model components found in this SBOM".to_string(),
+                    "No machine-learning-model components found in this SBOM (by declared \
+                     type, parsed ML-model metadata, or ML content signals)"
+                        .to_string(),
                 ),
                 checks: Vec::new(),
                 components_fully_documented: 0,
@@ -1459,6 +1475,90 @@ mod tests {
         assert!(metrics.is_not_applicable());
         assert_eq!(metrics.ml_component_count, 0);
         assert!(metrics.checks.is_empty());
+    }
+
+    /// Mistyped models (application/library-typed, but carrying parsed
+    /// ML-model metadata) must be scored, not declared N/A. Regression: the
+    /// type-only filter let `quality --profile ai-readiness` report N/A —
+    /// bypassing `--min-score` — on the very SBOMs `validate --standard
+    /// ai-act` assesses as applicable AI-BOMs.
+    #[test]
+    fn test_ai_readiness_scores_mistyped_model_with_ml_metadata() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut component = Component::new("sentiment-model".to_string(), "ml-1".to_string())
+            .with_version("1.0.0".to_string());
+        component.component_type = ComponentType::Application;
+        component.ml_model = Some(MlModelInfo::default());
+        sbom.add_component(component);
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let metrics = report
+            .ai_readiness_metrics
+            .expect("AI readiness metrics should be present");
+        assert!(
+            !metrics.is_not_applicable(),
+            "ML-model metadata must make the profile applicable regardless of the declared type"
+        );
+        assert_eq!(metrics.ml_component_count, 1);
+        // An empty model card documents nothing: the transparency checks fail
+        // and the score gates instead of vanishing into N/A.
+        assert_eq!(metrics.checks.len(), 11);
+        assert!(metrics.checks.iter().all(|c| !c.passed));
+        assert_eq!(report.grade, QualityGrade::F);
+    }
+
+    /// Untyped ML suspects (pkg:huggingface PURL, no metadata) keep the
+    /// profile applicable and are scored — mirroring SBOM-AIACT-UNTYPED-ML /
+    /// SBOM-BSIAI-UNTYPED-ML keeping `validate` applicable — so untyping a
+    /// model cannot dodge the score gate either.
+    #[test]
+    fn test_ai_readiness_scores_untyped_huggingface_suspect() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let hf = Component::new("bert-base-uncased".to_string(), "hf-1".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:huggingface/google-bert/bert-base-uncased@1.0.0".to_string());
+        sbom.add_component(hf);
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let metrics = report
+            .ai_readiness_metrics
+            .expect("AI readiness metrics should be present");
+        assert!(
+            !metrics.is_not_applicable(),
+            "an ML-looking suspect must keep the AI-readiness profile applicable"
+        );
+        assert_eq!(metrics.ml_component_count, 1);
+        assert_eq!(report.grade, QualityGrade::F);
+    }
+
+    /// A HuggingFace-hosted DATASET (dataset evidence present) is neither an
+    /// ML model nor an evasion suspect: it must not be scored against the
+    /// model-card checks, and a dataset-only SBOM stays N/A for this
+    /// model-card-centric profile.
+    #[test]
+    fn test_ai_readiness_does_not_score_hf_dataset_with_evidence() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut dataset = Component::new("imdb".to_string(), "ds-1".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:huggingface/datasets/imdb@1.0.0".to_string());
+        dataset.component_type = ComponentType::Data;
+        dataset.dataset = Some(crate::model::DatasetInfo::default());
+        sbom.add_component(dataset);
+        // A plain library must not count either.
+        sbom.add_component(
+            Component::new("express".to_string(), "lib-1".to_string())
+                .with_purl("pkg:npm/express@4.19.2".to_string()),
+        );
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let metrics = report
+            .ai_readiness_metrics
+            .expect("AI readiness metrics should be present");
+        assert!(
+            metrics.is_not_applicable(),
+            "a documented dataset must not be scored as an ML model"
+        );
+        assert_eq!(metrics.ml_component_count, 0);
     }
 
     #[test]

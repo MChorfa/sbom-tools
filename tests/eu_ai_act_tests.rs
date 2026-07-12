@@ -182,6 +182,55 @@ fn dataset_only_sbom_is_applicable_without_model_energy_info() {
 }
 
 #[test]
+fn xml_dataset_evidence_reaches_annex_iv_dataset_checks() {
+    // Regression: the CycloneDX XML converter dropped `<data>` componentData,
+    // so the Annex IV §2(d) dataset checks were silently skipped for XML
+    // AI-BOMs. The XML dataset (no sensitivity classification declared) must
+    // now be assessed like its JSON twin.
+    let sbom = parse_sbom(&fixture("cyclonedx/aibom-dataset-gap.cdx.xml"))
+        .expect("parse aibom-dataset-gap XML fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-2D-SENSITIVITY"
+                && v.message.contains("training-corpus")),
+        "the XML dataset without sensitivity classification must be flagged; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn huggingface_dataset_with_evidence_is_not_flagged_as_untyped_ml() {
+    // A HuggingFace-hosted DATASET with full componentData evidence is
+    // correctly classified; the untyped-ML heuristic (which also matches
+    // pkg:huggingface) must stay silent instead of prescribing that a correct
+    // dataset be retyped as machine-learning-model.
+    let sbom = parse_sbom(&fixture("cyclonedx/hf-dataset-aibom.cdx.json"))
+        .expect("parse hf-dataset-aibom fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-UNTYPED-ML"),
+        "dataset evidence must exempt the HF dataset from the untyped-ML warning; got {:?}",
+        result.violations
+    );
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        "the HF dataset must keep the profile applicable; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
 fn high_risk_flag_escalates_to_errors() {
     // minimal-mlbom has model components but is missing several Annex IV items,
     // so it produces readiness gaps to escalate.

@@ -20,9 +20,10 @@
 //! or parsed ML-model metadata; an AI dataset requires real dataset evidence
 //! (`Component::dataset`), never the bare component type. Components that
 //! merely *look* like ML content (a `pkg:huggingface` PURL or a `model-card`
-//! external reference) without either signal are collected separately so the
-//! profiles stay applicable and can surface a mistyped-ML warning instead of
-//! letting "untype your models" evade the assessment.
+//! external reference) without either signal — and without dataset evidence,
+//! since HuggingFace hosts datasets as well as models — are collected
+//! separately so the profiles stay applicable and can surface a mistyped-ML
+//! warning instead of letting "untype your models" evade the assessment.
 
 use super::{Violation, ViolationCategory, ViolationSeverity, truncate_list};
 use crate::model::{Component, ComponentType, ExternalRefType, NormalizedSbom};
@@ -41,9 +42,11 @@ pub(crate) struct AiBomScope<'a> {
     pub dataset_components: Vec<&'a Component>,
     /// Components that look like ML content (a `pkg:huggingface` PURL or a
     /// `model-card` external reference) but are neither typed
-    /// `machine-learning-model` nor carry ML-model metadata. Their presence
-    /// keeps the SBOM applicable; each profile surfaces them via its
-    /// mistyped-ML warning rule (`SBOM-AIACT-UNTYPED-ML` /
+    /// `machine-learning-model` nor carry ML-model metadata. Components with
+    /// dataset evidence are exempt: a HuggingFace-hosted dataset is already
+    /// correctly classified via [`Self::dataset_components`], not a mistyped
+    /// model. Their presence keeps the SBOM applicable; each profile surfaces
+    /// them via its mistyped-ML warning rule (`SBOM-AIACT-UNTYPED-ML` /
     /// `SBOM-BSIAI-UNTYPED-ML`).
     pub untyped_ml_components: Vec<&'a Component>,
 }
@@ -77,7 +80,12 @@ pub(crate) fn ai_bom_scope(sbom: &NormalizedSbom) -> AiBomScope<'_> {
         if c.dataset.is_some() {
             scope.dataset_components.push(c);
         }
-        if !is_ml && looks_like_ml_content(c) {
+        // Dataset-evidenced components are exempt from the untyped-ML
+        // heuristic: pkg:huggingface hosts datasets too, and such components
+        // are already enrolled as datasets above — flagging them as mistyped
+        // models would prescribe the wrong remediation (retyping a correctly
+        // typed dataset as machine-learning-model).
+        if !is_ml && c.dataset.is_none() && looks_like_ml_content(c) {
             scope.untyped_ml_components.push(c);
         }
     }
@@ -97,7 +105,10 @@ pub(crate) fn has_model_card_ref(c: &Component) -> bool {
 
 /// Heuristic ML-content detection for components that are not declared as
 /// models: a HuggingFace package URL or a model-card external reference is a
-/// strong signal that the component is an ML model.
+/// strong signal that the component is an ML model. Callers must exempt
+/// components carrying dataset evidence (`Component::dataset`) first —
+/// HuggingFace hosts datasets as well as models, and those are legitimate
+/// AI-BOM content, not evasion suspects.
 fn looks_like_ml_content(c: &Component) -> bool {
     let hf_purl = c.identifiers.purl.as_deref().is_some_and(|p| {
         p.get(..16)
@@ -210,6 +221,41 @@ mod tests {
         assert!(scope.ml_components.is_empty());
         assert_eq!(scope.untyped_ml_components.len(), 1);
         assert!(scope.is_applicable());
+    }
+
+    #[test]
+    fn huggingface_dataset_with_evidence_is_not_an_untyped_suspect() {
+        // A HuggingFace-hosted dataset — typed `data`, carrying real dataset
+        // evidence — is correctly classified as a dataset and must NOT be
+        // flagged as a mistyped ML model (the HF-dataset false-warning fix).
+        let mut sbom = NormalizedSbom::default();
+        let mut ds = component("imdb").with_purl("pkg:huggingface/datasets/imdb@1.0.0".to_string());
+        ds.component_type = ComponentType::Data;
+        ds.dataset = Some(DatasetInfo::default());
+        add(&mut sbom, ds);
+
+        let scope = ai_bom_scope(&sbom);
+        assert_eq!(scope.dataset_components.len(), 1);
+        assert!(
+            scope.untyped_ml_components.is_empty(),
+            "dataset evidence must exempt the component from the untyped-ML heuristic"
+        );
+        assert!(scope.is_applicable());
+    }
+
+    #[test]
+    fn huggingface_purl_with_dataset_evidence_but_untyped_is_not_a_suspect() {
+        // Even without ComponentType::Data, dataset evidence alone exempts
+        // the component from the mistyped-model warning.
+        let mut sbom = NormalizedSbom::default();
+        let mut ds =
+            component("common-voice").with_purl("pkg:huggingface/datasets/cv@2.0.0".to_string());
+        ds.dataset = Some(DatasetInfo::default());
+        add(&mut sbom, ds);
+
+        let scope = ai_bom_scope(&sbom);
+        assert_eq!(scope.dataset_components.len(), 1);
+        assert!(scope.untyped_ml_components.is_empty());
     }
 
     #[test]
