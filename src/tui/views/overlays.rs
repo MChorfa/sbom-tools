@@ -1012,4 +1012,31 @@ mod tests {
         let items: Vec<_> = sections.into_iter().flat_map(|s| s.items).collect();
         assert_eq!(jump_range(&items), "1-8");
     }
+
+    /// The MultiDiff/Timeline/Matrix sections must document the phase-6
+    /// unified search: the Ctrl+R regex toggle and n/N match cycling
+    /// (get_shortcuts_for_context). No snapshot renders the overlay in a
+    /// multi mode, so deleting those rows would otherwise pass the suite.
+    #[test]
+    fn multi_contexts_document_search_capabilities() {
+        for ctx in [
+            ShortcutsContext::MultiDiff,
+            ShortcutsContext::Timeline,
+            ShortcutsContext::Matrix,
+        ] {
+            let items = flatten(ctx, None);
+            assert!(
+                items
+                    .iter()
+                    .any(|(k, d)| k == "Ctrl+R" && d.contains("regex")),
+                "{ctx:?} section must document the Ctrl+R regex toggle"
+            );
+            assert!(
+                items
+                    .iter()
+                    .any(|(k, d)| k == "n/N" && d.contains("search match")),
+                "{ctx:?} section must document n/N search-match cycling"
+            );
+        }
+    }
 }

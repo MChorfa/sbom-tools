@@ -1358,6 +1358,33 @@ mod a11y_tests {
         // Dark ANSI backgrounds take the light foreground.
         assert_eq!(s.badge_fg_for(Color::Red), s.badge_fg_light);
     }
+
+    /// count_badge must pick its foreground through badge_fg_for (bright bg ->
+    /// dark fg, dark bg -> light fg); reverting to unconditional badge_fg_dark
+    /// reintroduces unreadable dark-on-dark badges with no snapshot noticing.
+    #[test]
+    fn count_badge_routes_fg_through_badge_fg_for() {
+        // count_badge reads the global theme; pin it to dark for determinism.
+        super::set_theme(super::Theme::dark());
+        let s = ColorScheme::dark();
+        let on_bright = super::count_badge(3, Color::Yellow);
+        assert_eq!(
+            on_bright.style.fg,
+            Some(s.badge_fg_dark),
+            "a bright badge background must take the dark foreground through count_badge"
+        );
+        let on_dark = super::count_badge(3, Color::Rgb(120, 0, 0));
+        assert_eq!(
+            on_dark.style.fg,
+            Some(s.badge_fg_light),
+            "a dark badge background must take the light foreground — an unconditional badge_fg_dark regression renders unreadable badges"
+        );
+        assert_eq!(
+            on_dark.style.bg,
+            Some(Color::Rgb(120, 0, 0)),
+            "count_badge must keep the requested badge background"
+        );
+    }
 }
 
 #[cfg(test)]

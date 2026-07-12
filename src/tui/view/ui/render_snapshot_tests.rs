@@ -1114,3 +1114,404 @@ fn view_global_search_ctrl_r_toggles_regex() {
     );
     insta::assert_snapshot!("view_search_overlay_error_80x24", text);
 }
+
+/// The view-mode '?' help overlay scrolls: the render measures the ceiling
+/// through the shared render_shortcuts_overlay and writes help_max_scroll
+/// back (src/tui/view/ui.rs), then j/k and Up/Down step help_scroll clamped
+/// to it (src/tui/view/events.rs:225-230); reopening resets the offset.
+#[test]
+fn view_help_overlay_scrolls_and_clamps() {
+    pin_theme();
+    let mut app = demo_view_app(ViewTab::Overview);
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    assert!(app.show_help);
+    let text = render_to_text(80, 24, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        app.help_max_scroll > 0,
+        "the View shortcuts content must clip at 80x24 and write a scroll range back:\n{text}"
+    );
+    assert!(
+        text.contains("more"),
+        "the clipped overlay must advertise its hidden rows:\n{text}"
+    );
+
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        app.help_scroll, 1,
+        "j must scroll the view help overlay down"
+    );
+    handle_key_event(&mut app, key(KeyCode::Up));
+    assert_eq!(app.help_scroll, 0, "Up must scroll back");
+    for _ in 0..500 {
+        handle_key_event(&mut app, key(KeyCode::Down));
+    }
+    assert_eq!(
+        app.help_scroll, app.help_max_scroll,
+        "scrolling must clamp to the measured ceiling, not run away"
+    );
+
+    // Close and reopen: toggle_help resets the offset.
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    assert!(!app.show_help);
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    assert_eq!(app.help_scroll, 0, "reopening must reset the scroll offset");
+}
+
+/// View-mode Ctrl+R (global search, src/tui/view/events.rs handle_search_key)
+/// must announce the toggle with the same 'Search mode: ...' status message
+/// as every other surface.
+#[test]
+fn view_ctrl_r_sets_search_mode_status() {
+    let mut app = demo_view_app(ViewTab::Overview);
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    assert!(app.search_state.active);
+    let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+    handle_key_event(&mut app, ctrl_r);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Search mode: regex"),
+        "view-mode Ctrl+R must set the status message"
+    );
+    handle_key_event(&mut app, ctrl_r);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Search mode: substring"),
+        "toggling back must announce substring mode"
+    );
+}
+
+/// The compact/tall threshold counts the license section's true minimum as 3
+/// rows (required = 8+8+8+eco_height+3 in render_stats_panel,
+/// src/tui/view/views/overview.rs), so an EOL-enriched SBOM at 120x40 keeps
+/// the richer stacked bordered panels instead of flapping into compact mode.
+#[test]
+fn overview_eol_enriched_keeps_stacked_panels_at_120x40() {
+    let mut app = demo_view_app(ViewTab::Overview);
+    app.stats.eol_enriched = true;
+    app.stats.eol_count = 2;
+    app.stats.eol_approaching_count = 1;
+    app.stats.eol_security_only_count = 1;
+    app.stats.eol_supported_count = 8;
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    // Stacked layout markers: the bordered EOL panel title carries the
+    // at-risk count in parens; the ecosystem panel is a bordered title.
+    assert!(
+        text.contains(" End-of-Life Status ("),
+        "EOL-enriched 120x40 must render the stacked bordered EOL panel:\n{text}"
+    );
+    assert!(
+        text.contains(" Ecosystem Distribution "),
+        "EOL-enriched 120x40 must render the stacked Ecosystem panel:\n{text}"
+    );
+    // Compact-mode idiom: '── <title> ──' section headers inside one panel.
+    assert!(
+        !text.contains("\u{2500}\u{2500} Vulnerability Severity \u{2500}\u{2500}"),
+        "120x40 with EOL data must not flap into the compact section-header layout:\n{text}"
+    );
+}
+
+/// In VIEW mode, clicking the «/» overflow markers selects the adjacent
+/// hidden tab (PrevMarker/NextMarker arms of handle_tab_click in
+/// src/tui/view/events.rs, sharing the window geometry stashed by the render).
+#[test]
+fn view_tab_marker_clicks_select_adjacent_hidden_tabs() {
+    use crate::tui::view::events::handle_mouse_event;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use unicode_width::UnicodeWidthStr;
+
+    let click = |app: &mut ViewApp, column: u16| {
+        handle_mouse_event(
+            app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row: 2,
+                modifiers: KeyModifiers::empty(),
+            },
+        );
+    };
+
+    // « (PrevMarker): a right-side tab at 80 cols clips earlier tabs.
+    let mut app = demo_view_app(ViewTab::Compliance);
+    let tabs = ViewTab::tabs_for_profile(app.bom_profile);
+    let _ = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert!(
+        app.tab_window.clipped_left,
+        "Compliance at 80 cols must clip earlier tabs: {:?}",
+        app.tab_window
+    );
+    let before = app.tab_window.start;
+    click(&mut app, 0); // the « marker cell
+    assert_eq!(
+        app.active_tab,
+        tabs[before - 1],
+        "\u{ab} click must select the tab just left of the window"
+    );
+
+    // » (NextMarker): Overview at 80 cols clips trailing tabs.
+    let mut app = demo_view_app(ViewTab::Overview);
+    let _ = render_to_text(80, 24, |frame| render(frame, &mut app));
+    let window = app.tab_window;
+    assert!(
+        window.clipped_right && window.end < tabs.len(),
+        "Overview at 80 cols must clip trailing tabs: {window:?}"
+    );
+    // Mirror tab_bar_hit_windowed's geometry: optional 2-col « marker, the
+    // visible labels joined by 3-col dividers, then the 2-col » marker.
+    let mut cursor: u16 = if window.clipped_left { 2 } else { 0 };
+    for (i, tab) in tabs.iter().enumerate().take(window.end).skip(window.start) {
+        let label = format!("[{}] {} ", i + 1, tab.title());
+        cursor += UnicodeWidthStr::width(label.as_str()) as u16;
+        if i + 1 != window.end {
+            cursor += 3;
+        }
+    }
+    click(&mut app, cursor);
+    assert_eq!(
+        app.active_tab, tabs[window.end],
+        "\u{bb} click must select the tab just right of the window"
+    );
+}
+
+/// Both terminal branches of render_violation_detail
+/// (src/tui/view/views/pqc_compliance.rs): an overflowing detail pane must
+/// flag hidden lines explicitly, and a violation-free algorithm must render
+/// the Compliant line instead of an empty pane.
+#[test]
+fn pqc_detail_pane_overflow_marker_and_compliant_branch() {
+    // X25519 (index 7 -- component order is pinned by the
+    // cbom_pqc_compliance snapshots) FAILs both CNSA 2.0 and NIST PQC, so its
+    // detail (>= 2 violations x 4 lines each) overflows the pane, whose inner
+    // height is squeezed to 4 rows at 80x24.
+    let mut app = cbom_view_app(ViewTab::PqcCompliance);
+    app.pqc_selected = 7;
+    let text = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("\u{250c} X25519 "),
+        "detail pane must be titled for the selected algorithm (fixture index drift?):\n{text}"
+    );
+    assert!(
+        text.contains("more lines \u{2014} see the Compliance tab"),
+        "overflowing violation detail must render the explicit truncation marker instead of clipping silently:\n{text}"
+    );
+
+    // AES-256-GCM (index 5) has ZERO violations of any severity (CNSA emits
+    // only Errors and its cell is PASS; NIST emits nothing for a level-1,
+    // non-broken, non-PQC-family algorithm).
+    let mut app = cbom_view_app(ViewTab::PqcCompliance);
+    app.pqc_selected = 5;
+    let text = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("\u{250c} AES-256-GCM "),
+        "detail pane must be titled for the selected algorithm (fixture index drift?):\n{text}"
+    );
+    assert!(
+        text.contains("Compliant \u{2014} no violations for this algorithm"),
+        "violation-free algorithms must render the Compliant branch:\n{text}"
+    );
+    assert!(
+        !text.contains("more lines"),
+        "the truncation marker must not render when the detail fits:\n{text}"
+    );
+}
+
+/// The CNSA 2.0 PASS/FAIL cell keys off Error-severity violations only
+/// (src/tui/view/views/pqc_compliance.rs): a Warning naming the algorithm
+/// must not flip the cell (or the header verdict) to FAIL.
+#[test]
+fn pqc_cnsa_cell_ignores_non_error_violations() {
+    use crate::quality::{
+        ComplianceLevel, ComplianceResult, Violation, ViolationCategory, ViolationSeverity,
+    };
+    pin_theme();
+
+    let algo_x_app = |severity: ViolationSeverity| -> ViewApp {
+        let mut sbom = NormalizedSbom::default();
+        let mut comp = Component::new("ALGO-X".to_string(), "algo-x-ref".to_string());
+        comp.component_type = crate::model::ComponentType::Cryptographic;
+        comp.crypto_properties = Some(crate::model::CryptoProperties::new(
+            crate::model::CryptoAssetType::Algorithm,
+        ));
+        sbom.components
+            .insert(CanonicalId::from_name_version("ALGO-X", None), comp);
+        let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+        app.active_tab = ViewTab::PqcCompliance;
+        // Pre-seed the cache: ensure_compliance_results is a no-op when Some,
+        // so the render sees exactly one CNSA violation of the given severity.
+        // (check_cnsa2 emits only Errors today, so no fixture can drive this.)
+        app.compliance_results = Some(vec![
+            ComplianceResult::new(
+                ComplianceLevel::Cnsa2,
+                vec![Violation {
+                    severity,
+                    category: ViolationCategory::CryptographyInfo,
+                    message: "advisory note about parameter choice".to_string(),
+                    element: Some("ALGO-X".to_string()),
+                    requirement: "advisory requirement".to_string(),
+                    rule_id: "TEST-CNSA-PROBE",
+                    standard_refs: Vec::new(),
+                }],
+            ),
+            ComplianceResult::new(ComplianceLevel::NistPqc, vec![]),
+        ]);
+        app
+    };
+
+    let mut app = algo_x_app(ViolationSeverity::Warning);
+    let text = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("ALGO-X"),
+        "precondition: the algorithm row must render:\n{text}"
+    );
+    assert!(
+        text.contains("PASS"),
+        "the CNSA/NIST cells must show PASS for a Warning-only violation:\n{text}"
+    );
+    assert!(
+        !text.contains("FAIL"),
+        "a Warning-severity CNSA violation must not flip the cell to FAIL:\n{text}"
+    );
+    assert!(
+        !text.contains("NON-COMPLIANT"),
+        "a Warning must not flip the header verdict:\n{text}"
+    );
+
+    let mut app = algo_x_app(ViolationSeverity::Error);
+    let text = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("FAIL"),
+        "an Error-severity CNSA violation naming the algorithm must flip the cell to FAIL:\n{text}"
+    );
+}
+
+/// Hard-pins the AI-Readiness clamp bound with a constant instead of the
+/// self-oracle: the BSI fixture has 11 checks vs 4 recommendations, so
+/// go_last must land on 10 (checks - 1). ai_readiness_navigation_scrolls_
+/// and_clamps asserts against ai_readiness_max_scroll() itself, so a
+/// regression of that function to recommendations.len()-1 passes it.
+#[test]
+fn ai_readiness_go_last_scrolls_to_checks_bound() {
+    let mut app = aibom_view_app(ViewTab::AiReadiness);
+    app.go_last();
+    assert_eq!(
+        app.ai_readiness_scroll, 10,
+        "max scroll must be the LONGER list (11 checks) - 1, not 4 recommendations - 1"
+    );
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    // Table-only needle: the checks row carries a Weight cell (the raw 0.12
+    // is renormalized across all checks before display, so don't pin the
+    // number), while the rec-pane line for the same check
+    // ('[P2] [Completeness] [AI-011] ..') has no weight column.
+    assert!(
+        text.lines()
+            .any(|l| l.contains("AI-011") && l.contains('%')),
+        "at max scroll the checks TABLE must reveal the last check row (AI-011 with its weight cell):\n{text}"
+    );
+    assert!(
+        !text.lines().any(|l| l.contains("AI-001")),
+        "at max scroll the first check row must have scrolled off (offset not driving the table?):\n{text}"
+    );
+}
+
+/// The shared AI-Readiness offset must be clamped PER PANE
+/// (src/tui/shared/quality.rs render_ai_readiness_summary): at max scroll
+/// (10) the 9-line recommendations paragraph must clamp to its own list
+/// (offset 3) instead of scrolling into blank space.
+#[test]
+fn ai_readiness_rec_pane_clamps_to_its_own_length_at_max_scroll() {
+    let mut app = aibom_view_app(ViewTab::AiReadiness);
+    app.go_last(); // shared offset 10 for 11 checks; recs pane has only 4 items
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("Recommendations (4)"),
+        "precondition: the recommendations pane must render:\n{text}"
+    );
+    // Bracketed rec-pane-only format: the checks table renders 'AI-011'
+    // without brackets, so this needle cannot be satisfied by the table.
+    assert!(
+        text.contains("[P2] [Completeness] [AI-011]"),
+        "the recommendations pane must still show content at max checks scroll \
+         (an unclamped shared offset of 10 blanks the 9-line pane):\n{text}"
+    );
+}
+
+/// The AI-BOM Quality tab routes to the same AI-readiness summary renderer
+/// and must scroll its checks table via quality_state.scroll_offset
+/// (src/tui/view/views/quality.rs), not a hardcoded 0.
+#[test]
+fn aibom_quality_tab_scroll_offset_drives_checks_table() {
+    let mut app = aibom_view_app(ViewTab::Quality);
+    let top = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        top.contains("AI Readiness Checks"),
+        "AI-BOM Quality tab must route to the AI-readiness renderer:\n{top}"
+    );
+    // AI-010 passes on the BSI fixture, so it is absent from the 4-item
+    // recommendations pane; at offset 0 the table shows AI-001..AI-008 only.
+    assert!(
+        !top.contains("AI-010"),
+        "precondition: AI-010 must sit below the checks-table fold at offset 0:\n{top}"
+    );
+
+    app.quality_state.scroll_offset = 8;
+    let scrolled = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert_ne!(
+        top, scrolled,
+        "quality_state.scroll_offset must drive the AI-BOM Quality checks table (hardcoded 0 regression)"
+    );
+    assert!(
+        scrolled.contains("AI-010"),
+        "offset 8 must reveal the below-the-fold AI-010 check row:\n{scrolled}"
+    );
+}
+
+/// When every danger metric is zero the crypto header must render the
+/// success 'No crypto risk flags' line instead of an empty first line
+/// (src/tui/view/views/crypto.rs render_header danger.is_empty() branch).
+#[test]
+fn crypto_header_renders_all_clear_when_no_danger_metrics() {
+    use crate::model::{AlgorithmProperties, CryptoAssetType, CryptoPrimitive, CryptoProperties};
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let mut comp = Component::new("ML-KEM-1024".to_string(), "ml-kem-ref".to_string());
+    comp.component_type = crate::model::ComponentType::Cryptographic;
+    // Level 5 => quantum-safe (not QVuln); name is not weak-by-name; Kem is
+    // not the hybrid Combiner primitive; no certs/keys exist — so every
+    // CryptographyMetrics danger counter stays 0.
+    comp.crypto_properties = Some(
+        CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+            AlgorithmProperties::new(CryptoPrimitive::Kem).with_nist_quantum_security_level(5),
+        ),
+    );
+    sbom.components
+        .insert(CanonicalId::from_name_version("ML-KEM-1024", None), comp);
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Cbom);
+    app.active_tab = ViewTab::Crypto;
+    let text = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("No crypto risk flags"),
+        "an all-clear CBOM must render the success line, not an empty first header row:\n{text}"
+    );
+    for token in [
+        "Compromised:",
+        "Weak:",
+        "QVuln:",
+        "Expired:",
+        "WeakKeys:",
+        "Expiring:",
+        "HybridPQC:",
+    ] {
+        assert!(
+            !text.contains(token),
+            "zero-count danger token {token} must be omitted from the header:\n{text}"
+        );
+    }
+    assert!(
+        text.contains("Quantum:"),
+        "the neutral counts line must still render under the all-clear line:\n{text}"
+    );
+}
