@@ -15,16 +15,19 @@ impl ComplianceChecker {
 
         // All levels require creator information
         if sbom.document.creators.is_empty() {
-            let (requirement, rule_id) = if self.level == ComplianceLevel::NtiaMinimum {
-                (
+            let (requirement, rule_id) = match self.level {
+                ComplianceLevel::NtiaMinimum => (
                     "NTIA Minimum Elements: Author".to_string(),
                     "SBOM-NTIA-AUTHOR",
-                )
-            } else {
-                (
+                ),
+                ComplianceLevel::FdaMedicalDevice => (
+                    "FDA: SBOM creator/manufacturer identification".to_string(),
+                    "SBOM-FDA-CREATOR",
+                ),
+                _ => (
                     "Document creator identification".to_string(),
                     "SBOM-CRA-GENERAL",
-                )
+                ),
             };
             violations.push(Violation {
                 severity: match self.level {
@@ -456,13 +459,18 @@ impl ComplianceChecker {
                 | ComplianceLevel::Comprehensive
         ) && sbom.document.serial_number.is_none()
         {
+            let rule_id = if self.level == ComplianceLevel::FdaMedicalDevice {
+                "SBOM-FDA-NAMESPACE"
+            } else {
+                "SBOM-CRA-GENERAL"
+            };
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
                 message: "SBOM should have a serial number/unique identifier".to_string(),
                 element: None,
                 requirement: "Document unique identification".to_string(),
-                rule_id: "SBOM-CRA-GENERAL",
+                rule_id,
                 standard_refs: Vec::new(),
             });
         }
@@ -481,11 +489,18 @@ impl ComplianceChecker {
                 .is_some_and(|s| s.support_end_date.is_some())
             || sbom.components.values().any(|comp| {
                 comp.extensions.properties.iter().any(|p| {
+                    // Token-match the property name — a bare substring test
+                    // let "geolocation" satisfy the lifecycle element via
+                    // its embedded "eol" — and require a real value.
                     let name_lower = p.name.to_lowercase();
-                    name_lower.contains("lifecycle")
+                    let is_lifecycle_name = name_lower
+                        .split(|c: char| !c.is_ascii_alphanumeric())
+                        .any(|t| t == "eol" || t == "lifecycle")
                         || name_lower.contains("end-of-life")
-                        || name_lower.contains("eol")
                         || name_lower.contains("end-of-support")
+                        || name_lower.contains("endoflife")
+                        || name_lower.contains("endofsupport");
+                    is_lifecycle_name && known_value(Some(p.value.as_str())).is_some()
                 })
             })
     }
@@ -495,16 +510,20 @@ impl ComplianceChecker {
 
         for comp in sbom.components.values() {
             // All levels: component must have a name. Whitespace-only names
-            // and asserted-as-unknown sentinels (NOASSERTION/NONE) count as
-            // missing — a placeholder cannot satisfy a required element.
-            if known_value(Some(comp.name.as_str())).is_none() {
-                let (requirement, rule_id) = if self.level == ComplianceLevel::NtiaMinimum {
-                    (
+            // and placeholder sentinels count as missing, but genuine
+            // packages named "none"/"unknown" (corroborated by their PURL)
+            // do not (see `known_component_name`).
+            if !known_component_name(comp) {
+                let (requirement, rule_id) = match self.level {
+                    ComplianceLevel::NtiaMinimum => (
                         "NTIA Minimum Elements: Component Name".to_string(),
                         "SBOM-NTIA-NAME",
-                    )
-                } else {
-                    ("Component name (required)".to_string(), "SBOM-CRA-GENERAL")
+                    ),
+                    ComplianceLevel::FdaMedicalDevice => (
+                        "FDA: Component name (required)".to_string(),
+                        "SBOM-FDA-GENERAL",
+                    ),
+                    _ => ("Component name (required)".to_string(), "SBOM-CRA-GENERAL"),
                 };
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
@@ -679,7 +698,7 @@ impl ComplianceChecker {
                             comp.name
                         ),
                         "CRA Art. 24 (steward): Component supplier information".to_string(),
-                        "SBOM-CRA-ART-13-15",
+                        "SBOM-CRA-ART-24-SUPPLIER",
                     ),
                     _ => (
                         format!("Component '{}' missing supplier/manufacturer", comp.name),
@@ -824,6 +843,9 @@ impl ComplianceChecker {
                     "CRA Annex I: Dependency relationships",
                     "SBOM-CRA-ANNEX-I-DEPENDENCY",
                 ),
+                ComplianceLevel::FdaMedicalDevice => {
+                    ("FDA: Dependency relationships", "SBOM-FDA-DEPENDENCY")
+                }
                 _ => ("NTIA: Dependency relationships", "SBOM-NTIA-DEPENDENCY"),
             };
 
@@ -856,12 +878,24 @@ impl ComplianceChecker {
                     connected.insert(&edge.to);
                 }
 
+                // A component that appears in the CycloneDX dependencies
+                // array with an explicitly empty dependsOn has positively
+                // declared "no dependencies" — that is documentation, not a
+                // gap (the parser marks it with a synthetic property).
+                let declares_no_deps = |c: &crate::model::Component| {
+                    c.extensions
+                        .properties
+                        .iter()
+                        .any(|p| p.name == crate::parsers::DECLARED_NO_DEPENDENCIES_PROPERTY)
+                };
+
                 // The primary product component must participate in the
                 // dependency graph — an SBOM whose root has no declared
                 // relationships does not describe the product's dependencies.
                 if let Some(primary_id) = &sbom.primary_component_id
                     && let Some(primary) = sbom.components.get(primary_id)
                     && !connected.contains(primary_id)
+                    && !declares_no_deps(primary)
                 {
                     violations.push(Violation {
                         severity: ViolationSeverity::Warning,
@@ -888,10 +922,16 @@ impl ComplianceChecker {
                 let total = sbom.components.len();
                 let orphans = sbom
                     .components
-                    .keys()
-                    .filter(|id| !connected.contains(id))
+                    .iter()
+                    .filter(|(id, c)| !connected.contains(id) && !declares_no_deps(c))
                     .count();
-                if !declared_incomplete && orphans >= 2 && orphans * 2 > total {
+                // FDA keeps the retired fast-path's any-orphan sensitivity
+                // ("each component's dependencies"); other standards warn
+                // only when orphans form a majority.
+                let fda = self.level == ComplianceLevel::FdaMedicalDevice;
+                if !declared_incomplete
+                    && ((fda && orphans >= 1) || (orphans >= 2 && orphans * 2 > total))
+                {
                     let pct = (orphans * 100) / total.max(1);
                     violations.push(Violation {
                         severity: ViolationSeverity::Warning,
@@ -946,15 +986,22 @@ impl ComplianceChecker {
         // submissions must address known vulnerabilities.
         if matches!(self.level, ComplianceLevel::FdaMedicalDevice) {
             use crate::model::Severity;
+            use std::collections::HashSet;
+            // Count distinct vulnerability ids — one CVE affecting five
+            // components is one vulnerability, not five.
             let vulns = sbom.all_vulnerabilities();
             let critical = vulns
                 .iter()
                 .filter(|(_, v)| matches!(v.severity, Some(Severity::Critical)))
-                .count();
+                .map(|(_, v)| v.id.as_str())
+                .collect::<HashSet<_>>()
+                .len();
             let high = vulns
                 .iter()
                 .filter(|(_, v)| matches!(v.severity, Some(Severity::High)))
-                .count();
+                .map(|(_, v)| v.id.as_str())
+                .collect::<HashSet<_>>()
+                .len();
             if critical > 0 || high > 0 {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,

@@ -90,6 +90,12 @@ pub fn detect_format(content: &str) -> Option<DetectedFormat> {
 /// whole document into a string. Inputs larger than this are rejected.
 pub(crate) const MAX_SBOM_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
+/// Synthetic component property recording that the source document
+/// positively declared the component as having no dependencies (e.g. a
+/// CycloneDX `dependencies` entry with an empty `dependsOn`). Compliance
+/// checks treat such components as documented, not missing from the graph.
+pub const DECLARED_NO_DEPENDENCIES_PROPERTY: &str = "sbom-tools:declared-no-dependencies";
+
 /// Strip a leading UTF-8 BOM (U+FEFF), if present.
 ///
 /// `str::trim()` does not remove U+FEFF (it is not `White_Space`), so a

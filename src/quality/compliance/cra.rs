@@ -47,18 +47,18 @@ impl ComplianceChecker {
         let attestation_present =
             any_ext(&[ExternalRefType::Attestation, ExternalRefType::Certification]);
 
-        let eucc_present = self.sidecar.as_ref().is_some_and(|s| {
-            s.eucc_protection_profile_id.is_some()
-                || s.eucc_target_of_evaluation.is_some()
-                || s.eucc_itsef_identifier.is_some()
-                || s.eucc_valid_until.is_some()
-        }) || any_ext_url_contains(
-            &[ExternalRefType::Certification, ExternalRefType::Attestation],
-            "eucc",
-        ) || any_ext_url_contains(
-            &[ExternalRefType::Certification, ExternalRefType::Attestation],
-            "common-criteria",
-        );
+        let eucc_present = self
+            .sidecar
+            .as_ref()
+            .is_some_and(crate::model::CraSidecarMetadata::has_live_eucc_evidence)
+            || any_ext_url_contains(
+                &[ExternalRefType::Certification, ExternalRefType::Attestation],
+                "eucc",
+            )
+            || any_ext_url_contains(
+                &[ExternalRefType::Certification, ExternalRefType::Attestation],
+                "common-criteria",
+            );
 
         let mut evidence: Vec<ConformityEvidence> = Vec::new();
         evidence.push(ConformityEvidence {
@@ -625,12 +625,11 @@ impl ComplianceChecker {
         };
         // The sidecar's dedicated EUCC evidence fields are authoritative;
         // the URL-substring scan over external refs is only a fallback.
-        let sidecar_has_eucc = self.sidecar.as_ref().is_some_and(|s| {
-            s.eucc_protection_profile_id.is_some()
-                || s.eucc_target_of_evaluation.is_some()
-                || s.eucc_itsef_identifier.is_some()
-                || s.eucc_valid_until.is_some()
-        });
+        // Empty strings and expired validity dates do not count.
+        let sidecar_has_eucc = self
+            .sidecar
+            .as_ref()
+            .is_some_and(crate::model::CraSidecarMetadata::has_live_eucc_evidence);
         let has_eucc_ref = sidecar_has_eucc
             || sbom.components.values().any(|comp| {
                 comp.external_refs.iter().any(|r| {

@@ -557,8 +557,49 @@ pub fn generate_ai_readiness_sarif(
     serde_json::to_string_pretty(&sarif).map_err(|e| ReportError::SerializationError(e.to_string()))
 }
 
+/// Dedup the rule catalogue by id and synthesize a reportingDescriptor for
+/// any result ruleId the hand-maintained per-standard tables don't declare.
+/// SARIF 2.1.0 requires descriptor ids to be unique, and GitHub code
+/// scanning drops rule metadata for results whose ruleId has no descriptor —
+/// this guarantees both invariants no matter which checks fired.
+fn complete_rule_catalogue(mut rules: Vec<SarifRule>, results: &[SarifResult]) -> Vec<SarifRule> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    rules.retain(|r| seen.insert(r.id.clone()));
+    for res in results {
+        if seen.contains(&res.rule_id) {
+            continue;
+        }
+        seen.insert(res.rule_id.clone());
+        // CamelCase-ish name derived from the id (SBOM-EO14028-NAME → SbomEo14028Name)
+        let name: String = res
+            .rule_id
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|seg| !seg.is_empty())
+            .map(|seg| {
+                let mut cs = seg.chars();
+                cs.next()
+                    .map(|f| f.to_ascii_uppercase().to_string() + &cs.as_str().to_ascii_lowercase())
+                    .unwrap_or_default()
+            })
+            .collect();
+        rules.push(SarifRule {
+            id: res.rule_id.clone(),
+            name,
+            short_description: SarifMessage {
+                text: format!("Compliance rule {}", res.rule_id),
+            },
+            default_configuration: SarifConfiguration { level: res.level },
+        });
+    }
+    rules
+}
+
 pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, ReportError> {
-    let rules = SarifRuleWithUri::wrap_all(get_sarif_rules_for_standard(result.level));
+    let results = compliance_results_to_sarif(result, None);
+    let rules = SarifRuleWithUri::wrap_all(complete_rule_catalogue(
+        get_sarif_rules_for_standard(result.level),
+        &results,
+    ));
     let sarif = SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
         version: "2.1.0".to_string(),
@@ -571,7 +612,7 @@ pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, Re
                     rules,
                 },
             },
-            results: compliance_results_to_sarif(result, None),
+            results,
             properties: None,
         }],
     };
@@ -583,15 +624,18 @@ pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, Re
 pub fn generate_multi_compliance_sarif(
     results: &[ComplianceResult],
 ) -> Result<String, ReportError> {
-    // Merge rules from all standards
+    // Merge rules from all standards; `complete_rule_catalogue` dedups the
+    // descriptors (two standards sharing the generic table used to emit
+    // every descriptor twice, which SARIF validators reject) and covers any
+    // emitted ruleId the static tables miss.
     let mut all_rules = Vec::new();
     let mut all_results = Vec::new();
 
     for result in results {
-        let rules = get_sarif_rules_for_standard(result.level);
-        all_rules.extend(rules);
+        all_rules.extend(get_sarif_rules_for_standard(result.level));
         all_results.extend(compliance_results_to_sarif(result, None));
     }
+    let all_rules = complete_rule_catalogue(all_rules, &all_results);
 
     let sarif = SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
@@ -962,6 +1006,16 @@ fn get_sarif_ntia_rules() -> Vec<SarifRule> {
             },
         },
         SarifRule {
+            id: "SBOM-NTIA-TIMESTAMP".to_string(),
+            name: "NtiaTimestamp".to_string(),
+            short_description: SarifMessage {
+                text: "NTIA Minimum Elements: Creation timestamp".to_string(),
+            },
+            default_configuration: SarifConfiguration {
+                level: SarifLevel::Error,
+            },
+        },
+        SarifRule {
             id: "SBOM-NTIA-GENERAL".to_string(),
             name: "NtiaGeneralRequirement".to_string(),
             short_description: SarifMessage {
@@ -976,6 +1030,18 @@ fn get_sarif_ntia_rules() -> Vec<SarifRule> {
 
 fn get_sarif_fda_rules() -> Vec<SarifRule> {
     vec![
+        // The FDA baseline check reuses the NTIA timestamp rule id (the FDA
+        // guidance incorporates the NTIA minimum elements).
+        SarifRule {
+            id: "SBOM-NTIA-TIMESTAMP".to_string(),
+            name: "NtiaTimestamp".to_string(),
+            short_description: SarifMessage {
+                text: "NTIA Minimum Elements: Creation timestamp".to_string(),
+            },
+            default_configuration: SarifConfiguration {
+                level: SarifLevel::Error,
+            },
+        },
         SarifRule {
             id: "SBOM-FDA-CREATOR".to_string(),
             name: "FdaCreator".to_string(),
@@ -1188,6 +1254,26 @@ fn get_sarif_ssdf_rules() -> Vec<SarifRule> {
 
 fn get_sarif_eo14028_rules() -> Vec<SarifRule> {
     vec![
+        SarifRule {
+            id: "SBOM-EO14028-TIMESTAMP".to_string(),
+            name: "Eo14028Timestamp".to_string(),
+            short_description: SarifMessage {
+                text: "EO 14028 Sec 4(e): SBOM creation timestamp (NTIA baseline)".to_string(),
+            },
+            default_configuration: SarifConfiguration {
+                level: SarifLevel::Error,
+            },
+        },
+        SarifRule {
+            id: "SBOM-EO14028-NAME".to_string(),
+            name: "Eo14028ComponentName".to_string(),
+            short_description: SarifMessage {
+                text: "EO 14028 Sec 4(e): Component name (NTIA baseline)".to_string(),
+            },
+            default_configuration: SarifConfiguration {
+                level: SarifLevel::Error,
+            },
+        },
         SarifRule {
             id: "SBOM-EO14028-FORMAT".to_string(),
             name: "Eo14028MachineReadable".to_string(),

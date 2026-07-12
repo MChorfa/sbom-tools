@@ -12,22 +12,50 @@ use crate::model::{Component, NormalizedSbom};
 /// components; such references say nothing about the *manufacturer's*
 /// obligations and must not satisfy them.
 pub(crate) fn manufacturer_scope_components(sbom: &NormalizedSbom) -> Vec<&Component> {
-    if let Some(primary) = sbom
-        .primary_component_id
-        .as_ref()
-        .and_then(|id| sbom.components.get(id))
-    {
-        return vec![primary];
-    }
     let mut incoming = std::collections::HashSet::new();
     for edge in &sbom.edges {
         incoming.insert(&edge.to);
     }
-    sbom.components
+    let primary = sbom.primary_component_id.as_ref();
+    // The primary component plus every root (no incoming edge): an SPDX
+    // document can DESCRIBE several sibling products, and each is
+    // manufacturer-scoped evidence — not just the first one the parser
+    // happened to promote to primary.
+    let scope: Vec<&Component> = sbom
+        .components
         .iter()
-        .filter(|(id, _)| !incoming.contains(id))
+        .filter(|(id, _)| primary.is_some_and(|p| p == *id) || !incoming.contains(id))
         .map(|(_, c)| c)
-        .collect()
+        .collect();
+    if scope.is_empty() {
+        // Fully cyclic graph with no identified primary: no component is
+        // provably a dependency-only node, so fall back to scanning all
+        // components rather than making manufacturer evidence unsatisfiable.
+        return sbom.components.values().collect();
+    }
+    scope
+}
+
+/// Whether a component's name is real. Empty/whitespace and the SPDX
+/// `NOASSERTION` sentinel never count. `none`/`unknown` are placeholder-ish
+/// but are also genuine package names (npm ships both), so they count when
+/// corroborated by a unique identifier whose name segment matches.
+pub(crate) fn known_component_name(comp: &Component) -> bool {
+    let name = comp.name.trim();
+    if name.is_empty() || name.eq_ignore_ascii_case("NOASSERTION") {
+        return false;
+    }
+    if !(name.eq_ignore_ascii_case("NONE") || name.eq_ignore_ascii_case("UNKNOWN")) {
+        return true;
+    }
+    // Suspicious placeholder spelling: require a corroborating identifier
+    // (e.g. pkg:npm/none@1.0.0 corroborates a component named "none").
+    comp.identifiers.purl.as_deref().is_some_and(|purl| {
+        purl.rsplit('/')
+            .next()
+            .and_then(|seg| seg.split('@').next())
+            .is_some_and(|purl_name| purl_name.eq_ignore_ascii_case(name))
+    })
 }
 
 /// Render a slice of names as a comma-separated list, truncated with

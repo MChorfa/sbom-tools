@@ -410,6 +410,20 @@ impl CraSidecarMetadata {
         None
     }
 
+    /// Whether the sidecar carries live EUCC evidence: a non-empty
+    /// Protection-Profile / Target-of-Evaluation / ITSEF identifier, or a
+    /// certificate validity date that has not expired. Empty strings and
+    /// expired certificates must not satisfy the Critical-class Annex IV
+    /// gate (mirrors the dedicated EUCC profile's semantics).
+    #[must_use]
+    pub fn has_live_eucc_evidence(&self) -> bool {
+        let live = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+        live(&self.eucc_protection_profile_id)
+            || live(&self.eucc_target_of_evaluation)
+            || live(&self.eucc_itsef_identifier)
+            || self.eucc_valid_until.is_some_and(|d| d > Utc::now())
+    }
+
     /// Check if any CRA-relevant fields are populated
     #[must_use]
     pub fn has_cra_data(&self) -> bool {

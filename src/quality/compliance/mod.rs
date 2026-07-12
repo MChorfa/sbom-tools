@@ -28,7 +28,7 @@ use context::{ComplianceContext, checker_for};
 use registry::REMEDIATION_GENERIC;
 pub use registry::{RuleMeta, rule_meta};
 use shared::{
-    has_known_supplier, has_known_value, is_valid_email_format, known_value,
+    has_known_supplier, has_known_value, is_valid_email_format, known_component_name, known_value,
     manufacturer_scope_components, truncate_list,
 };
 
@@ -1482,6 +1482,312 @@ mod tests {
                 .iter()
                 .any(|v| v.rule_id == "SBOM-CRA-ANNEX-IV"),
             "sidecar EUCC evidence fields must satisfy the Critical-class check"
+        );
+    }
+
+    /// Genuine packages named "none"/"unknown" (corroborated by PURL) must
+    /// not fail the name gate; NOASSERTION always fails it.
+    #[test]
+    fn genuine_none_named_package_passes_name_gate() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Organization};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("none".to_string(), "none@1".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:npm/none@1.0.0".to_string());
+        c.supplier = Some(Organization::new("Acme".to_string()));
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !r.violations.iter().any(|v| v.rule_id == "SBOM-NTIA-NAME"),
+            "npm package genuinely named 'none' must not fail the name gate"
+        );
+
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("NOASSERTION".to_string(), "x@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:npm/realname@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            r.violations.iter().any(|v| v.rule_id == "SBOM-NTIA-NAME"),
+            "NOASSERTION never satisfies the name gate"
+        );
+    }
+
+    /// Lifecycle-evidence property matching is token-based with a real
+    /// value — "geolocation" must not satisfy the FDA support element.
+    #[test]
+    fn fda_support_not_satisfied_by_incidental_eol_substring() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Property};
+        let build = |name: &str, value: &str| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string());
+            c.extensions.properties.push(Property {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
+            sbom.add_component(c);
+            ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom)
+        };
+        assert!(
+            build("geolocation", "enabled")
+                .violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "'geolocation' must not satisfy the support-lifecycle element"
+        );
+        assert!(
+            build("acme:eol", "2030-01-01")
+                .violations
+                .iter()
+                .all(|v| !v.requirement.contains("Level of support")),
+            "a real eol property with a value satisfies the element"
+        );
+        assert!(
+            build("end-of-support", "NOASSERTION")
+                .violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "a placeholder value must not satisfy the element"
+        );
+    }
+
+    /// A primary component that positively declares "no dependencies"
+    /// (CycloneDX empty dependsOn, preserved as a synthetic property) is
+    /// documented — the participation warning must not fire.
+    #[test]
+    fn primary_with_declared_empty_deps_does_not_warn() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, NormalizedSbom, Property,
+        };
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut app = Component::new("app".to_string(), "app".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/app@1.0".to_string());
+        app.extensions.properties.push(Property {
+            name: crate::parsers::DECLARED_NO_DEPENDENCIES_PROPERTY.to_string(),
+            value: "true".to_string(),
+        });
+        let lib_a = Component::new("liba".to_string(), "liba".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/liba@1.0".to_string());
+        let lib_b = Component::new("libb".to_string(), "libb".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/libb@1.0".to_string());
+        let app_id = app.canonical_id.clone();
+        let a_id = lib_a.canonical_id.clone();
+        let b_id = lib_b.canonical_id.clone();
+        sbom.primary_component_id = Some(app_id);
+        sbom.add_component(app);
+        sbom.add_component(lib_a);
+        sbom.add_component(lib_b);
+        sbom.edges
+            .push(DependencyEdge::new(a_id, b_id, DependencyType::DependsOn));
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.message.contains("Primary component")),
+            "declared-no-dependencies primary must not warn"
+        );
+    }
+
+    /// FDA keeps the retired fast-path's any-orphan sensitivity; other
+    /// standards only warn on a majority of orphans.
+    #[test]
+    fn fda_warns_on_minority_orphans() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, NormalizedSbom,
+        };
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let c = Component::new(format!("lib{i}"), format!("lib{i}@1"))
+                .with_version("1.0".to_string())
+                .with_purl(format!("pkg:cargo/lib{i}@1.0"));
+            ids.push(c.canonical_id.clone());
+            sbom.add_component(c);
+        }
+        // 3 of 4 connected, 1 orphan (minority).
+        sbom.edges.push(DependencyEdge::new(
+            ids[0].clone(),
+            ids[1].clone(),
+            DependencyType::DependsOn,
+        ));
+        sbom.edges.push(DependencyEdge::new(
+            ids[1].clone(),
+            ids[2].clone(),
+            DependencyType::DependsOn,
+        ));
+        let fda = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            fda.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
+            "FDA warns on any orphaned component"
+        );
+        let ntia = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !ntia.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
+            "NTIA only warns when orphans form a majority"
+        );
+    }
+
+    /// FDA rule identity: dependency, creator, and serial findings must
+    /// carry FDA rule ids, not NTIA/CRA ones.
+    #[test]
+    fn fda_findings_carry_fda_rule_ids() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.creators.clear();
+        for i in 0..2 {
+            sbom.add_component(
+                Component::new(format!("lib{i}"), format!("lib{i}@1"))
+                    .with_version("1.0".to_string())
+                    .with_purl(format!("pkg:cargo/lib{i}@1.0")),
+            );
+        }
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            r.violations.iter().any(|v| v.rule_id == "SBOM-FDA-CREATOR"),
+            "creators-empty must carry SBOM-FDA-CREATOR under FDA"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-FDA-DEPENDENCY"),
+            "dependency findings must carry SBOM-FDA-DEPENDENCY under FDA"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-FDA-NAMESPACE"),
+            "serial-number finding must carry SBOM-FDA-NAMESPACE under FDA"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-DEPENDENCY"),
+            "FDA runs must not emit NTIA dependency rule identity"
+        );
+    }
+
+    /// Sidecar EUCC evidence must be live: empty strings and expired
+    /// validity dates must not satisfy the Critical-class Annex IV gate.
+    #[test]
+    fn eucc_sidecar_empty_or_expired_evidence_does_not_satisfy() {
+        use crate::model::{Component, CraProductClass, CraSidecarMetadata, DocumentMetadata};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("fw".to_string(), "fw".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:generic/fw@1.0".to_string()),
+        );
+        let check = |sidecar: CraSidecarMetadata| {
+            ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                .with_product_class(CraProductClass::Critical)
+                .with_sidecar(sidecar)
+                .check(&sbom)
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-IV")
+        };
+        assert!(
+            check(CraSidecarMetadata {
+                eucc_protection_profile_id: Some("  ".to_string()),
+                ..Default::default()
+            }),
+            "an empty-string EUCC field must not satisfy the Annex IV gate"
+        );
+        assert!(
+            check(CraSidecarMetadata {
+                eucc_valid_until: Some(chrono::Utc::now() - chrono::Duration::days(365)),
+                ..Default::default()
+            }),
+            "an expired EUCC validity date must not satisfy the Annex IV gate"
+        );
+        assert!(
+            !check(CraSidecarMetadata {
+                eucc_valid_until: Some(chrono::Utc::now() + chrono::Duration::days(365)),
+                ..Default::default()
+            }),
+            "a live EUCC validity date satisfies the Annex IV gate"
+        );
+    }
+
+    /// Steward supplier findings cite Art. 24 in their structured refs, not
+    /// the exempted Art. 13(15).
+    #[test]
+    fn steward_supplier_refs_cite_art_24() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.vulnerability_disclosure_url =
+            Some("https://example.org/security".to_string());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
+        let v = r
+            .violations
+            .iter()
+            .find(|v| v.rule_id == "SBOM-CRA-ART-24-SUPPLIER")
+            .expect("steward supplier warning fires");
+        assert!(
+            v.standard_refs.iter().all(|sr| sr.id != "Art. 13(15)"),
+            "steward supplier refs must not cite Art. 13(15)"
+        );
+        assert!(
+            v.standard_refs.iter().any(|sr| sr.id == "Art. 24"),
+            "steward supplier refs must cite Art. 24"
+        );
+    }
+
+    /// Manufacturer scope: cyclic graphs fall back to all components, and a
+    /// primary does not exclude sibling root products.
+    #[test]
+    fn manufacturer_scope_handles_cycles_and_sibling_roots() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, ExternalRefType,
+            ExternalReference, NormalizedSbom,
+        };
+        // Cyclic: a <-> b, no primary; evidence on a must still count.
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut a = Component::new("liba".to_string(), "liba".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/liba@1.0".to_string());
+        a.external_refs.push(ExternalReference {
+            ref_type: ExternalRefType::SecurityContact,
+            url: "https://acme.example/security".to_string(),
+            comment: None,
+            hashes: Vec::new(),
+        });
+        let b = Component::new("libb".to_string(), "libb".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/libb@1.0".to_string());
+        let a_id = a.canonical_id.clone();
+        let b_id = b.canonical_id.clone();
+        sbom.add_component(a);
+        sbom.add_component(b);
+        sbom.edges.push(DependencyEdge::new(
+            a_id.clone(),
+            b_id.clone(),
+            DependencyType::DependsOn,
+        ));
+        sbom.edges
+            .push(DependencyEdge::new(b_id, a_id, DependencyType::DependsOn));
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-6-CONTACT"),
+            "evidence in a fully-cyclic graph must still count (fallback to all components)"
         );
     }
 

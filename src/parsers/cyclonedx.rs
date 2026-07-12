@@ -184,6 +184,18 @@ impl CycloneDxParser {
         if let Some(deps) = cdx.dependencies {
             for dep in deps {
                 if let Some(from_id) = id_map.get(&dep.ref_field) {
+                    // CycloneDX: an entry with an empty dependsOn positively
+                    // asserts "this component has no dependencies". Preserve
+                    // that assertion so graph-completeness checks don't
+                    // mistake it for a missing relationship.
+                    let declared_empty = dep.depends_on.as_ref().is_none_or(Vec::is_empty)
+                        && dep.provides.as_ref().is_none_or(Vec::is_empty);
+                    if declared_empty && let Some(comp) = sbom.components.get_mut(from_id) {
+                        comp.extensions.properties.push(crate::model::Property {
+                            name: super::DECLARED_NO_DEPENDENCIES_PROPERTY.to_string(),
+                            value: "true".to_string(),
+                        });
+                    }
                     for depends_on in dep.depends_on.unwrap_or_default() {
                         if let Some(to_id) = id_map.get(&depends_on) {
                             // Infer relationship type from scope when available.

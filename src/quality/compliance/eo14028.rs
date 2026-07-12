@@ -116,7 +116,7 @@ impl ComplianceChecker {
         let without_name = sbom
             .components
             .values()
-            .filter(|c| known_value(Some(c.name.as_str())).is_none())
+            .filter(|c| !known_component_name(c))
             .count();
         if without_name > 0 {
             violations.push(Violation {

@@ -148,6 +148,12 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(CRA, "Art. 13(12)"), (PREN, "PRE-7-RQ-06")],
             remediation: "Every component must have a version string. Use the actual release version (e.g., '1.2.3'), not a range or placeholder.",
         },
+        "SBOM-CRA-ART-24-SUPPLIER" => RuleMeta {
+            sarif_id: "SBOM-CRA-ART-24-SUPPLIER",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(CRA, "Art. 24")],
+            remediation: "Identify each component's supplier as part of the Art. 24 steward SBOM floor. CycloneDX: set component.supplier. SPDX: set PackageSupplier.",
+        },
         "SBOM-CRA-ART-13-15" => RuleMeta {
             sarif_id: "SBOM-CRA-ART-13-15",
             default_severity: ViolationSeverity::Warning,
@@ -632,7 +638,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         },
         "SBOM-NTIA-IDENTIFIER" => RuleMeta {
             sarif_id: "SBOM-NTIA-IDENTIFIER",
-            default_severity: ViolationSeverity::Warning,
+            default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
             remediation: REMEDIATION_GENERIC,
         },
