@@ -44,8 +44,25 @@ pub fn run_validate(
     summary: bool,
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
+    as_of: Option<&str>,
 ) -> Result<i32> {
     super::ensure_output_format_supported("validate", output, VALIDATE_OUTPUT_FORMATS)?;
+    // Pinned evaluation clock for deadline-sensitive checks (RFC 3339
+    // datetime, or a bare date meaning midnight UTC).
+    let as_of: Option<chrono::DateTime<chrono::Utc>> = as_of
+        .map(|raw| {
+            chrono::DateTime::parse_from_rfc3339(raw)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .or_else(|_| {
+                    raw.parse::<chrono::NaiveDate>().map(|d| {
+                        d.and_hms_opt(0, 0, 0)
+                            .expect("midnight is valid")
+                            .and_utc()
+                    })
+                })
+                .map_err(|e| anyhow::anyhow!("invalid --as-of {raw:?}: {e} (expected RFC 3339, e.g. 2027-01-01T00:00:00Z, or YYYY-MM-DD)"))
+        })
+        .transpose()?;
     anyhow::ensure!(
         !standards.is_empty(),
         "no compliance standard selected; pass --standard (valid values: {})",
@@ -81,6 +98,9 @@ pub fn run_validate(
     for selector in &standards {
         let level = selector.level();
         let mut checker = ComplianceChecker::new(level);
+        if let Some(now) = as_of {
+            checker = checker.with_as_of(now);
+        }
         // Sidecar metadata feeds the CRA family (manufacturer/disclosure/
         // lifecycle fields), EUCC (certificate references), and the AI Act
         // profile (the is_high_risk_ai flag escalates Annex IV findings).
@@ -340,6 +360,7 @@ mod tests {
                 false,
                 None,
                 None,
+                None,
             )
             .expect_err("unsupported format must be rejected");
             let msg = err.to_string();
@@ -363,6 +384,7 @@ mod tests {
             None,
             false,
             false,
+            None,
             None,
             None,
         )
@@ -389,6 +411,7 @@ mod tests {
             false,
             true,
             Some(dir.path().join("missing.cra.json")),
+            None,
             None,
         )
         .expect_err("broken explicit sidecar must be a hard error");

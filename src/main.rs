@@ -532,6 +532,13 @@ struct ValidateArgs {
     /// Sidecar `productClass` wins over this flag.
     #[arg(long, value_name = "CLASS")]
     cra_product_class: Option<String>,
+
+    /// Pin the evaluation clock (RFC 3339, e.g. 2027-01-01T00:00:00Z or
+    /// 2027-01-01). Deadline-sensitive checks (CRA Art. 14 readiness, SBOM
+    /// age, EUCC certificate expiry) evaluate against this instant instead
+    /// of the wall clock — reproducible CI runs.
+    #[arg(long, value_name = "DATETIME")]
+    as_of: Option<String>,
 }
 
 /// Arguments for the `diff-multi` subcommand
@@ -1687,6 +1694,7 @@ fn main() -> Result<()> {
                     .or_else(|| app.compliance.cra_sidecar.clone()),
                 args.cra_product_class
                     .or_else(|| app.compliance.cra_product_class.clone()),
+                args.as_of.as_deref(),
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);

@@ -81,7 +81,7 @@ impl ComplianceChecker {
                     standard_refs: Vec::new(),
                 });
             }
-            Some(until) if until <= chrono::Utc::now() => {
+            Some(until) if until <= self.now() => {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::DocumentMetadata,
@@ -95,7 +95,7 @@ impl ComplianceChecker {
                     standard_refs: Vec::new(),
                 });
             }
-            Some(until) if until <= chrono::Utc::now() + chrono::Duration::days(180) => {
+            Some(until) if until <= self.now() + chrono::Duration::days(180) => {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::DocumentMetadata,

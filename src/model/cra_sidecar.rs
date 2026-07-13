@@ -444,11 +444,18 @@ impl CraSidecarMetadata {
     /// gate (mirrors the dedicated EUCC profile's semantics).
     #[must_use]
     pub fn has_live_eucc_evidence(&self) -> bool {
+        self.has_live_eucc_evidence_at(Utc::now())
+    }
+
+    /// [`Self::has_live_eucc_evidence`] against a pinned evaluation instant
+    /// (reproducible compliance runs; see `ComplianceChecker::with_as_of`).
+    #[must_use]
+    pub fn has_live_eucc_evidence_at(&self, now: DateTime<Utc>) -> bool {
         let live = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
         live(&self.eucc_protection_profile_id)
             || live(&self.eucc_target_of_evaluation)
             || live(&self.eucc_itsef_identifier)
-            || self.eucc_valid_until.is_some_and(|d| d > Utc::now())
+            || self.eucc_valid_until.is_some_and(|d| d > now)
     }
 
     /// Check if any CRA-relevant fields are populated

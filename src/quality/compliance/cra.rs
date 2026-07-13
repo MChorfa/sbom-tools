@@ -50,7 +50,7 @@ impl ComplianceChecker {
         let eucc_present = self
             .sidecar
             .as_ref()
-            .is_some_and(crate::model::CraSidecarMetadata::has_live_eucc_evidence)
+            .is_some_and(|s| s.has_live_eucc_evidence_at(self.now()))
             || any_ext_url_contains(
                 &[ExternalRefType::Certification, ExternalRefType::Attestation],
                 "eucc",
@@ -151,7 +151,7 @@ impl ComplianceChecker {
                 standard_refs: Vec::new(),
             });
         } else {
-            let age_days = (chrono::Utc::now() - sbom.document.created).num_days();
+            let age_days = (self.now() - sbom.document.created).num_days();
             if age_days > 90 {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
@@ -466,7 +466,7 @@ impl ComplianceChecker {
         // Obligations apply from 11 September 2026; before that, missing
         // channels surface as Info ("prepare ahead"); after that, Warning.
         if self.level.is_cra() {
-            self.check_article_14_readiness_at(chrono::Utc::now(), violations);
+            self.check_article_14_readiness_at(self.now(), violations);
         }
 
         // B6: Art. 13(8) / Annex II (7) — Component lifecycle / EOL detection
@@ -645,7 +645,7 @@ impl ComplianceChecker {
         let sidecar_has_eucc = self
             .sidecar
             .as_ref()
-            .is_some_and(crate::model::CraSidecarMetadata::has_live_eucc_evidence);
+            .is_some_and(|s| s.has_live_eucc_evidence_at(self.now()));
         let has_eucc_ref = sidecar_has_eucc
             || sbom.components.values().any(|comp| {
                 comp.external_refs.iter().any(|r| {

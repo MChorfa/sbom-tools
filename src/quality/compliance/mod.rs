@@ -879,6 +879,10 @@ pub struct ComplianceChecker {
     /// for `class_severity()` (vendor-hash, EOL, cycles, DoC, EUCC, PSIRT,
     /// attestation). When `None`, behaves as `CraProductClass::Default`.
     product_class: Option<crate::model::CraProductClass>,
+    /// Evaluation clock. `None` means wall clock; pin it (CLI `--as-of`,
+    /// tests) so deadline-sensitive checks (Art. 14 readiness, SBOM age,
+    /// EUCC certificate expiry) are reproducible across runs.
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ComplianceChecker {
@@ -889,7 +893,23 @@ impl ComplianceChecker {
             level,
             sidecar: None,
             product_class: None,
+            as_of: None,
         }
+    }
+
+    /// Pin the evaluation clock. Deadline-sensitive checks (Art. 14
+    /// readiness, SBOM age, EUCC certificate expiry) evaluate against this
+    /// instant instead of the wall clock — reproducible CI runs, testable
+    /// boundary dates.
+    #[must_use]
+    pub const fn with_as_of(mut self, as_of: chrono::DateTime<chrono::Utc>) -> Self {
+        self.as_of = Some(as_of);
+        self
+    }
+
+    /// The evaluation instant: the pinned `as_of` clock, or the wall clock.
+    pub(crate) fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.as_of.unwrap_or_else(chrono::Utc::now)
     }
 
     /// Attach CRA sidecar metadata to supplement SBOM-level fields.
@@ -2097,6 +2117,74 @@ mod tests {
         json.as_object_mut().unwrap().remove("applicability");
         let back: ComplianceResult = serde_json::from_value(json).unwrap();
         assert_eq!(back.applicability, Applicability::Applicable);
+    }
+
+    /// A pinned evaluation clock makes deadline-sensitive checks
+    /// deterministic: Art. 14 severity flips across 2026-09-11, and EUCC
+    /// certificate expiry evaluates against the pinned instant.
+    #[test]
+    fn as_of_clock_pins_deadline_checks() {
+        use crate::model::{Component, CraSidecarMetadata, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let ts = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+
+        // Art. 14: Info before the 2026-09-11 application date, stronger after.
+        let art14_severity = |as_of: &str| {
+            ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                .with_as_of(ts(as_of))
+                .check(&sbom)
+                .violations
+                .iter()
+                .find(|v| v.requirement.contains("Art. 14(2)(a)"))
+                .map(|v| v.severity)
+        };
+        assert_eq!(
+            art14_severity("2026-01-01T00:00:00Z"),
+            Some(ViolationSeverity::Info),
+            "pre-deadline Art. 14 findings are informational"
+        );
+        assert_eq!(
+            art14_severity("2027-01-01T00:00:00Z"),
+            Some(ViolationSeverity::Warning),
+            "post-deadline Art. 14 findings escalate"
+        );
+
+        // EUCC certificate expiry against the pinned clock.
+        let sidecar = CraSidecarMetadata {
+            eucc_protection_profile_id: Some("PP-1".to_string()),
+            eucc_target_of_evaluation: Some("TOE-1".to_string()),
+            eucc_itsef_identifier: Some("ITSEF-1".to_string()),
+            eucc_valid_until: Some(ts("2027-06-01T00:00:00Z")),
+            ..Default::default()
+        };
+        let eucc_expired = |as_of: &str| {
+            ComplianceChecker::new(ComplianceLevel::EuccSubstantial)
+                .with_sidecar(sidecar.clone())
+                .with_as_of(ts(as_of))
+                .check(&sbom)
+                .violations
+                .iter()
+                .any(|v| {
+                    v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-EUCC-VALIDITY"
+                })
+        };
+        assert!(
+            !eucc_expired("2027-01-01T00:00:00Z"),
+            "certificate valid at the pinned instant"
+        );
+        assert!(
+            eucc_expired("2028-01-01T00:00:00Z"),
+            "certificate expired at the pinned instant"
+        );
     }
 
     #[test]
