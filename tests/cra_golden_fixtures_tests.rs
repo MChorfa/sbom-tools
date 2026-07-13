@@ -169,3 +169,38 @@ fn conformity_summary_present_when_class_pinned_via_sidecar() {
         sbom_tools::model::CraProductClass::ImportantClass1
     );
 }
+
+/// Canonical SPDX 3.0.1 (flat @graph with a shared CreationInfo node that
+/// elements reference by string) is the ONLY SPDX shape the BSI §4 gate
+/// accepts — it must parse and clear the gate end-to-end. It used to
+/// hard-fail the parse ("invalid type: string, expected struct
+/// Spdx3CreationInfo"), so no canonical SPDX document could obtain a BSI
+/// verdict at all.
+#[test]
+fn spdx3_shared_creationinfo_fixture_passes_bsi_gate_with_no_errors() {
+    let sbom_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/spdx3/shared-creationinfo.spdx3.json");
+    let parsed = parse_sbom(&sbom_path).expect("canonical SPDX 3.0.1 must parse");
+    assert_eq!(
+        parsed.document.spec_version, "3.0.1",
+        "specVersion must resolve through the shared CreationInfo node"
+    );
+
+    let result = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&parsed);
+    let errors: Vec<_> = result
+        .violations
+        .iter()
+        .filter(|v| v.severity == ViolationSeverity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "canonical SPDX 3.0.1 fixture must produce no BSI Errors; got: {errors:?}"
+    );
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-5-COMPLETENESS"),
+        "declared relationship completeness must satisfy the §5.2.2 completeness warning"
+    );
+}
