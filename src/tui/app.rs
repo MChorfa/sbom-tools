@@ -177,11 +177,18 @@ pub struct DataContext {
     pub(crate) new_cra_compliance: Option<ComplianceResult>,
     pub(crate) old_compliance_results: Option<Vec<ComplianceResult>>,
     pub(crate) new_compliance_results: Option<Vec<ComplianceResult>>,
-    /// Optional CRA sidecar metadata. When set, `ensure_compliance_results`
-    /// passes it to `ComplianceChecker::with_sidecar()` so high-risk AI
-    /// escalation (EU AI Act), OSS-Steward, EUCC, and Article 14 checks render
-    /// the same COMPLIANT/NON-COMPLIANT verdict the CLI produces.
-    pub(crate) cra_sidecar: Option<crate::model::CraSidecarMetadata>,
+    /// Optional CRA sidecar metadata for the old/baseline SBOM. When set,
+    /// `ensure_compliance_results` passes it to
+    /// `ComplianceChecker::with_sidecar()` for the old SBOM's checks.
+    /// Resolution is per-SBOM (each side of the diff is judged against its
+    /// own adjacent sidecar), matching the non-TUI report stage.
+    pub(crate) old_cra_sidecar: Option<crate::model::CraSidecarMetadata>,
+    /// Optional CRA sidecar metadata for the new/current SBOM. When set,
+    /// `ensure_compliance_results` passes it to
+    /// `ComplianceChecker::with_sidecar()` so high-risk AI escalation
+    /// (EU AI Act), OSS-Steward, EUCC, and Article 14 checks render the same
+    /// COMPLIANT/NON-COMPLIANT verdict the CLI produces.
+    pub(crate) new_cra_sidecar: Option<crate::model::CraSidecarMetadata>,
     pub(crate) matching_threshold: f64,
     #[cfg(feature = "enrichment")]
     pub(crate) enrichment_stats_old: Option<EnrichmentStats>,
@@ -238,23 +245,26 @@ pub struct App {
 impl App {
     /// Lazily compute compliance results for all standards when first needed.
     ///
-    /// The optional CRA sidecar is threaded into every checker so sidecar-driven
-    /// verdicts — most importantly EU AI Act high-risk escalation — match the
-    /// CLI. Without it a high-risk AI SBOM the CLI marks NON-COMPLIANT would
-    /// render COMPLIANT in the diff compliance tab.
+    /// Each SBOM's optional CRA sidecar is threaded into its checkers so
+    /// sidecar-driven verdicts — most importantly EU AI Act high-risk
+    /// escalation — match the CLI. Without it a high-risk AI SBOM the CLI
+    /// marks NON-COMPLIANT would render COMPLIANT in the diff compliance tab.
     pub fn ensure_compliance_results(&mut self) {
-        let sidecar = self.data.cra_sidecar.as_ref();
         if self.data.old_compliance_results.is_none()
             && let Some(old_sbom) = &self.data.old_sbom
         {
-            self.data.old_compliance_results =
-                Some(Self::compliance_results_for(old_sbom, sidecar));
+            self.data.old_compliance_results = Some(Self::compliance_results_for(
+                old_sbom,
+                self.data.old_cra_sidecar.as_ref(),
+            ));
         }
         if self.data.new_compliance_results.is_none()
             && let Some(new_sbom) = &self.data.new_sbom
         {
-            self.data.new_compliance_results =
-                Some(Self::compliance_results_for(new_sbom, sidecar));
+            self.data.new_compliance_results = Some(Self::compliance_results_for(
+                new_sbom,
+                self.data.new_cra_sidecar.as_ref(),
+            ));
         }
     }
 
@@ -408,7 +418,14 @@ impl App {
         let result = match self.mode {
             AppMode::Diff => {
                 let report_type = tab_to_report_type(self.active_tab);
-                let config = ReportConfig::with_types(vec![report_type]);
+                // Hand the reporters the sidecar-aware CRA results computed
+                // for the TUI itself, so an export never falls back to a
+                // bare (sidecar-less) checker and disagrees with the screen.
+                let config = ReportConfig {
+                    old_cra_compliance: self.data.old_cra_compliance.clone(),
+                    new_cra_compliance: self.data.new_cra_compliance.clone(),
+                    ..ReportConfig::with_types(vec![report_type])
+                };
                 if let (Some(diff_result), Some(old_sbom), Some(new_sbom)) = (
                     &self.data.diff_result,
                     &self.data.old_sbom,

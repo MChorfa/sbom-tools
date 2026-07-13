@@ -353,10 +353,11 @@ mod diff_alignment {
         let new = high_risk_ml_sbom();
         let old = high_risk_ml_sbom();
         let mut app = App::new_diff(DiffResult::new(), old, new, "{}", "{}");
-        app = app.with_cra_sidecar(CraSidecarMetadata {
+        let sidecar = CraSidecarMetadata {
             is_high_risk_ai: true,
             ..Default::default()
-        });
+        };
+        app = app.with_cra_sidecars(Some(sidecar.clone()), Some(sidecar));
 
         app.ensure_compliance_results();
 

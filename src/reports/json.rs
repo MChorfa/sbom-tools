@@ -3,7 +3,7 @@
 use super::{ReportConfig, ReportError, ReportFormat, ReportGenerator, ReportType};
 use crate::diff::DiffResult;
 use crate::model::{Component, NormalizedSbom, VulnerabilityRef};
-use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult};
+use crate::quality::ComplianceResult;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
@@ -56,14 +56,8 @@ impl ReportGenerator for JsonReporter {
         new_sbom: &NormalizedSbom,
         config: &ReportConfig,
     ) -> Result<String, ReportError> {
-        let old_cra = config
-            .old_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(old_sbom));
-        let new_cra = config
-            .new_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(new_sbom));
+        let old_cra = config.old_cra_compliance_or_bare(old_sbom);
+        let new_cra = config.new_cra_compliance_or_bare(new_sbom);
         let cra_compliance = CraCompliance {
             old: CraComplianceDetail::from_result(old_cra),
             new: CraComplianceDetail::from_result(new_cra),
@@ -177,10 +171,7 @@ impl ReportGenerator for JsonReporter {
         sbom: &NormalizedSbom,
         config: &ReportConfig,
     ) -> Result<String, ReportError> {
-        let cra_result = config
-            .view_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(sbom));
+        let cra_result = config.view_cra_compliance_or_bare(sbom);
         let compliance = CraComplianceDetail::from_result(cra_result);
 
         let direct_ids = sbom.direct_dependency_ids();

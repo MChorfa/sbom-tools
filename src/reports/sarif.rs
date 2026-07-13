@@ -3,9 +3,7 @@
 use super::{ReportConfig, ReportError, ReportFormat, ReportGenerator, ReportType};
 use crate::diff::{DiffResult, SlaStatus, VulnerabilityDetail};
 use crate::model::NormalizedSbom;
-use crate::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, ViolationSeverity, rule_meta,
-};
+use crate::quality::{ComplianceLevel, ComplianceResult, ViolationSeverity, rule_meta};
 use serde::Serialize;
 
 /// SARIF report generator
@@ -254,14 +252,8 @@ impl ReportGenerator for SarifReporter {
         }
 
         // Add CRA compliance results for old and new SBOMs (use pre-computed if available)
-        let cra_old = config
-            .old_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(old_sbom));
-        let cra_new = config
-            .new_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(new_sbom));
+        let cra_old = config.old_cra_compliance_or_bare(old_sbom);
+        let cra_new = config.new_cra_compliance_or_bare(new_sbom);
         results.extend(compliance_results_to_sarif(&cra_old, Some("Old SBOM")));
         results.extend(compliance_results_to_sarif(&cra_new, Some("New SBOM")));
 
@@ -328,10 +320,7 @@ impl ReportGenerator for SarifReporter {
         }
 
         // Add CRA compliance results (use pre-computed if available)
-        let cra_result = config
-            .view_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(sbom));
+        let cra_result = config.view_cra_compliance_or_bare(sbom);
         results.extend(compliance_results_to_sarif(&cra_result, None));
 
         // Same descriptor guarantee as the diff path (see above).
