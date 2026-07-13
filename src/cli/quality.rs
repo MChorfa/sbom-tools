@@ -4,9 +4,7 @@
 
 use crate::config::EnrichmentConfig;
 use crate::pipeline::{OutputTarget, exit_codes, parse_sbom_with_context, write_output};
-use crate::quality::{
-    QualityGrade, QualityReport, QualityScorer, ScoringProfile, ViolationSeverity,
-};
+use crate::quality::{QualityGrade, QualityReport, QualityScorer, ScoringProfile};
 use crate::reports::ReportFormat;
 use anyhow::{Result, bail};
 use serde_json::json;
@@ -254,78 +252,22 @@ fn format_quality_sarif(report: &QualityReport, config: &QualityConfig) -> Strin
         });
     }
 
-    let not_applicable = report
-        .ai_readiness_metrics
-        .as_ref()
-        .is_some_and(crate::quality::AiReadinessMetrics::is_not_applicable);
-    let mut results = Vec::new();
-
-    // Add compliance violations as SARIF results
-    for violation in &report.compliance.violations {
-        let level = match violation.severity {
-            ViolationSeverity::Error => "error",
-            ViolationSeverity::Warning => "warning",
-            ViolationSeverity::Info => "note",
-        };
-        results.push(json!({
-            "ruleId": format!("QUALITY-{}", violation.category.name().to_uppercase().replace(' ', "-")),
-            "level": level,
-            "message": { "text": violation.message },
-            "properties": {
-                "requirement": violation.requirement,
-                "category": violation.category.name(),
-                "remediation": violation.remediation_guidance(),
-                "element": violation.element,
-            }
-        }));
-    }
-
-    // Add recommendations as informational results
-    for rec in &report.recommendations {
-        let level = match rec.priority {
-            1 => "error",
-            2 => "warning",
-            _ => "note",
-        };
-        results.push(json!({
-            "ruleId": format!("QUALITY-REC-{}", rec.category.name().to_uppercase().replace(' ', "-")),
-            "level": level,
-            "message": {
-                "text": format!("{} ({} affected, +{:.1} impact)", rec.message, rec.affected_count, rec.impact)
-            },
-            "properties": {
-                "priority": rec.priority,
-                "category": rec.category.name(),
-                "affected_count": rec.affected_count,
-                "impact": rec.impact,
-            }
-        }));
-    }
-
-    let sarif = json!({
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "sbom-tools",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://github.com/anthropics/sbom-tools",
-                }
-            },
-            "results": results,
-            "properties": {
-                "sbom": config.sbom_path.file_name().unwrap_or_default().to_string_lossy(),
-                "profile": config.profile,
-                "applicable": !not_applicable,
-                "overall_score": if not_applicable { serde_json::Value::Null } else { json!(report.overall_score) },
-                "grade": if not_applicable { "N/A" } else { report.grade.letter() },
-                "compliant": report.compliance.is_compliant,
-            }
-        }]
-    });
-
-    serde_json::to_string_pretty(&sarif).unwrap_or_default()
+    // Everything else routes through the shared registry-driven SARIF layer:
+    // the compliance violations carry the exact same external rule ids as
+    // `validate -o sarif`, and recommendations are merged into the same run
+    // as advisory (never `error`) results.
+    crate::reports::generate_quality_sarif(
+        report,
+        &config
+            .sbom_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
+        &config.profile,
+    )
+    .unwrap_or_else(|_| {
+        serde_json::to_string_pretty(&serde_json::json!({ "runs": [] })).unwrap_or_default()
+    })
 }
 
 /// Format quality report for output
@@ -775,6 +717,35 @@ mod tests {
         assert_eq!(value["applicable"], json!(false));
         assert!(value["report"]["overall_score"].is_null());
         assert_eq!(value["report"]["grade"], json!("N/A"));
+    }
+
+    #[test]
+    fn test_format_quality_sarif_routes_compliance_through_registry_rule_ids() {
+        // Non-AI profiles route through the shared SARIF layer: violations
+        // carry registry SARIF rule ids (never invented QUALITY-* ids) and
+        // every emitted ruleId has a reportingDescriptor.
+        let sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let report = QualityScorer::new(ScoringProfile::Cra).score(&sbom);
+        let mut config = ai_config(ReportFormat::Sarif, None);
+        config.profile = "cra".to_string();
+        let out = format_quality_sarif(&report, &config);
+        let value: serde_json::Value = serde_json::from_str(&out).expect("valid SARIF JSON");
+        let run = &value["runs"][0];
+        let results = run["results"].as_array().expect("results array");
+        assert!(!results.is_empty(), "empty SBOM must fire CRA violations");
+        assert!(
+            results.iter().all(|r| r["ruleId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("SBOM-"))),
+            "quality SARIF must not invent QUALITY-* rule ids"
+        );
+        assert!(
+            run["tool"]["driver"]["rules"]
+                .as_array()
+                .is_some_and(|rules| !rules.is_empty()),
+            "quality SARIF must declare its rule catalogue"
+        );
+        assert_eq!(run["properties"]["compliant"], json!(false));
     }
 
     #[test]
