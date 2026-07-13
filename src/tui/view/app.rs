@@ -788,7 +788,18 @@ impl ViewApp {
         use crate::tui::export::{export_view, view_tab_to_report_type};
 
         let report_type = view_tab_to_report_type(self.active_tab);
-        let config = ReportConfig::with_types(vec![report_type]);
+        // Pre-compute CRA Phase 2 with this view's sidecar so exported
+        // reports carry the same sidecar-driven verdicts as the compliance
+        // tab instead of falling back to a bare (sidecar-less) checker.
+        let mut cra_checker =
+            crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2);
+        if let Some(sidecar) = &self.cra_sidecar {
+            cra_checker = cra_checker.with_sidecar(sidecar.clone());
+        }
+        let config = ReportConfig {
+            view_cra_compliance: Some(cra_checker.check(&self.sbom)),
+            ..ReportConfig::with_types(vec![report_type])
+        };
         let result = export_view(
             format,
             &self.sbom,

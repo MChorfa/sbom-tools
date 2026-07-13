@@ -6,7 +6,7 @@ use super::escape::{
 use super::{ReportConfig, ReportError, ReportFormat, ReportGenerator, ReportType};
 use crate::diff::{DiffResult, SlaStatus, VulnerabilityDetail};
 use crate::model::NormalizedSbom;
-use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult, ViolationSeverity};
+use crate::quality::{ComplianceResult, ViolationSeverity};
 use std::fmt::Write;
 
 /// Markdown report generator
@@ -578,12 +578,8 @@ impl ReportGenerator for MarkdownReporter {
 
         // CRA Compliance section
         {
-            let old_cra = config.old_cra_compliance.clone().unwrap_or_else(|| {
-                ComplianceChecker::new(ComplianceLevel::CraPhase2).check(old_sbom)
-            });
-            let new_cra = config.new_cra_compliance.clone().unwrap_or_else(|| {
-                ComplianceChecker::new(ComplianceLevel::CraPhase2).check(new_sbom)
-            });
+            let old_cra = config.old_cra_compliance_or_bare(old_sbom);
+            let new_cra = config.new_cra_compliance_or_bare(new_sbom);
             write_cra_compliance_diff(&mut md, &old_cra, &new_cra)?;
         }
 
@@ -747,10 +743,7 @@ impl ReportGenerator for MarkdownReporter {
 
         // CRA Compliance section
         {
-            let cra = config
-                .view_cra_compliance
-                .clone()
-                .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(sbom));
+            let cra = config.view_cra_compliance_or_bare(sbom);
             write_cra_compliance_view(&mut md, &cra)?;
         }
 

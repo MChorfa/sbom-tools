@@ -343,3 +343,159 @@ fn diff_markdown_and_html_reports_stay_compact_in_both_directions() {
         assert!(!html.contains("<th>Severity</th>"));
     }
 }
+
+// ============================================================================
+// Diff report sidecar parity (CLI, non-TUI path)
+// ============================================================================
+
+/// Minimal CycloneDX SBOM with no security contact anywhere, so the CRA
+/// Art. 13(17) single-point-of-contact finding fires as a Warning unless a
+/// sidecar supplies `securityContact`.
+const SIDECAR_PARITY_SBOM: &str = r#"{
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.6",
+    "version": 1,
+    "components": [
+        {
+            "type": "library",
+            "bom-ref": "lib-x@1.0.0",
+            "name": "lib-x",
+            "version": "1.0.0",
+            "purl": "pkg:npm/lib-x@1.0.0"
+        }
+    ]
+}"#;
+
+const SIDECAR_PARITY_SIDECAR: &str = r#"{ "securityContact": "security@example.com" }"#;
+
+/// Run `sbom-tools diff <old> <new> -o json` and return the parsed report.
+fn run_diff_json(old: &std::path::Path, new: &std::path::Path) -> serde_json::Value {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sbom-tools"))
+        .arg("--no-color")
+        .env("RUST_LOG", "error")
+        .arg("diff")
+        .arg(old)
+        .arg(new)
+        .args(["-o", "json"])
+        .output()
+        .expect("diff command should run");
+    assert!(
+        output.status.success(),
+        "diff should exit 0: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("diff -o json should emit valid JSON")
+}
+
+/// Severities of all Art. 13(17) (security contact) violations in one side of
+/// the report's `cra_compliance` object.
+fn art_13_17_severities(cra_detail: &serde_json::Value) -> Vec<String> {
+    cra_detail["violations"]
+        .as_array()
+        .expect("cra_compliance side should carry violations")
+        .iter()
+        .filter(|v| {
+            v["requirement"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Art. 13(17)")
+        })
+        .map(|v| v["severity"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// `diff -o json` must resolve each SBOM's adjacent CRA sidecar exactly like
+/// the TUI path does (per-SBOM auto-discovery of `<sbom>.cra.json`), so the
+/// same invocation can no longer yield different CRA verdicts depending on
+/// the output format.
+#[test]
+fn diff_json_report_honours_adjacent_cra_sidecar_per_sbom() {
+    use sbom_tools::model::CraSidecarMetadata;
+
+    // --- Without any sidecar: Art. 13(17) is a Warning on both sides. ---
+    let bare_dir = tempfile::tempdir().expect("temp dir");
+    let old_path = bare_dir.path().join("base.cdx.json");
+    let new_path = bare_dir.path().join("current.cdx.json");
+    std::fs::write(&old_path, SIDECAR_PARITY_SBOM).expect("write old SBOM");
+    std::fs::write(&new_path, SIDECAR_PARITY_SBOM).expect("write new SBOM");
+
+    let report = run_diff_json(&old_path, &new_path);
+    for side in ["old", "new"] {
+        assert_eq!(
+            art_13_17_severities(&report["cra_compliance"][side]),
+            vec!["Warning".to_string()],
+            "without a sidecar the {side} SBOM must carry the Art. 13(17) Warning"
+        );
+    }
+
+    // --- Sidecar next to the NEW SBOM only: new downgraded, old untouched. ---
+    let sidecar_dir = tempfile::tempdir().expect("temp dir");
+    let old_path = sidecar_dir.path().join("base.cdx.json");
+    let new_path = sidecar_dir.path().join("current.cdx.json");
+    let sidecar_path = sidecar_dir.path().join("current.cra.json");
+    std::fs::write(&old_path, SIDECAR_PARITY_SBOM).expect("write old SBOM");
+    std::fs::write(&new_path, SIDECAR_PARITY_SBOM).expect("write new SBOM");
+    std::fs::write(&sidecar_path, SIDECAR_PARITY_SIDECAR).expect("write sidecar");
+
+    let report = run_diff_json(&old_path, &new_path);
+    assert_eq!(
+        art_13_17_severities(&report["cra_compliance"]["new"]),
+        vec!["Info".to_string()],
+        "the new SBOM's adjacent sidecar supplies the security contact, so \
+         Art. 13(17) must be downgraded to Info in the JSON report"
+    );
+    assert_eq!(
+        art_13_17_severities(&report["cra_compliance"]["old"]),
+        vec!["Warning".to_string()],
+        "sidecar discovery is per-SBOM: the old SBOM has no adjacent sidecar, \
+         so its Art. 13(17) Warning must remain"
+    );
+
+    // The JSON report must match what the TUI computes for the same SBOM +
+    // sidecar (ComplianceChecker with the sidecar attached), not a bare check.
+    let parsed_new = parse_sbom_str(SIDECAR_PARITY_SBOM).expect("parse new SBOM");
+    let sidecar = CraSidecarMetadata::from_file(&sidecar_path).expect("load sidecar");
+    let expected = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+        .with_sidecar(sidecar)
+        .check(&parsed_new);
+    let new_detail = &report["cra_compliance"]["new"];
+    assert_eq!(
+        new_detail["is_compliant"].as_bool(),
+        Some(expected.is_compliant),
+        "is_compliant must match the sidecar-aware (TUI) computation"
+    );
+    assert_eq!(
+        new_detail["warning_count"].as_u64(),
+        Some(expected.warning_count as u64),
+        "warning_count must match the sidecar-aware (TUI) computation"
+    );
+    assert_eq!(
+        new_detail["info_count"].as_u64(),
+        Some(expected.info_count as u64),
+        "info_count must match the sidecar-aware (TUI) computation"
+    );
+
+    // --- Sidecar next to the OLD SBOM only: the mirror case. ---
+    let old_sidecar_dir = tempfile::tempdir().expect("temp dir");
+    let old_path = old_sidecar_dir.path().join("base.cdx.json");
+    let new_path = old_sidecar_dir.path().join("current.cdx.json");
+    std::fs::write(&old_path, SIDECAR_PARITY_SBOM).expect("write old SBOM");
+    std::fs::write(&new_path, SIDECAR_PARITY_SBOM).expect("write new SBOM");
+    std::fs::write(
+        old_sidecar_dir.path().join("base.cra.json"),
+        SIDECAR_PARITY_SIDECAR,
+    )
+    .expect("write sidecar");
+
+    let report = run_diff_json(&old_path, &new_path);
+    assert_eq!(
+        art_13_17_severities(&report["cra_compliance"]["old"]),
+        vec!["Info".to_string()],
+        "the old SBOM's adjacent sidecar must be honoured too"
+    );
+    assert_eq!(
+        art_13_17_severities(&report["cra_compliance"]["new"]),
+        vec!["Warning".to_string()],
+        "the new SBOM has no sidecar, so its Warning must remain"
+    );
+}
