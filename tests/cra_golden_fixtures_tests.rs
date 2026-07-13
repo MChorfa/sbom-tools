@@ -114,10 +114,9 @@ fn noncompliant_weak_hashes_fires_at_bsi_or_phase2() {
     let parsed = parse_sbom(&sbom_path).expect("parse fixture");
 
     let bsi = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&parsed);
-    let bsi_hash_finding = bsi
-        .violations
-        .iter()
-        .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4" || v.rule_id == "SBOM-BSI-TR-03183-2-5-4-MISSING");
+    let bsi_hash_finding = bsi.violations.iter().any(|v| {
+        v.rule_id == "SBOM-BSI-TR-03183-2-5-4" || v.rule_id == "SBOM-BSI-TR-03183-2-5-4-MISSING"
+    });
     assert!(
         bsi_hash_finding,
         "weak-hashes fixture must fire the BSI SHA-512 hash rule; \
