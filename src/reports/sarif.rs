@@ -553,10 +553,11 @@ pub fn generate_ai_readiness_sarif(
             results,
             properties: Some(SarifRunProperties {
                 applicable: !metrics.is_not_applicable(),
+                not_applicable_reason: None,
                 overall_score,
-                grade: grade.to_string(),
-                sbom: sbom_name.to_string(),
-                profile: profile.to_string(),
+                grade: Some(grade.to_string()),
+                sbom: Some(sbom_name.to_string()),
+                profile: Some(profile.to_string()),
             }),
         }],
     };
@@ -603,6 +604,20 @@ fn complete_rule_catalogue(mut rules: Vec<SarifRule>, results: &[SarifResult]) -
 
 pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, ReportError> {
     let results = compliance_results_to_sarif(result, None);
+    // Surface applicability at run level: a readiness standard that never
+    // evaluated the SBOM must be machine-distinguishable from a pass.
+    let not_applicable_reason = match &result.applicability {
+        crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+        crate::quality::Applicability::Applicable => None,
+    };
+    let run_properties = Some(SarifRunProperties {
+        applicable: result.is_applicable(),
+        not_applicable_reason,
+        overall_score: result.score().map(f32::from),
+        grade: None,
+        sbom: None,
+        profile: Some(result.level.name().to_string()),
+    });
     let rules = SarifRuleWithUri::wrap_all(complete_rule_catalogue(
         get_sarif_rules_for_standard(result.level),
         &results,
@@ -620,7 +635,7 @@ pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, Re
                 },
             },
             results,
-            properties: None,
+            properties: run_properties,
         }],
     };
 
@@ -1878,10 +1893,16 @@ struct SarifRun {
 #[serde(rename_all = "camelCase")]
 struct SarifRunProperties {
     applicable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_applicable_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     overall_score: Option<f32>,
-    grade: String,
-    sbom: String,
-    profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grade: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sbom: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
 }
 
 #[derive(Serialize)]

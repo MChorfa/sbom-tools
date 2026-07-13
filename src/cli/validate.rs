@@ -189,32 +189,39 @@ fn write_compliance_output(
 #[derive(serde::Serialize)]
 struct ComplianceSummary {
     standard: String,
+    /// Whether the standard actually evaluated the SBOM. When false,
+    /// `compliant` is the documented always-true N/A contract and `score`
+    /// is null — dashboards must not read either as a pass.
+    applicable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_applicable_reason: Option<String>,
     compliant: bool,
-    score: u8,
+    score: Option<u8>,
     errors: usize,
     warnings: usize,
     info: usize,
 }
 
-fn write_compliance_summary(result: &ComplianceResult, output_file: Option<PathBuf>) -> Result<()> {
-    let target = OutputTarget::from_option(output_file);
-    let total = result.violations.len() + 1;
-    let issues = result.error_count + result.warning_count;
-    let score = if issues >= total {
-        0
-    } else {
-        ((total - issues) * 100) / total
-    }
-    .min(100) as u8;
-
-    let summary = ComplianceSummary {
+fn compliance_summary(result: &ComplianceResult) -> ComplianceSummary {
+    let not_applicable_reason = match &result.applicability {
+        crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+        crate::quality::Applicability::Applicable => None,
+    };
+    ComplianceSummary {
         standard: result.level.name().to_string(),
+        applicable: result.is_applicable(),
+        not_applicable_reason,
         compliant: result.is_compliant,
-        score,
+        score: result.score(),
         errors: result.error_count,
         warnings: result.warning_count,
         info: result.info_count,
-    };
+    }
+}
+
+fn write_compliance_summary(result: &ComplianceResult, output_file: Option<PathBuf>) -> Result<()> {
+    let target = OutputTarget::from_option(output_file);
+    let summary = compliance_summary(result);
     let content = serde_json::to_string(&summary)
         .map_err(|e| anyhow::anyhow!("Failed to serialize summary: {e}"))?;
     write_output(&content, &target, false)?;
@@ -251,28 +258,7 @@ fn write_multi_compliance_summary(
     output_file: Option<PathBuf>,
 ) -> Result<()> {
     let target = OutputTarget::from_option(output_file);
-    let summaries: Vec<ComplianceSummary> = results
-        .iter()
-        .map(|result| {
-            let total = result.violations.len() + 1;
-            let issues = result.error_count + result.warning_count;
-            let score = if issues >= total {
-                0
-            } else {
-                ((total - issues) * 100) / total
-            }
-            .min(100) as u8;
-
-            ComplianceSummary {
-                standard: result.level.name().to_string(),
-                compliant: result.is_compliant,
-                score,
-                errors: result.error_count,
-                warnings: result.warning_count,
-                info: result.info_count,
-            }
-        })
-        .collect();
+    let summaries: Vec<ComplianceSummary> = results.iter().map(compliance_summary).collect();
 
     let content = serde_json::to_string(&summaries)
         .map_err(|e| anyhow::anyhow!("Failed to serialize multi-standard summary: {e}"))?;
@@ -283,17 +269,21 @@ fn write_multi_compliance_summary(
 fn format_compliance_text(result: &ComplianceResult) -> String {
     let mut lines = Vec::new();
     lines.push(format!("Compliance ({})", result.level.name()));
-    lines.push(format!(
-        "Status: {} ({} errors, {} warnings, {} info)",
-        if result.is_compliant {
-            "COMPLIANT"
-        } else {
-            "NON-COMPLIANT"
-        },
-        result.error_count,
-        result.warning_count,
-        result.info_count
-    ));
+    if let crate::quality::Applicability::NotApplicable(reason) = &result.applicability {
+        lines.push(format!("Status: NOT APPLICABLE — {reason}"));
+    } else {
+        lines.push(format!(
+            "Status: {} ({} errors, {} warnings, {} info)",
+            if result.is_compliant {
+                "COMPLIANT"
+            } else {
+                "NON-COMPLIANT"
+            },
+            result.error_count,
+            result.warning_count,
+            result.info_count
+        ));
+    }
     lines.push(String::new());
 
     if result.violations.is_empty() {

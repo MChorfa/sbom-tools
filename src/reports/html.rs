@@ -627,14 +627,9 @@ fn format_vex_html(vex_state: Option<&crate::model::VexState>) -> String {
 
 /// Compute compliance score as percentage (0-100)
 fn compliance_score_html(result: &ComplianceResult) -> u8 {
-    let total = result.violations.len() + 1;
-    let issues = result.error_count + result.warning_count;
-    let score = if issues >= total {
-        0
-    } else {
-        ((total - issues) * 100) / total
-    };
-    score.min(100) as u8
+    // Diff/view reports only render CRA results, which are always
+    // applicable; 0 is a defensive fallback, not a rendered state.
+    result.score().unwrap_or(0)
 }
 
 /// Generate an HTML trend badge for numeric delta

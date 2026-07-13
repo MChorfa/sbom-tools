@@ -244,7 +244,9 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .enumerate()
         .map(|(i, level)| {
             let result = &compliance_results[i];
-            let (status_icon, status_color) = if result.is_compliant {
+            let (status_icon, status_color) = if !result.is_applicable() {
+                ("\u{2014}", scheme.muted)
+            } else if result.is_compliant {
                 if result.warning_count > 0 {
                     ("\u{26a0}", scheme.warning)
                 } else {
@@ -351,7 +353,12 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, app: &ViewApp) {
 fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceResult) {
     let scheme = colors();
 
-    let (status_color, status_text) = if result.is_compliant {
+    let (status_color, status_text) = if !result.is_applicable() {
+        (
+            scheme.muted,
+            "NOT APPLICABLE \u{2014} Standard did not evaluate this SBOM",
+        )
+    } else if result.is_compliant {
         if result.warning_count == 0 && result.info_count == 0 {
             (scheme.success, "COMPLIANT \u{2014} All checks passed")
         } else if result.warning_count == 0 {

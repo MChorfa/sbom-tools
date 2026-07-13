@@ -714,6 +714,9 @@ expression: "render(&JsonReporter::new())"
       "error_count": 3,
       "warning_count": "[N]",
       "info_count": "[N]",
+      "applicability": {
+        "status": "applicable"
+      },
       "article_summary": {
         "machine_readable_format": 0,
         "art_13_17_contact": 1,
@@ -1403,6 +1406,9 @@ expression: "render(&JsonReporter::new())"
       "error_count": 3,
       "warning_count": "[N]",
       "info_count": "[N]",
+      "applicability": {
+        "status": "applicable"
+      },
       "article_summary": {
         "machine_readable_format": 0,
         "art_13_17_contact": 1,

@@ -775,14 +775,9 @@ fn delta_indicator(old_val: usize, new_val: usize, lower_is_better: bool) -> &'s
 
 /// Compute compliance score as percentage (0-100)
 fn compliance_score(result: &ComplianceResult) -> u8 {
-    let total = result.violations.len() + 1; // +1 avoids div-by-zero, counts "base pass"
-    let issues = result.error_count + result.warning_count;
-    let score = if issues >= total {
-        0
-    } else {
-        ((total - issues) * 100) / total
-    };
-    score.min(100) as u8
+    // Diff/view reports only render CRA results, which are always
+    // applicable; 0 is a defensive fallback, not a rendered state.
+    result.score().unwrap_or(0)
 }
 
 /// Write CRA compliance comparison for diff reports

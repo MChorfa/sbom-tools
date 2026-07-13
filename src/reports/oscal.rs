@@ -152,6 +152,7 @@ mod tests {
             info_count: 0,
             violations,
             conformity_summary: None,
+            applicability: crate::quality::Applicability::Applicable,
         }
     }
 

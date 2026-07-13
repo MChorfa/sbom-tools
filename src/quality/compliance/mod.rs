@@ -583,6 +583,27 @@ impl ViolationCategory {
     }
 }
 
+/// Whether the checked standard actually evaluated this SBOM.
+///
+/// Readiness profiles (EU AI Act, BSI/G7 SBOM-for-AI) return a single Info
+/// violation and `is_compliant = true` for SBOMs outside their scope; that
+/// contract is kept for compatibility, but consumers must render such runs
+/// as N/A — never as a pass. Old payloads without the field deserialize as
+/// `Applicable`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", tag = "status", content = "reason")]
+pub enum Applicability {
+    /// The standard evaluated the SBOM; `is_compliant` is meaningful.
+    #[default]
+    Applicable,
+    /// The standard did not apply (the string is the human-readable reason).
+    NotApplicable(String),
+}
+
+/// Rule ids whose presence marks a result as not applicable (the readiness
+/// profiles emit exactly one of these, as an Info, for out-of-scope SBOMs).
+const NOT_APPLICABLE_RULES: &[&str] = &["SBOM-AIACT-NA", "SBOM-BSIAI-NA"];
+
 /// Result of compliance checking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplianceResult {
@@ -603,6 +624,11 @@ pub struct ComplianceResult {
     /// pinned (explicitly or via sidecar). `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conformity_summary: Option<ConformityAssessmentSummary>,
+    /// Whether the standard actually evaluated this SBOM (see
+    /// [`Applicability`]). `is_compliant` stays `true` for not-applicable
+    /// runs by contract; renderers must show N/A instead of a pass.
+    #[serde(default)]
+    pub applicability: Applicability,
 }
 
 /// Per-route checklist of evidence the CRA Annex VIII conformity-assessment
@@ -649,15 +675,46 @@ impl ComplianceResult {
             .filter(|v| v.severity == ViolationSeverity::Info)
             .count();
 
+        let applicability = violations
+            .iter()
+            .find(|v| NOT_APPLICABLE_RULES.contains(&v.rule_id))
+            .map_or(Applicability::Applicable, |v| {
+                Applicability::NotApplicable(v.message.clone())
+            });
+
         Self {
             is_compliant: error_count == 0,
             level,
             violations,
             conformity_summary: None,
+            applicability,
             error_count,
             warning_count,
             info_count,
         }
+    }
+
+    /// Whether the standard actually evaluated this SBOM.
+    #[must_use]
+    pub fn is_applicable(&self) -> bool {
+        self.applicability == Applicability::Applicable
+    }
+
+    /// Badge/summary compliance score (0–100).
+    ///
+    /// Errors and warnings count against the score; Info findings are
+    /// neutral. (The formula this replaces used `violations.len()` as the
+    /// denominator, so adding Info findings *raised* the score — 5 errors
+    /// alone scored 16 while 5 errors + 20 infos scored 80.) `None` when
+    /// the standard was not applicable — an unevaluated SBOM has no score.
+    #[must_use]
+    pub fn score(&self) -> Option<u8> {
+        if !self.is_applicable() {
+            return None;
+        }
+        let actionable = self.error_count + self.warning_count;
+        #[allow(clippy::cast_possible_truncation)]
+        Some((100 / (actionable + 1)) as u8)
     }
 
     /// Get violations filtered by severity
@@ -1868,6 +1925,76 @@ mod tests {
         );
         let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(false));
         assert_eq!(cycles(&r), None, "acyclic graphs are silent");
+    }
+
+    /// A readiness standard that never evaluated the SBOM must expose
+    /// NotApplicable and no score — is_compliant stays true by contract.
+    #[test]
+    fn not_applicable_result_has_no_score() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        assert!(!r.is_applicable(), "non-AI SBOM must be NotApplicable");
+        assert!(
+            matches!(r.applicability, Applicability::NotApplicable(_)),
+            "applicability must carry the reason"
+        );
+        assert_eq!(r.score(), None, "unevaluated SBOMs have no score");
+        assert!(r.is_compliant, "the N/A is_compliant contract is preserved");
+
+        // An applicable run keeps a real score.
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(r.is_applicable());
+        assert!(r.score().is_some());
+    }
+
+    /// Info findings must not move the score: 5 errors alone and 5 errors +
+    /// 20 infos used to score 16 vs 80 because infos inflated the
+    /// denominator.
+    #[test]
+    fn score_is_neutral_to_info_findings() {
+        let violation = |severity| Violation {
+            severity,
+            category: ViolationCategory::DocumentMetadata,
+            message: "x".to_string(),
+            element: None,
+            requirement: "x".to_string(),
+            rule_id: "SBOM-CRA-GENERAL",
+            standard_refs: Vec::new(),
+        };
+        let errors_only = ComplianceResult::new(
+            ComplianceLevel::NtiaMinimum,
+            (0..5)
+                .map(|_| violation(ViolationSeverity::Error))
+                .collect(),
+        );
+        let with_infos = ComplianceResult::new(
+            ComplianceLevel::NtiaMinimum,
+            (0..5)
+                .map(|_| violation(ViolationSeverity::Error))
+                .chain((0..20).map(|_| violation(ViolationSeverity::Info)))
+                .collect(),
+        );
+        assert_eq!(errors_only.score(), with_infos.score());
+        assert_eq!(errors_only.score(), Some(16));
+        let clean = ComplianceResult::new(ComplianceLevel::NtiaMinimum, Vec::new());
+        assert_eq!(clean.score(), Some(100));
+    }
+
+    /// Payloads that predate the applicability field deserialize as
+    /// Applicable.
+    #[test]
+    fn applicability_defaults_on_old_payloads() {
+        let r = ComplianceResult::new(ComplianceLevel::NtiaMinimum, Vec::new());
+        let mut json: serde_json::Value = serde_json::to_value(&r).unwrap();
+        json.as_object_mut().unwrap().remove("applicability");
+        let back: ComplianceResult = serde_json::from_value(json).unwrap();
+        assert_eq!(back.applicability, Applicability::Applicable);
     }
 
     #[test]
