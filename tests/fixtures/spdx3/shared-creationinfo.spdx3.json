@@ -1,0 +1,101 @@
+{
+  "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+  "@graph": [
+    {
+      "type": "CreationInfo",
+      "@id": "_:creationinfo",
+      "specVersion": "3.0.1",
+      "created": "2026-01-15T10:00:00Z",
+      "createdBy": ["urn:example:agent:demo-corp"],
+      "createdUsing": ["urn:example:tool:sbom-gen"]
+    },
+    {
+      "type": "Organization",
+      "spdxId": "urn:example:agent:demo-corp",
+      "creationInfo": "_:creationinfo",
+      "name": "Demo Corp (https://demo.example)"
+    },
+    {
+      "type": "Tool",
+      "spdxId": "urn:example:tool:sbom-gen",
+      "creationInfo": "_:creationinfo",
+      "name": "sbom-gen 1.0"
+    },
+    {
+      "type": "SpdxDocument",
+      "spdxId": "urn:example:document",
+      "creationInfo": "_:creationinfo",
+      "name": "shared-creationinfo-demo",
+      "profileConformance": ["core", "software"],
+      "rootElement": ["urn:example:pkg:app"],
+      "element": ["urn:example:pkg:app", "urn:example:pkg:lib", "urn:example:rel:deps"]
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:example:pkg:app",
+      "creationInfo": "_:creationinfo",
+      "name": "app",
+      "software_packageVersion": "1.0.0",
+      "software_packageUrl": "pkg:npm/app@1.0.0",
+      "software_downloadLocation": "https://registry.example/app-1.0.0.tgz",
+      "software_copyrightText": "Copyright 2026 Demo Corp",
+      "software_primaryPurpose": "application",
+      "suppliedBy": ["urn:example:agent:demo-corp"],
+      "verifiedUsing": [
+        {
+          "type": "Hash",
+          "algorithm": "sha512",
+          "hashValue": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      ]
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:example:pkg:lib",
+      "creationInfo": "_:creationinfo",
+      "name": "lib",
+      "software_packageVersion": "2.3.0",
+      "software_packageUrl": "pkg:npm/lib@2.3.0",
+      "software_primaryPurpose": "library",
+      "suppliedBy": ["urn:example:agent:demo-corp"],
+      "verifiedUsing": [
+        {
+          "type": "Hash",
+          "algorithm": "sha512",
+          "hashValue": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        }
+      ]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:example:rel:deps",
+      "creationInfo": "_:creationinfo",
+      "relationshipType": "dependsOn",
+      "from": "urn:example:pkg:app",
+      "to": ["urn:example:pkg:lib"],
+      "completeness": "complete"
+    },
+    {
+      "type": "simplelicensing_LicenseExpression",
+      "spdxId": "urn:example:lic:mit",
+      "creationInfo": "_:creationinfo",
+      "simplelicensing_licenseExpression": "MIT"
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:example:rel:app-license",
+      "creationInfo": "_:creationinfo",
+      "relationshipType": "hasDeclaredLicense",
+      "from": "urn:example:pkg:app",
+      "to": ["urn:example:lic:mit"]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:example:rel:lib-license",
+      "creationInfo": "_:creationinfo",
+      "relationshipType": "hasDeclaredLicense",
+      "from": "urn:example:pkg:lib",
+      "to": ["urn:example:lic:mit"]
+    }
+  ]
+}

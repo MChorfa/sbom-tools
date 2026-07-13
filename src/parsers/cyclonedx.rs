@@ -73,6 +73,8 @@ impl CycloneDxParser {
                 timestamp: m.timestamp,
                 tools: m.tools.map(|t| t.tool),
                 authors: None,
+                manufacturer: None,
+                manufacture: None,
                 component: m.component.map(Into::into),
                 lifecycles: None,
                 distribution_constraints: None,
@@ -322,6 +324,40 @@ impl CycloneDxParser {
                         email: author.email.clone(),
                     });
                 }
+            }
+            // metadata.manufacturer (1.5+; deprecated pre-1.6 spelling:
+            // metadata.manufacture) is the organization that created the BOM
+            // — BSI TR-03183-2 v2.1.0 Table 8's canonical CycloneDX mapping
+            // for the required "Creator of the SBOM". Map it to an
+            // Organization creator; previously it was silently dropped, so
+            // documents expressing their creator exactly as the TR
+            // prescribes false-failed the §5.2.1 gate.
+            if let Some(manufacturer) = meta.manufacturer.as_ref().or(meta.manufacture.as_ref()) {
+                let email = manufacturer
+                    .contact
+                    .as_ref()
+                    .and_then(|cs| cs.iter().find_map(|c| c.email.clone()));
+                let mut name = manufacturer
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                // Creators carry no URL field: when no contact email exists,
+                // fold the first URL into the name so the TR's email-or-URL
+                // fallback stays discernible downstream (BSI §5.2.1 contact
+                // detection looks for "://" in the creator name).
+                if email.is_none()
+                    && let Some(url) = manufacturer
+                        .url
+                        .as_ref()
+                        .and_then(|urls| urls.iter().find(|u| !u.is_empty()))
+                {
+                    name = format!("{name} ({url})");
+                }
+                creators.push(Creator {
+                    creator_type: CreatorType::Organization,
+                    name,
+                    email,
+                });
             }
         }
 
@@ -1388,11 +1424,38 @@ struct CdxMetadata {
     tools: Option<Vec<CdxTool>>,
     /// Authors field (1.6+)
     authors: Option<Vec<CdxAuthor>>,
+    /// Organization that created the BOM (1.5+). BSI TR-03183-2 v2.1.0
+    /// Table 8 maps the required "Creator of the SBOM" to this field.
+    manufacturer: Option<CdxOrgEntity>,
+    /// Deprecated pre-1.6 spelling: manufacturer of the described component,
+    /// historically also used for the BOM creator. Accepted as a fallback.
+    manufacture: Option<CdxOrgEntity>,
     component: Option<CdxComponent>,
     /// Lifecycles field (1.5+) - contains phases like end-of-support dates
     lifecycles: Option<Vec<CdxLifecycle>>,
     /// Distribution constraints (1.7+) with TLP classification
     distribution_constraints: Option<CdxDistributionConstraints>,
+}
+
+/// `CycloneDX` organizational entity (`metadata.manufacturer` /
+/// deprecated `metadata.manufacture`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxOrgEntity {
+    name: Option<String>,
+    url: Option<Vec<String>>,
+    contact: Option<Vec<CdxOrgContact>>,
+}
+
+/// Contact entry of a `CycloneDX` organizational entity.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxOrgContact {
+    name: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
 }
 
 /// `CycloneDX` lifecycle entry (1.5+)
@@ -3218,6 +3281,114 @@ mod tests {
         assert_eq!(
             ml.fairness[0].group_at_risk.as_deref(),
             Some("assessed for demographic parity")
+        );
+    }
+
+    /// BSI TR-03183-2 v2.1.0 Table 8 maps the required "Creator of the SBOM"
+    /// to CycloneDX metadata.manufacturer — it must become an Organization
+    /// creator with its contact email (previously it was silently dropped
+    /// and manufacturer-only SBOMs false-failed the §5.2.1 gate).
+    #[test]
+    fn metadata_manufacturer_maps_to_organization_creator() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.6",
+              "version": 1,
+              "metadata": {
+                "manufacturer": {
+                  "name": "Demo Corp",
+                  "url": ["https://demo.example"],
+                  "contact": [{"name": "SBOM desk", "email": "sbom@demo.example"}]
+                }
+              },
+              "components": []
+            }"#,
+        );
+        let org = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.creator_type == CreatorType::Organization)
+            .expect("manufacturer must map to an Organization creator");
+        assert_eq!(org.name, "Demo Corp");
+        assert_eq!(org.email.as_deref(), Some("sbom@demo.example"));
+    }
+
+    /// When the manufacturer has no contact email, the first URL is folded
+    /// into the creator name so the BSI §5.2.1 email-or-URL fallback stays
+    /// discernible ("://" heuristic).
+    #[test]
+    fn metadata_manufacturer_url_fallback_folds_into_name() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.6",
+              "version": 1,
+              "metadata": {
+                "manufacturer": {"name": "Demo Corp", "url": ["https://demo.example"]}
+              },
+              "components": []
+            }"#,
+        );
+        let org = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.creator_type == CreatorType::Organization)
+            .expect("manufacturer must map to an Organization creator");
+        assert_eq!(org.name, "Demo Corp (https://demo.example)");
+        assert_eq!(org.email, None);
+    }
+
+    /// The deprecated pre-1.6 `metadata.manufacture` spelling is accepted as
+    /// a fallback.
+    #[test]
+    fn deprecated_metadata_manufacture_spelling_accepted() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.5",
+              "version": 1,
+              "metadata": {
+                "manufacture": {
+                  "name": "Legacy Corp",
+                  "contact": [{"email": "sbom@legacy.example"}]
+                }
+              },
+              "components": []
+            }"#,
+        );
+        let org = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.creator_type == CreatorType::Organization)
+            .expect("deprecated manufacture must map to an Organization creator");
+        assert_eq!(org.name, "Legacy Corp");
+        assert_eq!(org.email.as_deref(), Some("sbom@legacy.example"));
+    }
+
+    /// Silent side: a tools-only metadata block yields Tool creators only —
+    /// no Organization creator is fabricated.
+    #[test]
+    fn no_manufacturer_yields_no_organization_creator() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.5",
+              "version": 1,
+              "metadata": {"tools": [{"name": "sbom-gen", "version": "1.0"}]},
+              "components": []
+            }"#,
+        );
+        assert!(
+            sbom.document
+                .creators
+                .iter()
+                .all(|c| c.creator_type == CreatorType::Tool),
+            "tools-only metadata must produce only Tool creators, got {:?}",
+            sbom.document.creators
         );
     }
 }

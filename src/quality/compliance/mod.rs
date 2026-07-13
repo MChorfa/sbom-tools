@@ -3904,6 +3904,136 @@ mod tests {
         );
     }
 
+    /// §5.2.1 maps "Creator of the SBOM" to Person/Organization (CycloneDX
+    /// metadata.authors/manufacturer), explicitly NOT metadata.tools: a
+    /// tools-only SBOM (the default output of common generators) must fail
+    /// the creator gate (expectation flip: Tool creators used to satisfy the
+    /// presence test).
+    #[test]
+    fn bsi_tr_03183_2_tools_only_creators_fail_creator_gate() {
+        use crate::model::{Creator, CreatorType};
+        let mut sbom = NormalizedSbom::default();
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Tool,
+            name: "syft 1.18.0".to_string(),
+            email: None,
+        });
+        sbom.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1"
+                    && v.severity == ViolationSeverity::Error),
+            "a tools-only creators list must fail the §5.2.1 creator gate"
+        );
+
+        // Silent side: adding an Organization creator with an email (the
+        // metadata.manufacturer mapping) alongside the tool satisfies §5.2.1.
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Organization,
+            name: "Demo Corp".to_string(),
+            email: Some("sbom@demo.example".to_string()),
+        });
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-5-1")),
+            "an Organization creator with email satisfies §5.2.1 entirely"
+        );
+    }
+
+    /// The §5.2.1 -CONTACT Warning must inspect only non-Tool creators: a
+    /// tool whose name happens to carry contact-looking characters cannot
+    /// stand in for the creator's email/URL.
+    #[test]
+    fn bsi_tr_03183_2_contact_warning_ignores_tool_contacts() {
+        use crate::model::{Creator, CreatorType};
+        let mut sbom = NormalizedSbom::default();
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Tool,
+            name: "sbom-gen (https://sbom-gen.example)".to_string(),
+            email: None,
+        });
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Organization,
+            name: "Acme".to_string(),
+            email: None,
+        });
+        sbom.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1-CONTACT"
+                    && v.severity == ViolationSeverity::Warning),
+            "a tool's URL must not satisfy the creator contact requirement"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1"),
+            "the Organization creator is present — only the contact Warning may fire"
+        );
+    }
+
+    /// §5.2.2 SHA-512: only author-attested hashes count. An
+    /// enrichment-fetched SHA-512 is not part of the document under
+    /// assessment and must not mask a missing authored SHA-512
+    /// (HashProvenance::Authored exclusion).
+    #[test]
+    fn bsi_tr_03183_2_sha512_counts_only_authored_hashes() {
+        use crate::model::{Hash, HashAlgorithm};
+        let check = |hashes: Vec<Hash>| {
+            let mut sbom = NormalizedSbom::default();
+            let mut c = bsi_ok_component("lib");
+            c.hashes = hashes;
+            sbom.add_component(c);
+            ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom)
+        };
+
+        // Authored SHA-256 + ENRICHED SHA-512: the SHA-512 Error must still
+        // fire — the enriched hash is not author-attested.
+        let r = check(vec![
+            Hash::new(HashAlgorithm::Sha256, "0".repeat(64)),
+            Hash::enriched(HashAlgorithm::Sha512, "0".repeat(128)),
+        ]);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4"
+                    && v.severity == ViolationSeverity::Error),
+            "an enriched SHA-512 must not mask a missing authored SHA-512"
+        );
+
+        // Authored SHA-512: silent.
+        let r = check(vec![Hash::new(HashAlgorithm::Sha512, "f".repeat(128))]);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-5-4")),
+            "an authored SHA-512 satisfies §5.2.2"
+        );
+
+        // Enriched hashes only: the component counts as hash-less
+        // (§3.2.1-aware Warning), not as carrying the wrong algorithm.
+        let r = check(vec![Hash::enriched(HashAlgorithm::Sha512, "0".repeat(128))]);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4-MISSING"
+                    && v.severity == ViolationSeverity::Warning),
+            "enriched-only hashes must count as no authored hash at all"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4"),
+            "enriched-only hashes must not fire the wrong-algorithm Error"
+        );
+    }
+
     /// §5.2.2 component version is a required field: absence gates.
     #[test]
     fn bsi_tr_03183_2_gates_on_missing_version() {

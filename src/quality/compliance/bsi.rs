@@ -46,7 +46,9 @@ impl ComplianceChecker {
         sbom: &NormalizedSbom,
         violations: &mut Vec<Violation>,
     ) {
-        use crate::model::{CompletenessDeclaration, HashAlgorithm, HashProvenance, SbomFormat};
+        use crate::model::{
+            CompletenessDeclaration, CreatorType, HashAlgorithm, HashProvenance, SbomFormat,
+        };
 
         // §4 — Format eligibility gate. A newly generated or updated SBOM
         // MUST be CycloneDX >= 1.6 or SPDX >= 3.0.1 (JSON or XML). The §7
@@ -90,13 +92,25 @@ impl ComplianceChecker {
         // Note: v2.1.0 does NOT require identifying the generation tool in
         // any tier (the "Creator of the SBOM" maps to Person/Organization /
         // metadata.manufacturer, not metadata.tools), so the former
-        // tool-identification Error is intentionally gone.
-        if sbom.document.creators.is_empty() {
+        // tool-identification Error is intentionally gone. For the same
+        // reason Tool creators cannot SATISFY the field either: a tools-only
+        // SBOM (the default output of common generators) has no creator in
+        // the TR's sense, so both the presence Error and the contact Warning
+        // consider only non-Tool (Person/Organization) creators.
+        let non_tool_creators: Vec<_> = sbom
+            .document
+            .creators
+            .iter()
+            .filter(|c| c.creator_type != CreatorType::Tool)
+            .collect();
+        if non_tool_creators.is_empty() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
                 message: "[BSI TR-03183-2 §5.2.1] Creator of the SBOM missing (email address, or \
-                          URL if no email is available)"
+                          URL if no email is available); generation tools (metadata.tools) do \
+                          not satisfy the field — provide a Person/Organization creator (e.g. \
+                          CycloneDX metadata.authors or metadata.manufacturer)"
                     .to_string(),
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.1: Creator of the SBOM".to_string(),
@@ -104,7 +118,7 @@ impl ComplianceChecker {
                 standard_refs: Vec::new(),
             });
         } else {
-            let has_contact = sbom.document.creators.iter().any(|c| {
+            let has_contact = non_tool_creators.iter().any(|c| {
                 known_value(c.email.as_deref()).is_some()
                     || c.name.contains('@')
                     || c.name.contains("://")
@@ -376,9 +390,10 @@ impl ComplianceChecker {
 
         // §5.2.2 — "the completeness of this enumeration MUST be clearly
         // indicated". CycloneDX carries this via compositions.aggregate;
-        // SPDX has no equivalent field mapped into the model yet, so SPDX
-        // documents (parsed as Unknown) warn here too — the indication is
-        // genuinely absent from the document.
+        // SPDX 3.0+ via the relationships' explicit `completeness` property
+        // (both mapped into the model). SPDX 2.x has no equivalent field
+        // and stays Unknown, so it warns here — the indication is genuinely
+        // absent from the document.
         if matches!(
             sbom.document.completeness_declaration,
             CompletenessDeclaration::Unknown | CompletenessDeclaration::NotSpecified
@@ -387,7 +402,8 @@ impl ComplianceChecker {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DependencyInfo,
                 message: "[BSI TR-03183-2 §5.2.2] Completeness of the dependency enumeration is \
-                          not clearly indicated (CycloneDX compositions.aggregate)"
+                          not clearly indicated (CycloneDX compositions.aggregate / SPDX 3 \
+                          relationship completeness)"
                     .to_string(),
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.2: Completeness of the dependency enumeration"

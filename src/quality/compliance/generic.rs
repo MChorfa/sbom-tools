@@ -222,8 +222,12 @@ impl ComplianceChecker {
                         || v.starts_with("1.3"))
                 }
                 SbomFormat::Spdx => {
+                    // An empty spec_version means the document declared no
+                    // version (parsers never fabricate one): skip rather
+                    // than false-fail, matching the CycloneDX arm where an
+                    // empty version also passes.
                     let v = &sbom.document.spec_version;
-                    v.starts_with("2.3") || v.starts_with("3.")
+                    v.is_empty() || v.starts_with("2.3") || v.starts_with("3.")
                 }
             };
             if !format_ok {

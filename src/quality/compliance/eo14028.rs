@@ -20,8 +20,12 @@ impl ComplianceChecker {
                 // The NTIA minimum-elements report that EO 14028 §4(e)
                 // defers to names SPDX (then at 2.2) as an accepted format,
                 // so SPDX 2.2 documents are machine-readable under the EO.
+                // An empty spec_version means the document declared no
+                // version (parsers never fabricate one): skip rather than
+                // false-fail, matching the CycloneDX arm where an empty
+                // version also passes.
                 let v = &sbom.document.spec_version;
-                v.starts_with("2.2") || v.starts_with("2.3") || v.starts_with("3.")
+                v.is_empty() || v.starts_with("2.2") || v.starts_with("2.3") || v.starts_with("3.")
             }
         };
         if !format_ok {
