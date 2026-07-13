@@ -8,14 +8,25 @@ use crate::quality::{
     QualityGrade, QualityReport, QualityScorer, ScoringProfile, ViolationSeverity,
 };
 use crate::reports::ReportFormat;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde_json::json;
 use std::path::PathBuf;
+
+/// Output formats the `quality` command has a real renderer for.
+/// `auto`/`summary` render the plain-text report; JSON and SARIF are
+/// dedicated emitters. All other [`ReportFormat`] values are rejected up
+/// front instead of silently falling back to text.
+pub const QUALITY_OUTPUT_FORMATS: &[ReportFormat] = &[
+    ReportFormat::Auto,
+    ReportFormat::Summary,
+    ReportFormat::Json,
+    ReportFormat::Sarif,
+];
 
 /// Quality command configuration
 pub struct QualityConfig {
     pub sbom_path: PathBuf,
-    pub profile: String,
+    pub profile: ScoringProfile,
     pub output: ReportFormat,
     pub output_file: Option<PathBuf>,
     pub show_recommendations: bool,
@@ -45,7 +56,7 @@ pub struct QualityConfig {
 #[allow(clippy::too_many_arguments)]
 pub fn run_quality(
     sbom_path: PathBuf,
-    profile_name: String,
+    profile: ScoringProfile,
     output: ReportFormat,
     output_file: Option<PathBuf>,
     show_recommendations: bool,
@@ -59,7 +70,7 @@ pub fn run_quality(
 ) -> Result<i32> {
     let config = QualityConfig {
         sbom_path,
-        profile: profile_name,
+        profile,
         output,
         output_file,
         show_recommendations,
@@ -76,6 +87,8 @@ pub fn run_quality(
 }
 
 fn run_quality_impl(config: QualityConfig) -> Result<i32> {
+    super::ensure_output_format_supported("quality", config.output, QUALITY_OUTPUT_FORMATS)?;
+
     #[cfg_attr(not(feature = "enrichment"), allow(unused_mut))]
     let mut parsed = parse_sbom_with_context(&config.sbom_path, false)?;
 
@@ -99,16 +112,13 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
         }
     }
 
-    // Parse scoring profile
-    let profile = parse_scoring_profile(&config.profile)?;
+    let profile = config.profile;
 
     tracing::info!("Running quality assessment with {:?} profile", profile);
 
-    // Honour explicit --cra-sidecar; otherwise auto-discover.
-    let sidecar = match &config.cra_sidecar_path {
-        Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
-        None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
-    };
+    // Honour explicit --cra-sidecar (hard error when broken); otherwise
+    // auto-discover next to the SBOM (best-effort).
+    let sidecar = super::load_cra_sidecar(config.cra_sidecar_path.as_deref(), &config.sbom_path)?;
     let cli_class = config
         .cra_product_class
         .as_deref()
@@ -178,26 +188,6 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     Ok(exit_codes::SUCCESS)
 }
 
-/// Parse scoring profile from string
-fn parse_scoring_profile(profile_name: &str) -> Result<ScoringProfile> {
-    match profile_name.to_lowercase().as_str() {
-        "minimal" => Ok(ScoringProfile::Minimal),
-        "standard" => Ok(ScoringProfile::Standard),
-        "security" => Ok(ScoringProfile::Security),
-        "license-compliance" | "license" => Ok(ScoringProfile::LicenseCompliance),
-        "cra" | "cyber-resilience" => Ok(ScoringProfile::Cra),
-        "bsi" | "tr-03183" | "tr03183" | "bsi-tr-03183-2" => Ok(ScoringProfile::BsiTr03183_2),
-        "comprehensive" | "full" => Ok(ScoringProfile::Comprehensive),
-        "cbom" | "cryptographic" => Ok(ScoringProfile::Cbom),
-        "ai-readiness" | "ai_readiness" => Ok(ScoringProfile::AiReadiness),
-        _ => {
-            bail!(
-                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, bsi, comprehensive, cbom, ai-readiness"
-            );
-        }
-    }
-}
-
 /// Format quality report as JSON
 fn format_quality_json(report: &QualityReport, config: &QualityConfig) -> String {
     let not_applicable = report
@@ -221,7 +211,7 @@ fn format_quality_json(report: &QualityReport, config: &QualityConfig) -> String
         "tool": "sbom-tools",
         "version": env!("CARGO_PKG_VERSION"),
         "sbom": config.sbom_path.file_name().unwrap_or_default().to_string_lossy(),
-        "profile": config.profile,
+        "profile": config.profile.to_string(),
         "applicable": !not_applicable,
         "report": report_value,
     });
@@ -245,7 +235,7 @@ fn format_quality_sarif(report: &QualityReport, config: &QualityConfig) -> Strin
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy(),
-            &config.profile,
+            &config.profile.to_string(),
             score,
             grade,
         )
@@ -316,7 +306,7 @@ fn format_quality_sarif(report: &QualityReport, config: &QualityConfig) -> Strin
             "results": results,
             "properties": {
                 "sbom": config.sbom_path.file_name().unwrap_or_default().to_string_lossy(),
-                "profile": config.profile,
+                "profile": config.profile.to_string(),
                 "applicable": !not_applicable,
                 "overall_score": if not_applicable { serde_json::Value::Null } else { json!(report.overall_score) },
                 "grade": if not_applicable { "N/A" } else { report.grade.letter() },
@@ -628,75 +618,158 @@ mod tests {
     use super::*;
     use crate::model::{Component, ComponentType, DocumentMetadata, MlModelInfo, NormalizedSbom};
 
+    /// Contract test: every documented `--profile` spelling parses to the
+    /// right profile through the single shared parser (clap uses the same
+    /// name/alias table).
     #[test]
-    fn test_parse_scoring_profile() {
-        assert!(matches!(
-            parse_scoring_profile("minimal").unwrap(),
+    fn every_documented_profile_alias_parses() {
+        let table: &[(&str, ScoringProfile)] = &[
+            ("minimal", ScoringProfile::Minimal),
+            ("standard", ScoringProfile::Standard),
+            ("security", ScoringProfile::Security),
+            ("license-compliance", ScoringProfile::LicenseCompliance),
+            ("license", ScoringProfile::LicenseCompliance),
+            ("cra", ScoringProfile::Cra),
+            ("cyber-resilience", ScoringProfile::Cra),
+            ("bsi", ScoringProfile::BsiTr03183_2),
+            ("tr-03183", ScoringProfile::BsiTr03183_2),
+            ("tr03183", ScoringProfile::BsiTr03183_2),
+            ("bsi-tr-03183-2", ScoringProfile::BsiTr03183_2),
+            ("comprehensive", ScoringProfile::Comprehensive),
+            ("full", ScoringProfile::Comprehensive),
+            ("cbom", ScoringProfile::Cbom),
+            ("cryptographic", ScoringProfile::Cbom),
+            ("ai-readiness", ScoringProfile::AiReadiness),
+            ("ai_readiness", ScoringProfile::AiReadiness),
+        ];
+        for (spelling, expected) in table {
+            let parsed: ScoringProfile = spelling
+                .parse()
+                .unwrap_or_else(|e| panic!("'{spelling}' must parse: {e}"));
+            assert_eq!(parsed, *expected, "'{spelling}' mapped to wrong profile");
+        }
+    }
+
+    #[test]
+    fn profile_parse_is_case_insensitive_and_rejects_unknown() {
+        assert_eq!(
+            "MINIMAL".parse::<ScoringProfile>().unwrap(),
             ScoringProfile::Minimal
-        ));
-        assert!(matches!(
-            parse_scoring_profile("standard").unwrap(),
+        );
+        assert_eq!(
+            "Standard".parse::<ScoringProfile>().unwrap(),
             ScoringProfile::Standard
-        ));
-        assert!(matches!(
-            parse_scoring_profile("security").unwrap(),
-            ScoringProfile::Security
-        ));
-        assert!(matches!(
-            parse_scoring_profile("license-compliance").unwrap(),
-            ScoringProfile::LicenseCompliance
-        ));
-        assert!(matches!(
-            parse_scoring_profile("cra").unwrap(),
-            ScoringProfile::Cra
-        ));
-        assert!(matches!(
-            parse_scoring_profile("comprehensive").unwrap(),
-            ScoringProfile::Comprehensive
-        ));
+        );
+        let err = "invalid".parse::<ScoringProfile>().unwrap_err();
+        assert!(err.contains("Valid values"));
+        assert!(err.contains("license-compliance"));
     }
 
     #[test]
-    fn test_parse_scoring_profile_case_insensitive() {
-        assert!(matches!(
-            parse_scoring_profile("MINIMAL").unwrap(),
-            ScoringProfile::Minimal
-        ));
-        assert!(matches!(
-            parse_scoring_profile("Standard").unwrap(),
-            ScoringProfile::Standard
-        ));
+    fn rejects_unsupported_output_format_before_reading_sbom() {
+        // html/markdown/csv/oscal-json used to fall through to the text
+        // renderer; they must now fail fast (before the SBOM is read — the
+        // path here does not exist).
+        for format in [
+            ReportFormat::Html,
+            ReportFormat::Markdown,
+            ReportFormat::Csv,
+            ReportFormat::OscalJson,
+            ReportFormat::Ndjson,
+            ReportFormat::Table,
+            ReportFormat::SideBySide,
+            ReportFormat::Tui,
+        ] {
+            let err = run_quality(
+                PathBuf::from("/nonexistent/never-read.cdx.json"),
+                ScoringProfile::Standard,
+                format,
+                None,
+                false,
+                false,
+                None,
+                false,
+                true,
+                None,
+                None,
+                EnrichmentConfig::default(),
+            )
+            .expect_err("unsupported format must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("not supported by `sbom-tools quality`"),
+                "unexpected error for {format}: {msg}"
+            );
+            assert!(
+                msg.contains("sarif") && msg.contains("json"),
+                "error must list the supported formats: {msg}"
+            );
+        }
     }
 
     #[test]
-    fn test_parse_scoring_profile_invalid() {
-        assert!(parse_scoring_profile("invalid").is_err());
+    fn explicit_missing_sidecar_is_a_hard_error() {
+        // An explicitly passed --cra-sidecar that fails to load used to be
+        // silently ignored (`.ok()`); it must now abort the command.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let err = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            false,
+            true,
+            Some(dir.path().join("missing.cra.json")),
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect_err("broken explicit sidecar must be a hard error");
+        assert!(err.to_string().contains("Failed to load CRA sidecar"));
     }
 
     #[test]
-    fn test_parse_scoring_profile_aliases() {
-        assert!(matches!(
-            parse_scoring_profile("license").unwrap(),
-            ScoringProfile::LicenseCompliance
-        ));
-        assert!(matches!(
-            parse_scoring_profile("full").unwrap(),
-            ScoringProfile::Comprehensive
-        ));
-        assert!(matches!(
-            parse_scoring_profile("cyber-resilience").unwrap(),
-            ScoringProfile::Cra
-        ));
-        assert!(matches!(
-            parse_scoring_profile("ai-readiness").unwrap(),
-            ScoringProfile::AiReadiness
-        ));
+    fn auto_discovered_broken_sidecar_soft_fails() {
+        // Without an explicit path, a broken adjacent sidecar must not abort
+        // the command (best-effort discovery logs a warning instead).
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("app.cra.json"), "{ not json").unwrap();
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Json,
+            Some(dir.path().join("out.json")),
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("auto-discovery must soft-fail on a broken sidecar");
+        assert_eq!(code, exit_codes::SUCCESS);
     }
 
     fn ai_config(output: ReportFormat, min_score: Option<f32>) -> QualityConfig {
         QualityConfig {
             sbom_path: PathBuf::from("model.cdx.json"),
-            profile: "ai-readiness".to_string(),
+            profile: ScoringProfile::AiReadiness,
             output,
             output_file: None,
             show_recommendations: true,

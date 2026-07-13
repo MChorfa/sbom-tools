@@ -224,3 +224,175 @@ fn explicit_missing_config_path_is_an_error() {
         stderr(&output)
     );
 }
+
+// ---------------------------------------------------------------------------
+// `compliance:` config section (validate / quality defaults)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_compliance_standards_takes_effect_on_validate() {
+    // Default standard is ntia; a config value of [cra] is observable in the
+    // summary JSON's "standard" field.
+    let (_dir, cfg) = write_config("compliance:\n  standards: [cra]\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .arg("--summary")
+        .output()
+        .expect("validate should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("summary should be JSON");
+    assert!(
+        json["standard"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("CRA"),
+        "config compliance.standards=[cra] should select CRA, got: {json}"
+    );
+}
+
+#[test]
+fn explicit_standard_flag_overrides_config_compliance_standards() {
+    let (_dir, cfg) = write_config("compliance:\n  standards: [cra]\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "ntia", "--summary"])
+        .output()
+        .expect("validate should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("summary should be JSON");
+    assert_eq!(
+        json["standard"], "NTIA Minimum Elements",
+        "explicit --standard ntia must override the config file: {json}"
+    );
+}
+
+#[test]
+fn config_compliance_profile_takes_effect_on_quality() {
+    // Config profile accepts the same aliases as the CLI flag.
+    let (_dir, cfg) = write_config("compliance:\n  profile: cyber-resilience\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "quality"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "json"])
+        .output()
+        .expect("quality should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("quality output should be JSON");
+    assert_eq!(
+        json["profile"], "cra",
+        "config compliance.profile=cyber-resilience should select the cra profile: {json}"
+    );
+}
+
+#[test]
+fn explicit_profile_flag_overrides_config_compliance_profile() {
+    let (_dir, cfg) = write_config("compliance:\n  profile: cra\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "quality"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--profile", "security", "-o", "json"])
+        .output()
+        .expect("quality should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("quality output should be JSON");
+    assert_eq!(
+        json["profile"], "security",
+        "explicit --profile security must override the config file: {json}"
+    );
+}
+
+#[test]
+fn config_compliance_min_score_gates_quality_exit_code() {
+    // No CLI --min-score; the config's min_score: 100 must flip the exit code.
+    let (_dir, cfg) = write_config("compliance:\n  min_score: 100\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "quality"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "json"])
+        .output()
+        .expect("quality should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "config compliance.min_score=100 must gate the exit code; stderr:\n{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn config_compliance_fail_on_warning_takes_effect_on_validate() {
+    // ntia-warnings-only has warnings but no errors, so exit code 2 can only
+    // come from the config's fail_on_warning.
+    let (_dir, cfg) = write_config("compliance:\n  fail_on_warning: true\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("cyclonedx/ntia-warnings-only.cdx.json"))
+        .args(["--standard", "ntia", "--summary"])
+        .output()
+        .expect("validate should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "config compliance.fail_on_warning must flip the exit code; stderr:\n{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn invalid_compliance_section_fails_config_check_with_field_name() {
+    let (_dir, cfg) =
+        write_config("compliance:\n  standards: [not-a-standard]\n  profile: bogus\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "config", "check"])
+        .output()
+        .expect("config check should run");
+
+    assert!(
+        !output.status.success(),
+        "invalid compliance section should fail config check"
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("compliance.standards[0]") && err.contains("compliance.profile"),
+        "error should name the offending fields; stderr:\n{err}"
+    );
+}
+
+#[test]
+fn config_compliance_cra_sidecar_is_explicit_and_hard_errors_when_broken() {
+    // A sidecar configured in the file is treated like an explicit flag: a
+    // broken path aborts the command instead of being silently ignored.
+    let (_dir, cfg) = write_config("compliance:\n  cra_sidecar: /nonexistent/side.cra.json\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "cra", "--summary"])
+        .output()
+        .expect("validate should run");
+
+    assert!(
+        !output.status.success(),
+        "a configured broken sidecar must abort validate"
+    );
+    assert!(
+        stderr(&output).contains("Failed to load CRA sidecar"),
+        "{}",
+        stderr(&output)
+    );
+}

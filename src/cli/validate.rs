@@ -4,10 +4,24 @@
 
 use crate::model::NormalizedSbom;
 use crate::pipeline::{OutputTarget, exit_codes, parse_sbom_with_context, write_output};
-use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult, ViolationSeverity};
+use crate::quality::{
+    ComplianceChecker, ComplianceLevel, ComplianceResult, StandardSelector, ViolationSeverity,
+};
 use crate::reports::{ReportFormat, generate_compliance_sarif};
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::path::PathBuf;
+
+/// Output formats the `validate` command has a real renderer for.
+/// `auto`/`summary` render the plain-text report; everything else here is a
+/// dedicated machine-readable emitter. All other [`ReportFormat`] values are
+/// rejected up front instead of silently falling back to text.
+pub const VALIDATE_OUTPUT_FORMATS: &[ReportFormat] = &[
+    ReportFormat::Auto,
+    ReportFormat::Summary,
+    ReportFormat::Json,
+    ReportFormat::Sarif,
+    ReportFormat::OscalJson,
+];
 
 /// Run the validate command, returning the desired exit code.
 ///
@@ -23,7 +37,7 @@ use std::path::PathBuf;
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub fn run_validate(
     sbom_path: PathBuf,
-    standard: String,
+    standards: Vec<StandardSelector>,
     output: ReportFormat,
     output_file: Option<PathBuf>,
     fail_on_warning: bool,
@@ -31,17 +45,18 @@ pub fn run_validate(
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
 ) -> Result<i32> {
+    super::ensure_output_format_supported("validate", output, VALIDATE_OUTPUT_FORMATS)?;
+    anyhow::ensure!(
+        !standards.is_empty(),
+        "no compliance standard selected; pass --standard (valid values: {})",
+        StandardSelector::valid_values()
+    );
+
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
 
-    // Load CRA sidecar — explicit flag wins, otherwise auto-discover next to the SBOM
-    let cra_sidecar = match cra_sidecar_path {
-        Some(p) => Some(
-            crate::model::CraSidecarMetadata::from_file(&p).map_err(|e| {
-                anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())
-            })?,
-        ),
-        None => crate::model::CraSidecarMetadata::find_for_sbom(&sbom_path),
-    };
+    // Load CRA sidecar — an explicit path is a hard error when broken,
+    // otherwise auto-discover next to the SBOM (best-effort).
+    let cra_sidecar = super::load_cra_sidecar(cra_sidecar_path.as_deref(), &sbom_path)?;
 
     // Resolve effective product class: sidecar wins; otherwise CLI flag.
     // Mismatch between explicit CLI flag and sidecar is reported as a Warning
@@ -61,72 +76,34 @@ pub fn run_validate(
     }
     let effective_class = sidecar_class.or(cli_class);
 
-    let standards: Vec<&str> = standard.split(',').map(str::trim).collect();
     let mut results = Vec::new();
 
-    for std_name in &standards {
-        let result = match std_name.to_lowercase().as_str() {
-            "ntia" => ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(parsed.sbom()),
-            "fda" => ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(parsed.sbom()),
-            "cra" => {
-                let mut checker = ComplianceChecker::new(ComplianceLevel::CraPhase2);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                if let Some(c) = effective_class {
-                    checker = checker.with_product_class(c);
-                }
-                checker.check(parsed.sbom())
-            }
-            "ssdf" | "nist-ssdf" | "nist_ssdf" => {
-                ComplianceChecker::new(ComplianceLevel::NistSsdf).check(parsed.sbom())
-            }
-            "eo14028" | "eo-14028" | "eo_14028" => {
-                ComplianceChecker::new(ComplianceLevel::Eo14028).check(parsed.sbom())
-            }
-            "cnsa2" | "cnsa-2" | "cnsa_2" | "cnsa2.0" => {
-                ComplianceChecker::new(ComplianceLevel::Cnsa2).check(parsed.sbom())
-            }
-            "pqc" | "nist-pqc" | "nist_pqc" => {
-                ComplianceChecker::new(ComplianceLevel::NistPqc).check(parsed.sbom())
-            }
-            "bsi" | "tr-03183" | "tr03183" | "bsi-tr-03183-2" => {
-                ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(parsed.sbom())
-            }
-            "oss-steward" | "cra-oss-steward" | "cra-oss" | "cra-art24" | "art24" => {
-                let mut checker = ComplianceChecker::new(ComplianceLevel::CraOssSteward);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                checker.check(parsed.sbom())
-            }
-            "eucc" | "eucc-substantial" | "common-criteria" => {
-                let mut checker = ComplianceChecker::new(ComplianceLevel::EuccSubstantial);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                checker.check(parsed.sbom())
-            }
-            "ai-act" | "ai_act" | "aiact" | "eu-ai-act" => {
-                // The sidecar carries the is_high_risk_ai flag, which escalates
-                // Annex IV readiness findings — attach it when present.
-                let mut checker = ComplianceChecker::new(ComplianceLevel::EuAiAct);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                checker.check(parsed.sbom())
-            }
-            "bsi-ai" | "bsi_ai" | "bsiai" | "sbom-for-ai" | "ai-bom" => {
-                ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(parsed.sbom())
-            }
-            _ => {
-                bail!(
-                    "Unknown validation standard: {std_name}. \
-                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc, bsi, oss-steward, eucc, ai-act, bsi-ai"
-                );
-            }
-        };
-        results.push(result);
+    for selector in &standards {
+        let level = selector.level();
+        let mut checker = ComplianceChecker::new(level);
+        // Sidecar metadata feeds the CRA family (manufacturer/disclosure/
+        // lifecycle fields), EUCC (certificate references), and the AI Act
+        // profile (the is_high_risk_ai flag escalates Annex IV findings).
+        if matches!(
+            level,
+            ComplianceLevel::CraPhase1
+                | ComplianceLevel::CraPhase2
+                | ComplianceLevel::CraOssSteward
+                | ComplianceLevel::EuccSubstantial
+                | ComplianceLevel::EuAiAct
+        ) && let Some(sc) = cra_sidecar.clone()
+        {
+            checker = checker.with_sidecar(sc);
+        }
+        // Product class drives severity calibration for the CRA phase checks.
+        if matches!(
+            level,
+            ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2
+        ) && let Some(c) = effective_class
+        {
+            checker = checker.with_product_class(c);
+        }
+        results.push(checker.check(parsed.sbom()));
     }
 
     if results.len() == 1 {
@@ -338,5 +315,83 @@ mod tests {
     #[test]
     fn print_ntia_validation_does_not_panic_on_empty_sbom() {
         print_ntia_validation(&NormalizedSbom::default());
+    }
+
+    #[test]
+    fn rejects_unsupported_output_format_before_reading_sbom() {
+        // html/markdown/etc. used to silently fall through to the text
+        // renderer; they must now fail fast (before the SBOM is even read —
+        // the path here does not exist).
+        for format in [
+            ReportFormat::Html,
+            ReportFormat::Markdown,
+            ReportFormat::Csv,
+            ReportFormat::Ndjson,
+            ReportFormat::Table,
+            ReportFormat::SideBySide,
+            ReportFormat::Tui,
+        ] {
+            let err = run_validate(
+                PathBuf::from("/nonexistent/never-read.cdx.json"),
+                vec![StandardSelector::Ntia],
+                format,
+                None,
+                false,
+                false,
+                None,
+                None,
+            )
+            .expect_err("unsupported format must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("not supported by `sbom-tools validate`"),
+                "unexpected error for {format}: {msg}"
+            );
+            assert!(
+                msg.contains("oscal-json") && msg.contains("sarif"),
+                "error must list the supported formats: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_empty_standard_list() {
+        let err = run_validate(
+            PathBuf::from("/nonexistent/never-read.cdx.json"),
+            Vec::new(),
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            None,
+        )
+        .expect_err("empty standard list must be rejected");
+        assert!(err.to_string().contains("no compliance standard selected"));
+    }
+
+    #[test]
+    fn explicit_missing_sidecar_is_a_hard_error() {
+        // Regression guard for the loader contract: an explicitly passed
+        // sidecar path that cannot be loaded must abort validation.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let err = run_validate(
+            sbom_path,
+            vec![StandardSelector::Cra],
+            ReportFormat::Summary,
+            None,
+            false,
+            true,
+            Some(dir.path().join("missing.cra.json")),
+            None,
+        )
+        .expect_err("broken explicit sidecar must be a hard error");
+        assert!(err.to_string().contains("Failed to load CRA sidecar"));
     }
 }

@@ -23,6 +23,7 @@ use sbom_tools::{
         WatchConfig,
     },
     pipeline::dirs,
+    quality::{ScoringProfile, StandardSelector},
     reports::{ReportFormat, ReportType},
     watch::parse_duration,
 };
@@ -484,11 +485,26 @@ struct ValidateArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
 
-    /// Compliance standard(s) to validate against (comma-separated: ntia, fda, cra, ssdf, eo14028, ai-act, bsi-ai)
-    #[arg(long, default_value = "ntia")]
-    standard: String,
+    /// Compliance standard(s) to validate against (comma-separated)
+    ///
+    /// `cra` means CRA Phase 2 (full application, Dec 2027); use
+    /// `cra-phase1` (alias `cra-2026`) for the Art. 14 reporting phase.
+    /// Aliases: cra-phase2, nist-ssdf/nist_ssdf, eo-14028/eo_14028,
+    /// cnsa-2/cnsa_2/cnsa2.0, nist-pqc/nist_pqc,
+    /// tr-03183/tr03183/bsi-tr-03183-2,
+    /// cra-oss-steward/cra-oss/cra-art24/art24,
+    /// eucc-substantial/common-criteria, ai_act/aiact/eu-ai-act,
+    /// bsi_ai/bsiai/sbom-for-ai/ai-bom.
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        ignore_case = true,
+        default_value = "ntia"
+    )]
+    standard: Vec<StandardSelector>,
 
-    /// Output format (auto detects TTY: tui if interactive, summary otherwise)
+    /// Output format (summary, json, sarif, oscal-json; auto = summary)
     #[arg(short, long, default_value = "auto")]
     output: ReportFormat,
 
@@ -735,11 +751,15 @@ struct QualityArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
 
-    /// Scoring profile (minimal, standard, security, license-compliance, comprehensive)
-    #[arg(long, default_value = "standard")]
-    profile: String,
+    /// Scoring profile
+    ///
+    /// Aliases: license (license-compliance), cyber-resilience (cra),
+    /// tr-03183/tr03183/bsi-tr-03183-2 (bsi), full (comprehensive),
+    /// cryptographic (cbom), ai_readiness (ai-readiness).
+    #[arg(long, value_enum, ignore_case = true, default_value = "standard")]
+    profile: ScoringProfile,
 
-    /// Output format (auto detects TTY: tui if interactive, summary otherwise)
+    /// Output format (summary, json, sarif; auto = summary)
     #[arg(short, long, default_value = "auto")]
     output: ReportFormat,
 
@@ -1616,8 +1636,14 @@ fn main() -> Result<()> {
                     .as_deref()
                     .and_then(sbom_tools::BomProfile::from_str_opt),
                 enrichment,
-                cra_sidecar_path: args.cra_sidecar.clone(),
-                cra_product_class: args.cra_product_class.clone(),
+                cra_sidecar_path: args
+                    .cra_sidecar
+                    .clone()
+                    .or_else(|| app.compliance.cra_sidecar.clone()),
+                cra_product_class: args
+                    .cra_product_class
+                    .clone()
+                    .or_else(|| app.compliance.cra_product_class.clone()),
             };
             let exit_code = cli::run_view(config)?;
             if exit_code != 0 {
@@ -1627,15 +1653,40 @@ fn main() -> Result<()> {
         }
 
         Commands::Validate(args) => {
+            let sm = sub_matches;
+            // Standards: explicit --standard > config `compliance.standards`
+            // > built-in default (ntia). Config values go through the same
+            // alias-aware parser as the CLI flag.
+            let standards: Vec<StandardSelector> =
+                if arg_was_set_sub(sm, "standard") || app.compliance.standards.is_empty() {
+                    args.standard
+                } else {
+                    app.compliance
+                        .standards
+                        .iter()
+                        .map(|s| {
+                            s.parse().map_err(|e| {
+                                anyhow::anyhow!("invalid `compliance.standards` in config: {e}")
+                            })
+                        })
+                        .collect::<Result<_>>()?
+                };
+            let output = resolve(
+                args.output,
+                arg_was_set_sub(sm, "output"),
+                Some(app.output.format),
+            );
             let exit_code = cli::run_validate(
                 args.sbom,
-                args.standard,
-                args.output,
+                standards,
+                output,
                 args.output_file,
-                args.fail_on_warning,
+                resolve_bool(args.fail_on_warning, app.compliance.fail_on_warning),
                 args.summary,
-                args.cra_sidecar,
-                args.cra_product_class,
+                args.cra_sidecar
+                    .or_else(|| app.compliance.cra_sidecar.clone()),
+                args.cra_product_class
+                    .or_else(|| app.compliance.cra_product_class.clone()),
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
@@ -1877,19 +1928,35 @@ fn main() -> Result<()> {
                 arg_was_set_sub(sm, "output"),
                 Some(app.output.format),
             );
+            // Profile: explicit --profile > config `compliance.profile` >
+            // built-in default (standard). Config values go through the same
+            // alias-aware parser as the CLI flag.
+            let profile = if arg_was_set_sub(sm, "profile") {
+                args.profile
+            } else if let Some(ref p) = app.compliance.profile {
+                p.parse()
+                    .map_err(|e| anyhow::anyhow!("invalid `compliance.profile` in config: {e}"))?
+            } else {
+                args.profile
+            };
             let enrichment = seed_enrichment(&args.enrichment, sm, &app, offline);
             let exit_code = cli::run_quality(
                 args.sbom,
-                args.profile,
+                profile,
                 output,
                 args.output_file,
                 args.recommendations,
                 args.metrics,
-                args.min_score,
-                args.fail_on_noncompliant,
+                args.min_score.or(app.compliance.min_score),
+                resolve_bool(
+                    args.fail_on_noncompliant,
+                    app.compliance.fail_on_noncompliant,
+                ),
                 resolve_bool(cli.no_color, app.output.no_color),
-                args.cra_sidecar,
-                args.cra_product_class,
+                args.cra_sidecar
+                    .or_else(|| app.compliance.cra_sidecar.clone()),
+                args.cra_product_class
+                    .or_else(|| app.compliance.cra_product_class.clone()),
                 enrichment,
             )?;
             if exit_code != 0 {

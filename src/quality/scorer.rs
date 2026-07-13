@@ -54,33 +54,102 @@ fn ml_has_exploitability_reference(component: &crate::model::Component) -> bool 
     })
 }
 
-/// Scoring profile determines weights and thresholds
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Scoring profile determines weights and thresholds.
+///
+/// The `#[value(...)]` attributes are the single source of truth for the
+/// CLI spellings of `quality --profile` (help text, parse errors, shell
+/// completions) and for the config file's `compliance.profile` key, which
+/// parses through [`std::str::FromStr`] over the same table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[non_exhaustive]
 pub enum ScoringProfile {
     /// Minimal requirements - basic identification
+    #[value(name = "minimal")]
     Minimal,
     /// Standard requirements - recommended for most use cases
+    #[value(name = "standard")]
     Standard,
     /// Security-focused - emphasizes vulnerability info and supply chain
+    #[value(name = "security")]
     Security,
     /// License-focused - emphasizes license compliance
+    #[value(name = "license-compliance", alias = "license")]
     LicenseCompliance,
     /// EU Cyber Resilience Act - emphasizes supply chain transparency and security disclosure
+    #[value(name = "cra", alias = "cyber-resilience")]
     Cra,
     /// BSI TR-03183-2 v2.1.0 (German national CRA-aligned SBOM technical
     /// guideline). Stricter than CRA on formats and hashes (SHA-512);
     /// uses CRA-style weights.
+    #[value(
+        name = "bsi",
+        alias = "tr-03183",
+        alias = "tr03183",
+        alias = "bsi-tr-03183-2"
+    )]
     BsiTr03183_2,
     /// Comprehensive - all aspects equally weighted
+    #[value(name = "comprehensive", alias = "full")]
     Comprehensive,
     /// CBOM - cryptographic BOM focus (algorithm strength, PQC readiness, key/cert lifecycle)
+    #[value(name = "cbom", alias = "cryptographic")]
     Cbom,
     /// AI/ML readiness - evaluates model-card completeness for machine-learning components
+    #[value(name = "ai-readiness", alias = "ai_readiness")]
     AiReadiness,
 }
 
+impl std::fmt::Display for ScoringProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.canonical_name())
+    }
+}
+
+impl std::str::FromStr for ScoringProfile {
+    type Err = String;
+
+    /// Case-insensitive parse through the same name/alias table clap uses.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        for variant in <Self as clap::ValueEnum>::value_variants() {
+            if clap::ValueEnum::to_possible_value(variant).is_some_and(|pv| pv.matches(s, true)) {
+                return Ok(*variant);
+            }
+        }
+        Err(format!(
+            "unknown scoring profile '{s}'. Valid values: {}",
+            Self::valid_values()
+        ))
+    }
+}
+
 impl ScoringProfile {
+    /// The canonical CLI spelling (the `#[value(name = ...)]`).
+    #[must_use]
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Standard => "standard",
+            Self::Security => "security",
+            Self::LicenseCompliance => "license-compliance",
+            Self::Cra => "cra",
+            Self::BsiTr03183_2 => "bsi",
+            Self::Comprehensive => "comprehensive",
+            Self::Cbom => "cbom",
+            Self::AiReadiness => "ai-readiness",
+        }
+    }
+
+    /// Comma-separated list of every canonical value, for error messages.
+    #[must_use]
+    pub fn valid_values() -> String {
+        <Self as clap::ValueEnum>::value_variants()
+            .iter()
+            .map(|v| v.canonical_name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// Get the compliance level associated with this profile
     #[must_use]
     pub const fn compliance_level(&self) -> ComplianceLevel {

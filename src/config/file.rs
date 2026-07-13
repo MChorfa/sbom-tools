@@ -269,6 +269,37 @@ impl AppConfig {
             self.tui.theme = other.tui.theme.clone();
         }
 
+        // Compliance config
+        if !other.compliance.standards.is_empty() {
+            self.compliance
+                .standards
+                .clone_from(&other.compliance.standards);
+        }
+        if other.compliance.profile.is_some() {
+            self.compliance
+                .profile
+                .clone_from(&other.compliance.profile);
+        }
+        if other.compliance.min_score.is_some() {
+            self.compliance.min_score = other.compliance.min_score;
+        }
+        if other.compliance.fail_on_warning {
+            self.compliance.fail_on_warning = true;
+        }
+        if other.compliance.fail_on_noncompliant {
+            self.compliance.fail_on_noncompliant = true;
+        }
+        if other.compliance.cra_sidecar.is_some() {
+            self.compliance
+                .cra_sidecar
+                .clone_from(&other.compliance.cra_sidecar);
+        }
+        if other.compliance.cra_product_class.is_some() {
+            self.compliance
+                .cra_product_class
+                .clone_from(&other.compliance.cra_product_class);
+        }
+
         // Enrichment config
         if other.enrichment.is_some() {
             self.enrichment.clone_from(&other.enrichment);
@@ -381,6 +412,27 @@ tui:
   show_line_numbers: true
   mouse_enabled: true
   initial_threshold: 0.8
+
+# Compliance defaults for `validate` / `quality` (CLI flags override)
+compliance:
+  # Default standard(s) for `validate --standard`. Canonical values:
+  # ntia, fda, cra, cra-phase1, ssdf, eo14028, cnsa2, pqc, bsi,
+  # oss-steward, eucc, ai-act, bsi-ai (aliases accepted)
+  # standards: [ntia, cra]
+  # Default scoring profile for `quality --profile`: minimal, standard,
+  # security, license-compliance, cra, bsi, comprehensive, cbom, ai-readiness
+  # profile: standard
+  # Fail `quality` when the overall score is below this (0-100)
+  # min_score: 70
+  # Exit non-zero when `validate` finds warnings
+  fail_on_warning: false
+  # Exit non-zero when `quality` reports NON-COMPLIANT
+  fail_on_noncompliant: false
+  # CRA sidecar metadata file (JSON or YAML); a configured path that fails
+  # to load is a hard error
+  # cra_sidecar: ./app.cra.json
+  # CRA product class: default, important-class-1, important-class-2, critical
+  # cra_product_class: default
 
 # Enrichment configuration (optional)
 # enrichment:
