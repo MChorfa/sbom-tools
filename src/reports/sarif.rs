@@ -265,6 +265,10 @@ impl ReportGenerator for SarifReporter {
         results.extend(compliance_results_to_sarif(&cra_old, Some("Old SBOM")));
         results.extend(compliance_results_to_sarif(&cra_new, Some("New SBOM")));
 
+        // Guarantee every emitted ruleId has a descriptor (the static table
+        // predates rules like SBOM-CRA-CYCLES) and descriptor ids are unique.
+        let rules = complete_rule_catalogue(get_sarif_rules(), &results);
+
         let sarif = SarifReport {
             schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
             version: "2.1.0".to_string(),
@@ -274,7 +278,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: SarifRuleWithUri::wrap_all(get_sarif_rules()),
+                        rules: SarifRuleWithUri::wrap_all(rules),
                     },
                 },
                 results,
@@ -330,6 +334,9 @@ impl ReportGenerator for SarifReporter {
             .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(sbom));
         results.extend(compliance_results_to_sarif(&cra_result, None));
 
+        // Same descriptor guarantee as the diff path (see above).
+        let rules = complete_rule_catalogue(get_sarif_view_rules(), &results);
+
         let sarif = SarifReport {
             schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
             version: "2.1.0".to_string(),
@@ -339,7 +346,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: SarifRuleWithUri::wrap_all(get_sarif_view_rules()),
+                        rules: SarifRuleWithUri::wrap_all(rules),
                     },
                 },
                 results,
@@ -768,9 +775,9 @@ fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
     } else if rule_id.starts_with("SBOM-EO14028-") || rule_id.starts_with("SBOM-EO-14028-") {
         Some("https://www.federalregister.gov/d/2021-10460")
     } else if rule_id.starts_with("SBOM-FDA-") {
-        Some(
-            "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions",
-        )
+        // Current edition: "Quality Management System Considerations…"
+        // (final, 2026-02-03); FDA's media id is the stable handle.
+        Some("https://www.fda.gov/media/119933/download")
     } else if rule_id.starts_with("SBOM-NTIA-") {
         Some("https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom")
     } else if rule_id.starts_with("SBOM-PQC-") || rule_id.starts_with("SBOM-NIST-PQC-") {
@@ -1491,10 +1498,10 @@ fn get_sarif_compliance_rules() -> Vec<SarifRule> {
             default_configuration: SarifConfiguration { level: SarifLevel::Warning },
         },
         SarifRule {
-            id: "SBOM-CRA-ART-13-9".to_string(),
+            id: "SBOM-CRA-VULN-STATEMENT".to_string(),
             name: "CraKnownVulnerabilities".to_string(),
             short_description: SarifMessage {
-                text: "CRA Art. 13(9): Known vulnerabilities statement — vulnerability data or assertion".to_string(),
+                text: "CRA Annex I Part II (1): Documented vulnerability information — vulnerability data or assertion".to_string(),
             },
             default_configuration: SarifConfiguration { level: SarifLevel::Note },
         },

@@ -210,7 +210,9 @@ impl ComplianceChecker {
             });
         }
 
-        // B3: Art. 13(9) — Known vulnerabilities statement
+        // B3: Annex I Part II (1) — documented vulnerability information.
+        // (Formerly cited Art. 13(9), which is actually the 10-year
+        // security-update availability obligation.)
         // SBOM should either contain vulnerability data or explicitly indicate "none known"
         let has_vuln_data = sbom
             .components
@@ -230,12 +232,13 @@ impl ComplianceChecker {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::SecurityInfo,
                 message:
-                    "[CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; \
+                    "[CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; \
                     include vulnerability information or a statement of no known vulnerabilities"
                         .to_string(),
                 element: None,
-                requirement: "CRA Art. 13(9): Known vulnerabilities statement".to_string(),
-                rule_id: "SBOM-CRA-ART-13-9",
+                requirement: "CRA Annex I Part II (1): Documented vulnerability information"
+                    .to_string(),
+                rule_id: "SBOM-CRA-VULN-STATEMENT",
                 standard_refs: Vec::new(),
             });
         }
@@ -784,16 +787,16 @@ impl ComplianceChecker {
         let ew_present = sidecar.is_some_and(|s| s.early_warning_contact.is_some());
         if !ew_present {
             let msg = if art_14_active {
-                "[CRA Art. 14(1)] 24-hour early-warning channel missing — required when an actively-exploited vulnerability is identified"
+                "[CRA Art. 14(2)(a)] 24-hour early-warning channel missing — required when an actively-exploited vulnerability is identified"
             } else {
-                "[CRA Art. 14(1)] 24-hour early-warning channel missing — document the ENISA/CSIRT contact before 2026-09-11"
+                "[CRA Art. 14(2)(a)] 24-hour early-warning channel missing — document the ENISA/CSIRT contact before 2026-09-11"
             };
             violations.push(Violation {
                 severity: post_deadline_severity,
                 category: ViolationCategory::SecurityInfo,
                 message: msg.to_string(),
                 element: None,
-                requirement: "CRA Art. 14(1): 24-hour early-warning channel".to_string(),
+                requirement: "CRA Art. 14(2)(a): 24-hour early-warning channel".to_string(),
                 rule_id: "SBOM-CRA-ART-14",
                 standard_refs: Vec::new(),
             });
@@ -802,16 +805,16 @@ impl ComplianceChecker {
         let ir_present = sidecar.is_some_and(|s| s.incident_report_contact.is_some());
         if !ir_present {
             let msg = if art_14_active {
-                "[CRA Art. 14(2)] 72-hour incident-report channel missing — required for severe incidents impacting product security"
+                "[CRA Art. 14(2)(b) / 14(4)(b)] 72-hour notification channel missing — required for actively exploited vulnerabilities and severe incidents"
             } else {
-                "[CRA Art. 14(2)] 72-hour incident-report channel missing — document this contact before 2026-09-11"
+                "[CRA Art. 14(2)(b) / 14(4)(b)] 72-hour notification channel missing — document this contact before 2026-09-11"
             };
             violations.push(Violation {
                 severity: post_deadline_severity,
                 category: ViolationCategory::SecurityInfo,
                 message: msg.to_string(),
                 element: None,
-                requirement: "CRA Art. 14(2): 72-hour incident-report channel".to_string(),
+                requirement: "CRA Art. 14(2)(b): 72-hour notification channel".to_string(),
                 rule_id: "SBOM-CRA-ART-14",
                 standard_refs: Vec::new(),
             });

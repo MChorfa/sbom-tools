@@ -149,7 +149,7 @@ fn sarif_rule_ids_are_stable_for_cra_noncompliant_fixture() {
         "SBOM-CRA-VULN-METADATA",
         "SBOM-CRA-CVD-POLICY",
         "SBOM-CRA-ART-13-8",
-        "SBOM-CRA-ART-13-9",
+        "SBOM-CRA-VULN-STATEMENT",
         "SBOM-CRA-LIFECYCLE",
         "SBOM-CRA-ART-13-15-PRODUCT",
         "SBOM-CRA-COMPONENT-VERSION",

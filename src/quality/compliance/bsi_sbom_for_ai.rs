@@ -295,7 +295,8 @@ impl ComplianceChecker {
                 without_hash.push(c.name.clone());
             } else if !c.hashes.iter().any(|h| nist_approved_hash(&h.algorithm)) {
                 // Hash present but none use a NIST-approved algorithm
-                // (reuses the bsi.rs SHA-256+ gate).
+                // (NIST-approved SHA-256+ — intentionally NOT the TR-03183-2 §5.2.2
+                // SHA-512 rule; the AI guidance asks for NIST-approved algorithms).
                 weak_hash.push(c.name.clone());
             }
 
@@ -603,7 +604,8 @@ impl ComplianceChecker {
 }
 
 /// NIST-approved cryptographic hash gate (SHA-256 or stronger). Reuses the
-/// same allowlist as the BSI TR-03183-2 §5.4 check in [`super::bsi`].
+/// NIST-approved hash allowlist (SHA-256 and stronger). Deliberately
+/// independent of the TR-03183-2 §5.2.2 SHA-512-only rule in [`super::bsi`].
 fn nist_approved_hash(a: &HashAlgorithm) -> bool {
     matches!(
         a,

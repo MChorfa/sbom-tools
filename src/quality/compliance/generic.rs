@@ -242,7 +242,7 @@ impl ComplianceChecker {
                 });
             }
 
-            // CRA Annex I, Part II, 1: Unique product identifier traceability
+            // CRA Annex I Part II (1): Unique product identifier traceability
             // The primary/root component should have a stable unique identifier (PURL or CPE)
             // that can be traced across software updates.
             if let Some(ref primary_id) = sbom.primary_component_id
@@ -254,11 +254,11 @@ impl ComplianceChecker {
                             severity: ViolationSeverity::Warning,
                             category: ViolationCategory::ComponentIdentification,
                             message: format!(
-                                "[CRA Annex I, Part II] Primary component '{}' missing unique identifier (PURL/CPE) for cross-update traceability",
+                                "[CRA Annex I Part II (1)] Primary component '{}' missing unique identifier (PURL/CPE) for cross-update traceability",
                                 primary.name
                             ),
                             element: Some(primary.name.clone()),
-                            requirement: "CRA Annex I, Part II, 1: Product identifier traceability across updates".to_string(),
+                            requirement: "CRA Annex I Part II (1): Product identifier traceability across updates".to_string(),
                             rule_id: "SBOM-CRA-ANNEX-I-TRACEABILITY",
                             standard_refs: Vec::new(),
                         });

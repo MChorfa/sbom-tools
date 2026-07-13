@@ -15,7 +15,7 @@ ENISA / industry guidance. Use it to:
 > Generated and maintained alongside the sbom-tools source tree.
 > If a check or article moves, send a PR — the reverse map is the
 > single source of truth for both human readers and the
-> `Violation::derive_standard_refs()` lookup table.
+> `rule_meta()` registry (surfaced via `Violation::registry_standard_refs()`).
 
 ## CRA timeline anchors
 
@@ -67,7 +67,7 @@ that ends up in SARIF `properties.standardHelpUris`.
 | `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` | Annex I Part II (5); Art. 13(8) | RLS-2-RQ-02      | —                | `coordinatedDisclosurePolicyUrl`                          |
 | `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)                        | PRE-7-RQ-06         | —                | `supportEndDate` + EOL enrichment                         |
 | `CRA Art. 13(8) / 13(19): Support period disclosure`            | Art. 13(8); Art. 13(19); Annex II (7) | PRE-7-RQ-06     | —                | `supportEndDate`                                          |
-| `CRA Art. 13(9): Known vulnerabilities statement`               | Art. 13(9)                        | RLS-2-RQ-04         | —                | OSV / KEV / VEX enrichment                                |
+| `CRA Annex I Part II (1): Documented vulnerability information` | Annex I Part II (1)               | RLS-2-RQ-04         | —                | OSV / KEV / VEX enrichment                                |
 | `CRA Annex II (7): Component lifecycle monitoring/status`       | Art. 13(8); Annex II (7)          | PRE-7-RQ-06         | —                | EOL enrichment + transitive supplier coverage             |
 | `CRA Art. 13(15): Product identification`                       | Art. 13(15); Annex II (3)         | PRE-7-RQ-06         | §5.2.2           | SBOM `metadata.component.name` + sidecar `productName`    |
 | `CRA Annex I Part II (1): Component version`                    | Annex I Part II (1)               | PRE-7-RQ-06         | §5.2.2           | component `version` fields                                |
@@ -80,8 +80,8 @@ that ends up in SARIF `properties.standardHelpUris`.
 | Requirement string                                          | CRA Article    | prEN 40000-1-3      | sidecar field                         |
 |-------------------------------------------------------------|----------------|---------------------|---------------------------------------|
 | `CRA Art. 14: PSIRT contact for external vulnerability reports` | Art. 14    | RLS-2-RQ-03         | `psirtUrl`                            |
-| `CRA Art. 14(1): 24-hour early-warning channel`             | Art. 14(1)     | RLS-2-RQ-03         | `earlyWarningContact`                 |
-| `CRA Art. 14(2): 72-hour incident-report channel`           | Art. 14(2)     | RLS-2-RQ-03         | `incidentReportContact`               |
+| `CRA Art. 14(2)(a): 24-hour early-warning channel`          | Art. 14(2)(a) / 14(4)(a) | RLS-2-RQ-03 | `earlyWarningContact`                 |
+| `CRA Art. 14(2)(b): 72-hour notification channel`           | Art. 14(2)(b) / 14(4)(b) | RLS-2-RQ-03 | `incidentReportContact`               |
 | `CRA Art. 14(7): ENISA single reporting platform`           | Art. 14(7)     | RLS-2-RQ-03-RE      | `enisaReportingPlatformId`            |
 
 Pre-deadline (`Utc::now() < 2026-09-11`) findings are emitted as `Info`;
@@ -94,7 +94,7 @@ post-deadline they become `Warning` (or `Error` at
 | Requirement string                                          | CRA Annex                | prEN 40000-1-3      | What clears it                                          |
 |-------------------------------------------------------------|--------------------------|---------------------|---------------------------------------------------------|
 | `CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through` | Annex I Part II | PRE-7-RQ-07-RE | strong (SHA-256+) hash on vendor-supplied components |
-| `CRA Annex I Part II 1: Component identifier`               | Annex I Part II 1        | PRE-7-RQ-07         | PURL / CPE / SWID / SWHID on each component             |
+| `CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier` | Annex I         | PRE-7-RQ-07         | PURL / CPE / SWID / SWHID on each component             |
 | `CRA Annex I Part II: Supply chain transparency`            | Annex I Part II          | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
 | `CRA Annex I Part I (2)(f): Document signature/integrity`   | Annex I Part I (2)(f)    | —                   | serial number / digital signature / attestation hash    |
 | `CRA Annex I Part I (2)(f): Component integrity information (hash)` | Annex I Part I (2)(f) | —                | cryptographic hash (SHA-256+) per component             |
@@ -112,7 +112,7 @@ post-deadline they become `Warning` (or `Error` at
 | `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Annex I Part II (5) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` |
 
 Article 24 *suppresses* manufacturer-only checks (Art. 13(16) email,
-Annex VII DoC, Annex VIII attestation, Article 14 channels, hardware
+Annex V DoC, Annex VIII attestation, Article 14 channels, hardware
 [PRE-8-RQ-02], vendor-hash carry-through).
 
 ## CRA-P3.2 product-class severity calibration
@@ -252,25 +252,25 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
 | ENISA SBOM Implementation Guidance | https://www.enisa.europa.eu/publications/sbom-implementation-guidance                                                                              |
 | NIST SP 800-218 SSDF               | https://doi.org/10.6028/NIST.SP.800-218                                                                                                            |
 | EO 14028                           | https://www.federalregister.gov/d/2021-10460                                                                                                       |
-| FDA premarket cybersecurity        | https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions |
-| NTIA SBOM minimum elements         | https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf                                                                  |
+| FDA premarket cybersecurity (final, 2026-02-03) | https://www.fda.gov/media/119933/download                                                                                          |
+| NTIA SBOM minimum elements         | https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom                                                                     |
 | CSAF v2.0 (ISO/IEC 20153:2025)     | https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html                                                                                          |
 | OpenVEX                            | https://github.com/openvex/spec                                                                                                                    |
 | CISA KEV                           | https://www.cisa.gov/known-exploited-vulnerabilities-catalog                                                                                       |
 | OSV.dev                            | https://osv.dev                                                                                                                                    |
-| EUCC (Reg. (EU) 2024/482)          | https://eur-lex.europa.eu/eli/reg/2024/482/oj/eng                                                                                                  |
+| EUCC (Reg. (EU) 2024/482)          | https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng                                                                                             |
 
 ## Where this map lives in the code
 
-- `Violation::derive_standard_refs()` in `src/quality/compliance.rs` —
+- `rule_meta()` in `src/quality/compliance/registry.rs` (via `Violation::registry_standard_refs()`) —
   string → `(StandardKind, id)` mapping. Drives SARIF
   `properties.standardIds`.
-- `StandardKind::canonical_help_uri()` in `src/quality/compliance.rs` —
+- `StandardKind::canonical_help_uri()` in `src/quality/compliance/mod.rs` —
   `(StandardKind, id)` → URL. Drives SARIF `helpUri` and
   `properties.standardHelpUris`.
 - `rule_help_uri()` in `src/reports/sarif.rs` — rule-ID prefix → URL
   for `runs[].tool.driver.rules[].helpUri`.
-- `ComplianceChecker::class_severity()` in `src/quality/compliance.rs` —
+- `ComplianceChecker::class_severity()` in `src/quality/compliance/mod.rs` —
   P3.2 calibration table.
 - `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V DoC + Annex VII tech-doc dossier
   generator.

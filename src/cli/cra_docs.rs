@@ -253,7 +253,7 @@ fn render_tech_doc(
          ## 2. Risk assessment (CRA Art. 13(2))\n\
          - Risk-assessment document: {risk_assessment}\n\
          - Methodology: {methodology}\n\
-         - Annex II Part 3 risk-acceptance criteria: _TBD_\n\n\
+         - Risk-acceptance criteria (Art. 13(2) risk assessment): _TBD_\n\n\
          ## 3. Vulnerability-handling process (Annex I Part II)\n\
          - Process description: see `vulnerability-handling-policy.md` in this dossier\n\
          - PSIRT: {psirt}\n\
@@ -445,10 +445,10 @@ fn render_vuln_policy(sbom: &NormalizedSbom, sidecar: Option<&CraSidecarMetadata
         .unwrap_or("_TBD: coordinated vulnerability-disclosure policy URL_");
     let early = sidecar
         .and_then(|s| s.early_warning_contact.as_deref())
-        .unwrap_or("_TBD: 24-hour early-warning channel (CRA Art. 14(1))_");
+        .unwrap_or("_TBD: 24-hour early-warning channel (CRA Art. 14(2)(a) / 14(4)(a))_");
     let incident = sidecar
         .and_then(|s| s.incident_report_contact.as_deref())
-        .unwrap_or("_TBD: 72-hour incident-report channel (CRA Art. 14(2))_");
+        .unwrap_or("_TBD: 72-hour notification channel (CRA Art. 14(2)(b) / 14(4)(b))_");
     let enisa = sidecar
         .and_then(|s| s.enisa_reporting_platform_id.as_deref())
         .unwrap_or("_TBD: ENISA single-reporting-platform manufacturer ID (Art. 14(7))_");
@@ -467,8 +467,8 @@ fn render_vuln_policy(sbom: &NormalizedSbom, sidecar: Option<&CraSidecarMetadata
          | PSIRT (public reporting portal) | {psirt} |\n\
          | Security contact (encrypted email) | {security_contact} |\n\
          | Coordinated disclosure policy | {cvd_policy} |\n\
-         | 24-hour early warning (CRA Art. 14(1)) | {early} |\n\
-         | 72-hour incident report (CRA Art. 14(2)) | {incident} |\n\
+         | 24-hour early warning (CRA Art. 14(2)(a) / 14(4)(a)) | {early} |\n\
+         | 72-hour notification (CRA Art. 14(2)(b) / 14(4)(b)) | {incident} |\n\
          | ENISA single reporting platform (Art. 14(7)) | {enisa} |\n\n\
          ## 3. Process commitments\n\
          - **Acknowledgement**: we will acknowledge receipt of any vulnerability \

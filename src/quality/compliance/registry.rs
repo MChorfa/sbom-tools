@@ -172,10 +172,13 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             ],
             remediation: "Specify when security updates will no longer be provided. CycloneDX 1.5+: use component.releaseNotes or metadata properties. SPDX: use an annotation with end-of-support date.",
         },
-        "SBOM-CRA-ART-13-9" => RuleMeta {
-            sarif_id: "SBOM-CRA-ART-13-9",
+        // Documented vulnerability information. Formerly cited Art. 13(9),
+        // which is actually the 10-year availability of issued security
+        // updates; the documentation obligation is Annex I Part II (1).
+        "SBOM-CRA-VULN-STATEMENT" => RuleMeta {
+            sarif_id: "SBOM-CRA-VULN-STATEMENT",
             default_severity: ViolationSeverity::Info,
-            refs: &[(CRA, "Art. 13(9)")],
+            refs: &[(ANNEX, "Annex I Part II (1)")],
             remediation: "Include vulnerability data or add a vulnerability-assertion external reference stating no known vulnerabilities. CycloneDX: use the vulnerabilities array. SPDX: use annotations or external references.",
         },
         // Component lifecycle / end-of-support. Formerly cited Art. 13(11),
@@ -265,7 +268,6 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             sarif_id: "SBOM-CRA-ANNEX-I",
             default_severity: ViolationSeverity::Warning,
             refs: &[
-                (ANNEX, "Annex I Part II"),
                 (ANNEX, "Annex I Part II"),
                 (PREN, "PRE-7-RQ-01"),
                 (PREN, "PRE-7-RQ-03"),
@@ -1138,7 +1140,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         "SBOM-PQC-CERT-001" => RuleMeta {
             sarif_id: "SBOM-PQC-CERT-001",
             default_severity: ViolationSeverity::Error,
-            refs: &[(K::NistPqc, "IR 8547")],
+            refs: &[(K::NistPqc, "IR 8547 ipd")],
             remediation: REMEDIATION_PQC_CERT,
         },
         // Certificate signature-algorithm ref cannot be resolved/classified —
@@ -1146,7 +1148,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         "SBOM-PQC-CERT-UNKNOWN" => RuleMeta {
             sarif_id: "SBOM-PQC-CERT-UNKNOWN",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(K::NistPqc, "IR 8547")],
+            refs: &[(K::NistPqc, "IR 8547 ipd")],
             remediation: REMEDIATION_PQC_UNKNOWN,
         },
         // Protocol version gate: SSL / TLS below 1.2 disallowed.
@@ -1170,7 +1172,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
         "SBOM-PQC-PROTO-UNKNOWN" => RuleMeta {
             sarif_id: "SBOM-PQC-PROTO-UNKNOWN",
             default_severity: ViolationSeverity::Warning,
-            refs: &[(K::NistPqc, "IR 8547")],
+            refs: &[(K::NistPqc, "IR 8547 ipd")],
             remediation: REMEDIATION_PQC_UNKNOWN,
         },
         _ => return None,

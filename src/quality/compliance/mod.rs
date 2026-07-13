@@ -111,7 +111,8 @@ pub enum ComplianceLevel {
     /// legal-conformity guarantee, and does not classify a system as high-risk.
     /// Returns N/A for SBOMs with no ML-model or dataset metadata.
     EuAiAct,
-    /// BSI/G7 "SBOM for AI — Minimum Elements" (Feb 2026) READINESS. Scores an
+    /// BSI/G7 "SBOM for AI — Minimum Elements" (final joint G7 guidance, May 2026)
+    /// READINESS. Scores an
     /// AI-BOM element-by-element against the seven clusters (Metadata,
     /// System-Level, Models, Datasets, Infrastructure, Security, plus the
     /// document-author elements) of the BSI/G7 minimum-elements guidance, using
@@ -211,7 +212,7 @@ impl ComplianceLevel {
                 "EU AI Act (Reg. (EU) 2024/1689) Annex IV technical-documentation READINESS — model description, training-data characteristics, validation/testing metrics, limitations (readiness only, not a legal-conformity guarantee; N/A for non-AI SBOMs)"
             }
             Self::BsiSbomForAi => {
-                "BSI/G7 SBOM-for-AI Minimum Elements (Feb 2026) READINESS — scores an AI-BOM element-by-element across the Metadata, System-Level, Models, Datasets, Infrastructure, and Security clusters (readiness only, not a legal-conformity guarantee; N/A for non-AI SBOMs)"
+                "BSI/G7 SBOM-for-AI Minimum Elements (joint G7 final, May 2026) READINESS — scores an AI-BOM element-by-element across the Metadata, System-Level, Models, Datasets, Infrastructure, and Security clusters (readiness only, not a legal-conformity guarantee; N/A for non-AI SBOMs)"
             }
             Self::Comprehensive => "All recommended fields and best practices",
         }
@@ -296,7 +297,7 @@ pub enum StandardKind {
     NistPqc,
     /// EU AI Act (Regulation (EU) 2024/1689) — Annex IV technical documentation
     EuAiAct,
-    /// BSI/G7 "SBOM for AI — Minimum Elements" (Feb 2026)
+    /// BSI/G7 "SBOM for AI — Minimum Elements" (joint G7 final, May 2026)
     BsiSbomForAi,
     /// EUCC — European cybersecurity certification scheme on Common Criteria,
     /// Implementing Regulation (EU) 2024/482

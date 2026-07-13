@@ -107,7 +107,9 @@ fn noncompliant_no_manufacturer_fires_art_13_16_or_supplier_check() {
 
 #[test]
 fn noncompliant_weak_hashes_fires_at_bsi_or_phase2() {
-    // BSI TR-03183-2 §5.4 requires SHA-256+ on every component.
+    // BSI TR-03183-2 v2.1.0 §5.2.2 requires the SHA-512 hash of the
+    // deployable component; the weak-hashes fixture must fire the hash rule
+    // itself (SBOM-BSI-TR-03183-2-5-4), not just any BSI violation.
     let sbom_path = fixtures_dir().join("cra-noncompliant-weak-hashes.cdx.json");
     let parsed = parse_sbom(&sbom_path).expect("parse fixture");
 
@@ -115,10 +117,10 @@ fn noncompliant_weak_hashes_fires_at_bsi_or_phase2() {
     let bsi_hash_finding = bsi
         .violations
         .iter()
-        .any(|v| v.requirement.contains("BSI TR-03183-2") || v.requirement.contains("hash"));
+        .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4" || v.rule_id == "SBOM-BSI-TR-03183-2-5-4-MISSING");
     assert!(
         bsi_hash_finding,
-        "weak-hashes fixture must fire a BSI TR-03183-2 hash-related violation; \
+        "weak-hashes fixture must fire the BSI SHA-512 hash rule; \
          got requirements: {:?}",
         bsi.violations
             .iter()

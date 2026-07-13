@@ -323,7 +323,7 @@ struct CraArticleSummary {
     art_13_16_manufacturer: usize,
     /// Annex I - Essential cybersecurity requirements (incl. Part II SBOM
     /// elements and Part I (2)(f) integrity)
-    #[serde(rename = "annex_i_technical_documentation")]
+    #[serde(rename = "annex_i_essential_requirements")]
     annex_i: usize,
     /// Annex V - EU Declaration of Conformity
     #[serde(rename = "annex_v_declaration_of_conformity")]
@@ -363,9 +363,10 @@ impl CraComplianceDetail {
                 summary.art_13_15_product += 1;
             } else if req.contains("art. 13(16)") || req.contains("art.13(16)") {
                 summary.art_13_16_manufacturer += 1;
-            } else if req.contains("annex viii") {
-                // Annex VIII (conformity assessment) has no bucket; the
-                // check must precede the "annex v" prefix match below.
+            } else if req.contains("annex viii") || req.contains("annex iv") {
+                // Annex VIII (conformity assessment) and Annex IV (critical
+                // products / EUCC reference) have no bucket; both must
+                // precede the "annex v" / "annex i" prefix matches.
             } else if req.contains("annex v") {
                 summary.annex_v += 1;
             } else if req.contains("annex i") || req.contains("annex_i") {
