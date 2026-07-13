@@ -29,8 +29,11 @@ mod shared;
 mod ssdf;
 
 use context::{ComplianceContext, checker_for};
-use registry::REMEDIATION_GENERIC;
-pub use registry::{RuleMeta, rule_meta};
+pub use registry::{
+    COMPLIANCE_SARIF_RULE_IDS, EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS, NTIA_SARIF_RULE_IDS,
+    RuleMeta, SSDF_SARIF_RULE_IDS, all_rule_ids, rule_meta,
+};
+use registry::{REMEDIATION_GENERIC, lookup_static_rule_id};
 pub use selector::StandardSelector;
 use shared::{
     has_known_supplier, has_known_value, is_valid_email_format, known_component_name, known_value,
@@ -432,7 +435,7 @@ impl StandardKind {
 }
 
 /// A compliance violation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Violation {
     /// Severity: error, warning, info
     pub severity: ViolationSeverity,
@@ -450,16 +453,16 @@ pub struct Violation {
     /// and the remediation text. Defaults to `"SBOM-CRA-GENERAL"` for
     /// violations built outside the checker (e.g., from external config).
     ///
-    /// Skipped during (de)serialization: it is a `&'static str` runtime index,
-    /// not part of the JSON contract. Round-tripped payloads resolve back to
-    /// the default; `standard_refs` already carries the serialized references.
-    #[serde(skip, default = "default_rule_id")]
+    /// Serialized as `rule_id` (alongside a derived `sarif_rule_id`; see the
+    /// manual [`Serialize`] impl) so machine consumers get a stable rule key
+    /// instead of regexing the message. Deserialization maps a known id back
+    /// to its registry `&'static str` key and falls back to the generic
+    /// default for unknown ids or old payloads without the field.
     pub rule_id: &'static str,
     /// Structured references to harmonised-standard / regulation clauses.
     ///
     /// Populated by `ComplianceChecker::check()` from [`Violation::rule_id`]
     /// via [`rule_meta`]. Empty when a violation's rule maps to no references.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub standard_refs: Vec<StandardRef>,
 }
 
@@ -467,6 +470,80 @@ pub struct Violation {
 /// predate the field.
 fn default_rule_id() -> &'static str {
     "SBOM-CRA-GENERAL"
+}
+
+/// Owned mirror of [`Violation`] used for deserialization: `rule_id` arrives
+/// as an owned string (or is absent in old payloads) and is mapped back to
+/// its registry `&'static str` key. A derived `Deserialize` directly on
+/// [`Violation`] would implicitly borrow the `&'static str` field from the
+/// input (`'de: 'static`), which does not hold for streamed payloads.
+#[derive(Deserialize)]
+struct ViolationPayload {
+    severity: ViolationSeverity,
+    category: ViolationCategory,
+    message: String,
+    element: Option<String>,
+    requirement: String,
+    #[serde(default)]
+    rule_id: Option<String>,
+    #[serde(default)]
+    standard_refs: Vec<StandardRef>,
+}
+
+impl<'de> Deserialize<'de> for Violation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let payload = ViolationPayload::deserialize(deserializer)?;
+        Ok(Self {
+            severity: payload.severity,
+            category: payload.category,
+            message: payload.message,
+            element: payload.element,
+            requirement: payload.requirement,
+            // Unknown ids (from newer/older registries) collapse to the
+            // generic default rather than failing deserialization; the
+            // serialized `sarif_rule_id` companion field is derived, so it
+            // is ignored here.
+            rule_id: payload
+                .rule_id
+                .as_deref()
+                .and_then(lookup_static_rule_id)
+                .unwrap_or_else(default_rule_id),
+            standard_refs: payload.standard_refs,
+        })
+    }
+}
+
+impl Serialize for Violation {
+    /// Manual impl so the JSON carries both the stable internal `rule_id` and
+    /// the externally-visible `sarif_rule_id` derived from the rule registry
+    /// (never stored, so it cannot drift). Field order mirrors declaration
+    /// order; `standard_refs` is skipped when empty, as before.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let has_refs = !self.standard_refs.is_empty();
+        let mut state = serializer.serialize_struct("Violation", 7 + usize::from(has_refs))?;
+        state.serialize_field("severity", &self.severity)?;
+        state.serialize_field("category", &self.category)?;
+        state.serialize_field("message", &self.message)?;
+        state.serialize_field("element", &self.element)?;
+        state.serialize_field("requirement", &self.requirement)?;
+        state.serialize_field("rule_id", self.rule_id)?;
+        // Same registry lookup + fallback as the SARIF renderer, so the same
+        // violation carries the same external rule id on every surface.
+        state.serialize_field("sarif_rule_id", self.sarif_rule_id())?;
+        if has_refs {
+            state.serialize_field("standard_refs", &self.standard_refs)?;
+        } else {
+            state.skip_field("standard_refs")?;
+        }
+        state.end()
+    }
 }
 
 impl Violation {
@@ -499,6 +576,15 @@ impl Violation {
     #[must_use]
     pub fn remediation_guidance(&self) -> &'static str {
         rule_meta(self.rule_id).map_or(REMEDIATION_GENERIC, |m| m.remediation)
+    }
+
+    /// Externally-visible SARIF rule id for this violation, looked up from
+    /// the rule registry by [`Violation::rule_id`]. Unregistered keys fall
+    /// back to the generic CRA rule — the exact fallback the SARIF renderer
+    /// uses, so JSON and SARIF always agree.
+    #[must_use]
+    pub fn sarif_rule_id(&self) -> &'static str {
+        rule_meta(self.rule_id).map_or("SBOM-CRA-GENERAL", |m| m.sarif_id)
     }
 }
 

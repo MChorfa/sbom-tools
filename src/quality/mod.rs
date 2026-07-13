@@ -33,9 +33,11 @@ mod metrics;
 mod scorer;
 
 pub use compliance::{
-    Applicability, ClassCheck, ComplianceChecker, ComplianceLevel, ComplianceResult,
-    ConformityAssessmentSummary, ConformityEvidence, CraPhase, RuleMeta, StandardKind, StandardRef,
-    StandardSelector, Violation, ViolationCategory, ViolationSeverity, rule_meta,
+    Applicability, COMPLIANCE_SARIF_RULE_IDS, ClassCheck, ComplianceChecker, ComplianceLevel,
+    ComplianceResult, ConformityAssessmentSummary, ConformityEvidence, CraPhase,
+    EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS, NTIA_SARIF_RULE_IDS, RuleMeta, SSDF_SARIF_RULE_IDS,
+    StandardKind, StandardRef, StandardSelector, Violation, ViolationCategory, ViolationSeverity,
+    all_rule_ids, rule_meta,
 };
 pub use metrics::{
     AuditabilityMetrics, CompletenessMetrics, ComplexityFactors, ComplexityLevel,
