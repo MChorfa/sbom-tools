@@ -148,6 +148,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness".to_string(),
                 rule_id: "SBOM-CRA-SBOM-FRESHNESS",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         } else {
@@ -162,6 +164,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness".to_string(),
                     rule_id: "SBOM-CRA-SBOM-FRESHNESS",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             } else if age_days > 30 {
@@ -174,6 +178,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness".to_string(),
                     rule_id: "SBOM-CRA-SBOM-FRESHNESS",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -206,6 +212,11 @@ impl ComplianceChecker {
                 requirement: "CRA Art. 13(5): Third-party due diligence (license tracking)"
                     .to_string(),
                 rule_id: "SBOM-CRA-ART-13-5",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_license,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -239,6 +250,8 @@ impl ComplianceChecker {
                 requirement: "CRA Annex I Part II (1): Documented vulnerability information"
                     .to_string(),
                 rule_id: "SBOM-CRA-VULN-STATEMENT",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -285,6 +298,13 @@ impl ComplianceChecker {
                     requirement: "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Direct dependency supplier (mandatory)"
                         .to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN",
+                    component_id: None,
+                    // The message prints only the affected count; the cohort
+                    // is the set of direct dependencies.
+                    counts: Some(ViolationCounts {
+                        affected: n,
+                        total: direct_ids.len(),
+                    }),
                     standard_refs: Vec::new(),
                 });
             }
@@ -309,6 +329,11 @@ impl ComplianceChecker {
                     requirement: "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Transitive dependency supplier (recommended)"
                         .to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN",
+                    component_id: None,
+                    counts: Some(ViolationCounts {
+                        affected: transitive_n,
+                        total: denom,
+                    }),
                     standard_refs: Vec::new(),
                 });
             }
@@ -394,6 +419,13 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through".to_string(),
                         rule_id: "SBOM-CRA-PRE-7-RQ-07-RE",
+                        component_id: None,
+                        // Coverage finding: mirrors the "X/Y carry an
+                        // upstream hash" numbers printed in the message.
+                        counts: Some(ViolationCounts {
+                            affected: metrics.vendor_components_with_hash,
+                            total: metrics.vendor_components_total,
+                        }),
                         standard_refs: Vec::new(),
                     });
                 }
@@ -424,6 +456,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CRA Annex I Part I (2)(f): Document signature/integrity".to_string(),
                 rule_id: "SBOM-CRA-DOC-INTEGRITY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -453,6 +487,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Art. 13(2): Documented risk assessment".to_string(),
                     rule_id: "SBOM-CRA-ART-13-2",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -496,6 +532,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CRA Art. 13(8): Support period / lifecycle management".to_string(),
                 rule_id: "SBOM-CRA-ART-13-8",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -519,6 +557,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CRA Annex II (7): Component lifecycle monitoring".to_string(),
                 rule_id: "SBOM-CRA-LIFECYCLE",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -549,6 +589,8 @@ impl ComplianceChecker {
                     requirement: "CRA Annex I Part II (4): SPDX 3.0 Security profile conformance"
                         .to_string(),
                     rule_id: "SBOM-CRA-VULN-METADATA",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -578,6 +620,8 @@ impl ComplianceChecker {
                     requirement: "CRA Art. 13(5): SPDX 3.0 SimpleLicensing profile conformance"
                         .to_string(),
                     rule_id: "SBOM-CRA-ART-13-5",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -621,6 +665,8 @@ impl ComplianceChecker {
                         "CRA Annex I Part I {id}: controls-assertion evidence (prEN 40000-1-2)"
                     ),
                     rule_id: "SBOM-CRA-ANNEX-I-CONTROLS",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -671,6 +717,8 @@ impl ComplianceChecker {
                 requirement: "CRA Annex IV: EUCC reference (Common Criteria certificate)"
                     .to_string(),
                 rule_id: "SBOM-CRA-ANNEX-IV",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -718,6 +766,8 @@ impl ComplianceChecker {
                     route.label()
                 ),
                 rule_id: "SBOM-CRA-ANNEX-VIII",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -780,6 +830,8 @@ impl ComplianceChecker {
                 requirement: "CRA Art. 14: PSIRT contact for external vulnerability reports"
                     .to_string(),
                 rule_id: "SBOM-CRA-ART-14",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -798,6 +850,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CRA Art. 14(2)(a): 24-hour early-warning channel".to_string(),
                 rule_id: "SBOM-CRA-ART-14",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -816,6 +870,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CRA Art. 14(2)(b): 72-hour notification channel".to_string(),
                 rule_id: "SBOM-CRA-ART-14",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -833,6 +889,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CRA Art. 14(7): ENISA single reporting platform".to_string(),
                 rule_id: "SBOM-CRA-ART-14",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -883,6 +941,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware producer".to_string(),
                     rule_id: "SBOM-CRA-PRE-8-RQ-02",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -902,6 +962,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware identifier".to_string(),
                     rule_id: "SBOM-CRA-PRE-8-RQ-02",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -918,6 +980,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Firmware version".to_string(),
                     rule_id: "SBOM-CRA-PRE-8-RQ-02",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -941,6 +1005,8 @@ impl ComplianceChecker {
                         element: Some(comp.name.clone()),
                         requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Device firmware association".to_string(),
                         rule_id: "SBOM-CRA-PRE-8-RQ-02",
+                        component_id: Some(comp.canonical_id.value().to_string()),
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -1010,6 +1076,8 @@ impl ComplianceChecker {
                 requirement: "CRA Art. 24: Vulnerability-handling process (steward floor)"
                     .to_string(),
                 rule_id: "SBOM-CRA-ART-24",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -1034,6 +1102,8 @@ impl ComplianceChecker {
                 requirement: "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy"
                     .to_string(),
                 rule_id: "SBOM-CRA-CVD-POLICY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }

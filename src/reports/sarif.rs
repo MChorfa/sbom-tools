@@ -838,12 +838,19 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
                 .iter()
                 .filter_map(|sr| sr.help_uri.clone())
                 .collect();
-            let properties = if standard_ids.is_empty() && standard_help_uris.is_empty() {
+            let properties = if standard_ids.is_empty()
+                && standard_help_uris.is_empty()
+                && v.component_id.is_none()
+                && v.counts.is_none()
+            {
                 None
             } else {
                 Some(SarifResultProperties {
                     standard_ids,
                     standard_help_uris,
+                    component_id: v.component_id.clone(),
+                    affected: v.counts.map(|c| c.affected),
+                    total: v.counts.map(|c| c.total),
                     ..SarifResultProperties::default()
                 })
             };
@@ -1264,6 +1271,19 @@ struct SarifResultProperties {
     /// Estimated score impact — quality recommendations only.
     #[serde(skip_serializing_if = "Option::is_none")]
     impact: Option<f32>,
+    /// Canonical id of the offending component (compliance results only) —
+    /// mirrors `Violation::component_id`, the machine-readable join key back
+    /// to the SBOM component. Absent for document-level/aggregate findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component_id: Option<String>,
+    /// Affected-component count for aggregate compliance findings — mirrors
+    /// `Violation::counts.affected` (the numerator printed in the message).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    affected: Option<usize>,
+    /// Total-component count for aggregate compliance findings — mirrors
+    /// `Violation::counts.total` (the message's denominator).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<usize>,
 }
 
 #[derive(Serialize)]

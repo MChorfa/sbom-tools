@@ -9,7 +9,11 @@
 //!    id for the same violation (no more invented `QUALITY-*` ids), and
 //!    quality recommendations are never `error`;
 //! 4. OSCAL emits one `results[]` entry per standard with a machine-readable
-//!    verdict (standard id, is_compliant, applicability, counts, score).
+//!    verdict (standard id, is_compliant, applicability, counts, score);
+//! 5. structured violation identity (P2-H): component-scoped violations carry
+//!    a `component_id` join key (the component's canonical id) and aggregate
+//!    findings carry `counts` mirroring the message's affected/total numbers —
+//!    on JSON and SARIF alike — while old payloads still deserialize.
 
 use sbom_tools::model::{Component, DocumentMetadata, NormalizedSbom};
 use sbom_tools::quality::{
@@ -275,4 +279,160 @@ fn oscal_emits_one_result_per_standard_with_verdict_and_applicability() {
                 .contains("compliance roll-up")
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Structured violation identity (P2-H)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn component_scoped_violations_carry_canonical_component_id() {
+    let sbom = violating_sbom();
+    // NTIA emits one per-component finding per missing version, so every
+    // fixture component fires SBOM-NTIA-VERSION.
+    let result = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+    let per_component: Vec<_> = result
+        .violations
+        .iter()
+        .filter(|v| v.rule_id == "SBOM-NTIA-VERSION")
+        .collect();
+    assert_eq!(
+        per_component.len(),
+        3,
+        "one finding per versionless component"
+    );
+
+    let canonical_ids: BTreeSet<String> = sbom
+        .components
+        .keys()
+        .map(|id| id.value().to_string())
+        .collect();
+    for v in &per_component {
+        let cid = v
+            .component_id
+            .as_deref()
+            .expect("component-scoped violation carries component_id");
+        assert!(
+            canonical_ids.contains(cid),
+            "component_id {cid:?} must join back to an SBOM component (element {:?} is only a label)",
+            v.element
+        );
+    }
+
+    // The join key survives a JSON round-trip.
+    let json = serde_json::to_string(&result).expect("serialize");
+    let back: sbom_tools::quality::ComplianceResult =
+        serde_json::from_str(&json).expect("deserialize");
+    let original: Vec<Option<String>> = result
+        .violations
+        .iter()
+        .map(|v| v.component_id.clone())
+        .collect();
+    let round_tripped: Vec<Option<String>> = back
+        .violations
+        .iter()
+        .map(|v| v.component_id.clone())
+        .collect();
+    assert_eq!(original, round_tripped, "component_id must round-trip");
+}
+
+#[test]
+fn aggregate_violations_carry_counts_matching_the_message() {
+    let sbom = violating_sbom();
+    // EO 14028 aggregates missing versions into a single "N/M components"
+    // finding; all 3 fixture components lack a version.
+    let result = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+    let v = result
+        .violations
+        .iter()
+        .find(|v| v.rule_id == "SBOM-EO14028-VERSION")
+        .expect("aggregate version finding fires");
+    let counts = v.counts.expect("aggregate finding carries counts");
+    assert_eq!(
+        (counts.affected, counts.total),
+        (3, 3),
+        "counts must match the fixture cohort"
+    );
+    assert!(
+        v.message
+            .contains(&format!("{}/{}", counts.affected, counts.total)),
+        "counts must mirror the numbers printed in the message: {}",
+        v.message
+    );
+
+    // Structured shape in JSON, and it round-trips.
+    let json = serde_json::to_value(v).expect("serialize violation");
+    assert_eq!(json["counts"]["affected"], 3);
+    assert_eq!(json["counts"]["total"], 3);
+    let back: sbom_tools::quality::Violation =
+        serde_json::from_value(json).expect("deserialize violation");
+    assert_eq!(back.counts, v.counts, "counts must round-trip");
+}
+
+#[test]
+fn old_payloads_without_identity_fields_deserialize_to_none() {
+    // Violation JSON predating component_id/counts (and the fields are also
+    // omitted from serialization when None, so old consumers see no change).
+    let payload = serde_json::json!({
+        "severity": "Error",
+        "category": "ComponentIdentification",
+        "message": "Component 'lib0' missing version",
+        "element": "lib0",
+        "requirement": "NTIA: Component version",
+        "rule_id": "SBOM-NTIA-VERSION"
+    });
+    let v: sbom_tools::quality::Violation =
+        serde_json::from_value(payload).expect("old payload deserializes");
+    assert_eq!(v.component_id, None);
+    assert_eq!(v.counts, None);
+
+    // And a document-level violation serializes WITHOUT the new keys.
+    let json = serde_json::to_value(&v).expect("serialize");
+    let obj = json.as_object().expect("object");
+    assert!(!obj.contains_key("component_id"));
+    assert!(!obj.contains_key("counts"));
+}
+
+#[test]
+fn sarif_results_carry_component_id_and_counts_properties() {
+    let sbom = violating_sbom();
+
+    // Per-component surface: componentId property joins back to the SBOM.
+    let canonical_ids: BTreeSet<String> = sbom
+        .components
+        .keys()
+        .map(|id| id.value().to_string())
+        .collect();
+    let result = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+    let sarif = generate_compliance_sarif(&result).expect("sarif");
+    let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid SARIF");
+    let component_ids: Vec<&str> = json["runs"][0]["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .filter_map(|r| r["properties"]["componentId"].as_str())
+        .collect();
+    assert!(
+        !component_ids.is_empty(),
+        "component-scoped SARIF results must carry properties.componentId"
+    );
+    for cid in component_ids {
+        assert!(
+            canonical_ids.contains(cid),
+            "SARIF componentId {cid:?} must join back to an SBOM component"
+        );
+    }
+
+    // Aggregate surface: affected/total properties mirror Violation::counts.
+    let result = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+    let sarif = generate_compliance_sarif(&result).expect("sarif");
+    let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid SARIF");
+    assert!(
+        json["runs"][0]["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|r| r["properties"]["affected"] == 3 && r["properties"]["total"] == 3),
+        "aggregate SARIF results must carry properties.affected/total"
+    );
 }

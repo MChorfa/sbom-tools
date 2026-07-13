@@ -62,6 +62,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI: applicability".to_string(),
                 rule_id: "SBOM-BSIAI-NA",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
             return;
@@ -108,6 +110,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Author".to_string(),
                 rule_id: "SBOM-BSIAI-META-AUTHOR",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -127,6 +131,8 @@ impl ComplianceChecker {
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Data format name + version"
                     .to_string(),
                 rule_id: "SBOM-BSIAI-META-FORMAT",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -144,6 +150,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Timestamp".to_string(),
                 rule_id: "SBOM-BSIAI-META-TIMESTAMP",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -162,6 +170,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Generation tool".to_string(),
                 rule_id: "SBOM-BSIAI-META-TOOL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -177,6 +187,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Signature".to_string(),
                 rule_id: "SBOM-BSIAI-META-SIGNATURE",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -212,6 +224,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — System-Level / Primary AI system".to_string(),
                 rule_id: "SBOM-BSIAI-SYS-PRIMARY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -240,6 +254,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — System-Level / Producer".to_string(),
                 rule_id: "SBOM-BSIAI-SYS-PRODUCER",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -255,6 +271,8 @@ impl ComplianceChecker {
             element: None,
             requirement: "BSI/G7 SBOM-for-AI — System-Level / Data flow & usage".to_string(),
             rule_id: "SBOM-BSIAI-SYS-DATAFLOW",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         });
     }
@@ -333,6 +351,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_name,
+            ml_components.len(),
             "declare no name",
             "BSI/G7 SBOM-for-AI — Models / Model name",
             "SBOM-BSIAI-MODEL-NAME",
@@ -342,6 +361,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_version,
+            ml_components.len(),
             "declare no version",
             "BSI/G7 SBOM-for-AI — Models / Model version",
             "SBOM-BSIAI-MODEL-VERSION",
@@ -351,6 +371,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_identifier,
+            ml_components.len(),
             "carry no unique identifier (PURL/CPE/SWHID/SWID)",
             "BSI/G7 SBOM-for-AI — Models / Model identifier",
             "SBOM-BSIAI-MODEL-IDENTIFIER",
@@ -360,6 +381,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::IntegrityInfo,
             &without_hash,
+            ml_components.len(),
             "carry no model-weight hash value",
             "BSI/G7 SBOM-for-AI — Models / Model hash value",
             "SBOM-BSIAI-MODEL-HASH",
@@ -369,6 +391,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::IntegrityInfo,
             &weak_hash,
+            ml_components.len(),
             "use no NIST-approved hash algorithm (SHA-256+) for their weights",
             "BSI/G7 SBOM-for-AI — Models / Hash algorithm",
             "SBOM-BSIAI-MODEL-HASH-ALGO",
@@ -380,6 +403,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_model_card,
+            ml_components.len(),
             "reference no model card",
             "BSI/G7 SBOM-for-AI — Models / Model card",
             "SBOM-BSIAI-MODEL-CARD",
@@ -389,6 +413,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_architecture,
+            ml_components.len(),
             "declare no architecture",
             "BSI/G7 SBOM-for-AI — Models / Architecture",
             "SBOM-BSIAI-MODEL-ARCHITECTURE",
@@ -398,6 +423,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DependencyInfo,
             &without_datasets,
+            ml_components.len(),
             "reference no training datasets",
             "BSI/G7 SBOM-for-AI — Models / Training datasets",
             "SBOM-BSIAI-MODEL-DATASETS",
@@ -407,6 +433,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_limitations,
+            ml_components.len(),
             "state no limitations",
             "BSI/G7 SBOM-for-AI — Models / Limitations",
             "SBOM-BSIAI-MODEL-LIMITATIONS",
@@ -416,6 +443,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::LicenseInfo,
             &without_license,
+            ml_components.len(),
             "declare no license",
             "BSI/G7 SBOM-for-AI — Models / Model license",
             "SBOM-BSIAI-MODEL-LICENSE",
@@ -478,6 +506,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_name,
+            dataset_components.len(),
             "declare no name",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset name",
             "SBOM-BSIAI-DATASET-NAME",
@@ -487,6 +516,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_identifier,
+            dataset_components.len(),
             "carry no unique identifier (PURL/CPE/SWHID/SWID)",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset identifier",
             "SBOM-BSIAI-DATASET-IDENTIFIER",
@@ -498,6 +528,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::IntegrityInfo,
             &without_hash,
+            dataset_components.len(),
             "carry no hash value",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset hash value",
             "SBOM-BSIAI-DATASET-HASH",
@@ -507,6 +538,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::LicenseInfo,
             &without_license,
+            dataset_components.len(),
             "declare no license",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset license",
             "SBOM-BSIAI-DATASET-LICENSE",
@@ -516,6 +548,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_sensitivity,
+            dataset_components.len(),
             "declare no sensitivity classification",
             "BSI/G7 SBOM-for-AI — Datasets / Sensitivity classification",
             "SBOM-BSIAI-DATASET-SENSITIVITY",
@@ -525,6 +558,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_provenance,
+            dataset_components.len(),
             "declare no provenance / intended-use",
             "BSI/G7 SBOM-for-AI — Datasets / Provenance & intended use",
             "SBOM-BSIAI-DATASET-PROVENANCE",
@@ -569,6 +603,8 @@ impl ComplianceChecker {
                 requirement: "BSI/G7 SBOM-for-AI — Infrastructure / Runtime & framework"
                     .to_string(),
                 rule_id: "SBOM-BSIAI-INFRA-RUNTIME",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -587,6 +623,8 @@ impl ComplianceChecker {
             element: None,
             requirement: "BSI/G7 SBOM-for-AI — Security / AI security controls".to_string(),
             rule_id: "SBOM-BSIAI-SEC-CONTROLS",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         });
         violations.push(Violation {
@@ -598,6 +636,8 @@ impl ComplianceChecker {
             element: None,
             requirement: "BSI/G7 SBOM-for-AI — Security / Exploitability reference".to_string(),
             rule_id: "SBOM-BSIAI-SEC-EXPLOITABILITY",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         });
     }
@@ -623,12 +663,16 @@ fn nist_approved_hash(a: &HashAlgorithm) -> bool {
 }
 
 /// Push a per-component readiness finding when `failing` is non-empty. `verb`
-/// completes the sentence "N component(s) <verb>: <list>".
+/// completes the sentence "N component(s) <verb>: <list>". `total` is the
+/// size of the cluster cohort the failing components were drawn from (ML
+/// models or datasets), carried as structured [`ViolationCounts`].
+#[allow(clippy::too_many_arguments)]
 fn push_model_finding(
     violations: &mut Vec<Violation>,
     severity: ViolationSeverity,
     category: ViolationCategory,
     failing: &[String],
+    total: usize,
     verb: &str,
     requirement: &str,
     rule_id: &'static str,
@@ -649,6 +693,11 @@ fn push_model_finding(
         element: failing.first().cloned(),
         requirement: requirement.to_string(),
         rule_id,
+        component_id: None,
+        counts: Some(ViolationCounts {
+            affected: failing.len(),
+            total,
+        }),
         standard_refs: Vec::new(),
     });
 }

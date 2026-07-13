@@ -32,6 +32,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EUCC Substantial: Protection Profile reference".to_string(),
                 rule_id: "SBOM-EUCC-PP",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -48,6 +50,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EUCC Substantial: Target of Evaluation reference".to_string(),
                 rule_id: "SBOM-EUCC-TOE",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -64,6 +68,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EUCC Substantial: ITSEF identifier".to_string(),
                 rule_id: "SBOM-EUCC-ITSEF",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -78,6 +84,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "EUCC Substantial: certificate valid-until date".to_string(),
                     rule_id: "SBOM-EUCC-VALIDITY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -92,6 +100,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "EUCC Substantial: certificate validity".to_string(),
                     rule_id: "SBOM-EUCC-VALIDITY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -106,6 +116,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "EUCC Substantial: certificate validity".to_string(),
                     rule_id: "SBOM-EUCC-VALIDITY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -133,6 +145,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EUCC Substantial: Certification external reference".to_string(),
                 rule_id: "SBOM-EUCC-CERTREF",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }

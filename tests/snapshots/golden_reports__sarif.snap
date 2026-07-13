@@ -934,7 +934,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1012,7 +1013,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1029,7 +1031,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1045,7 +1048,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1062,7 +1066,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/lodash@4.17.20"
           }
         },
         {
@@ -1078,7 +1083,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/lodash@4.17.20"
           }
         },
         {
@@ -1095,7 +1101,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/express@4.17.1"
           }
         },
         {
@@ -1111,7 +1118,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/express@4.17.1"
           }
         },
         {
@@ -1128,7 +1136,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/moment@2.29.1"
           }
         },
         {
@@ -1144,7 +1153,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/moment@2.29.1"
           }
         },
         {
@@ -1161,7 +1171,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/request@2.88.2"
           }
         },
         {
@@ -1177,7 +1188,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/request@2.88.2"
           }
         },
         {
@@ -1194,7 +1206,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/axios@0.21.1"
           }
         },
         {
@@ -1210,7 +1223,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/axios@0.21.1"
           }
         },
         {
@@ -1227,7 +1241,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/underscore@1.12.0"
           }
         },
         {
@@ -1243,7 +1258,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/underscore@1.12.0"
           }
         },
         {
@@ -1260,7 +1276,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/jquery@3.5.1"
           }
         },
         {
@@ -1276,7 +1293,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/jquery@3.5.1"
           }
         },
         {
@@ -1293,7 +1311,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/react@17.0.1"
           }
         },
         {
@@ -1309,7 +1328,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/react@17.0.1"
           }
         },
         {
@@ -1334,7 +1354,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'acme-webapp' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: acme-webapp]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "acme-webapp"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1342,7 +1365,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'lodash' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: lodash]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/lodash@4.17.20"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1350,7 +1376,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'express' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: express]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/express@4.17.1"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1358,7 +1387,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'moment' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: moment]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/moment@2.29.1"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1366,7 +1398,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'request' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: request]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/request@2.88.2"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1374,7 +1409,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'axios' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: axios]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/axios@0.21.1"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1382,7 +1420,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'underscore' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: underscore]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/underscore@1.12.0"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1390,7 +1431,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'jquery' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: jquery]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/jquery@3.5.1"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -1398,7 +1442,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "Old SBOM - EU CRA Phase 2 (2027): Component 'react' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: react]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/react@17.0.1"
+          }
         },
         {
           "ruleId": "SBOM-CRA-SBOM-FRESHNESS",
@@ -1431,7 +1478,9 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "affected": 1,
+            "total": 9
           }
         },
         {
@@ -1626,7 +1675,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1704,7 +1754,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1721,7 +1772,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1737,7 +1789,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1754,7 +1807,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/lodash@4.17.21"
           }
         },
         {
@@ -1770,7 +1824,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/lodash@4.17.21"
           }
         },
         {
@@ -1787,7 +1842,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/express@4.18.2"
           }
         },
         {
@@ -1803,7 +1859,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/express@4.18.2"
           }
         },
         {
@@ -1820,7 +1877,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/dayjs@1.11.7"
           }
         },
         {
@@ -1836,7 +1894,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/dayjs@1.11.7"
           }
         },
         {
@@ -1853,7 +1912,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/axios@1.4.0"
           }
         },
         {
@@ -1869,7 +1929,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/axios@1.4.0"
           }
         },
         {
@@ -1886,7 +1947,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/react@18.2.0"
           }
         },
         {
@@ -1902,7 +1964,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/react@18.2.0"
           }
         },
         {
@@ -1919,7 +1982,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/typescript@5.0.4"
           }
         },
         {
@@ -1935,7 +1999,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/typescript@5.0.4"
           }
         },
         {
@@ -1952,7 +2017,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/zod@3.21.4"
           }
         },
         {
@@ -1968,7 +2034,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/zod@3.21.4"
           }
         },
         {
@@ -1985,7 +2052,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/prisma@4.15.0"
           }
         },
         {
@@ -2001,7 +2069,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "pkg:npm/prisma@4.15.0"
           }
         },
         {
@@ -2026,7 +2095,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'acme-webapp' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: acme-webapp]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "acme-webapp"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2034,7 +2106,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'lodash' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: lodash]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/lodash@4.17.21"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2042,7 +2117,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'express' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: express]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/express@4.18.2"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2050,7 +2128,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'dayjs' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: dayjs]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/dayjs@1.11.7"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2058,7 +2139,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'axios' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: axios]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/axios@1.4.0"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2066,7 +2150,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'react' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: react]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/react@18.2.0"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2074,7 +2161,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'typescript' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: typescript]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/typescript@5.0.4"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2082,7 +2172,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'zod' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: zod]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/zod@3.21.4"
+          }
         },
         {
           "ruleId": "SBOM-CRA-GENERAL",
@@ -2090,7 +2183,10 @@ expression: "render(&SarifReporter::new())"
           "message": {
             "text": "New SBOM - EU CRA Phase 2 (2027): Component 'prisma' may be missing bom-ref (Requirement: CycloneDX: bom-ref for dependency tracking) [Element: prisma]"
           },
-          "locations": []
+          "locations": [],
+          "properties": {
+            "componentId": "pkg:npm/prisma@4.15.0"
+          }
         },
         {
           "ruleId": "SBOM-CRA-SBOM-FRESHNESS",
@@ -2123,7 +2219,9 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "affected": 1,
+            "total": 9
           }
         },
         {

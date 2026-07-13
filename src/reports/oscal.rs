@@ -236,6 +236,8 @@ mod tests {
             element: Some("metadata".to_string()),
             requirement: "NTIA minimum elements".to_string(),
             rule_id: "SBOM-NTIA-TIMESTAMP",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         }
     }
@@ -400,6 +402,8 @@ mod tests {
             element: Some("metadata".to_string()),
             requirement: "NTIA minimum elements".to_string(),
             rule_id: "SBOM-NTIA-TIMESTAMP",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         };
         let document = build(&[result(vec![

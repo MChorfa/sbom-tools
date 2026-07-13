@@ -39,6 +39,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement,
                 rule_id,
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -65,6 +67,8 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Art. 13(16): Manufacturer identification".to_string(),
                         rule_id: "SBOM-CRA-ART-13-16",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 } else {
@@ -77,6 +81,8 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Art. 13(16): Manufacturer identification".to_string(),
                         rule_id: "SBOM-CRA-ART-13-16",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -97,6 +103,8 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Art. 13(16): Valid contact information".to_string(),
                         rule_id: "SBOM-CRA-ART-13-16-EMAIL",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -115,6 +123,8 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Art. 13(15): Product identification".to_string(),
                         rule_id: "SBOM-CRA-ART-13-15-PRODUCT",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 } else {
@@ -126,6 +136,8 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Art. 13(15): Product identification".to_string(),
                         rule_id: "SBOM-CRA-ART-13-15-PRODUCT",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -164,6 +176,8 @@ impl ComplianceChecker {
                         requirement: "CRA Art. 13(17): Vulnerability disclosure contact"
                             .to_string(),
                         rule_id: "SBOM-CRA-ART-13-17-CONTACT",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 } else {
@@ -175,6 +189,8 @@ impl ComplianceChecker {
                         requirement: "CRA Art. 13(17): Vulnerability disclosure contact"
                             .to_string(),
                         rule_id: "SBOM-CRA-ART-13-17-CONTACT",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -189,6 +205,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Annex I: Primary product identification".to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-PRIMARY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -205,6 +223,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Art. 13(8) / 13(19): Support period disclosure".to_string(),
                     rule_id: "SBOM-CRA-ART-13-8",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -242,6 +262,8 @@ impl ComplianceChecker {
                     requirement: "CRA Annex I Part II (1): Machine-readable SBOM format"
                         .to_string(),
                     rule_id: "SBOM-CRA-MACHINE-READABLE",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -264,6 +286,8 @@ impl ComplianceChecker {
                             element: Some(primary.name.clone()),
                             requirement: "CRA Annex I Part II (1): Product identifier traceability across updates".to_string(),
                             rule_id: "SBOM-CRA-ANNEX-I-TRACEABILITY",
+                            component_id: Some(primary.canonical_id.value().to_string()),
+                            counts: None,
                             standard_refs: Vec::new(),
                         });
             }
@@ -295,6 +319,8 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy".to_string(),
                         rule_id: "SBOM-CRA-CVD-POLICY",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 } else {
@@ -305,6 +331,8 @@ impl ComplianceChecker {
                         element: None,
                         requirement: "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy".to_string(),
                         rule_id: "SBOM-CRA-CVD-POLICY",
+                        component_id: None,
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -322,6 +350,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Annex II (7): Component lifecycle status".to_string(),
                     rule_id: "SBOM-CRA-LIFECYCLE",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -355,6 +385,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Annex V: EU Declaration of Conformity reference".to_string(),
                     rule_id: "SBOM-CRA-ANNEX-V",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -376,6 +408,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "FDA: Manufacturer identification".to_string(),
                     rule_id: "SBOM-FDA-SUPPLIER",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -390,6 +424,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "FDA: Contact information".to_string(),
                     rule_id: "SBOM-FDA-SUPPORT",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -403,6 +439,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "FDA: Document identification".to_string(),
                     rule_id: "SBOM-FDA-NAME",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -425,6 +463,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "FDA: Level of support and end-of-support date".to_string(),
                     rule_id: "SBOM-FDA-SUPPORT",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -456,6 +496,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement,
                 rule_id: "SBOM-NTIA-TIMESTAMP",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -482,6 +524,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "Document unique identification".to_string(),
                 rule_id,
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -543,6 +587,8 @@ impl ComplianceChecker {
                     element: Some(comp.identifiers.format_id.clone()),
                     requirement,
                     rule_id,
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -590,6 +636,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: req,
                     rule_id,
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -664,6 +712,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement,
                     rule_id,
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -727,6 +777,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement,
                     rule_id,
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -745,6 +797,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: "License declaration".to_string(),
                     rule_id: "SBOM-CRA-GENERAL",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -774,6 +828,8 @@ impl ComplianceChecker {
                         } else {
                             "SBOM-CRA-GENERAL"
                         },
+                        component_id: Some(comp.canonical_id.value().to_string()),
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 } else if self.level == ComplianceLevel::FdaMedicalDevice {
@@ -807,6 +863,8 @@ impl ComplianceChecker {
                             requirement: "FDA: Strong cryptographic hash (SHA-256 or better)"
                                 .to_string(),
                             rule_id: "SBOM-FDA-HASH",
+                            component_id: Some(comp.canonical_id.value().to_string()),
+                            counts: None,
                             standard_refs: Vec::new(),
                         });
                     }
@@ -826,6 +884,8 @@ impl ComplianceChecker {
                     requirement: "CRA Annex I Part I (2)(f): Component integrity information (hash)"
                         .to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-INTEGRITY",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -880,6 +940,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: requirement.to_string(),
                     rule_id,
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             } else if has_multiple_components {
@@ -922,6 +984,8 @@ impl ComplianceChecker {
                         element: Some(primary.name.clone()),
                         requirement: requirement.to_string(),
                         rule_id,
+                        component_id: Some(primary.canonical_id.value().to_string()),
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -957,6 +1021,11 @@ impl ComplianceChecker {
                         element: None,
                         requirement: requirement.to_string(),
                         rule_id,
+                        component_id: None,
+                        counts: Some(ViolationCounts {
+                            affected: orphans,
+                            total,
+                        }),
                         standard_refs: Vec::new(),
                     });
                 }
@@ -984,6 +1053,8 @@ impl ComplianceChecker {
                     requirement: "CRA Annex I Part II (1): Dependency graph consistency"
                         .to_string(),
                     rule_id: "SBOM-CRA-CYCLES",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -1012,6 +1083,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "CRA Annex I: Top-level dependency clarity".to_string(),
                     rule_id: "SBOM-CRA-ANNEX-I-DEPENDENCY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -1053,6 +1126,8 @@ impl ComplianceChecker {
                     element: None,
                     requirement: "FDA: Known vulnerability assessment".to_string(),
                     rule_id: "SBOM-FDA-SECURITY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -1075,6 +1150,8 @@ impl ComplianceChecker {
                     requirement: "CRA Annex I Part II (4): Vulnerability metadata completeness"
                         .to_string(),
                     rule_id: "SBOM-CRA-VULN-METADATA",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -1093,6 +1170,8 @@ impl ComplianceChecker {
                         element: Some(comp.name.clone()),
                         requirement: "CRA Annex I Part II (4): Remediation detail".to_string(),
                         rule_id: "SBOM-CRA-VULN-METADATA",
+                        component_id: Some(comp.canonical_id.value().to_string()),
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
             }
@@ -1131,6 +1210,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "Current CycloneDX version".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -1146,6 +1227,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: "CycloneDX: bom-ref for dependency tracking".to_string(),
                     rule_id: "SBOM-CRA-GENERAL",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -1169,6 +1252,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "Valid SPDX version".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -1199,6 +1284,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: expected.to_string(),
                     rule_id: "SBOM-CRA-GENERAL",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }

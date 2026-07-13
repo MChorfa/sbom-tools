@@ -443,8 +443,31 @@ pub struct Violation {
     pub category: ViolationCategory,
     /// Human-readable message
     pub message: String,
-    /// Component or element that violated (if applicable)
+    /// Component or element that violated (if applicable).
+    ///
+    /// This is a human-readable *label* (usually the component name, sometimes
+    /// a format id) and is not unique across versions or duplicate names — use
+    /// [`Violation::component_id`] as the machine-readable join key.
     pub element: Option<String>,
+    /// Canonical id of the offending component, when component-scoped.
+    ///
+    /// Unlike [`Violation::element`], this is a stable join key back to the
+    /// SBOM component (the component's `CanonicalId`), so machine consumers
+    /// can reliably correlate findings with components. `None` for
+    /// document-level and aggregate findings.
+    ///
+    /// Serialized as `component_id`, omitted when `None`; old payloads
+    /// without the field deserialize to `None`.
+    pub component_id: Option<String>,
+    /// Affected/total component counts for aggregate findings.
+    ///
+    /// Mirrors the numbers embedded in the human-readable `message`
+    /// (e.g. "7/10 components (70%)…") in structured form. `None` for
+    /// non-aggregate findings.
+    ///
+    /// Serialized as `counts`, omitted when `None`; old payloads without the
+    /// field deserialize to `None`.
+    pub counts: Option<ViolationCounts>,
     /// Standard/requirement being violated
     pub requirement: String,
     /// Stable internal rule key, set at the check site, indexing into
@@ -466,6 +489,21 @@ pub struct Violation {
     pub standard_refs: Vec<StandardRef>,
 }
 
+/// Affected/total component counts carried by aggregate findings.
+///
+/// Structured mirror of the coverage numbers that aggregate checks embed in
+/// the human-readable message (e.g. "7/10 components (70%)…"), so machine
+/// consumers can extract them without regexing the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViolationCounts {
+    /// Numerator as printed in the message — usually the number of offending
+    /// components; for coverage-style findings ("only X/Y carry …") it is the
+    /// covered count, exactly as the message states it.
+    pub affected: usize,
+    /// Total number of components considered (the message's denominator).
+    pub total: usize,
+}
+
 /// Serde default for [`Violation::rule_id`] when deserializing payloads that
 /// predate the field.
 fn default_rule_id() -> &'static str {
@@ -483,6 +521,10 @@ struct ViolationPayload {
     category: ViolationCategory,
     message: String,
     element: Option<String>,
+    #[serde(default)]
+    component_id: Option<String>,
+    #[serde(default)]
+    counts: Option<ViolationCounts>,
     requirement: String,
     #[serde(default)]
     rule_id: Option<String>,
@@ -501,6 +543,8 @@ impl<'de> Deserialize<'de> for Violation {
             category: payload.category,
             message: payload.message,
             element: payload.element,
+            component_id: payload.component_id,
+            counts: payload.counts,
             requirement: payload.requirement,
             // Unknown ids (from newer/older registries) collapse to the
             // generic default rather than failing deserialization; the
@@ -520,18 +564,35 @@ impl Serialize for Violation {
     /// Manual impl so the JSON carries both the stable internal `rule_id` and
     /// the externally-visible `sarif_rule_id` derived from the rule registry
     /// (never stored, so it cannot drift). Field order mirrors declaration
-    /// order; `standard_refs` is skipped when empty, as before.
+    /// order; `standard_refs` is skipped when empty, and `component_id` /
+    /// `counts` are skipped when `None`, as their serde-derive
+    /// `skip_serializing_if = "Option::is_none"` equivalents would be.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
         let has_refs = !self.standard_refs.is_empty();
-        let mut state = serializer.serialize_struct("Violation", 7 + usize::from(has_refs))?;
+        let has_component_id = self.component_id.is_some();
+        let has_counts = self.counts.is_some();
+        let mut state = serializer.serialize_struct(
+            "Violation",
+            7 + usize::from(has_refs) + usize::from(has_component_id) + usize::from(has_counts),
+        )?;
         state.serialize_field("severity", &self.severity)?;
         state.serialize_field("category", &self.category)?;
         state.serialize_field("message", &self.message)?;
         state.serialize_field("element", &self.element)?;
+        if has_component_id {
+            state.serialize_field("component_id", &self.component_id)?;
+        } else {
+            state.skip_field("component_id")?;
+        }
+        if has_counts {
+            state.serialize_field("counts", &self.counts)?;
+        } else {
+            state.skip_field("counts")?;
+        }
         state.serialize_field("requirement", &self.requirement)?;
         state.serialize_field("rule_id", self.rule_id)?;
         // Same registry lookup + fallback as the SARIF renderer, so the same
@@ -2087,6 +2148,8 @@ mod tests {
             element: None,
             requirement: "x".to_string(),
             rule_id: "SBOM-CRA-GENERAL",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         };
         let errors_only = ComplianceResult::new(
@@ -2234,6 +2297,8 @@ mod tests {
                 element: None,
                 requirement: "Test".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             },
             Violation {
@@ -2243,6 +2308,8 @@ mod tests {
                 element: None,
                 requirement: "Test".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             },
             Violation {
@@ -2252,6 +2319,8 @@ mod tests {
                 element: None,
                 requirement: "Test".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             },
         ];
@@ -3307,6 +3376,8 @@ mod tests {
             element: None,
             requirement: String::new(),
             rule_id,
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         };
         v.registry_standard_refs()

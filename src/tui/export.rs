@@ -817,6 +817,8 @@ mod compliance_export_tests {
             element: Some("comp-a".to_string()),
             requirement: "Test requirement".to_string(),
             rule_id,
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         }
     }

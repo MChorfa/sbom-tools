@@ -55,6 +55,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EU AI Act Annex IV: applicability".to_string(),
                 rule_id: "SBOM-AIACT-NA",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
             return;
@@ -148,6 +150,11 @@ impl ComplianceChecker {
                 requirement: "EU AI Act Annex IV §1: general description of the AI system"
                     .to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-1-DESCRIPTION",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_description.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -165,6 +172,11 @@ impl ComplianceChecker {
                 element: without_use_cases.first().cloned(),
                 requirement: "EU AI Act Annex IV §1: intended purpose / use-cases".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-1-PURPOSE",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_use_cases.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -203,6 +215,11 @@ impl ComplianceChecker {
                 element: without_datasets.first().cloned(),
                 requirement: "EU AI Act Annex IV §2(d): training-data provenance".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2D-DATASETS",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_datasets.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -237,6 +254,11 @@ impl ComplianceChecker {
                 requirement: "EU AI Act Annex IV §2(d): training-data sensitivity classification"
                     .to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2D-SENSITIVITY",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: undeclared_sensitivity.len(),
+                    total: dataset_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -291,6 +313,11 @@ impl ComplianceChecker {
                 element: without_metrics.first().cloned(),
                 requirement: "EU AI Act Annex IV §2(g): validation/testing metrics".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2G-METRICS",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_metrics.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -336,6 +363,11 @@ impl ComplianceChecker {
                 element: without_limitations.first().cloned(),
                 requirement: "EU AI Act Annex IV §3: foreseeable limitations and risks".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-3-LIMITATIONS",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_limitations.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -397,6 +429,13 @@ impl ComplianceChecker {
                 element: personal_data.first().cloned(),
                 requirement: "EU AI Act Annex IV §2(d): personal-data disclosure".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2D-PERSONAL-DATA",
+                component_id: None,
+                // Counts only apply when per-dataset classifications drove
+                // the note (the sidecar flag has no component cohort).
+                counts: (!personal_data.is_empty()).then_some(ViolationCounts {
+                    affected: personal_data.len(),
+                    total: dataset_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -430,6 +469,8 @@ impl ComplianceChecker {
                 requirement: "EU AI Act Annex IV §2(c): computational resources / energy"
                     .to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2C-ENERGY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }

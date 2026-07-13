@@ -40,6 +40,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Machine-readable SBOM format".to_string(),
                 rule_id: "SBOM-EO14028-FORMAT",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -57,6 +59,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Timestamp (NTIA baseline)".to_string(),
                 rule_id: "SBOM-EO14028-TIMESTAMP",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -76,6 +80,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Automated SBOM generation".to_string(),
                 rule_id: "SBOM-EO14028-AUTOGEN",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -89,6 +95,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): SBOM creator identification".to_string(),
                 rule_id: "SBOM-EO14028-CREATOR",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -112,6 +120,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component unique identification".to_string(),
                 rule_id: "SBOM-EO14028-IDENTIFIER",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_id,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -130,6 +143,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component name (NTIA baseline)".to_string(),
                 rule_id: "SBOM-EO14028-NAME",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_name,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -144,6 +162,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Dependency relationships".to_string(),
                 rule_id: "SBOM-EO14028-DEPENDENCY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -165,6 +185,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component version".to_string(),
                 rule_id: "SBOM-EO14028-VERSION",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_version,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -183,6 +208,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component integrity verification".to_string(),
                 rule_id: "SBOM-EO14028-INTEGRITY",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_hash,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -209,6 +239,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(g): Vulnerability disclosure process".to_string(),
                 rule_id: "SBOM-EO14028-DISCLOSURE",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -235,6 +267,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Supplier identification".to_string(),
                 rule_id: "SBOM-EO14028-SUPPLIER",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_supplier,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }

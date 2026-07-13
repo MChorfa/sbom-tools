@@ -150,6 +150,8 @@ pub(crate) fn push_untyped_ml_warning(
         element: names.first().cloned(),
         requirement: requirement.to_string(),
         rule_id,
+        component_id: None,
+        counts: None,
         standard_refs: Vec::new(),
     });
 }

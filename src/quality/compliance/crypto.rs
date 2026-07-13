@@ -296,6 +296,8 @@ impl ComplianceChecker {
                                     element: Some(comp.name.clone()),
                                     requirement: "CNSA 2.0 Certificate".to_string(),
                                     rule_id: "SBOM-CNSA2-CERT-001",
+                                    component_id: Some(comp.canonical_id.value().to_string()),
+                                    counts: None,
                                     standard_refs: Vec::new(),
                                 });
                             }
@@ -317,6 +319,8 @@ impl ComplianceChecker {
                                     requirement: "CNSA 2.0: certificate signature identification"
                                         .to_string(),
                                     rule_id: "SBOM-CNSA2-CERT-UNKNOWN",
+                                    component_id: Some(comp.canonical_id.value().to_string()),
+                                    counts: None,
                                     standard_refs: Vec::new(),
                                 });
                             }
@@ -350,6 +354,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "CNSA 2.0: cryptographic inventory required".to_string(),
                 rule_id: "SBOM-CNSA2-000",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -393,6 +399,8 @@ impl ComplianceChecker {
                             element: Some(comp.name.clone()),
                             requirement: "CNSA 2.0 PQC Migration".to_string(),
                             rule_id: "SBOM-CNSA2-ALG-006",
+                            component_id: Some(comp.canonical_id.value().to_string()),
+                            counts: None,
                             standard_refs: Vec::new(),
                         });
                     }
@@ -407,6 +415,8 @@ impl ComplianceChecker {
                         element: Some(comp.name.clone()),
                         requirement: "CNSA 2.0 Level 5".to_string(),
                         rule_id: "SBOM-CNSA2-ALG-007",
+                        component_id: Some(comp.canonical_id.value().to_string()),
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -427,6 +437,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: cnsa2_requirement(rule_id).to_string(),
                     rule_id,
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -450,6 +462,8 @@ impl ComplianceChecker {
                         element: Some(comp.name.clone()),
                         requirement: "CNSA 2.0: algorithm identification".to_string(),
                         rule_id: "SBOM-CNSA2-ALG-UNKNOWN",
+                        component_id: Some(comp.canonical_id.value().to_string()),
+                        counts: None,
                         standard_refs: Vec::new(),
                     });
                 }
@@ -479,6 +493,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "CNSA 2.0 Protocol".to_string(),
                 rule_id: "SBOM-CNSA2-PROTO-001",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         } else if matches!(proto.protocol_type, ProtocolType::Tls | ProtocolType::Dtls)
@@ -504,6 +520,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "CNSA 2.0 Protocol".to_string(),
                 rule_id: "SBOM-CNSA2-PROTO-001",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -524,6 +542,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "CNSA 2.0 Protocol".to_string(),
                 rule_id: "SBOM-CNSA2-PROTO-002",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         };
@@ -642,6 +662,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "CNSA 2.0: protocol algorithm identification".to_string(),
                 rule_id: "SBOM-CNSA2-PROTO-UNKNOWN",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         } else if !substantive {
@@ -657,6 +679,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "CNSA 2.0: protocol algorithm identification".to_string(),
                 rule_id: "SBOM-CNSA2-PROTO-UNKNOWN",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -719,6 +743,8 @@ impl ComplianceChecker {
                                 element: Some(comp.name.clone()),
                                 requirement: "IR 8547: certificate signature".to_string(),
                                 rule_id: "SBOM-PQC-CERT-001",
+                                component_id: Some(comp.canonical_id.value().to_string()),
+                                counts: None,
                                 standard_refs: Vec::new(),
                             });
                         } else if cls.class == AlgorithmClass::Unknown {
@@ -739,6 +765,8 @@ impl ComplianceChecker {
                                 requirement: "IR 8547: certificate signature identification"
                                     .to_string(),
                                 rule_id: "SBOM-PQC-CERT-UNKNOWN",
+                                component_id: Some(comp.canonical_id.value().to_string()),
+                                counts: None,
                                 standard_refs: Vec::new(),
                             });
                         }
@@ -775,6 +803,8 @@ impl ComplianceChecker {
                                     element: Some(comp.name.clone()),
                                     requirement: "NIST: minimum key size".to_string(),
                                     rule_id: "SBOM-PQC-KEY-001",
+                                    component_id: Some(comp.canonical_id.value().to_string()),
+                                    counts: None,
                                     standard_refs: Vec::new(),
                                 });
                             }
@@ -800,6 +830,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "IR 8547: cryptographic inventory required".to_string(),
                 rule_id: "SBOM-PQC-000",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -838,6 +870,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "IR 8547: quantum-vulnerable".to_string(),
                 rule_id: "SBOM-PQC-001",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -851,6 +885,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "IR 8547: quantum assessment required".to_string(),
                 rule_id: "SBOM-PQC-012",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -870,6 +906,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "SP 800-131A: disallowed".to_string(),
                 rule_id: "SBOM-PQC-005",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -886,6 +924,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "SP 800-131A Rev 3: ECB disallowed".to_string(),
                 rule_id: "SBOM-PQC-008",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -913,6 +953,8 @@ impl ComplianceChecker {
                     element: Some(comp.name.clone()),
                     requirement: "FIPS 203/204/205: approved".to_string(),
                     rule_id: "SBOM-PQC-009",
+                    component_id: Some(comp.canonical_id.value().to_string()),
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -930,6 +972,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "IR 8547: recommended transition".to_string(),
                 rule_id: "SBOM-PQC-010",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -958,6 +1002,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "SP 800-52: protocol version".to_string(),
                 rule_id: "SBOM-PQC-PROTO-001",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         } else if matches!(proto.protocol_type, ProtocolType::Tls | ProtocolType::Dtls)
@@ -976,6 +1022,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "SP 800-52: protocol version".to_string(),
                 rule_id: "SBOM-PQC-PROTO-001",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -1006,6 +1054,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "IR 8547 / SP 800-131A: protocol algorithms".to_string(),
                 rule_id: "SBOM-PQC-PROTO-002",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         };
@@ -1117,6 +1167,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "IR 8547: protocol algorithm identification".to_string(),
                 rule_id: "SBOM-PQC-PROTO-UNKNOWN",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         } else if !substantive {
@@ -1131,6 +1183,8 @@ impl ComplianceChecker {
                 element: Some(comp.name.clone()),
                 requirement: "IR 8547: protocol algorithm identification".to_string(),
                 rule_id: "SBOM-PQC-PROTO-UNKNOWN",
+                component_id: Some(comp.canonical_id.value().to_string()),
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }

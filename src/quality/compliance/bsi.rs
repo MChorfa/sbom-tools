@@ -78,6 +78,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §4: Eligible SBOM format and version".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-4",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -115,6 +117,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.1: Creator of the SBOM".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-1",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         } else {
@@ -134,6 +138,8 @@ impl ComplianceChecker {
                     requirement: "BSI TR-03183-2 §5.2.1: Creator of the SBOM (email or URL)"
                         .to_string(),
                     rule_id: "SBOM-BSI-TR-03183-2-5-1-CONTACT",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -151,6 +157,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.1: Timestamp".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-2",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -254,6 +262,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.2: Component name".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-3",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: nameless,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -274,6 +287,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.2: Component version".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-VERSION",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_version.len(),
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -292,6 +310,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.2: Distribution licences".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-LICENSE",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_license.len(),
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -311,6 +334,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §6.1: Licence identifiers and expressions".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-LICENSE-SPDX",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: non_spdx_license.len(),
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -328,6 +356,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.2: Component creator".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-CREATOR",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_creator,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -348,6 +381,11 @@ impl ComplianceChecker {
                 requirement: "BSI TR-03183-2 §5.2.2: Hash of the deployable component (SHA-512)"
                     .to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-4",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: sha512_missing.len(),
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -368,6 +406,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.2: Hash of the deployable component".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-4-MISSING",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_hash,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -384,6 +427,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.2: Dependencies on other components".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-5",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -409,6 +454,8 @@ impl ComplianceChecker {
                 requirement: "BSI TR-03183-2 §5.2.2: Completeness of the dependency enumeration"
                     .to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-5-COMPLETENESS",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -431,6 +478,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.4: Other unique identifiers".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-2-4",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_identifier.len(),
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -456,6 +508,11 @@ impl ComplianceChecker {
                 requirement: "BSI TR-03183-2 §3.1: No vulnerability information in the SBOM"
                     .to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-3-1",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: with_vulnerabilities,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
