@@ -379,6 +379,14 @@ fn compliance_to_sarif(result: Option<&crate::quality::ComplianceResult>) -> Str
         .unwrap_or_else(|e| format!(r#"{{"error": "{e}"}}"#))
 }
 
+/// Escape `|` in markdown table cell content so untrusted SBOM values
+/// (component names in `element`, requirement text) cannot shift every
+/// subsequent column of the row. The sibling HTML/CSV exports already
+/// escape via `escape_html`/`csv_escape`.
+fn md_escape_cell(s: &str) -> String {
+    s.replace('|', "\\|")
+}
+
 fn compliance_to_markdown(results: &[crate::quality::ComplianceResult], selected: usize) -> String {
     let mut md = String::new();
 
@@ -416,9 +424,9 @@ fn compliance_to_markdown(results: &[crate::quality::ComplianceResult], selected
                 v.severity.name(),
                 v.rule_id,
                 v.category.name(),
-                v.requirement,
-                element,
-                v.remediation_guidance(),
+                md_escape_cell(&v.requirement),
+                md_escape_cell(element),
+                md_escape_cell(v.remediation_guidance()),
             ));
         }
         md.push('\n');
@@ -885,6 +893,35 @@ mod compliance_export_tests {
         // Shared ComplianceResult::score(): 1 error → 100/(1+1) = 50.
         let expected = format!("Score: {}%", results[0].score().expect("applicable score"));
         assert!(md.contains(&expected), "score must come from score()");
+    }
+
+    #[test]
+    fn markdown_escapes_pipes_in_table_cells() {
+        // Component names are untrusted SBOM input and may legally contain
+        // '|' (CycloneDX name fields); unescaped they shift every following
+        // column of the table row.
+        let mut v = violation(RULE_ID, ViolationSeverity::Error);
+        v.element = Some("lib|4.x".to_string());
+        v.requirement = "Field a | field b".to_string();
+        let results = vec![ComplianceResult::new(
+            ComplianceLevel::BsiTr03183_2,
+            vec![v],
+        )];
+
+        let md = compliance_to_markdown(&results, 0);
+
+        assert!(
+            md.contains("lib\\|4.x"),
+            "element cell must escape '|': {md}"
+        );
+        assert!(
+            md.contains("Field a \\| field b"),
+            "requirement cell must escape '|': {md}"
+        );
+        assert!(
+            !md.contains("| lib|4.x |"),
+            "raw pipe must not survive inside a cell: {md}"
+        );
     }
 
     #[test]

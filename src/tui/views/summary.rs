@@ -1276,6 +1276,26 @@ fn render_policy_compact(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     ];
 
     if let Some(ref result) = compliance.result {
+        // Applicability first: `passes` stays `true` for a standard that did
+        // not evaluate this SBOM, and rendering it as a green PASS (or any
+        // score) would report a verdict that was never computed.
+        if let Some(reason) = result.not_applicable.as_deref() {
+            spans.push(Span::styled(
+                " N/A ",
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(scheme.muted)
+                    .bold(),
+            ));
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                crate::tui::widgets::truncate_str(reason, 60),
+                Style::default().fg(scheme.text_muted).italic(),
+            ));
+            render_policy_block(frame, area, compliance, spans);
+            return;
+        }
+
         let (status, status_style) = if result.passes {
             (
                 " PASS ",
@@ -1365,12 +1385,30 @@ fn render_policy_compact(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         ));
     }
 
-    let border_style = if compliance.passes() {
-        Style::default().fg(scheme.success)
-    } else if compliance.checked {
-        Style::default().fg(scheme.error)
-    } else {
+    render_policy_block(frame, area, compliance, spans);
+}
+
+/// Render the assembled policy spans in the bordered " Security Policy "
+/// block. The border stays neutral for N/A results (no verdict was
+/// computed, so neither the green pass nor the red fail border applies).
+fn render_policy_block<'a>(
+    frame: &mut Frame,
+    area: Rect,
+    compliance: &crate::tui::app_states::PolicyComplianceState,
+    spans: Vec<Span<'a>>,
+) {
+    let scheme = colors();
+    let not_applicable = compliance
+        .result
+        .as_ref()
+        .is_some_and(|r| r.not_applicable.is_some());
+
+    let border_style = if not_applicable || !compliance.checked {
         Style::default().fg(scheme.border)
+    } else if compliance.passes() {
+        Style::default().fg(scheme.success)
+    } else {
+        Style::default().fg(scheme.error)
     };
 
     let paragraph = Paragraph::new(Line::from(spans)).block(

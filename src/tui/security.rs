@@ -789,8 +789,13 @@ pub struct ComplianceResult {
     pub violations: Vec<PolicyViolation>,
     /// Compliance score (0-100)
     pub score: u8,
-    /// Whether the SBOM passes the policy
+    /// Whether the SBOM passes the policy. Stays `true` for not-applicable
+    /// standards-based results by contract — check `not_applicable` first.
     pub passes: bool,
+    /// When `Some`, the checked standard did not evaluate this SBOM (the
+    /// string is the human-readable reason). Renderers must show N/A —
+    /// never a pass or a score — regardless of `passes`.
+    pub not_applicable: Option<String>,
 }
 
 impl ComplianceResult {
@@ -814,6 +819,9 @@ pub fn check_compliance(
         violations: Vec::new(),
         score: 100,
         passes: true,
+        // Policy presets always evaluate the SBOM; only standards-based
+        // readiness profiles can be not applicable.
+        not_applicable: None,
     };
 
     for (name, version, licenses, vulns) in components {
