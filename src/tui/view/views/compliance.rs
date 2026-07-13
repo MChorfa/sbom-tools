@@ -1032,7 +1032,13 @@ fn render_empty_compliance(
     let all_levels = ComplianceLevel::all();
     for (i, level) in all_levels.iter().enumerate() {
         if let Some(r) = all_results.get(i) {
-            let (icon, icon_color) = if r.is_compliant {
+            // Applicability first, mirroring the tab strip: N/A results keep
+            // `is_compliant = true` (and warning_count = 0) by contract, so
+            // deriving the icon from those alone renders an unevaluated
+            // standard as a green pass one panel below the "\u{2014}" tab.
+            let (icon, icon_color) = if !r.is_applicable() {
+                ("\u{2014}", scheme.muted)
+            } else if r.is_compliant {
                 if r.warning_count > 0 {
                     ("\u{26a0}", scheme.warning)
                 } else {
@@ -1042,7 +1048,9 @@ fn render_empty_compliance(
                 ("\u{2717}", scheme.error)
             };
 
-            let detail = if r.is_compliant && r.violations.is_empty() {
+            let detail = if !r.is_applicable() {
+                "not applicable".to_string()
+            } else if r.is_compliant && r.violations.is_empty() {
                 "passed".to_string()
             } else if r.is_compliant {
                 format!("{} warnings", r.warning_count)

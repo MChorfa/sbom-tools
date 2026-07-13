@@ -613,17 +613,26 @@ impl App {
             return;
         };
 
-        // Find the SBOM to check (prefer new_sbom in diff mode, sbom in view mode)
-        let sbom = match self.mode {
-            AppMode::Diff => self.data.new_sbom.as_ref(),
-            _ => self.data.sbom.as_ref(),
+        // Find the SBOM to check (prefer new_sbom in diff mode, sbom in view
+        // mode) together with its adjacent CRA sidecar, mirroring
+        // `compliance_results_for` so the policy widget renders the same
+        // verdict as the compliance tab (view mode carries no sidecar).
+        let (sbom, sidecar) = match self.mode {
+            AppMode::Diff => (
+                self.data.new_sbom.as_ref(),
+                self.data.new_cra_sidecar.as_ref(),
+            ),
+            _ => (self.data.sbom.as_ref(), None),
         };
         let Some(sbom) = sbom else {
             self.set_status_message("No SBOM loaded to check");
             return;
         };
 
-        let checker = ComplianceChecker::new(level);
+        let mut checker = ComplianceChecker::new(level);
+        if let Some(sc) = sidecar {
+            checker = checker.with_sidecar(sc.clone());
+        }
         let std_result = checker.check(sbom);
 
         // Convert quality::Violation → PolicyViolation
@@ -646,16 +655,17 @@ impl App {
             })
             .collect();
 
-        // Calculate score: errors weigh 10pts, warnings 5pts, info 1pt
-        let penalty: u32 = violations
-            .iter()
-            .map(|v| match v.severity {
-                PolicySeverity::High | PolicySeverity::Critical => 10,
-                PolicySeverity::Medium => 5,
-                PolicySeverity::Low => 1,
-            })
-            .sum();
-        let score = 100u8.saturating_sub(penalty.min(100) as u8);
+        // Shared badge score via `ComplianceResult::score()` — the single
+        // formula every compliance surface renders (Info-neutral; `None`
+        // when the standard did not evaluate the SBOM).
+        let score = std_result.score().unwrap_or(0);
+
+        // N/A results keep `is_compliant = true` by contract; carry the
+        // applicability reason so renderers show "N/A" instead of a pass.
+        let not_applicable = match &std_result.applicability {
+            crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+            crate::quality::Applicability::Applicable => None,
+        };
 
         let passes = std_result.is_compliant;
         let policy_name = format!("{} Compliance", preset.label());
@@ -667,13 +677,16 @@ impl App {
             violations,
             score,
             passes,
+            not_applicable: not_applicable.clone(),
         };
 
         self.compliance_state.result = Some(result);
         self.compliance_state.checked = true;
         self.compliance_state.selected_violation = 0;
 
-        if passes {
+        if let Some(reason) = not_applicable {
+            self.set_status_message(format!("{policy_name} - NOT APPLICABLE ({reason})"));
+        } else if passes {
             self.set_status_message(format!("{policy_name} - COMPLIANT (score: {score})"));
         } else {
             self.set_status_message(format!(
