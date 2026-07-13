@@ -258,10 +258,10 @@ expression: "render(&SarifReporter::new())"
               "helpUri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             },
             {
-              "id": "SBOM-CRA-ART-13-9",
+              "id": "SBOM-CRA-VULN-STATEMENT",
               "name": "CraKnownVulnerabilities",
               "shortDescription": {
-                "text": "CRA Art. 13(9): Known vulnerabilities statement — vulnerability data or assertion"
+                "text": "CRA Annex I Part II (1): Documented vulnerability information — vulnerability data or assertion"
               },
               "defaultConfiguration": {
                 "level": "note"
@@ -924,7 +924,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I, Part II, 1: Product identifier traceability across updates) [Element: acme-webapp]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I Part II (1): Product identifier traceability across updates) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -1435,15 +1435,15 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-9",
+          "ruleId": "SBOM-CRA-VULN-STATEMENT",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Art. 13(9): Known vulnerabilities statement) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Annex I Part II (1): Documented vulnerability information) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(9)"
+              "CRA-Annex:Annex I Part II (1)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -1502,7 +1502,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14] (Requirement: CRA Art. 14(1): 24-hour early-warning channel) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)(a)] 24-hour early-warning channel missing — document the ENISA/CSIRT contact before 2026-09-11 (Requirement: CRA Art. 14(2)(a): 24-hour early-warning channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1518,7 +1518,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14] (Requirement: CRA Art. 14(2): 72-hour incident-report channel) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)(b) / 14(4)(b)] 72-hour notification channel missing — document this contact before 2026-09-11 (Requirement: CRA Art. 14(2)(b): 72-hour notification channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -1616,7 +1616,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-ANNEX-I",
           "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I, Part II, 1: Product identifier traceability across updates) [Element: acme-webapp]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability (Requirement: CRA Annex I Part II (1): Product identifier traceability across updates) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -2127,15 +2127,15 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-ART-13-9",
+          "ruleId": "SBOM-CRA-VULN-STATEMENT",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Art. 13(9): Known vulnerabilities statement) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Annex I Part II (1): Documented vulnerability information) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA:Art. 13(9)"
+              "CRA-Annex:Annex I Part II (1)"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
@@ -2194,7 +2194,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14] (Requirement: CRA Art. 14(1): 24-hour early-warning channel) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)(a)] 24-hour early-warning channel missing — document the ENISA/CSIRT contact before 2026-09-11 (Requirement: CRA Art. 14(2)(a): 24-hour early-warning channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {
@@ -2210,7 +2210,7 @@ expression: "render(&SarifReporter::new())"
           "ruleId": "SBOM-CRA-GENERAL",
           "level": "note",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14] (Requirement: CRA Art. 14(2): 72-hour incident-report channel) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Art. 14(2)(b) / 14(4)(b)] 72-hour notification channel missing — document this contact before 2026-09-11 (Requirement: CRA Art. 14(2)(b): 72-hour notification channel) [Element: unknown]"
           },
           "locations": [],
           "properties": {

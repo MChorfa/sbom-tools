@@ -118,9 +118,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Warning",
           "category": "ComponentIdentification",
-          "message": "[CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability",
+          "message": "[CRA Annex I Part II (1)] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability",
           "element": "acme-webapp",
-          "requirement": "CRA Annex I, Part II, 1: Product identifier traceability across updates",
+          "requirement": "CRA Annex I Part II (1): Product identifier traceability across updates",
           "standard_refs": [
             {
               "standard": "CraAnnex",
@@ -615,13 +615,13 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Info",
           "category": "SecurityInfo",
-          "message": "[CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities",
+          "message": "[CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities",
           "element": null,
-          "requirement": "CRA Art. 13(9): Known vulnerabilities statement",
+          "requirement": "CRA Annex I Part II (1): Documented vulnerability information",
           "standard_refs": [
             {
-              "standard": "CraArticle",
-              "id": "Art. 13(9)",
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ]
@@ -671,9 +671,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "[ART14_SEV]",
           "category": "SecurityInfo",
-          "message": "[CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14]",
+          "message": "[CRA Art. 14(2)(a)] 24-hour early-warning channel missing — document the ENISA/CSIRT contact before 2026-09-11",
           "element": null,
-          "requirement": "CRA Art. 14(1): 24-hour early-warning channel",
+          "requirement": "CRA Art. 14(2)(a): 24-hour early-warning channel",
           "standard_refs": [
             {
               "standard": "CraArticle",
@@ -685,9 +685,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "[ART14_SEV]",
           "category": "SecurityInfo",
-          "message": "[CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14]",
+          "message": "[CRA Art. 14(2)(b) / 14(4)(b)] 72-hour notification channel missing — document this contact before 2026-09-11",
           "element": null,
-          "requirement": "CRA Art. 14(2): 72-hour incident-report channel",
+          "requirement": "CRA Art. 14(2)(b): 72-hour notification channel",
           "standard_refs": [
             {
               "standard": "CraArticle",
@@ -722,7 +722,7 @@ expression: "render(&JsonReporter::new())"
         "lifecycle": 1,
         "art_13_15_product_identification": 0,
         "art_13_16_manufacturer_identification": 1,
-        "annex_i_technical_documentation": 23,
+        "annex_i_essential_requirements": 24,
         "annex_v_declaration_of_conformity": 1
       }
     },
@@ -807,9 +807,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Warning",
           "category": "ComponentIdentification",
-          "message": "[CRA Annex I, Part II] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability",
+          "message": "[CRA Annex I Part II (1)] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability",
           "element": "acme-webapp",
-          "requirement": "CRA Annex I, Part II, 1: Product identifier traceability across updates",
+          "requirement": "CRA Annex I Part II (1): Product identifier traceability across updates",
           "standard_refs": [
             {
               "standard": "CraAnnex",
@@ -1304,13 +1304,13 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Info",
           "category": "SecurityInfo",
-          "message": "[CRA Art. 13(9)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities",
+          "message": "[CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities",
           "element": null,
-          "requirement": "CRA Art. 13(9): Known vulnerabilities statement",
+          "requirement": "CRA Annex I Part II (1): Documented vulnerability information",
           "standard_refs": [
             {
-              "standard": "CraArticle",
-              "id": "Art. 13(9)",
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ]
@@ -1360,9 +1360,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "[ART14_SEV]",
           "category": "SecurityInfo",
-          "message": "[CRA Art. 14(1)] 24-hour early-warning channel missing — [ART14]",
+          "message": "[CRA Art. 14(2)(a)] 24-hour early-warning channel missing — document the ENISA/CSIRT contact before 2026-09-11",
           "element": null,
-          "requirement": "CRA Art. 14(1): 24-hour early-warning channel",
+          "requirement": "CRA Art. 14(2)(a): 24-hour early-warning channel",
           "standard_refs": [
             {
               "standard": "CraArticle",
@@ -1374,9 +1374,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "[ART14_SEV]",
           "category": "SecurityInfo",
-          "message": "[CRA Art. 14(2)] 72-hour incident-report channel missing — [ART14]",
+          "message": "[CRA Art. 14(2)(b) / 14(4)(b)] 72-hour notification channel missing — document this contact before 2026-09-11",
           "element": null,
-          "requirement": "CRA Art. 14(2): 72-hour incident-report channel",
+          "requirement": "CRA Art. 14(2)(b): 72-hour notification channel",
           "standard_refs": [
             {
               "standard": "CraArticle",
@@ -1411,7 +1411,7 @@ expression: "render(&JsonReporter::new())"
         "lifecycle": 1,
         "art_13_15_product_identification": 0,
         "art_13_16_manufacturer_identification": 1,
-        "annex_i_technical_documentation": 23,
+        "annex_i_essential_requirements": 24,
         "annex_v_declaration_of_conformity": 1
       }
     }

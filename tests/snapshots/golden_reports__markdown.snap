@@ -1,6 +1,6 @@
 ---
 source: tests/golden_reports.rs
-assertion_line: 157
+assertion_line: 158
 expression: "render(&MarkdownReporter::new())"
 ---
 # SBOM Diff Report
@@ -87,7 +87,7 @@ expression: "render(&MarkdownReporter::new())"
 | Channel | Status |
 |---------|--------|
 | PSIRT contact | Missing |
-| 24-hour early warning (Art. 14(1)) | Missing |
+| 24-hour early warning (Art. 14(1)) | Documented |
 | 72-hour incident report (Art. 14(2)) | Missing |
 | ENISA single reporting platform (Art. 14(7)) | Missing |
 
