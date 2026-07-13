@@ -1270,11 +1270,17 @@ impl StandardComplianceState {
     }
 }
 
-/// Compute compliance results for all standards
+/// Compute compliance results for all standards.
+///
+/// `product_class` is the CLI-resolved effective CRA product class; it is
+/// applied to every checker (only the CRA-family checks consult it, and a
+/// sidecar-carried `productClass` still wins inside the checker) so the TUI
+/// renders the same severity-calibrated verdicts as the non-TUI report path.
 #[must_use]
 pub fn compute_compliance_results(
     sbom: &crate::model::NormalizedSbom,
     sidecar: Option<&crate::model::CraSidecarMetadata>,
+    product_class: Option<crate::model::CraProductClass>,
 ) -> Vec<ComplianceResult> {
     ComplianceLevel::all()
         .iter()
@@ -1282,6 +1288,9 @@ pub fn compute_compliance_results(
             let mut checker = ComplianceChecker::new(*level);
             if let Some(sc) = sidecar {
                 checker = checker.with_sidecar(sc.clone());
+            }
+            if let Some(class) = product_class {
+                checker = checker.with_product_class(class);
             }
             checker.check(sbom)
         })

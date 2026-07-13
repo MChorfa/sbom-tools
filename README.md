@@ -853,6 +853,13 @@ jobs:
 | `6` | Actively exploited (KEV) vulnerability introduced (`--fail-on-kev`) |
 | `7` | Supported ML performance metric regressed (`--fail-on-ml-regression`) |
 
+Gate codes only apply to runs that completed successfully and produced their
+report. Usage and configuration errors (an unsupported `-o` format for the
+command, an invalid `--as-of`/`--cra-product-class` value, a broken explicit
+`--cra-sidecar`, or an invalid config file) exit `1`, and command-line parse
+errors exit `2` — CI pipelines should therefore only interpret a nonzero exit
+as a gate verdict when the expected report output was produced.
+
 ML regression directions are explicit. Higher is better for `accuracy`, `f1`,
 `f1_score`, `precision`, `recall`, `auc`, `roc_auc`, `bleu`, and `rouge`.
 Lower is better for `loss`, `error`, `error_rate`, `perplexity`, `latency`, and

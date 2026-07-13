@@ -41,6 +41,11 @@ pub struct QualityConfig {
     pub cra_sidecar_path: Option<PathBuf>,
     /// CRA Annex III/IV product class (CLI string form). Sidecar value wins.
     pub cra_product_class: Option<String>,
+    /// Pinned evaluation clock (raw `--as-of` CLI form). Deadline-sensitive
+    /// compliance checks embedded in the report (CRA Art. 14 readiness, SBOM
+    /// age, EUCC certificate expiry) evaluate against this instant instead of
+    /// the wall clock, mirroring `validate --as-of`.
+    pub as_of: Option<String>,
     /// Enrichment configuration (OSV / KEV / EOL / staleness / VEX). When any
     /// source is enabled the SBOM is enriched before scoring so the
     /// Lifecycle / `VulnDocs` categories reflect live data.
@@ -48,6 +53,10 @@ pub struct QualityConfig {
 }
 
 /// Run the quality command, returning the desired exit code.
+///
+/// Gate codes (below-threshold / non-compliant) only apply to runs that
+/// completed an assessment; usage/configuration errors propagate as `Err`,
+/// which the binary's `main()` maps to process exit code 1.
 ///
 /// The caller is responsible for calling `std::process::exit()` with the
 /// returned code when it is non-zero.
@@ -64,6 +73,7 @@ pub fn run_quality(
     no_color: bool,
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
+    as_of: Option<String>,
     enrichment: EnrichmentConfig,
 ) -> Result<i32> {
     let config = QualityConfig {
@@ -78,6 +88,7 @@ pub fn run_quality(
         no_color,
         cra_sidecar_path,
         cra_product_class,
+        as_of,
         enrichment,
     };
 
@@ -86,6 +97,15 @@ pub fn run_quality(
 
 fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     super::ensure_output_format_supported("quality", config.output, QUALITY_OUTPUT_FORMATS)?;
+
+    // Pinned evaluation clock for deadline-sensitive compliance checks
+    // (shared parser with `validate --as-of`). Parsed up front so a bad
+    // value fails before the SBOM is read.
+    let as_of: Option<chrono::DateTime<chrono::Utc>> = config
+        .as_of
+        .as_deref()
+        .map(super::parse_as_of)
+        .transpose()?;
 
     #[cfg_attr(not(feature = "enrichment"), allow(unused_mut))]
     let mut parsed = parse_sbom_with_context(&config.sbom_path, false)?;
@@ -117,10 +137,8 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     // Honour explicit --cra-sidecar (hard error when broken); otherwise
     // auto-discover next to the SBOM (best-effort).
     let sidecar = super::load_cra_sidecar(config.cra_sidecar_path.as_deref(), &config.sbom_path)?;
-    let cli_class = config
-        .cra_product_class
-        .as_deref()
-        .and_then(crate::model::CraProductClass::parse_cli);
+    // An explicitly passed unrecognized class is a hard error (strict parse).
+    let cli_class = super::parse_cra_product_class(config.cra_product_class.as_deref())?;
     let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
     if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
         && cli != side
@@ -140,6 +158,9 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     if let Some(c) = effective_class {
         scorer = scorer.with_cra_product_class(c);
     }
+    if let Some(t) = as_of {
+        scorer = scorer.with_as_of(t);
+    }
     let report = scorer.score(parsed.sbom());
 
     // Build output based on format
@@ -153,12 +174,15 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     let output_target = OutputTarget::from_option(config.output_file);
     write_output(&output_text, &output_target, false)?;
 
-    // Check minimum score threshold. An N/A AI-readiness report (no ML components)
-    // has no meaningful score, so it must not trip the threshold gate.
+    // An N/A AI-readiness report (no ML components) has no meaningful score
+    // and no rendered compliance verdict (text and SARIF both show "N/A"),
+    // so NEITHER gate below may fire on it.
     let ai_not_applicable = report
         .ai_readiness_metrics
         .as_ref()
         .is_some_and(crate::quality::AiReadinessMetrics::is_not_applicable);
+
+    // Check minimum score threshold.
     if let Some(threshold) = config.min_score
         && !ai_not_applicable
         && report.overall_score < threshold
@@ -174,7 +198,14 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     // Opt-in: fail the command when the compliance verdict is non-compliant,
     // so the printed "NON-COMPLIANT" cannot be paired with a success exit.
     // Off by default, so `quality --min-score` keeps its score-only contract.
-    if config.fail_on_noncompliant && !report.compliance.is_compliant {
+    // Guarded by the same applicability rules as the score gate: an N/A run
+    // (AI-readiness without ML components, or a not-applicable compliance
+    // standard) renders no verdict and must not flip the exit code.
+    if config.fail_on_noncompliant
+        && !ai_not_applicable
+        && report.compliance.is_applicable()
+        && !report.compliance.is_compliant
+    {
         tracing::error!(
             "SBOM is non-compliant with {} ({} error(s))",
             report.compliance.level.name(),
@@ -634,6 +665,7 @@ mod tests {
                 true,
                 None,
                 None,
+                None,
                 EnrichmentConfig::default(),
             )
             .expect_err("unsupported format must be rejected");
@@ -672,10 +704,127 @@ mod tests {
             true,
             Some(dir.path().join("missing.cra.json")),
             None,
+            None,
             EnrichmentConfig::default(),
         )
         .expect_err("broken explicit sidecar must be a hard error");
         assert!(err.to_string().contains("Failed to load CRA sidecar"));
+    }
+
+    fn write_minimal_sbom(dir: &std::path::Path) -> PathBuf {
+        let sbom_path = dir.join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        sbom_path
+    }
+
+    #[test]
+    fn fail_on_noncompliant_does_not_fire_on_na_ai_readiness_run() {
+        // Regression: an N/A AI-readiness run (no ML components) used to
+        // exit 1 on the hidden Comprehensive-level compliance check that no
+        // renderer ever displays. Both gates are armed here; neither may fire.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = write_minimal_sbom(dir.path());
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::AiReadiness,
+            ReportFormat::Summary,
+            Some(dir.path().join("out.txt")),
+            false,
+            false,
+            Some(70.0), // --min-score: must not fire on N/A either (P0 guard)
+            true,       // --fail-on-noncompliant
+            true,
+            None,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("an N/A AI-readiness run must not error");
+        assert_eq!(
+            code,
+            exit_codes::SUCCESS,
+            "N/A AI-readiness run must exit 0 with --fail-on-noncompliant"
+        );
+    }
+
+    #[test]
+    fn fail_on_noncompliant_still_fires_on_applicable_noncompliant_run() {
+        // The empty SBOM is genuinely non-compliant with the CRA profile's
+        // embedded check, so the opt-in gate must still flip the exit code.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = write_minimal_sbom(dir.path());
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            Some(dir.path().join("out.txt")),
+            false,
+            false,
+            None,
+            true, // --fail-on-noncompliant
+            true,
+            None,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("the run itself must succeed");
+        assert_eq!(code, exit_codes::COMPLIANCE_ERRORS);
+    }
+
+    #[test]
+    fn typod_cra_product_class_is_a_hard_error() {
+        // Regression: a typo'd --cra-product-class was silently dropped,
+        // scoring a critical-class product as Default.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = write_minimal_sbom(dir.path());
+        let err = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            Some("critcal".to_string()),
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect_err("typo'd --cra-product-class must be a hard error");
+        let msg = err.to_string();
+        assert!(msg.contains("critcal"), "must name the bad value: {msg}");
+        assert!(
+            msg.contains("critical"),
+            "must list the valid values: {msg}"
+        );
+    }
+
+    #[test]
+    fn invalid_as_of_is_a_hard_error_before_reading_the_sbom() {
+        let err = run_quality(
+            PathBuf::from("/nonexistent/never-read.cdx.json"),
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            None,
+            Some("not-a-date".to_string()),
+            EnrichmentConfig::default(),
+        )
+        .expect_err("invalid --as-of must be rejected");
+        assert!(err.to_string().contains("invalid --as-of"));
     }
 
     #[test]
@@ -702,6 +851,7 @@ mod tests {
             true,
             None,
             None,
+            None,
             EnrichmentConfig::default(),
         )
         .expect("auto-discovery must soft-fail on a broken sidecar");
@@ -721,6 +871,7 @@ mod tests {
             no_color: true,
             cra_sidecar_path: None,
             cra_product_class: None,
+            as_of: None,
             enrichment: EnrichmentConfig::default(),
         }
     }

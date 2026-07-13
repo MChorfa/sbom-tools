@@ -473,7 +473,12 @@ struct ViewArgs {
     0  Compliant (no errors; no warnings with --fail-on-warning)
     1  Compliance errors found (non-compliant)
     2  Compliance warnings found (only with --fail-on-warning)
-    3  Error occurred
+
+    The gate codes above only apply to runs that completed a validation.
+    Usage and configuration errors (unsupported output format, invalid
+    --as-of / --cra-product-class / --cra-sidecar, broken config file)
+    also exit 1, and command-line parse errors exit 2 — so a nonzero exit
+    is only a compliance verdict when the expected report was produced.
 
 EXAMPLES:
     sbom-tools validate app.cdx.json                              # NTIA minimum
@@ -497,9 +502,8 @@ struct ValidateArgs {
     /// bsi_ai/bsiai/sbom-for-ai/ai-bom.
     #[arg(
         long,
-        value_enum,
+        value_parser = StandardSelectorParser,
         value_delimiter = ',',
-        ignore_case = true,
         default_value = "ntia"
     )]
     standard: Vec<StandardSelector>,
@@ -746,7 +750,14 @@ struct MatrixArgs {
 #[command(after_help = "EXIT CODES:
     0  Score meets --min-score (or no threshold) and, with --fail-on-noncompliant, the SBOM is compliant
     1  Overall score below --min-score, OR (with --fail-on-noncompliant) the SBOM is non-compliant
-    3  Error occurred
+
+    The gate codes above only apply to runs that completed an assessment.
+    Usage and configuration errors (unsupported output format, invalid
+    --as-of / --cra-product-class / --cra-sidecar, broken config file)
+    also exit 1, and command-line parse errors exit 2 — so a nonzero exit
+    is only a quality/compliance verdict when the expected report was
+    produced. N/A runs (e.g. --profile ai-readiness on an SBOM without ML
+    components) never trip either gate.
 
 EXAMPLES:
     sbom-tools quality app.cdx.json                                # Score overview
@@ -802,6 +813,14 @@ struct QualityArgs {
     /// Sidecar `productClass` wins over this flag.
     #[arg(long, value_name = "CLASS")]
     cra_product_class: Option<String>,
+
+    /// Pin the evaluation clock (RFC 3339, e.g. 2027-01-01T00:00:00Z or
+    /// 2027-01-01). Deadline-sensitive compliance checks embedded in the
+    /// quality report (CRA Art. 14 readiness, SBOM age, EUCC certificate
+    /// expiry) evaluate against this instant instead of the wall clock —
+    /// reproducible CI runs, mirroring `validate --as-of`.
+    #[arg(long, value_name = "DATETIME")]
+    as_of: Option<String>,
 
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
@@ -1437,6 +1456,93 @@ enum VexExportFormatArg {
     Csaf,
 }
 
+/// Clap value parser for `--standard`.
+///
+/// Trims surrounding whitespace before matching so quoted comma lists like
+/// `--standard "ntia, cra"` parse (the pre-typed hand parser applied
+/// `str::trim`, and the config-file path still does via `FromStr`), then
+/// delegates to [`StandardSelector`]'s alias-aware, case-insensitive
+/// `FromStr`. `possible_values` forwards the ValueEnum table so `--help`
+/// enumeration, shell completions, and clap's invalid-value error (with the
+/// valid-value list) are identical to the plain `value_enum` parser.
+#[derive(Clone)]
+struct StandardSelectorParser;
+
+impl clap::builder::TypedValueParser for StandardSelectorParser {
+    type Value = StandardSelector;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> std::result::Result<Self::Value, clap::Error> {
+        use clap::error::{ContextKind, ContextValue, ErrorKind};
+        let raw = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(ErrorKind::InvalidUtf8).with_cmd(cmd))?;
+        raw.trim().parse::<StandardSelector>().map_err(|_| {
+            let mut err = clap::Error::new(ErrorKind::InvalidValue).with_cmd(cmd);
+            if let Some(arg) = arg {
+                err.insert(
+                    ContextKind::InvalidArg,
+                    ContextValue::String(arg.to_string()),
+                );
+            }
+            err.insert(ContextKind::InvalidValue, ContextValue::String(raw.into()));
+            err.insert(
+                ContextKind::ValidValue,
+                ContextValue::Strings(
+                    StandardSelector::value_variants()
+                        .iter()
+                        .map(|v| v.canonical_name().to_string())
+                        .collect(),
+                ),
+            );
+            err
+        })
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        Some(Box::new(
+            StandardSelector::value_variants()
+                .iter()
+                .filter_map(clap::ValueEnum::to_possible_value),
+        ))
+    }
+}
+
+/// The config-file `output.format` only participates in a command's format
+/// resolution when that command actually supports it.
+///
+/// A global default aimed at `diff`/`view` (e.g. `format: tui` or `html`)
+/// must not hard-fail a bare `validate`/`quality` invocation the user never
+/// asked to render in that format — it silently degrades to the command
+/// default instead (with a debug note). An **explicit** `-o` flag is
+/// unaffected: it wins resolution here and is still hard-gated in the
+/// command handler.
+fn supported_config_format(
+    command: &str,
+    cli_format_was_set: bool,
+    config_format: ReportFormat,
+    supported: &[ReportFormat],
+) -> Option<ReportFormat> {
+    if cli_format_was_set {
+        // Explicit -o wins; the config value is never consulted.
+        return None;
+    }
+    if supported.contains(&config_format) {
+        return Some(config_format);
+    }
+    tracing::debug!(
+        "config output.format '{config_format}' is not supported by `sbom-tools {command}`; \
+         falling back to the command default"
+    );
+    None
+}
+
 /// Validate VEX state filter values at the CLI boundary.
 fn validate_vex_state(s: &str) -> std::result::Result<String, String> {
     match s.to_lowercase().as_str() {
@@ -1678,10 +1784,16 @@ fn main() -> Result<()> {
                         })
                         .collect::<Result<_>>()?
                 };
+            let output_was_set = arg_was_set_sub(sm, "output");
             let output = resolve(
                 args.output,
-                arg_was_set_sub(sm, "output"),
-                Some(app.output.format),
+                output_was_set,
+                supported_config_format(
+                    "validate",
+                    output_was_set,
+                    app.output.format,
+                    cli::VALIDATE_OUTPUT_FORMATS,
+                ),
             );
             let exit_code = cli::run_validate(
                 args.sbom,
@@ -1931,10 +2043,16 @@ fn main() -> Result<()> {
 
         Commands::Quality(args) => {
             let sm = sub_matches;
+            let output_was_set = arg_was_set_sub(sm, "output");
             let output = resolve(
                 args.output,
-                arg_was_set_sub(sm, "output"),
-                Some(app.output.format),
+                output_was_set,
+                supported_config_format(
+                    "quality",
+                    output_was_set,
+                    app.output.format,
+                    cli::QUALITY_OUTPUT_FORMATS,
+                ),
             );
             // Profile: explicit --profile > config `compliance.profile` >
             // built-in default (standard). Config values go through the same
@@ -1965,6 +2083,7 @@ fn main() -> Result<()> {
                     .or_else(|| app.compliance.cra_sidecar.clone()),
                 args.cra_product_class
                     .or_else(|| app.compliance.cra_product_class.clone()),
+                args.as_of,
                 enrichment,
             )?;
             if exit_code != 0 {
@@ -2359,11 +2478,17 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        // Same config fallback as validate/quality/view: the `compliance:`
+        // section supplies the sidecar path and product class when the CLI
+        // flags are absent, so the dossier agrees with the validate verdict
+        // produced under the same config.
         Commands::CraDocs(args) => cli::run_cra_docs(
             args.sbom,
             args.output,
-            args.cra_sidecar,
-            args.cra_product_class,
+            args.cra_sidecar
+                .or_else(|| app.compliance.cra_sidecar.clone()),
+            args.cra_product_class
+                .or_else(|| app.compliance.cra_product_class.clone()),
         ),
 
         Commands::CraStandardsWatch(args) => cli::run_cra_standards_watch(

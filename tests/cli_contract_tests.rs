@@ -355,6 +355,228 @@ fn validate_standard_aliases_parse_through_clap() {
     );
 }
 
+/// Regression: the pre-typed hand parser split on ',' and trimmed, so quoted
+/// lists with spaces (`--standard "ntia, cra"`) parsed. The typed parser must
+/// keep accepting them instead of exiting 2 (which the documented contract
+/// reads as "warnings found").
+#[test]
+fn validate_standard_list_with_spaces_after_commas_parses() {
+    let output = base_command()
+        .arg("validate")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "ntia, cra", "--summary"])
+        .output()
+        .expect("validate command should run");
+
+    let err = stderr(&output);
+    assert_ne!(
+        output.status.code(),
+        Some(2),
+        "'ntia, cra' must not be a usage error: {err}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("summary should be JSON");
+    let standards: Vec<String> = json
+        .as_array()
+        .expect("multi-standard summary array")
+        .iter()
+        .map(|s| s["standard"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(standards.len(), 2, "both standards must run: {standards:?}");
+    assert!(
+        standards.iter().any(|s| s.contains("NTIA")) && standards.iter().any(|s| s.contains("CRA")),
+        "expected NTIA + CRA results: {standards:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// --summary overrides --output (documented), so the format gate is skipped
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_summary_overrides_unsupported_output_format() {
+    // `--summary` is documented as "(overrides --output)"; a stray `-o html`
+    // must not hard-error and the compact JSON summary must be emitted.
+    let output = base_command()
+        .arg("validate")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "ntia", "--summary", "-o", "html"])
+        .output()
+        .expect("validate command should run");
+
+    let err = stderr(&output);
+    assert!(
+        !err.contains("not supported by"),
+        "--summary must skip the format gate: {err}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("summary should be JSON");
+    assert!(
+        json["standard"].is_string(),
+        "expected the compact summary JSON: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Typo'd --cra-product-class is a hard error at every accepting command
+// ---------------------------------------------------------------------------
+
+fn assert_rejects_typod_product_class(output: &Output, command: &str) {
+    assert!(
+        !output.status.success(),
+        "{command}: a typo'd --cra-product-class must be a hard error"
+    );
+    let err = stderr(output);
+    assert!(
+        err.contains("critcal"),
+        "{command}: error must name the bad value: {err}"
+    );
+    for valid in [
+        "default",
+        "important-class-1",
+        "important-class-2",
+        "critical",
+    ] {
+        assert!(
+            err.contains(valid),
+            "{command}: error must list '{valid}': {err}"
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_typod_cra_product_class() {
+    let output = base_command()
+        .arg("validate")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "cra", "--cra-product-class", "critcal"])
+        .arg("--summary")
+        .output()
+        .expect("validate command should run");
+    assert_rejects_typod_product_class(&output, "validate");
+}
+
+#[test]
+fn quality_rejects_typod_cra_product_class() {
+    let output = base_command()
+        .arg("quality")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--profile", "cra", "--cra-product-class", "critcal"])
+        .output()
+        .expect("quality command should run");
+    assert_rejects_typod_product_class(&output, "quality");
+}
+
+#[test]
+fn view_rejects_typod_cra_product_class() {
+    let output = base_command()
+        .arg("view")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "json", "--cra-product-class", "critcal"])
+        .output()
+        .expect("view command should run");
+    assert_rejects_typod_product_class(&output, "view");
+}
+
+#[test]
+fn cra_docs_rejects_typod_cra_product_class() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let output = base_command()
+        .arg("cra-docs")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .arg("--output")
+        .arg(dir.path().join("dossier"))
+        .args(["--cra-product-class", "critcal"])
+        .output()
+        .expect("cra-docs command should run");
+    assert_rejects_typod_product_class(&output, "cra-docs");
+}
+
+#[test]
+fn validate_accepts_valid_cra_product_class() {
+    // Accepting case for the strict parser: a canonical spelling still runs
+    // (exit code reflects compliance, not a parse failure).
+    let output = base_command()
+        .arg("validate")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "cra", "--cra-product-class", "critical"])
+        .arg("--summary")
+        .output()
+        .expect("validate command should run");
+
+    let err = stderr(&output);
+    assert!(
+        !err.contains("Invalid product class"),
+        "valid class must parse: {err}"
+    );
+    serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+        .expect("summary should be JSON");
+}
+
+// ---------------------------------------------------------------------------
+// quality gates are N/A-aware and its compliance clock is pinnable
+// ---------------------------------------------------------------------------
+
+#[test]
+fn quality_fail_on_noncompliant_exits_0_on_na_ai_readiness_run() {
+    // Regression: an N/A AI-readiness run (non-ML SBOM) used to exit 1 on a
+    // hidden Comprehensive-level check that no renderer displays.
+    let output = base_command()
+        .arg("quality")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--profile", "ai-readiness", "--fail-on-noncompliant"])
+        .output()
+        .expect("quality command should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "N/A run must not trip --fail-on-noncompliant; stderr:\n{}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("N/A"),
+        "the rendered report should say N/A: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn quality_accepts_as_of_like_validate() {
+    // `quality --as-of` pins the embedded compliance clock (parity with
+    // validate); the offset-less spelling is taken as UTC.
+    let output = base_command()
+        .arg("quality")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--profile", "cra", "--as-of", "2027-01-01T00:00:00"])
+        .output()
+        .expect("quality command should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "quality --as-of must parse and run; stderr:\n{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn quality_rejects_invalid_as_of_with_a_clear_error() {
+    let output = base_command()
+        .arg("quality")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--profile", "cra", "--as-of", "not-a-date"])
+        .output()
+        .expect("quality command should run");
+
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(
+        err.contains("invalid --as-of") && err.contains("RFC 3339"),
+        "error must explain the accepted forms: {err}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Unsupported (command, format) combinations are rejected, not substituted
 // ---------------------------------------------------------------------------

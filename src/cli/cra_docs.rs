@@ -29,18 +29,13 @@ pub fn run_cra_docs(
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
     let sbom = parsed.sbom();
 
-    // Sidecar resolution: explicit path → auto-discover.
-    let sidecar = match cra_sidecar_path {
-        Some(p) => Some(CraSidecarMetadata::from_file(&p).map_err(|e| {
-            anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())
-        })?),
-        None => CraSidecarMetadata::find_for_sbom(&sbom_path),
-    };
+    // Sidecar resolution (shared with validate/quality/view): an explicit
+    // path that fails to load is a hard error; auto-discovery is best-effort.
+    let sidecar = super::load_cra_sidecar(cra_sidecar_path.as_deref(), &sbom_path)?;
 
     // Effective product class: sidecar wins, else CLI flag, else Default.
-    let cli_class = cra_product_class
-        .as_deref()
-        .and_then(CraProductClass::parse_cli);
+    // An explicitly passed unrecognized class is a hard error (strict parse).
+    let cli_class = super::parse_cra_product_class(cra_product_class.as_deref())?;
     let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
     if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
         && cli != side
