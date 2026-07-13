@@ -511,6 +511,20 @@ pub enum ViolationSeverity {
     Info,
 }
 
+impl ViolationSeverity {
+    /// Canonical display label, matching the strings the reports layer
+    /// (markdown/HTML violation tables) emits. Renderers should use this
+    /// rather than the `Debug` form so the label can't silently drift.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Error => "Error",
+            Self::Warning => "Warning",
+            Self::Info => "Info",
+        }
+    }
+}
+
 /// Category of compliance violation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ViolationCategory {
