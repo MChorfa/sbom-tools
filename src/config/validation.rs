@@ -176,14 +176,11 @@ impl Validatable for ComplianceConfig {
         }
 
         if let Some(ref class) = self.cra_product_class
-            && crate::model::CraProductClass::parse_cli(class).is_none()
+            && let Err(message) = crate::model::CraProductClass::parse_cli_strict(class)
         {
             errors.push(ConfigError {
                 field: "compliance.cra_product_class".to_string(),
-                message: format!(
-                    "Invalid product class '{class}'. Valid options: \
-                     default, important-class-1, important-class-2, critical"
-                ),
+                message,
             });
         }
 

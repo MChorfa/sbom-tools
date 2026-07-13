@@ -277,6 +277,25 @@ impl CraProductClass {
         }
     }
 
+    /// Strict variant of [`Self::parse_cli`]: an unrecognized spelling is an
+    /// error naming the valid values instead of `None`.
+    ///
+    /// Used by the `--cra-product-class` CLI flags and the config-file
+    /// validator so a typo can never be silently dropped (which would score
+    /// the SBOM as `Default` class and flip CRA verdicts).
+    ///
+    /// # Errors
+    /// Returns a message listing the valid canonical spellings when `s` is
+    /// not a recognized product class.
+    pub fn parse_cli_strict(s: &str) -> Result<Self, String> {
+        Self::parse_cli(s).ok_or_else(|| {
+            format!(
+                "Invalid product class '{s}'. Valid options: \
+                 default, important-class-1, important-class-2, critical"
+            )
+        })
+    }
+
     /// The conformity-assessment route the regulation expects (or strictly
     /// requires) for this class. Manufacturers may choose a stricter route.
     #[must_use]

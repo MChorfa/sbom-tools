@@ -32,6 +32,14 @@ pub const VALIDATE_OUTPUT_FORMATS: &[ReportFormat] = &[
 /// - [`exit_codes::COMPLIANCE_WARNINGS`] (2): warnings found with
 ///   `--fail-on-warning`
 ///
+/// These gate codes only apply to runs that completed a validation. A
+/// usage/configuration error surfaced from this function (unsupported output
+/// format, invalid `--as-of` or `--cra-product-class`, broken explicit
+/// sidecar) propagates as an `Err`, which the binary's `main()` maps to
+/// process exit code 1 (and clap parse errors exit 2) — the same numbers as
+/// the gate codes above. CI pipelines must therefore not interpret a nonzero
+/// exit as a compliance verdict unless the expected report was produced.
+///
 /// The caller is responsible for calling `std::process::exit()` with the
 /// returned code when it is non-zero.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
@@ -46,23 +54,14 @@ pub fn run_validate(
     cra_product_class: Option<String>,
     as_of: Option<&str>,
 ) -> Result<i32> {
-    super::ensure_output_format_supported("validate", output, VALIDATE_OUTPUT_FORMATS)?;
-    // Pinned evaluation clock for deadline-sensitive checks (RFC 3339
-    // datetime, or a bare date meaning midnight UTC).
-    let as_of: Option<chrono::DateTime<chrono::Utc>> = as_of
-        .map(|raw| {
-            chrono::DateTime::parse_from_rfc3339(raw)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .or_else(|_| {
-                    raw.parse::<chrono::NaiveDate>().map(|d| {
-                        d.and_hms_opt(0, 0, 0)
-                            .expect("midnight is valid")
-                            .and_utc()
-                    })
-                })
-                .map_err(|e| anyhow::anyhow!("invalid --as-of {raw:?}: {e} (expected RFC 3339, e.g. 2027-01-01T00:00:00Z, or YYYY-MM-DD)"))
-        })
-        .transpose()?;
+    // `--summary` overrides `--output` (documented on the flag), so the
+    // requested format is never rendered and must not be gated.
+    if !summary {
+        super::ensure_output_format_supported("validate", output, VALIDATE_OUTPUT_FORMATS)?;
+    }
+    // Pinned evaluation clock for deadline-sensitive checks (shared parser
+    // with `quality --as-of`).
+    let as_of: Option<chrono::DateTime<chrono::Utc>> = as_of.map(super::parse_as_of).transpose()?;
     anyhow::ensure!(
         !standards.is_empty(),
         "no compliance standard selected; pass --standard (valid values: {})",
@@ -76,11 +75,10 @@ pub fn run_validate(
     let cra_sidecar = super::load_cra_sidecar(cra_sidecar_path.as_deref(), &sbom_path)?;
 
     // Resolve effective product class: sidecar wins; otherwise CLI flag.
+    // An explicitly passed unrecognized class is a hard error (strict parse).
     // Mismatch between explicit CLI flag and sidecar is reported as a Warning
     // on stderr (not turned into a Violation — sidecar is authoritative).
-    let cli_class = cra_product_class
-        .as_deref()
-        .and_then(crate::model::CraProductClass::parse_cli);
+    let cli_class = super::parse_cra_product_class(cra_product_class.as_deref())?;
     let sidecar_class = cra_sidecar.as_ref().and_then(|s| s.product_class);
     if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
         && cli != side
@@ -390,6 +388,92 @@ mod tests {
         )
         .expect_err("empty standard list must be rejected");
         assert!(err.to_string().contains("no compliance standard selected"));
+    }
+
+    #[test]
+    fn summary_overrides_output_and_skips_the_format_gate() {
+        // `--summary` is documented as "(overrides --output)", so a stray
+        // `-o html` must not hard-error; the compact JSON summary is written.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("summary.json");
+        run_validate(
+            sbom_path,
+            vec![StandardSelector::Ntia],
+            ReportFormat::Html, // rejected without --summary; ignored with it
+            Some(out.clone()),
+            false,
+            true,
+            None,
+            None,
+            None,
+        )
+        .expect("--summary must override -o html instead of hard-erroring");
+        let content = std::fs::read_to_string(out).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(content.trim()).expect("compact summary JSON");
+        assert!(json["standard"].is_string(), "summary JSON shape: {json}");
+    }
+
+    #[test]
+    fn typod_cra_product_class_is_a_hard_error() {
+        // Regression: `--cra-product-class critcal` used to be silently
+        // dropped (scored as Default class), flipping the CRA verdict.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let err = run_validate(
+            sbom_path,
+            vec![StandardSelector::Cra],
+            ReportFormat::Summary,
+            None,
+            false,
+            true,
+            None,
+            Some("critcal".to_string()),
+            None,
+        )
+        .expect_err("typo'd --cra-product-class must be a hard error");
+        let msg = err.to_string();
+        assert!(msg.contains("critcal"), "must name the bad value: {msg}");
+        assert!(
+            msg.contains("important-class-2") && msg.contains("critical"),
+            "must list the valid values: {msg}"
+        );
+    }
+
+    #[test]
+    fn as_of_accepts_offsetless_datetime() {
+        // Regression: "2027-01-01T00:00:00" used to fail with a misleading
+        // "trailing input" error; it now parses as UTC.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        run_validate(
+            sbom_path,
+            vec![StandardSelector::Cra],
+            ReportFormat::Summary,
+            Some(dir.path().join("out.json")),
+            false,
+            true,
+            None,
+            None,
+            Some("2027-01-01T00:00:00"),
+        )
+        .expect("offset-less --as-of datetime must parse (assumed UTC)");
     }
 
     #[test]

@@ -555,6 +555,11 @@ pub struct QualityScorer {
     /// Optional CRA Annex III/IV product class. Sidecar `productClass` (when
     /// present on `cra_sidecar`) wins over this value at check time.
     cra_product_class: Option<crate::model::CraProductClass>,
+    /// Optional pinned evaluation clock for the embedded compliance check.
+    /// `None` means wall clock; set it (CLI `--as-of`, tests) so deadline-
+    /// sensitive checks (CRA Art. 14 readiness, SBOM age, EUCC certificate
+    /// expiry) are reproducible across runs.
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl QualityScorer {
@@ -566,6 +571,7 @@ impl QualityScorer {
             completeness_weights: CompletenessWeights::default(),
             cra_sidecar: None,
             cra_product_class: None,
+            as_of: None,
         }
     }
 
@@ -589,6 +595,16 @@ impl QualityScorer {
     #[must_use]
     pub const fn with_cra_product_class(mut self, class: crate::model::CraProductClass) -> Self {
         self.cra_product_class = Some(class);
+        self
+    }
+
+    /// Pin the evaluation clock of the embedded compliance check (mirrors
+    /// [`ComplianceChecker::with_as_of`]). Deadline-sensitive checks (CRA
+    /// Art. 14 readiness, SBOM age, EUCC certificate expiry) evaluate against
+    /// this instant instead of the wall clock — reproducible CI gates.
+    #[must_use]
+    pub const fn with_as_of(mut self, as_of: chrono::DateTime<chrono::Utc>) -> Self {
+        self.as_of = Some(as_of);
         self
     }
 
@@ -691,13 +707,17 @@ impl QualityScorer {
             total_components,
         );
 
-        // Run compliance check (with sidecar + product class if configured)
+        // Run compliance check (with sidecar + product class + pinned clock
+        // if configured)
         let mut compliance_checker = ComplianceChecker::new(self.profile.compliance_level());
         if let Some(sc) = self.cra_sidecar.clone() {
             compliance_checker = compliance_checker.with_sidecar(sc);
         }
         if let Some(c) = self.cra_product_class {
             compliance_checker = compliance_checker.with_product_class(c);
+        }
+        if let Some(t) = self.as_of {
+            compliance_checker = compliance_checker.with_as_of(t);
         }
         let compliance = compliance_checker.check(sbom);
 
@@ -773,7 +793,13 @@ impl QualityScorer {
         let auditability_metrics = AuditabilityMetrics::from_sbom(sbom);
         let lifecycle_metrics = LifecycleMetrics::from_sbom(sbom);
 
-        let compliance = ComplianceChecker::new(self.profile.compliance_level()).check(sbom);
+        let compliance = {
+            let mut checker = ComplianceChecker::new(self.profile.compliance_level());
+            if let Some(t) = self.as_of {
+                checker = checker.with_as_of(t);
+            }
+            checker.check(sbom)
+        };
 
         let make_report = |overall_score: f32,
                            grade: QualityGrade,
@@ -1427,6 +1453,35 @@ mod tests {
         assert_eq!(QualityGrade::from_score(75.0), QualityGrade::C);
         assert_eq!(QualityGrade::from_score(65.0), QualityGrade::D);
         assert_eq!(QualityGrade::from_score(55.0), QualityGrade::F);
+    }
+
+    #[test]
+    fn with_as_of_pins_the_embedded_compliance_clock() {
+        // The CRA Art. 14 readiness checks escalate Warning→Error after the
+        // 2026-09-11 deadline for Important Class II products. Pinning the
+        // scorer's clock on either side of the boundary must therefore change
+        // the embedded compliance verdict — proving `--as-of` reaches the
+        // checker instead of it silently using the wall clock.
+        use chrono::{TimeZone, Utc};
+        let sbom = NormalizedSbom::default();
+        let score_at = |ts: chrono::DateTime<chrono::Utc>| {
+            QualityScorer::new(ScoringProfile::Cra)
+                .with_cra_product_class(crate::model::CraProductClass::ImportantClass2)
+                .with_as_of(ts)
+                .score(&sbom)
+        };
+        let pre = score_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        let post = score_at(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap());
+        assert!(
+            post.compliance.error_count > pre.compliance.error_count,
+            "post-deadline run must escalate Art. 14 findings: pre={} post={}",
+            pre.compliance.error_count,
+            post.compliance.error_count
+        );
+        // Determinism: the same pinned clock yields the same verdict.
+        let pre2 = score_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        assert_eq!(pre.compliance.error_count, pre2.compliance.error_count);
+        assert_eq!(pre.compliance.is_compliant, pre2.compliance.is_compliant);
     }
 
     #[test]

@@ -359,7 +359,8 @@ matching:
 
 # Output configuration
 output:
-  # Format: auto, json, text, sarif, markdown, html
+  # Format: auto, tui, side-by-side, json, sarif, oscal-json, markdown,
+  # html, summary, table, csv, ndjson
   format: auto
   # Output file path (omit for stdout)
   # file: report.json
@@ -453,6 +454,24 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::TempDir;
+
+    #[test]
+    fn generated_full_example_config_loads_and_validates() {
+        // Regression: `config init` used to write `format: auto`, which the
+        // PascalCase-only ReportFormat deserializer rejected — the tool's own
+        // scaffold bricked every subsequent command until hand-edited.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join(".sbom-tools.yaml");
+        std::fs::write(&path, generate_full_example_config()).unwrap();
+        let config =
+            load_config_file(&path).expect("the generated example config must parse cleanly");
+        use crate::config::Validatable;
+        let errors = config.validate();
+        assert!(
+            errors.is_empty(),
+            "the generated example config must validate: {errors:?}"
+        );
+    }
 
     #[test]
     fn test_find_config_in_dir() {

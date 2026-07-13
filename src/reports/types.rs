@@ -5,36 +5,54 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Output format for reports
+///
+/// Serde names are kebab-case, matching the CLI spellings (`-o oscal-json`)
+/// so a hand-written config file can use the same values the CLI documents.
+/// The historical PascalCase variant names are kept as aliases so existing
+/// config files (`format: Json`) keep loading.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize, JsonSchema,
 )]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum ReportFormat {
     /// Auto-detect: TUI if TTY, summary otherwise
     #[default]
+    #[serde(alias = "Auto")]
     Auto,
     /// Interactive TUI display
+    #[serde(alias = "Tui")]
     Tui,
     /// Side-by-side terminal diff (like difftastic)
     #[value(alias = "side-by-side")]
+    #[serde(alias = "SideBySide")]
     SideBySide,
     /// Structured JSON output
+    #[serde(alias = "Json")]
     Json,
     /// SARIF 2.1.0 for CI/CD
+    #[serde(alias = "Sarif")]
     Sarif,
     /// OSCAL 1.1.2 assessment-results JSON
+    #[serde(alias = "OscalJson")]
     OscalJson,
     /// Human-readable Markdown
+    #[serde(alias = "Markdown")]
     Markdown,
     /// Interactive HTML report
+    #[serde(alias = "Html")]
     Html,
     /// Brief summary output
+    #[serde(alias = "Summary")]
     Summary,
     /// Compact table for terminal (colored)
+    #[serde(alias = "Table")]
     Table,
     /// CSV for spreadsheet import
+    #[serde(alias = "Csv")]
     Csv,
     /// Newline-delimited JSON (one record per line, streaming-friendly)
+    #[serde(alias = "Ndjson")]
     Ndjson,
 }
 
@@ -256,6 +274,57 @@ impl ReportMetadata {
         Self {
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_format_deserializes_kebab_case_and_legacy_pascal_case() {
+        // kebab-case is the canonical (CLI-matching) spelling; the historical
+        // PascalCase names must keep loading so existing configs don't break.
+        for (raw, expected) in [
+            ("auto", ReportFormat::Auto),
+            ("tui", ReportFormat::Tui),
+            ("side-by-side", ReportFormat::SideBySide),
+            ("oscal-json", ReportFormat::OscalJson),
+            ("Auto", ReportFormat::Auto),
+            ("Json", ReportFormat::Json),
+            ("SideBySide", ReportFormat::SideBySide),
+            ("OscalJson", ReportFormat::OscalJson),
+            ("Ndjson", ReportFormat::Ndjson),
+        ] {
+            let parsed: ReportFormat = serde_json::from_str(&format!("\"{raw}\""))
+                .unwrap_or_else(|e| panic!("'{raw}' must deserialize: {e}"));
+            assert_eq!(parsed, expected, "'{raw}' mapped to the wrong variant");
+        }
+    }
+
+    #[test]
+    fn report_format_serializes_to_the_cli_spelling() {
+        // Serialization, Display (CLI), and deserialization agree, so a
+        // `config show`/`config check` round-trip is loss-free.
+        for format in [
+            ReportFormat::Auto,
+            ReportFormat::Tui,
+            ReportFormat::SideBySide,
+            ReportFormat::Json,
+            ReportFormat::Sarif,
+            ReportFormat::OscalJson,
+            ReportFormat::Markdown,
+            ReportFormat::Html,
+            ReportFormat::Summary,
+            ReportFormat::Table,
+            ReportFormat::Csv,
+            ReportFormat::Ndjson,
+        ] {
+            let serialized = serde_json::to_string(&format).unwrap();
+            assert_eq!(serialized, format!("\"{format}\""));
+            let round: ReportFormat = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(round, format);
         }
     }
 }
