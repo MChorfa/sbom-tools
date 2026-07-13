@@ -936,8 +936,8 @@ fn write_reporting_channels_md(md: &mut String, result: &ComplianceResult) -> st
     }
 
     let psirt = channel_status(result, "Art. 14: PSIRT");
-    let early = channel_status(result, "Art. 14(1)");
-    let incident = channel_status(result, "Art. 14(2)");
+    let early = channel_status(result, "Art. 14(2)(a)");
+    let incident = channel_status(result, "Art. 14(2)(b)");
     let enisa = channel_status(result, "Art. 14(7)");
 
     writeln!(md, "### Reporting Channels (CRA Art. 14)\n")?;
@@ -946,12 +946,12 @@ fn write_reporting_channels_md(md: &mut String, result: &ComplianceResult) -> st
     writeln!(md, "| PSIRT contact | {} |", psirt.label())?;
     writeln!(
         md,
-        "| 24-hour early warning (Art. 14(1)) | {} |",
+        "| 24-hour early warning (Art. 14(2)(a)) | {} |",
         early.label()
     )?;
     writeln!(
         md,
-        "| 72-hour incident report (Art. 14(2)) | {} |",
+        "| 72-hour notification (Art. 14(2)(b)) | {} |",
         incident.label()
     )?;
     writeln!(
