@@ -87,8 +87,8 @@ expression: "render(&MarkdownReporter::new())"
 | Channel | Status |
 |---------|--------|
 | PSIRT contact | Missing |
-| 24-hour early warning (Art. 14(1)) | Documented |
-| 72-hour incident report (Art. 14(2)) | Missing |
+| 24-hour early warning (Art. 14(2)(a)) | Missing |
+| 72-hour notification (Art. 14(2)(b)) | Missing |
 | ENISA single reporting platform (Art. 14(7)) | Missing |
 
 _Article 14 reporting obligations apply from 11 September 2026. Channels marked 'Missing (pre-deadline)' surface as Info; after the deadline they become Warnings._

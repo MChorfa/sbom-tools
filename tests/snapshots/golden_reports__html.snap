@@ -1,6 +1,6 @@
 ---
 source: tests/golden_reports.rs
-assertion_line: 164
+assertion_line: 165
 expression: "render(&HtmlReporter::new())"
 ---
 <!DOCTYPE html>
@@ -389,8 +389,8 @@ expression: "render(&HtmlReporter::new())"
         <thead><tr><th>Channel</th><th>Status</th></tr></thead>
         <tbody>
             <tr><td>PSIRT contact</td><td><span class="badge badge-medium">Missing</span></td></tr>
-            <tr><td>24-hour early warning (Art. 14(1))</td><td><span class="badge badge-medium">Missing</span></td></tr>
-            <tr><td>72-hour incident report (Art. 14(2))</td><td><span class="badge badge-medium">Missing</span></td></tr>
+            <tr><td>24-hour early warning (Art. 14(2)(a))</td><td><span class="badge badge-medium">Missing</span></td></tr>
+            <tr><td>72-hour notification (Art. 14(2)(b))</td><td><span class="badge badge-medium">Missing</span></td></tr>
             <tr><td>ENISA single reporting platform (Art. 14(7))</td><td><span class="badge badge-medium">Missing</span></td></tr>
         </tbody>
     </table>
