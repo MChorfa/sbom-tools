@@ -114,6 +114,17 @@ fn standard_result(
         findings.push(rollup_finding(result, standard_name, uuid()));
     }
     for violation in &result.violations {
+        // A real N/A result carries exactly one Info marker violation
+        // (SBOM-AIACT-NA / SBOM-BSIAI-NA) — that is how the checker encodes
+        // "this standard never evaluated the SBOM". The applicability props
+        // above already carry that verdict; rendering the marker through
+        // `finding()` would emit a `not-satisfied` objective (OSCAL's
+        // finding-target state is a closed satisfied/not-satisfied enum with
+        // no N/A) for a standard that was never evaluated. Skip it, like the
+        // CSV export does; any other violation keeps current behavior.
+        if !result.is_applicable() && is_not_applicable_marker(violation) {
+            continue;
+        }
         let observation_uuid = uuid();
         observations.push(observation(violation, observation_uuid, collected));
         findings.push(finding(violation, observation_uuid, uuid()));
@@ -136,6 +147,13 @@ fn standard_result(
         entry["findings"] = Value::Array(findings);
     }
     entry
+}
+
+/// Whether a violation is a readiness profile's not-applicable placeholder
+/// (mirrors `NOT_APPLICABLE_RULES` in `quality::compliance`, the marker set
+/// `ComplianceResult::new` derives `Applicability::NotApplicable` from).
+fn is_not_applicable_marker(violation: &Violation) -> bool {
+    matches!(violation.rule_id, "SBOM-AIACT-NA" | "SBOM-BSIAI-NA")
 }
 
 fn prop(name: &str, value: &str) -> Value {
@@ -351,12 +369,30 @@ mod tests {
         );
     }
 
+    /// The single Info marker violation the readiness checkers actually emit
+    /// for out-of-scope SBOMs (`ComplianceResult::new` derives
+    /// `Applicability::NotApplicable` from its presence).
+    fn na_marker() -> Violation {
+        Violation {
+            severity: ViolationSeverity::Info,
+            category: ViolationCategory::DocumentMetadata,
+            message: "[AI-Act] Not applicable: no ML components".to_string(),
+            element: None,
+            requirement: "EU AI Act Annex IV".to_string(),
+            rule_id: "SBOM-AIACT-NA",
+            component_id: None,
+            counts: None,
+            standard_refs: Vec::new(),
+        }
+    }
+
     #[test]
     fn not_applicable_standard_carries_na_verdict_and_no_rollup() {
-        let mut na = result(Vec::new());
-        na.level = ComplianceLevel::EuAiAct;
-        na.applicability =
-            crate::quality::Applicability::NotApplicable("no ML components".to_string());
+        // Build through the production constructor: a real N/A result always
+        // contains the marker violation — the shape that used to leak a
+        // `not-satisfied` finding for a standard that never evaluated the SBOM.
+        let na = ComplianceResult::new(ComplianceLevel::EuAiAct, vec![na_marker()]);
+        assert!(!na.is_applicable(), "marker must derive not-applicable");
         let document = build(&[na]);
         let assessment = &document["assessment-results"]["results"][0];
         assert_eq!(
@@ -365,7 +401,7 @@ mod tests {
         );
         assert_eq!(
             prop_value(assessment, "not-applicable-reason"),
-            Some("no ML components")
+            Some("[AI-Act] Not applicable: no ML components")
         );
         assert!(
             prop_value(assessment, "score").is_none(),
@@ -373,8 +409,34 @@ mod tests {
         );
         assert!(
             assessment.get("findings").is_none(),
-            "an unevaluated standard gets no roll-up finding"
+            "an unevaluated standard gets no roll-up and no marker finding"
         );
+        assert!(
+            assessment.get("observations").is_none(),
+            "the N/A marker is not an actionable observation"
+        );
+    }
+
+    #[test]
+    fn not_applicable_standard_still_renders_non_marker_violations() {
+        // Should a checker ever attach a real violation to an N/A result,
+        // only the marker is suppressed — everything else keeps the current
+        // observation + not-satisfied finding behavior.
+        let na = ComplianceResult::new(
+            ComplianceLevel::EuAiAct,
+            vec![na_marker(), violation("genuine finding")],
+        );
+        let document = build(&[na]);
+        let assessment = &document["assessment-results"]["results"][0];
+        assert_eq!(
+            prop_value(assessment, "applicability"),
+            Some("not-applicable")
+        );
+        let findings = assessment["findings"].as_array().expect("findings");
+        assert_eq!(findings.len(), 1, "marker skipped, real violation kept");
+        assert_eq!(findings[0]["description"], "genuine finding");
+        assert_eq!(findings[0]["target"]["status"]["state"], "not-satisfied");
+        assert_eq!(assessment["observations"].as_array().map(Vec::len), Some(1));
     }
 
     #[test]

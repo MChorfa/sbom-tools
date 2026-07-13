@@ -1951,6 +1951,47 @@ pub const COMPLIANCE_SARIF_RULE_IDS: &[&str] = &[
     "SBOM-BSIAI-UNTYPED-ML",
 ];
 
+/// NSA CNSA 2.0 SARIF rule catalogue: every `SBOM-CNSA2-*` self-descriptor
+/// in the registry. The `cnsa2_and_pqc_slices_cover_their_rule_families`
+/// test keeps this slice in lockstep with the registry, so a CNSA 2.0 run
+/// declares its own rule family instead of the CRA-family catalogue.
+pub const CNSA2_SARIF_RULE_IDS: &[&str] = &[
+    "SBOM-CNSA2-000",
+    "SBOM-CNSA2-ALG-001",
+    "SBOM-CNSA2-ALG-002",
+    "SBOM-CNSA2-ALG-003",
+    "SBOM-CNSA2-ALG-004",
+    "SBOM-CNSA2-ALG-005",
+    "SBOM-CNSA2-ALG-006",
+    "SBOM-CNSA2-ALG-007",
+    "SBOM-CNSA2-ALG-008",
+    "SBOM-CNSA2-ALG-UNKNOWN",
+    "SBOM-CNSA2-CERT-001",
+    "SBOM-CNSA2-CERT-UNKNOWN",
+    "SBOM-CNSA2-PROTO-001",
+    "SBOM-CNSA2-PROTO-002",
+    "SBOM-CNSA2-PROTO-UNKNOWN",
+];
+
+/// NIST PQC readiness SARIF rule catalogue: every `SBOM-PQC-*`
+/// self-descriptor in the registry. Same lockstep guarantee as
+/// [`CNSA2_SARIF_RULE_IDS`].
+pub const PQC_SARIF_RULE_IDS: &[&str] = &[
+    "SBOM-PQC-000",
+    "SBOM-PQC-001",
+    "SBOM-PQC-005",
+    "SBOM-PQC-008",
+    "SBOM-PQC-009",
+    "SBOM-PQC-010",
+    "SBOM-PQC-012",
+    "SBOM-PQC-KEY-001",
+    "SBOM-PQC-CERT-001",
+    "SBOM-PQC-CERT-UNKNOWN",
+    "SBOM-PQC-PROTO-001",
+    "SBOM-PQC-PROTO-002",
+    "SBOM-PQC-PROTO-UNKNOWN",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2000,6 +2041,8 @@ mod tests {
             ("ssdf", SSDF_SARIF_RULE_IDS),
             ("eo14028", EO14028_SARIF_RULE_IDS),
             ("compliance", COMPLIANCE_SARIF_RULE_IDS),
+            ("cnsa2", CNSA2_SARIF_RULE_IDS),
+            ("pqc", PQC_SARIF_RULE_IDS),
         ] {
             let mut seen = std::collections::BTreeSet::new();
             for id in slice {
@@ -2012,6 +2055,30 @@ mod tests {
                     meta.sarif_id
                 );
             }
+        }
+    }
+
+    /// The CNSA 2.0 / PQC catalogues must enumerate their entire rule
+    /// family: a registry rule missing from its slice would only surface via
+    /// the catalogue-completion backfill when it happens to fire, putting
+    /// SARIF consumers' suppressions/baselines back on an incomplete
+    /// catalogue.
+    #[test]
+    fn cnsa2_and_pqc_slices_cover_their_rule_families() {
+        for (prefix, slice) in [
+            ("SBOM-CNSA2-", CNSA2_SARIF_RULE_IDS),
+            ("SBOM-PQC-", PQC_SARIF_RULE_IDS),
+        ] {
+            let expected: std::collections::BTreeSet<&str> = all_rule_ids()
+                .iter()
+                .copied()
+                .filter(|id| id.starts_with(prefix))
+                .collect();
+            let actual: std::collections::BTreeSet<&str> = slice.iter().copied().collect();
+            assert_eq!(
+                actual, expected,
+                "{prefix}* SARIF slice drifted from the registry"
+            );
         }
     }
 

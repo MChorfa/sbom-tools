@@ -830,7 +830,19 @@ mod tests {
         let run = &value["runs"][0];
         let props = &run["properties"];
         assert_eq!(props["applicable"], json!(false));
-        assert!(props["overall_score"].is_null());
+        // The serialized key is camelCase and *omitted* for the unscored N/A
+        // case — indexing `props["overall_score"]` would return Null for any
+        // absent key, so assert on the real key's absence.
+        assert!(
+            props.get("overallScore").is_none(),
+            "unscored N/A run must omit overallScore entirely"
+        );
+        assert!(
+            props["notApplicableReason"]
+                .as_str()
+                .is_some_and(|r| r.contains("No machine-learning-model components")),
+            "N/A run must carry the metrics' human-readable reason"
+        );
         assert_eq!(props["grade"], json!("N/A"));
         // The dedicated SBOM-AIBOM-* rule family is now emitted (was absent before),
         // and N/A yields no findings.

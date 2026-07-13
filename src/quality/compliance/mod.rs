@@ -30,8 +30,9 @@ mod ssdf;
 
 use context::{ComplianceContext, checker_for};
 pub use registry::{
-    COMPLIANCE_SARIF_RULE_IDS, EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS, NTIA_SARIF_RULE_IDS,
-    RuleMeta, SSDF_SARIF_RULE_IDS, all_rule_ids, rule_meta,
+    CNSA2_SARIF_RULE_IDS, COMPLIANCE_SARIF_RULE_IDS, EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS,
+    NTIA_SARIF_RULE_IDS, PQC_SARIF_RULE_IDS, RuleMeta, SSDF_SARIF_RULE_IDS, all_rule_ids,
+    rule_meta,
 };
 use registry::{REMEDIATION_GENERIC, lookup_static_rule_id};
 pub use selector::StandardSelector;

@@ -543,12 +543,16 @@ pub fn generate_ai_readiness_sarif(
             results,
             properties: Some(SarifRunProperties {
                 applicable: !metrics.is_not_applicable(),
-                not_applicable_reason: None,
+                // Same contract as the compliance N/A surfaces: an N/A run
+                // carries its human-readable reason (`AiReadinessMetrics`
+                // populates `na_reason` exactly when `not_applicable`).
+                not_applicable_reason: metrics.na_reason.clone(),
                 overall_score,
                 grade: Some(grade.to_string()),
                 sbom: Some(sbom_name.to_string()),
                 profile: Some(profile.to_string()),
                 compliant: None,
+                standards: Vec::new(),
             }),
         }],
     };
@@ -618,6 +622,7 @@ pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, Re
         sbom: None,
         profile: Some(result.level.name().to_string()),
         compliant: None,
+        standards: Vec::new(),
     });
     let rules = SarifRuleWithUri::wrap_all(complete_rule_catalogue(
         get_sarif_rules_for_standard(result.level),
@@ -660,6 +665,25 @@ pub fn generate_multi_compliance_sarif(
     }
     let all_rules = complete_rule_catalogue(all_rules, &all_results);
 
+    // Per-standard applicability/score/verdict ride on `properties.standards`
+    // — without them a not-applicable standard in a merged run is
+    // machine-indistinguishable from a pass (the single-standard run's flat
+    // properties don't fit N standards). The flat per-standard fields stay
+    // unset; `applicable` reports whether any standard evaluated the SBOM.
+    let run_properties = Some(SarifRunProperties {
+        applicable: results.iter().any(ComplianceResult::is_applicable),
+        not_applicable_reason: None,
+        overall_score: None,
+        grade: None,
+        sbom: None,
+        profile: None,
+        compliant: None,
+        standards: results
+            .iter()
+            .map(StandardRunSummary::from_result)
+            .collect(),
+    });
+
     let sarif = SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
         version: "2.1.0".to_string(),
@@ -673,7 +697,7 @@ pub fn generate_multi_compliance_sarif(
                 },
             },
             results: all_results,
-            properties: None,
+            properties: run_properties,
         }],
     };
 
@@ -764,6 +788,7 @@ pub fn generate_quality_sarif(
                 sbom: Some(sbom_name.to_string()),
                 profile: Some(profile.to_string()),
                 compliant: Some(report.compliance.is_compliant),
+                standards: Vec::new(),
             }),
         }],
     };
@@ -1077,6 +1102,11 @@ fn get_sarif_rules_for_standard(level: ComplianceLevel) -> Vec<SarifRule> {
         ComplianceLevel::FdaMedicalDevice => get_sarif_fda_rules(),
         ComplianceLevel::NistSsdf => get_sarif_ssdf_rules(),
         ComplianceLevel::Eo14028 => get_sarif_eo14028_rules(),
+        ComplianceLevel::Cnsa2 => get_sarif_cnsa2_rules(),
+        ComplianceLevel::NistPqc => get_sarif_pqc_rules(),
+        // The remaining levels (Minimum/Standard/Comprehensive, the CRA
+        // profiles, BSI TR-03183-2, EUCC, and the AI readiness profiles)
+        // genuinely emit rules from the shared CRA-family catalogue.
         _ => get_sarif_compliance_rules(),
     }
 }
@@ -1095,6 +1125,14 @@ fn get_sarif_ssdf_rules() -> Vec<SarifRule> {
 
 fn get_sarif_eo14028_rules() -> Vec<SarifRule> {
     registry_sarif_rules(crate::quality::EO14028_SARIF_RULE_IDS)
+}
+
+fn get_sarif_cnsa2_rules() -> Vec<SarifRule> {
+    registry_sarif_rules(crate::quality::CNSA2_SARIF_RULE_IDS)
+}
+
+fn get_sarif_pqc_rules() -> Vec<SarifRule> {
+    registry_sarif_rules(crate::quality::PQC_SARIF_RULE_IDS)
 }
 
 fn get_sarif_compliance_rules() -> Vec<SarifRule> {
@@ -1157,28 +1195,86 @@ struct SarifRun {
     properties: Option<SarifRunProperties>,
 }
 
-/// Run-level properties for an AI-readiness SARIF report. Mirrors the run
-/// properties the hand-rolled quality SARIF emitted (minus `compliant`, which
-/// is not meaningful for an AI-only report). `overall_score` is always emitted
-/// (as `null` for the not-applicable case) so machine consumers can distinguish
-/// "score 0" from "not applicable".
+/// Run-level properties shared by every sbom-tools SARIF surface (`validate`
+/// single- and multi-standard, `quality`, and AI-readiness runs).
+///
+/// Every `Option`/`Vec` field is *omitted* when absent (`skip_serializing_if`)
+/// — never emitted as `null`/`[]` — so machine consumers must treat a missing
+/// key as "no value" and check `applicable` before reading any verdict field.
+/// In particular, a run without an `overallScore` key is an unscored
+/// (not-applicable) run, not a score of 0.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SarifRunProperties {
+    /// Whether the evaluated standard/profile actually applied to the SBOM.
+    /// For multi-standard runs: whether at least one standard applied (the
+    /// per-standard verdicts live in `standards`).
     applicable: bool,
+    /// Human-readable reason when `applicable` is false; omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     not_applicable_reason: Option<String>,
+    /// Omitted when the run was not scored. Surface-dependent semantics: on
+    /// `quality` runs this is the weighted 0-100 quality score, while on
+    /// `validate` compliance runs it is the standard's compliance score
+    /// (`ComplianceResult::score`) — the two are not comparable.
     #[serde(skip_serializing_if = "Option::is_none")]
     overall_score: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     grade: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sbom: Option<String>,
+    /// CLI profile name on `quality` runs; standard display name on
+    /// `validate` runs. Omitted on multi-standard runs (see `standards`).
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
     /// Compliance verdict for the embedded standard (quality reports only).
     #[serde(skip_serializing_if = "Option::is_none")]
     compliant: Option<bool>,
+    /// Per-standard summaries for multi-standard compliance runs — one entry
+    /// per checked standard, so a not-applicable standard stays
+    /// machine-distinguishable from a pass when several standards share one
+    /// run. Omitted on single-standard and quality runs, whose verdict rides
+    /// on the flat fields above.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    standards: Vec<StandardRunSummary>,
+}
+
+/// One `properties.standards` entry of a multi-standard compliance run.
+/// Field semantics mirror the flat fields a single-standard run carries.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StandardRunSummary {
+    /// Standard display name (the value the single-standard run's `profile`
+    /// property carries).
+    profile: String,
+    /// Whether the standard actually evaluated the SBOM.
+    applicable: bool,
+    /// Human-readable N/A reason; omitted for applicable standards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_applicable_reason: Option<String>,
+    /// Compliance score (0-100); omitted when the standard did not evaluate
+    /// the SBOM.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overall_score: Option<f32>,
+    /// Raw verdict. Stays `true` for not-applicable standards by the
+    /// documented `ComplianceResult` contract — check `applicable` first.
+    compliant: bool,
+}
+
+impl StandardRunSummary {
+    fn from_result(result: &ComplianceResult) -> Self {
+        let not_applicable_reason = match &result.applicability {
+            crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+            crate::quality::Applicability::Applicable => None,
+        };
+        Self {
+            profile: result.level.name().to_string(),
+            applicable: result.is_applicable(),
+            not_applicable_reason,
+            overall_score: result.score().map(f32::from),
+            compliant: result.is_compliant,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1348,6 +1444,8 @@ mod registry_consistency_tests {
             ("fda", get_sarif_fda_rules()),
             ("ssdf", get_sarif_ssdf_rules()),
             ("eo14028", get_sarif_eo14028_rules()),
+            ("cnsa2", get_sarif_cnsa2_rules()),
+            ("pqc", get_sarif_pqc_rules()),
             ("compliance", get_sarif_compliance_rules()),
         ];
         let mut mismatches = Vec::new();

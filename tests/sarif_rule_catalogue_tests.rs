@@ -4,7 +4,9 @@
 //! undeclared ids and rejects duplicate descriptors).
 
 use sbom_tools::model::{Component, DocumentMetadata, NormalizedSbom};
-use sbom_tools::quality::{ComplianceChecker, ComplianceLevel};
+use sbom_tools::quality::{
+    CNSA2_SARIF_RULE_IDS, ComplianceChecker, ComplianceLevel, PQC_SARIF_RULE_IDS,
+};
 use sbom_tools::reports::{generate_compliance_sarif, generate_multi_compliance_sarif};
 use std::collections::HashSet;
 
@@ -125,4 +127,115 @@ fn multi_standard_sarif_has_unique_descriptors() {
     .collect();
     let sarif = generate_multi_compliance_sarif(&results).expect("sarif generation");
     assert_catalogue_complete(&sarif, "multi cra,bsi,ntia");
+}
+
+/// A CNSA 2.0 / NIST PQC run must declare its own rule family as the SARIF
+/// catalogue — not the CRA/BSI/EUCC/AI-family table it used to inherit from
+/// the `_` arm (which had zero overlap with the rules actually evaluated).
+#[test]
+fn cnsa2_and_pqc_sarif_declare_only_their_own_rule_family() {
+    let sbom = violating_sbom();
+    for (level, prefix, slice) in [
+        (ComplianceLevel::Cnsa2, "SBOM-CNSA2-", CNSA2_SARIF_RULE_IDS),
+        (ComplianceLevel::NistPqc, "SBOM-PQC-", PQC_SARIF_RULE_IDS),
+    ] {
+        let result = ComplianceChecker::new(level).check(&sbom);
+        let sarif = generate_compliance_sarif(&result).expect("sarif generation");
+        assert_catalogue_complete(&sarif, level.name());
+        let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
+        let declared: HashSet<&str> = json["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .expect("rules array")
+            .iter()
+            .filter_map(|r| r["id"].as_str())
+            .collect();
+        for id in declared.iter() {
+            assert!(
+                id.starts_with(prefix),
+                "[{}] declared rule {id} is outside the {prefix}* family",
+                level.name()
+            );
+        }
+        for id in slice {
+            assert!(
+                declared.contains(id),
+                "[{}] curated rule {id} missing from the declared catalogue",
+                level.name()
+            );
+        }
+    }
+}
+
+/// Multi-standard SARIF must carry per-standard applicability/score/verdict
+/// on `properties.standards` — otherwise a standard that never evaluated the
+/// SBOM (EU AI Act on a non-ML SBOM) is machine-indistinguishable from a
+/// clean pass in `validate --standard ai-act,ntia -o sarif`.
+#[test]
+fn multi_standard_sarif_carries_per_standard_run_summaries() {
+    let sbom = violating_sbom();
+    let results: Vec<_> = [ComplianceLevel::EuAiAct, ComplianceLevel::NtiaMinimum]
+        .into_iter()
+        .map(|l| ComplianceChecker::new(l).check(&sbom))
+        .collect();
+    assert!(
+        !results[0].is_applicable() && results[1].is_applicable(),
+        "fixture must yield one N/A and one applicable standard"
+    );
+
+    let sarif = generate_multi_compliance_sarif(&results).expect("sarif generation");
+    let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
+    let props = &json["runs"][0]["properties"];
+    assert_eq!(
+        props["applicable"],
+        serde_json::json!(true),
+        "at least one standard evaluated the SBOM"
+    );
+
+    let standards = props["standards"].as_array().expect("standards array");
+    assert_eq!(standards.len(), results.len(), "one entry per standard");
+    for (entry, result) in standards.iter().zip(&results) {
+        assert_eq!(
+            entry["profile"].as_str(),
+            Some(result.level.name()),
+            "profile carries the standard display name"
+        );
+        assert_eq!(
+            entry["applicable"].as_bool(),
+            Some(result.is_applicable()),
+            "[{}] applicability mismatch",
+            result.level.name()
+        );
+        assert_eq!(
+            entry["compliant"].as_bool(),
+            Some(result.is_compliant),
+            "[{}] verdict mismatch",
+            result.level.name()
+        );
+        if result.is_applicable() {
+            assert_eq!(
+                entry["overallScore"].as_f64(),
+                result.score().map(f64::from),
+                "[{}] score mismatch",
+                result.level.name()
+            );
+            assert!(
+                entry.get("notApplicableReason").is_none(),
+                "[{}] applicable standard must not carry an N/A reason",
+                result.level.name()
+            );
+        } else {
+            assert!(
+                entry.get("overallScore").is_none(),
+                "[{}] unevaluated standard must omit overallScore (not null/0)",
+                result.level.name()
+            );
+            assert!(
+                entry["notApplicableReason"]
+                    .as_str()
+                    .is_some_and(|r| !r.is_empty()),
+                "[{}] N/A entry must carry its human-readable reason",
+                result.level.name()
+            );
+        }
+    }
 }
