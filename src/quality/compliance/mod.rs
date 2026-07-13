@@ -24,12 +24,14 @@ mod eu_ai_act;
 mod eucc;
 mod generic;
 mod registry;
+mod selector;
 mod shared;
 mod ssdf;
 
 use context::{ComplianceContext, checker_for};
 use registry::REMEDIATION_GENERIC;
 pub use registry::{RuleMeta, rule_meta};
+pub use selector::StandardSelector;
 use shared::{
     has_known_supplier, has_known_value, is_valid_email_format, known_component_name, known_value,
     manufacturer_scope_components, truncate_list,

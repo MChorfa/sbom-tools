@@ -3,8 +3,9 @@
 //! Provides validation traits and implementations for all configuration types.
 
 use super::types::{
-    AppConfig, BehaviorConfig, DiffConfig, EnrichmentConfig, FilterConfig, MatchingConfig,
-    MatrixConfig, MultiDiffConfig, OutputConfig, TimelineConfig, TuiConfig, ViewConfig,
+    AppConfig, BehaviorConfig, ComplianceConfig, DiffConfig, EnrichmentConfig, FilterConfig,
+    MatchingConfig, MatrixConfig, MultiDiffConfig, OutputConfig, TimelineConfig, TuiConfig,
+    ViewConfig,
 };
 
 // ============================================================================
@@ -55,6 +56,7 @@ impl Validatable for AppConfig {
         errors.extend(self.output.validate());
         errors.extend(self.behavior.validate());
         errors.extend(self.tui.validate());
+        errors.extend(self.compliance.validate());
 
         if let Some(ref enrichment) = self.enrichment {
             errors.extend(enrichment.validate());
@@ -136,6 +138,56 @@ impl Validatable for BehaviorConfig {
     fn validate(&self) -> Vec<ConfigError> {
         // BehaviorConfig contains only boolean flags that don't need validation
         Vec::new()
+    }
+}
+
+impl Validatable for ComplianceConfig {
+    fn validate(&self) -> Vec<ConfigError> {
+        let mut errors = Vec::new();
+
+        // Standards and profile parse through the same alias-aware parsers
+        // the CLI flags use, so a config typo fails at load time with the
+        // exact list of valid values.
+        for (i, standard) in self.standards.iter().enumerate() {
+            if let Err(e) = standard.parse::<crate::quality::StandardSelector>() {
+                errors.push(ConfigError {
+                    field: format!("compliance.standards[{i}]"),
+                    message: e,
+                });
+            }
+        }
+
+        if let Some(ref profile) = self.profile
+            && let Err(e) = profile.parse::<crate::quality::ScoringProfile>()
+        {
+            errors.push(ConfigError {
+                field: "compliance.profile".to_string(),
+                message: e,
+            });
+        }
+
+        if let Some(min_score) = self.min_score
+            && !(0.0..=100.0).contains(&min_score)
+        {
+            errors.push(ConfigError {
+                field: "compliance.min_score".to_string(),
+                message: format!("min_score must be between 0 and 100, got {min_score}"),
+            });
+        }
+
+        if let Some(ref class) = self.cra_product_class
+            && crate::model::CraProductClass::parse_cli(class).is_none()
+        {
+            errors.push(ConfigError {
+                field: "compliance.cra_product_class".to_string(),
+                message: format!(
+                    "Invalid product class '{class}'. Valid options: \
+                     default, important-class-1, important-class-2, critical"
+                ),
+            });
+        }
+
+        errors
     }
 }
 
@@ -504,6 +556,45 @@ mod tests {
             ..EnrichmentConfig::default()
         };
         assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn compliance_config_accepts_canonical_values_and_aliases() {
+        let config = ComplianceConfig {
+            standards: vec![
+                "ntia".to_string(),
+                "cra-phase1".to_string(),
+                "nist-ssdf".to_string(), // alias
+            ],
+            profile: Some("cyber-resilience".to_string()), // alias
+            min_score: Some(70.0),
+            cra_product_class: Some("important-class-1".to_string()),
+            ..Default::default()
+        };
+        assert!(config.is_valid(), "{:?}", config.validate());
+    }
+
+    #[test]
+    fn compliance_config_rejects_bad_values() {
+        let config = ComplianceConfig {
+            standards: vec!["not-a-standard".to_string()],
+            profile: Some("not-a-profile".to_string()),
+            min_score: Some(250.0),
+            cra_product_class: Some("mega-critical".to_string()),
+            ..Default::default()
+        };
+        let errors = config.validate();
+        for field in [
+            "compliance.standards[0]",
+            "compliance.profile",
+            "compliance.min_score",
+            "compliance.cra_product_class",
+        ] {
+            assert!(
+                errors.iter().any(|e| e.field == field),
+                "expected an error for {field}: {errors:?}"
+            );
+        }
     }
 
     #[test]

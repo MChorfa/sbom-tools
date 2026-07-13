@@ -485,8 +485,8 @@ Checks an SBOM against a compliance standard and reports missing fields or faili
 
 | Flag | Description |
 |------|-------------|
-| `--standard <std>` | Standard to validate: `ntia` (default), `fda`, `cra`, `ssdf`, `eo14028` (comma-separated for multiple) |
-| `-o, --output <fmt>` | Output format (default: `json`; supports `sarif` for CI integration) |
+| `--standard <std>` | Standard to validate: `ntia` (default), `fda`, `cra` (= Phase 2), `cra-phase1`, `ssdf`, `eo14028`, `cnsa2`, `pqc`, `bsi`, `oss-steward`, `eucc`, `ai-act`, `bsi-ai` (comma-separated for multiple; aliases in `--help`) |
+| `-o, --output <fmt>` | Output format: `summary` (default via `auto`), `json`, `sarif`, `oscal-json` |
 
 </details>
 
@@ -503,7 +503,7 @@ Scores an SBOM from 0–100 using a weighted profile. Use `--min-score` to fail 
 
 | Flag | Description |
 |------|-------------|
-| `--profile <name>` | Scoring profile: `minimal`, `standard` (default), `security`, `license-compliance`, `cra`, `comprehensive`, `cbom` |
+| `--profile <name>` | Scoring profile: `minimal`, `standard` (default), `security`, `license-compliance`, `cra`, `bsi`, `comprehensive`, `cbom`, `ai-readiness` |
 | `--min-score <n>` | Fail if quality score is below threshold (0–100) |
 | `--recommendations` | Show detailed improvement recommendations |
 | `--metrics` | Show detailed scoring metrics |
@@ -689,7 +689,7 @@ Select with `-o` / `--output`:
 | TUI | `tui` | Interactive exploration |
 | JSON | `json` | Programmatic integration |
 | SARIF | `sarif` | CI/CD security dashboards (SARIF 2.1.0) |
-| OSCAL assessment results | `oscal-json` | OSCAL 1.1.2 validation findings for assessment tooling |
+| OSCAL assessment results | `oscal-json` | OSCAL 1.1.2 validation findings for assessment tooling (`validate` only) |
 | Markdown | `markdown` | Documentation, PR comments |
 | HTML | `html` | Stakeholder reports |
 | CSV | `csv` | Spreadsheet analysis |

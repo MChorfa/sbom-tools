@@ -48,3 +48,48 @@ pub use watch::run_watch;
 
 // Re-export config types used by handlers
 pub use crate::config::{DiffConfig, ViewConfig};
+
+/// Reject an output format the given command has no real renderer for.
+///
+/// Each command handler declares the formats it genuinely supports and calls
+/// this before doing any work, so an unsupported `(command, format)` pair
+/// fails with a clear error instead of silently substituting another format
+/// (e.g. `validate -o html` used to fall through to the plain-text renderer,
+/// and `diff -o oscal-json` used to emit plain JSON).
+pub(crate) fn ensure_output_format_supported(
+    command: &str,
+    requested: crate::reports::ReportFormat,
+    supported: &[crate::reports::ReportFormat],
+) -> anyhow::Result<()> {
+    if supported.contains(&requested) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "output format '{requested}' is not supported by `sbom-tools {command}`; \
+         supported formats: {}",
+        supported
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Resolve the CRA sidecar for a command.
+///
+/// An **explicitly** requested sidecar (CLI flag or config file) that fails
+/// to load is a hard error — the user asked for that metadata, so silently
+/// scoring without it would misreport compliance. Auto-discovery (no explicit
+/// path) stays best-effort: `find_for_sbom` logs a warning for a discovered-
+/// but-broken candidate and returns `None`.
+pub(crate) fn load_cra_sidecar(
+    explicit: Option<&std::path::Path>,
+    sbom_path: &std::path::Path,
+) -> anyhow::Result<Option<crate::model::CraSidecarMetadata>> {
+    match explicit {
+        Some(p) => crate::model::CraSidecarMetadata::from_file(p)
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())),
+        None => Ok(crate::model::CraSidecarMetadata::find_for_sbom(sbom_path)),
+    }
+}

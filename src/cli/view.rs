@@ -14,6 +14,22 @@ use anyhow::Result;
 /// Run the view command
 #[allow(clippy::needless_pass_by_value)]
 pub fn run_view(config: ViewConfig) -> Result<i32> {
+    // `view` renders every format except OSCAL (which is compliance-
+    // assessment output produced by `validate`); reject it up front instead
+    // of silently emitting plain JSON.
+    if config.output.format == ReportFormat::OscalJson {
+        anyhow::bail!(
+            "output format 'oscal-json' is not supported by `sbom-tools view`; \
+             use `sbom-tools validate -o oscal-json` for OSCAL assessment results"
+        );
+    }
+
+    // Resolve the CRA sidecar once for both the TUI and report paths: an
+    // explicit --cra-sidecar that fails to load is a hard error; auto-
+    // discovery next to the SBOM stays best-effort.
+    let cra_sidecar =
+        super::load_cra_sidecar(config.cra_sidecar_path.as_deref(), &config.sbom_path)?;
+
     let mut parsed = parse_sbom_with_context(&config.sbom_path, false)?;
 
     // Enrich with OSV vulnerability data if enabled
@@ -190,17 +206,12 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
     tracing::info!("BOM profile: {bom_profile}");
 
     if effective_output == ReportFormat::Tui {
-        // Resolve sidecar so the compliance tab's OSS-Steward / EUCC /
-        // Article 14 / product-class checks render against the same
-        // metadata the CLI uses (auto-discovered next to the SBOM when
-        // `--cra-sidecar` is omitted).
-        let tui_sidecar = match &config.cra_sidecar_path {
-            Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
-            None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
-        };
+        // The compliance tab's OSS-Steward / EUCC / Article 14 /
+        // product-class checks render against the same sidecar metadata the
+        // CLI report path uses (resolved once at the top of `run_view`).
         let (sbom, raw_content) = parsed.into_parts();
         let mut app = ViewApp::new(sbom, &raw_content, bom_profile);
-        if let Some(sc) = tui_sidecar {
+        if let Some(sc) = cra_sidecar.clone() {
             app = app.with_cra_sidecar(sc);
         }
         app.export_template = config.output.export_template.clone();
@@ -215,7 +226,7 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         run_view_tui(&mut app)?;
     } else {
         parsed.drop_raw_content();
-        output_view_report(&config, parsed.sbom(), &output_target)?;
+        output_view_report(&config, cra_sidecar, parsed.sbom(), &output_target)?;
     }
 
     if config.fail_on_vuln && vuln_count > 0 {
@@ -312,17 +323,15 @@ pub fn severity_meets_minimum(severity: &Severity, minimum: &Severity) -> bool {
 /// Output view report to file or stdout
 fn output_view_report(
     config: &ViewConfig,
+    sidecar: Option<crate::model::CraSidecarMetadata>,
     sbom: &NormalizedSbom,
     output_target: &OutputTarget,
 ) -> Result<()> {
     let effective_output = auto_detect_format(config.output.format, output_target);
 
-    // Pre-compute CRA compliance once for reporters.
-    // Honour explicit --cra-sidecar; otherwise auto-discover next to the SBOM.
-    let sidecar = match &config.cra_sidecar_path {
-        Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
-        None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
-    };
+    // Pre-compute CRA compliance once for reporters, using the sidecar
+    // resolved in `run_view` (explicit path hard-errors there; discovery is
+    // best-effort).
     let cli_class = config
         .cra_product_class
         .as_deref()

@@ -36,6 +36,8 @@ pub struct AppConfig {
     pub ecosystem_rules: EcosystemRulesConfig,
     /// TUI-specific configuration
     pub tui: TuiConfig,
+    /// Compliance defaults for the `validate`/`quality` commands
+    pub compliance: ComplianceConfig,
     /// Enrichment configuration (OSV, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<EnrichmentConfig>,
@@ -777,6 +779,46 @@ pub struct EcosystemRulesConfig {
     pub disabled: bool,
     /// Enable typosquat detection warnings
     pub detect_typosquats: bool,
+}
+
+/// Compliance defaults for the `validate` and `quality` commands.
+///
+/// File-level defaults for the compliance-facing CLI flags. Explicit CLI
+/// flags always override these values (same precedence as every other
+/// section: explicit CLI > config file > built-in default).
+///
+/// `standards` and `profile` are stored as strings and parsed through the
+/// same alias-aware parsers the CLI uses
+/// ([`crate::quality::StandardSelector`] / [`crate::quality::ScoringProfile`]),
+/// so every CLI spelling works in the file too; invalid values are rejected
+/// at config-validation time with the list of valid options.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct ComplianceConfig {
+    /// Default standard(s) for `validate --standard`
+    /// (e.g. `[ntia, cra, cra-phase1]`; aliases accepted)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub standards: Vec<String>,
+    /// Default scoring profile for `quality --profile`
+    /// (e.g. `cra`; aliases accepted)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Default `quality --min-score` gate (0-100)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 100.0))]
+    pub min_score: Option<f32>,
+    /// Default for `validate --fail-on-warning`
+    pub fail_on_warning: bool,
+    /// Default for `quality --fail-on-noncompliant`
+    pub fail_on_noncompliant: bool,
+    /// Default CRA sidecar path (`--cra-sidecar`). Treated as explicitly
+    /// requested: a configured sidecar that fails to load is a hard error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cra_sidecar: Option<PathBuf>,
+    /// Default CRA Annex III/IV product class (`--cra-product-class`):
+    /// default, important-class-1, important-class-2, critical
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cra_product_class: Option<String>,
 }
 
 /// Enrichment configuration for vulnerability data sources.
