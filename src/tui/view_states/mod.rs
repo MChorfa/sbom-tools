@@ -27,4 +27,5 @@ pub use licenses::LicensesView;
 pub use quality::QualityView;
 pub use sidebyside::SideBySideView;
 pub use source::SourceView;
+pub use summary::SummaryView;
 pub use vulnerabilities::VulnerabilitiesView;

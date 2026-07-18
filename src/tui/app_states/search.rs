@@ -18,6 +18,74 @@ impl SearchMode {
     }
 }
 
+/// One matching semantic for every search surface: case-insensitive
+/// substring or case-insensitive regex, built once per query.
+#[derive(Debug)]
+pub struct SearchMatcher {
+    mode: SearchMode,
+    regex: Option<regex::Regex>,
+    query_lower: String,
+}
+
+impl SearchMatcher {
+    /// Build a matcher; invalid regex patterns return the error string the
+    /// overlays display.
+    pub fn build(query: &str, mode: SearchMode) -> Result<Self, String> {
+        let regex = match mode {
+            SearchMode::Regex => Some(
+                regex::RegexBuilder::new(query)
+                    .case_insensitive(true)
+                    .build()
+                    .map_err(|e| format!("Invalid regex: {e}"))?,
+            ),
+            SearchMode::Substring => None,
+        };
+        Ok(Self {
+            mode,
+            regex,
+            query_lower: query.to_lowercase(),
+        })
+    }
+
+    pub fn is_match(&self, text: &str) -> bool {
+        match self.mode {
+            SearchMode::Substring => text.to_lowercase().contains(&self.query_lower),
+            SearchMode::Regex => self.regex.as_ref().is_some_and(|re| re.is_match(text)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod matcher_tests {
+    use super::{SearchMatcher, SearchMode};
+
+    #[test]
+    fn substring_is_case_insensitive() {
+        let m = SearchMatcher::build("AxIoS", SearchMode::Substring).unwrap();
+        assert!(m.is_match("axios@1.4.0"));
+        assert!(!m.is_match("lodash"));
+    }
+
+    #[test]
+    fn substring_treats_metacharacters_literally() {
+        let m = SearchMatcher::build("a.c", SearchMode::Substring).unwrap();
+        assert!(m.is_match("a.c-parser"));
+        assert!(
+            !m.is_match("abc"),
+            "'.' must not act as a regex wildcard in Substring mode"
+        );
+    }
+
+    #[test]
+    fn regex_matches_and_reports_errors() {
+        let m = SearchMatcher::build("CVE-2024-.*", SearchMode::Regex).unwrap();
+        assert!(m.is_match("cve-2024-1234"), "regex is case-insensitive");
+        assert!(!m.is_match("CVE-2023-1"));
+        let err = SearchMatcher::build("(", SearchMode::Regex).unwrap_err();
+        assert!(err.starts_with("Invalid regex:"), "{err}");
+    }
+}
+
 /// Search state for diff mode.
 #[derive(Debug, Clone)]
 pub struct DiffSearchState {

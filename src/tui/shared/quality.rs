@@ -454,7 +454,18 @@ pub fn priority_style(priority: u8) -> Style {
 
 /// Continuous RGB gradient bar color for better visual differentiation.
 /// Score 0 → dark red, 50 → yellow, 100 → green.
+///
+/// The gradient is dark-theme-tuned; other themes (light, high-contrast, and
+/// monochrome, which `NO_COLOR` forces) get the discrete theme-derived score
+/// buckets so bars stay legible.
 fn bar_grade_style(score: f32) -> Style {
+    bar_grade_style_for(score, crate::tui::theme::current_theme_name())
+}
+
+fn bar_grade_style_for(score: f32, theme_name: &str) -> Style {
+    if theme_name != "dark" {
+        return score_style(score);
+    }
     let t = score.clamp(0.0, 100.0) / 100.0;
     let (r, g, b) = if t < 0.5 {
         // 0..50: dark red (180,40,40) → yellow (220,180,0)
@@ -500,9 +511,10 @@ pub fn render_quality_summary(
     area: Rect,
     report: &QualityReport,
     selected_rec: usize,
+    checks_scroll: usize,
 ) {
     if report.profile == ScoringProfile::AiReadiness {
-        render_ai_readiness_summary(frame, area, report, selected_rec);
+        render_ai_readiness_summary(frame, area, report, selected_rec, checks_scroll);
         return;
     }
 
@@ -627,7 +639,7 @@ pub fn render_quality_summary(
         )
         .bar_width(6)
         .bar_gap(1)
-        .value_style(Style::default().fg(Color::White).bold())
+        .value_style(Style::default().fg(scheme.text).bold())
         .data(BarGroup::default().bars(&bars));
     frame.render_widget(bar_chart, mid_chunks[0]);
 
@@ -647,6 +659,7 @@ fn render_ai_readiness_summary(
     area: Rect,
     report: &QualityReport,
     selected_rec: usize,
+    checks_scroll: usize,
 ) {
     let scheme = colors();
     let Some(metrics) = report.ai_readiness_metrics.as_ref() else {
@@ -773,9 +786,34 @@ fn render_ai_readiness_summary(
             .style(Style::default().fg(scheme.accent).bold())
             .bottom_margin(1),
     );
-    frame.render_widget(checks, chunks[2]);
+    let n_checks = metrics.checks.len();
+    let offset = checks_scroll.min(n_checks.saturating_sub(1));
+    let mut table_state = ratatui::widgets::TableState::default().with_offset(offset);
+    frame.render_stateful_widget(checks, chunks[2], &mut table_state);
+    // Visible rows: inner height minus borders, header and its bottom margin.
+    let visible = chunks[2].height.saturating_sub(2 + 2) as usize;
+    if n_checks > visible {
+        crate::tui::widgets::render_scrollbar(
+            frame,
+            chunks[2].inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            n_checks,
+            offset,
+        );
+    }
 
-    render_quality_recommendations(frame, chunks[3], report, selected_rec, 0);
+    // One shared offset scrolls both panes (coarse by design: the footer
+    // advertises a single up/down pair for the whole tab), each clamped to
+    // its own list so the shorter pane never scrolls into blank space.
+    render_quality_recommendations(
+        frame,
+        chunks[3],
+        report,
+        selected_rec,
+        checks_scroll.min(report.recommendations.len().saturating_sub(1)),
+    );
 }
 
 /// Render a compact 4-line header with grade, inline bar, score, profile, and strongest/weakest.
@@ -2115,4 +2153,29 @@ pub fn render_quality_recommendations(
         )
         .scroll((scroll_offset as u16, 0));
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod bar_style_tests {
+    use super::*;
+
+    /// Off-dark themes (light, high-contrast, and monochrome, which NO_COLOR
+    /// forces) must use the discrete theme-derived buckets, not the dark-tuned
+    /// RGB ramp.
+    #[test]
+    fn bar_gradient_uses_discrete_buckets_off_dark() {
+        // Pin the global theme: score_style reads it, and both sides of the
+        // equality must evaluate under the same scheme.
+        crate::tui::test_support::pin_theme();
+        assert_eq!(bar_grade_style_for(85.0, "light"), score_style(85.0));
+        assert_eq!(
+            bar_grade_style_for(85.0, "high-contrast"),
+            score_style(85.0)
+        );
+        assert_eq!(bar_grade_style_for(85.0, "monochrome"), score_style(85.0));
+        match bar_grade_style_for(85.0, "dark").fg {
+            Some(Color::Rgb(..)) => {}
+            other => panic!("dark theme keeps the RGB ramp, got {other:?}"),
+        }
+    }
 }

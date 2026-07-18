@@ -5,7 +5,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
- [1] Overview   │  [2] Components   │  [3] Vulns   │  [4] Licenses   │  [5] Deps   │  [6] Quality   │  [7] Compliance
+[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ Compliance Standards (←/→ to switch) ────────────────────────────────────────────────────────────────────────────────┐
@@ -42,4 +42,4 @@ sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 │←/→ standard  j/k navigate  Enter details  g view [Grouped]  f filter [All]  E export  ? help                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  Components: 9 │ Vulns: 0 │ Licenses: 3
- f filter  ←→ standard  ↑↓ select │  Tab switch  / search  e export  ? help  q quit [y] copy Component  missing supplier
+   …  f filter  ←→ standard │  Tab switch  / search  e export  ? help  q quit [y] copy Component  missing supplier...

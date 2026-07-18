@@ -7,12 +7,35 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// License expression following SPDX license expression syntax
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseExpression {
     /// The raw license expression string
     pub expression: String,
     /// Whether this is a valid SPDX expression
     pub is_valid_spdx: bool,
+    /// Human-readable name resolved from the document's license
+    /// definitions (e.g. SPDX hasExtractedLicensingInfos for a bare
+    /// `LicenseRef-*` expression). Display metadata only: excluded from
+    /// equality/hashing below so identical expressions stay equal (and
+    /// pre-existing serialized SBOMs stay diff-identical) whether or not
+    /// resolution ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_name: Option<String>,
+}
+
+/// Equality/hashing deliberately ignore `resolved_name`: the raw
+/// expression is the license identity.
+impl PartialEq for LicenseExpression {
+    fn eq(&self, other: &Self) -> bool {
+        self.expression == other.expression && self.is_valid_spdx == other.is_valid_spdx
+    }
+}
+impl Eq for LicenseExpression {}
+impl std::hash::Hash for LicenseExpression {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expression.hash(state);
+        self.is_valid_spdx.hash(state);
+    }
 }
 
 impl LicenseExpression {
@@ -23,6 +46,7 @@ impl LicenseExpression {
         Self {
             expression,
             is_valid_spdx,
+            resolved_name: None,
         }
     }
 
@@ -239,6 +263,7 @@ impl Default for LicenseExpression {
         Self {
             expression: "NOASSERTION".to_string(),
             is_valid_spdx: false,
+            resolved_name: None,
         }
     }
 }

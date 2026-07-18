@@ -14,6 +14,7 @@ pub fn render_quality(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
             area,
             report,
             app.quality_state.selected_recommendation,
+            app.quality_state.scroll_offset,
         ),
         QualityViewMode::Breakdown => shared::render_score_breakdown(frame, area, report),
         QualityViewMode::Metrics => shared::render_quality_metrics(frame, area, report),

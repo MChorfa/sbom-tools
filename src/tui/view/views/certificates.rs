@@ -6,12 +6,13 @@ use crate::model::{ComponentType, CryptoAssetType};
 use crate::tui::view::app::ViewApp;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 /// Render the certificates tab (CBOM mode).
 pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = crate::tui::theme::colors();
     let certs: Vec<_> = app
         .sbom
         .components
@@ -37,14 +38,14 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
     });
 
     if certs.is_empty() {
-        let msg = Paragraph::new("No certificates found in this CBOM.")
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Certificates "),
-            )
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No certificates found",
+            Some("Requires CycloneDX 1.6+ CBOM data (cryptoProperties)"),
+            None,
+        );
         return;
     }
 
@@ -64,16 +65,8 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .and_then(|cp| cp.certificate_properties.as_ref());
 
             let (status_icon, status_color) = cert
-                .map(|c| {
-                    if c.is_expired() {
-                        ("X", Color::Red)
-                    } else if c.is_expiring_soon(90) {
-                        ("!", Color::Yellow)
-                    } else {
-                        ("✓", Color::Green)
-                    }
-                })
-                .unwrap_or(("?", Color::DarkGray));
+                .map(crate::tui::shared::crypto::cert_status_glyph)
+                .unwrap_or(("?", scheme.text_muted));
 
             let expiry = cert
                 .and_then(|c| c.not_valid_after.as_ref())
@@ -81,9 +74,7 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .unwrap_or_else(|| "-".to_string());
 
             let style = if i == app.certificates_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+                crate::tui::theme::Styles::selected()
             } else {
                 Style::default()
             };
@@ -91,7 +82,10 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                 Span::raw(&comp.name),
-                Span::styled(format!("  {expiry}"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {expiry}"),
+                    Style::default().fg(scheme.text_muted),
+                ),
             ]))
             .style(style)
         })
@@ -100,7 +94,8 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Certificates ({}) ", certs.len())),
+            .title(format!(" Certificates ({}) ", certs.len()))
+            .title_bottom(crate::tui::shared::crypto::cert_legend()),
     );
     let mut list_state = ratatui::widgets::ListState::default();
     if !certs.is_empty() {
@@ -131,53 +126,7 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
         && let Some(cert) = &cp.certificate_properties
     {
         lines.push(Line::raw(""));
-        if let Some(s) = &cert.subject_name {
-            lines.push(Line::from(format!("Subject:    {s}")));
-        }
-        if let Some(i) = &cert.issuer_name {
-            lines.push(Line::from(format!("Issuer:     {i}")));
-        }
-        lines.push(Line::raw(""));
-        if let Some(nb) = &cert.not_valid_before {
-            lines.push(Line::from(format!("Valid From: {}", nb.format("%Y-%m-%d"))));
-        }
-        if let Some(na) = &cert.not_valid_after {
-            let color = if cert.is_expired() {
-                Color::Red
-            } else if cert.is_expiring_soon(90) {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
-            let status_label = if cert.is_expired() {
-                " EXPIRED"
-            } else if cert.is_expiring_soon(90) {
-                " EXPIRING SOON"
-            } else {
-                ""
-            };
-            lines.push(Line::from(vec![
-                Span::raw("Valid To:   "),
-                Span::styled(
-                    na.format("%Y-%m-%d").to_string(),
-                    Style::default().fg(color),
-                ),
-                Span::styled(status_label, Style::default().fg(color)),
-            ]));
-            if let Some(days) = cert.validity_days() {
-                lines.push(Line::from(format!("Remaining:  {days} days")));
-            }
-        }
-        lines.push(Line::raw(""));
-        if let Some(fmt) = &cert.certificate_format {
-            lines.push(Line::from(format!("Format:     {fmt}")));
-        }
-        if let Some(sig_ref) = &cert.signature_algorithm_ref {
-            lines.push(Line::from(format!("Sig Algo:   {sig_ref}")));
-        }
-        if let Some(key_ref) = &cert.subject_public_key_ref {
-            lines.push(Line::from(format!("Public Key: {key_ref}")));
-        }
+        lines.extend(crate::tui::shared::crypto::certificate_detail_lines(cert));
     }
 
     let detail = Paragraph::new(lines)

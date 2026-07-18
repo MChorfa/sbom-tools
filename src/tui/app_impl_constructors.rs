@@ -60,6 +60,9 @@ impl App {
             security_cache: crate::tui::security::SecurityAnalysisCache::new(),
             compliance_state: crate::tui::app_states::PolicyComplianceState::new(),
             export_template: None,
+            tab_window: crate::tui::shared::TabWindow::default(),
+            last_frame_area: None,
+            summary_view: crate::tui::view_states::SummaryView::new(),
             components_view: crate::tui::view_states::ComponentsView::new(),
             dependencies_view: crate::tui::view_states::DependenciesView::new(),
             licenses_view: crate::tui::view_states::LicensesView::new(),
@@ -75,7 +78,7 @@ impl App {
     /// Create a new app for diff mode
     #[must_use]
     pub fn new_diff(
-        diff_result: DiffResult,
+        mut diff_result: DiffResult,
         old_sbom: NormalizedSbom,
         new_sbom: NormalizedSbom,
         old_raw: &str,
@@ -101,6 +104,14 @@ impl App {
         // Build indexes for fast lookups (O(1) instead of O(n))
         let old_sbom_index = Some(old_sbom.build_index());
         let new_sbom_index = Some(new_sbom.build_index());
+
+        // Backfill the engine's QualityDelta for TUI-only construction paths
+        // (only the pipeline sets it today); pipeline-provided values win.
+        if diff_result.quality_delta.is_none()
+            && let (Some(oldq), Some(newq)) = (old_quality.as_ref(), new_quality.as_ref())
+        {
+            diff_result.quality_delta = Some(crate::diff::QualityDelta::from_reports(oldq, newq));
+        }
 
         let mut app = Self::base(AppMode::Diff);
         let mut source = SourceDiffState::new(old_raw, new_raw);
@@ -221,10 +232,14 @@ impl App {
     #[must_use]
     pub fn new_multi_diff(result: MultiDiffResult) -> Self {
         let target_count = result.comparisons.len();
+        // Selection bounds must be set at construction or j/k in the variable
+        // drill-down stays frozen at index 0 (the guard checks total > 0).
+        let variable_count = result.summary.variable_components.len();
 
         let mut app = Self::base(AppMode::MultiDiff);
         app.data.multi_diff_result = Some(result);
         app.tabs.multi_diff = MultiDiffState::new_with_targets(target_count);
+        app.tabs.multi_diff.total_variable_components = variable_count;
         app
     }
 
@@ -232,10 +247,15 @@ impl App {
     #[must_use]
     pub fn new_timeline(result: TimelineResult) -> Self {
         let version_count = result.sboms.len();
+        // Component filter defaults to All, so the unfiltered count is
+        // correct at construction (the 'f' handler resyncs on filter change).
+        let component_count = result.evolution_summary.components_added.len()
+            + result.evolution_summary.components_removed.len();
 
         let mut app = Self::base(AppMode::Timeline);
         app.data.timeline_result = Some(result);
         app.tabs.timeline = TimelineState::new_with_versions(version_count);
+        app.tabs.timeline.total_components = component_count;
         app
     }
 
@@ -243,10 +263,12 @@ impl App {
     #[must_use]
     pub fn new_matrix(result: MatrixResult) -> Self {
         let sbom_count = result.sboms.len();
+        let cluster_count = result.clustering.as_ref().map_or(0, |c| c.clusters.len());
 
         let mut app = Self::base(AppMode::Matrix);
         app.data.matrix_result = Some(result);
         app.tabs.matrix = MatrixState::new_with_size(sbom_count);
+        app.tabs.matrix.total_clusters = cluster_count;
         app
     }
 }

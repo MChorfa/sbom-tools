@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5] Vulnerabilities   │  [6] Quality   │
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Transitive  Highlight  Cycles  │  Depth:5  Roots:50  Sort:Name

@@ -593,6 +593,15 @@ impl ComplianceChecker {
                 });
             }
 
+            // File/snippet inventory entries are name+hash records, not
+            // packages: the version / unique-identifier / supplier / license
+            // requirements below do not apply to them (NTIA scopes those to
+            // components). Without this carve-out, a file-cataloguing SBOM
+            // emits thousands of spurious Errors and auto-fails compliance.
+            if matches!(comp.component_type, crate::model::ComponentType::File) {
+                continue;
+            }
+
             // NTIA minimum & FDA: version required (the CRA levels include
             // the Art. 24 steward profile — steward SBOMs still need
             // versioned components)

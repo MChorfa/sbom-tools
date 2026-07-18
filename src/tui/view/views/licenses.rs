@@ -1,8 +1,9 @@
 //! License view for `ViewApp`.
 
+use crate::tui::license_utils::LicenseCategory;
+use crate::tui::shared::licenses::category_color;
 use crate::tui::theme::colors;
 use crate::tui::view::app::{LicenseGroupBy, ViewApp};
-use crate::tui::views::licenses::categorize_license;
 use crate::tui::widgets::extract_display_name;
 use ratatui::{
     prelude::*,
@@ -29,7 +30,21 @@ pub fn render_licenses(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     // Build license data once, not per sub-panel
     let license_data = build_license_data(app);
 
-    render_license_list(frame, chunks[0], app, &license_data);
+    // Lazily cache the pairwise compatibility report (SBOM is immutable in
+    // view mode; "Unknown" is the synthetic no-license bucket, not an SPDX id).
+    if app.license_state.compat_report.is_none() {
+        let exprs: Vec<&str> = license_data
+            .iter()
+            .map(|(l, _, _)| l.as_str())
+            .filter(|l| *l != "Unknown")
+            .collect();
+        app.license_state.compat_report = Some(std::sync::Arc::new(
+            crate::tui::license_utils::analyze_license_compatibility(&exprs),
+        ));
+    }
+    let report = app.license_state.compat_report.clone();
+
+    render_license_list(frame, chunks[0], app, &license_data, report.as_deref());
     render_license_details(frame, chunks[1], app, &license_data);
 }
 
@@ -37,7 +52,8 @@ fn render_license_list(
     frame: &mut Frame,
     area: Rect,
     app: &mut ViewApp,
-    license_data: &[(String, usize, String)],
+    license_data: &[(String, usize, LicenseCategory)],
+    report: Option<&crate::tui::license_utils::LicenseCompatibilityReport>,
 ) {
     let scheme = colors();
     let chunks = Layout::default()
@@ -70,7 +86,7 @@ fn render_license_list(
         Span::raw(" inspect"),
     ]);
 
-    let filter_line2 = Line::from(vec![
+    let mut filter_line2 = Line::from(vec![
         Span::styled(
             format!("✓ {permissive}"),
             Style::default().fg(scheme.success),
@@ -88,6 +104,24 @@ fn render_license_list(
             Style::default().fg(scheme.text_muted),
         ),
     ]);
+    if let Some(report) = report
+        && !report.issues.is_empty()
+    {
+        let color = if report
+            .issues
+            .iter()
+            .any(|i| i.severity == crate::tui::license_utils::IssueSeverity::Error)
+        {
+            scheme.error
+        } else {
+            scheme.warning
+        };
+        filter_line2.push_span(Span::raw("  │  "));
+        filter_line2.push_span(Span::styled(
+            format!("⚡ {} conflicts", report.issues.len()),
+            Style::default().fg(color),
+        ));
+    }
 
     let filter_bar = Paragraph::new(vec![filter_line1, filter_line2]);
     frame.render_widget(filter_bar, chunks[0]);
@@ -101,7 +135,7 @@ fn render_license_list(
         .iter()
         .enumerate()
         .map(|(i, (license, count, category))| {
-            let cat_color = scheme.license_color(category);
+            let cat_color = category_color(*category);
 
             // Show distribution bar in count column
             let max_count = license_data.first().map_or(1, |d| d.1.max(1));
@@ -116,7 +150,10 @@ fn render_license_list(
             // Highlight copyleft/unknown licenses
             let license_style = if i == app.license_state.selected {
                 Style::default()
-            } else if category == "Unknown" || category == "Proprietary" {
+            } else if matches!(
+                category,
+                LicenseCategory::Unknown | LicenseCategory::Proprietary
+            ) {
                 Style::default().fg(scheme.text_muted)
             } else {
                 Style::default()
@@ -126,7 +163,11 @@ fn render_license_list(
                 Cell::from(Span::styled(license.as_str(), license_style)),
                 Cell::from(count_cell),
                 Cell::from(Span::styled(
-                    category.as_str(),
+                    format!(
+                        "{} {}",
+                        crate::tui::shared::licenses::category_glyph(*category),
+                        category.as_str()
+                    ),
                     Style::default().fg(cat_color),
                 )),
             ])
@@ -188,11 +229,29 @@ fn render_license_list(
     }
 }
 
+/// Pairwise compatibility of the selected license against every other
+/// distinct license in the SBOM. Runs O(unique) `from_spdx` parses per
+/// selected-pane render; the full O(unique^2) report is cached separately on
+/// `LicenseViewState::compat_report`.
+fn selected_license_conflicts(
+    selected: &str,
+    license_data: &[(String, usize, LicenseCategory)],
+) -> Vec<(String, crate::tui::license_utils::CompatibilityResult)> {
+    license_data
+        .iter()
+        .filter(|(l, _, _)| l != selected && l != "Unknown")
+        .filter_map(|(l, _, _)| {
+            let res = crate::tui::license_utils::check_compatibility(selected, l);
+            (!res.compatible || res.score < 70).then(|| (l.clone(), res))
+        })
+        .collect()
+}
+
 fn render_license_details(
     frame: &mut Frame,
     area: Rect,
     app: &mut ViewApp,
-    license_data: &[(String, usize, String)],
+    license_data: &[(String, usize, LicenseCategory)],
 ) {
     let scheme = colors();
 
@@ -233,6 +292,56 @@ fn render_license_details(
 
         // License characteristics
         lines.extend(crate::tui::shared::licenses::render_license_characteristics_lines(license));
+
+        // Compatibility against the other licenses in this SBOM (the engine
+        // computes pairwise SPDX conflicts; view mode previously discarded them)
+        let distinct = license_data
+            .iter()
+            .filter(|(l, _, _)| l != "Unknown")
+            .count();
+        // Height-gated: at 80x24 the header block already fills the panel, so
+        // the section would render as a dangling header with its verdict (and
+        // the component list) below the unscrollable fold — the conflict badge
+        // in the list header carries the signal at small sizes.
+        if license != "Unknown" && distinct >= 2 && area.height >= 20 {
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                "Compatibility:",
+                Style::default().fg(scheme.primary).bold(),
+            ));
+            let conflicts = selected_license_conflicts(license, license_data);
+            if conflicts.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("  ✓ ", Style::default().fg(scheme.success)),
+                    Span::styled(
+                        format!("No conflicts with {} other licenses", distinct - 1),
+                        Style::default().fg(scheme.success),
+                    ),
+                ]));
+            } else {
+                for (other, res) in conflicts.iter().take(3) {
+                    let (icon, color) = if res.compatible {
+                        ("⚠", scheme.warning)
+                    } else {
+                        ("✗", scheme.error)
+                    };
+                    let first_warning = res.warnings.first().map_or("", |w| w.as_str());
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {icon} "), Style::default().fg(color)),
+                        Span::styled(
+                            format!("vs {other}: {first_warning}"),
+                            Style::default().fg(color),
+                        ),
+                    ]));
+                }
+                if conflicts.len() > 3 {
+                    lines.push(Line::styled(
+                        format!("  … and {} more", conflicts.len() - 3),
+                        Style::default().fg(scheme.muted),
+                    ));
+                }
+            }
+        }
 
         lines.push(Line::from(""));
 
@@ -358,7 +467,7 @@ fn render_license_details(
 fn render_distribution_overview(
     frame: &mut Frame,
     area: Rect,
-    license_data: &[(String, usize, String)],
+    license_data: &[(String, usize, LicenseCategory)],
 ) {
     let scheme = colors();
 
@@ -382,10 +491,10 @@ fn render_distribution_overview(
     )]));
     lines.push(Line::from(""));
 
-    // Category breakdown
-    let mut cat_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    // Category breakdown, iterated in the enum's risk-gradient order.
+    let mut cat_counts: BTreeMap<LicenseCategory, usize> = BTreeMap::new();
     for (_, count, category) in license_data {
-        *cat_counts.entry(category.as_str()).or_insert(0) += count;
+        *cat_counts.entry(*category).or_insert(0) += count;
     }
     let total: usize = cat_counts.values().sum();
 
@@ -397,7 +506,8 @@ fn render_distribution_overview(
         };
         let bar_width = (pct as f64 / 100.0 * 20.0).ceil() as usize;
         let bar = "█".repeat(bar_width);
-        let cat_color = scheme.license_color(cat);
+        let cat_color = category_color(*cat);
+        let cat = cat.as_str();
 
         lines.push(Line::from(vec![
             Span::styled(
@@ -444,11 +554,11 @@ fn render_distribution_overview(
 }
 
 /// Build license data from a ViewApp (public for cross-module access).
-pub fn build_license_data_from_app(app: &ViewApp) -> Vec<(String, usize, String)> {
+pub fn build_license_data_from_app(app: &ViewApp) -> Vec<(String, usize, LicenseCategory)> {
     build_license_data(app)
 }
 
-fn build_license_data(app: &ViewApp) -> Vec<(String, usize, String)> {
+fn build_license_data(app: &ViewApp) -> Vec<(String, usize, LicenseCategory)> {
     let mut license_map: HashMap<String, usize> = HashMap::new();
 
     for comp in app.sbom.components.values() {
@@ -464,7 +574,7 @@ fn build_license_data(app: &ViewApp) -> Vec<(String, usize, String)> {
     let mut data: Vec<_> = license_map
         .into_iter()
         .map(|(license, count)| {
-            let category = categorize_license(&license);
+            let category = crate::tui::license_utils::LicenseInfo::from_spdx(&license).category;
             (license, count, category)
         })
         .collect();
@@ -519,16 +629,25 @@ pub fn get_first_component_id_for_license(app: &ViewApp, license: &str) -> Optio
 }
 
 /// Phase 4: Compute risk summary counts for filter bar.
-fn compute_risk_summary(license_data: &[(String, usize, String)]) -> (usize, usize, usize) {
+///
+/// Matches on the enum exhaustively — the previous string match compared
+/// against `"Strong Copyleft"`, which `LicenseCategory::StrongCopyleft`
+/// never produces (`as_str()` is `"Copyleft"`), so every GPL component was
+/// silently counted as "unknown".
+fn compute_risk_summary(
+    license_data: &[(String, usize, LicenseCategory)],
+) -> (usize, usize, usize) {
     let mut permissive = 0usize;
     let mut copyleft = 0usize;
     let mut unknown = 0usize;
 
     for (_, count, category) in license_data {
-        match category.as_str() {
-            "Permissive" | "Public Domain" => permissive += count,
-            "Weak Copyleft" | "Strong Copyleft" | "Network Copyleft" => copyleft += count,
-            _ => unknown += count,
+        match category {
+            LicenseCategory::Permissive | LicenseCategory::PublicDomain => permissive += count,
+            LicenseCategory::WeakCopyleft
+            | LicenseCategory::StrongCopyleft
+            | LicenseCategory::NetworkCopyleft => copyleft += count,
+            LicenseCategory::Proprietary | LicenseCategory::Unknown => unknown += count,
         }
     }
 
@@ -620,5 +739,58 @@ fn component_type_symbol(component_type: &str) -> &'static str {
         "Firmware" => "W",
         "Data" => "D",
         _ => "·",
+    }
+}
+
+#[cfg(test)]
+mod risk_summary_tests {
+    use super::*;
+
+    fn entry(expr: &str, count: usize) -> (String, usize, LicenseCategory) {
+        let category = crate::tui::license_utils::LicenseInfo::from_spdx(expr).category;
+        (expr.to_string(), count, category)
+    }
+
+    /// Regression for the GPL miscount: the old string match compared against
+    /// "Strong Copyleft", which `as_str()` never produces ("Copyleft"), so
+    /// every GPL component fell through to the unknown bucket.
+    #[test]
+    fn gpl_and_agpl_count_as_copyleft_not_unknown() {
+        let data = vec![
+            entry("GPL-3.0-only", 3),
+            entry("AGPL-3.0-only", 2),
+            entry("CC0-1.0", 1),
+            entry("MIT", 4),
+        ];
+
+        let (permissive, copyleft, unknown) = compute_risk_summary(&data);
+        assert_eq!(permissive, 5, "MIT + CC0 (public domain)");
+        assert_eq!(copyleft, 5, "GPL (strong) + AGPL (network)");
+        assert_eq!(unknown, 0, "no unknowns in this set");
+    }
+
+    /// The engine flags GPL-2.0's patent-clause clash with Apache-2.0; the
+    /// per-selection helper must surface it (and stay quiet for MIT).
+    #[test]
+    fn selected_license_conflicts_flags_gpl2_apache_patent_clash() {
+        let data = vec![entry("GPL-2.0-only", 1), entry("Apache-2.0", 1)];
+        let conflicts = selected_license_conflicts("Apache-2.0", &data);
+        assert_eq!(conflicts.len(), 1, "exactly one conflicting pair");
+        assert_eq!(conflicts[0].0, "GPL-2.0-only");
+        assert!(
+            conflicts[0]
+                .1
+                .warnings
+                .first()
+                .is_some_and(|w| w.contains("patent clauses")),
+            "first warning must name the patent clash: {:?}",
+            conflicts[0].1.warnings
+        );
+
+        let data = vec![entry("MIT", 1), entry("Apache-2.0", 1)];
+        assert!(
+            selected_license_conflicts("MIT", &data).is_empty(),
+            "MIT vs Apache-2.0 is conflict-free"
+        );
     }
 }

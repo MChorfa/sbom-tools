@@ -9,7 +9,7 @@ use crate::tui::widgets::{
 };
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::io::{self, stdout};
 
@@ -118,12 +118,19 @@ fn render(frame: &mut Frame, app: &mut ViewApp) {
 
     // Render overlays
     if app.show_help {
-        let shortcuts_state = crate::tui::app::ShortcutsOverlayState {
+        let mut shortcuts_state = crate::tui::app::ShortcutsOverlayState {
             visible: true,
             context: crate::tui::app::ShortcutsContext::View,
             profile: Some(app.bom_profile),
+            // ViewApp has no ViewState impls yet (documented partial scope).
+            tab_title: None,
+            tab_items: Vec::new(),
+            scroll: app.help_scroll,
+            max_scroll: 0,
         };
-        crate::tui::views::render_shortcuts_overlay(frame, &shortcuts_state);
+        crate::tui::views::render_shortcuts_overlay(frame, &mut shortcuts_state);
+        app.help_scroll = shortcuts_state.scroll;
+        app.help_max_scroll = shortcuts_state.max_scroll;
     }
 
     if app.search_state.active {
@@ -159,7 +166,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &ViewApp) {
     );
 
     let profile_color = if app.bom_profile == crate::model::BomProfile::Cbom {
-        Color::Cyan
+        colors().primary
     } else {
         colors().text_muted
     };
@@ -183,46 +190,74 @@ fn render_header(frame: &mut Frame, area: Rect, app: &ViewApp) {
     frame.render_widget(header, area);
 }
 
-fn render_tabs(frame: &mut Frame, area: Rect, app: &ViewApp) {
+fn render_tabs(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
+    use unicode_width::UnicodeWidthStr;
+
     let available_tabs = ViewTab::tabs_for_profile(app.bom_profile);
-
-    let titles: Vec<Line> = available_tabs
-        .iter()
-        .enumerate()
-        .map(|(i, tab)| {
-            let is_active = *tab == app.active_tab;
-            let key_style = if is_active {
-                Style::default().fg(colors().accent).bold()
-            } else {
-                Style::default().fg(colors().muted)
-            };
-            let title_style = if is_active {
-                Style::default().fg(colors().accent).bold()
-            } else {
-                Style::default().fg(colors().text_muted)
-            };
-
-            Line::from(vec![
-                Span::styled(format!("[{}]", i + 1), key_style),
-                Span::styled(format!(" {} ", tab.title()), title_style),
-            ])
-        })
-        .collect();
 
     let selected_idx = available_tabs
         .iter()
         .position(|t| *t == app.active_tab)
         .unwrap_or(0);
 
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(colors().border)),
-        )
-        .highlight_style(Style::default().fg(colors().accent))
-        .select(selected_idx)
-        .divider(Span::styled(" │ ", Style::default().fg(colors().muted)));
+    // Window the entries against the real width (mirrors diff mode; the
+    // ratatui Tabs widget truncated silently with no indicator).
+    let widths: Vec<u16> = available_tabs
+        .iter()
+        .enumerate()
+        .map(|(i, tab)| {
+            UnicodeWidthStr::width(format!("[{}] {} ", i + 1, tab.title()).as_str()) as u16
+        })
+        .collect();
+    let window = crate::tui::shared::tab_window(&widths, 3, selected_idx, area.width);
+    app.tab_window = window;
+
+    let mut spans: Vec<Span> = Vec::new();
+    if window.clipped_left {
+        spans.push(Span::styled(
+            "\u{ab} ",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+    for (rel, (i, tab)) in available_tabs
+        .iter()
+        .enumerate()
+        .skip(window.start)
+        .take(window.end - window.start)
+        .enumerate()
+    {
+        if rel > 0 {
+            spans.push(Span::styled(
+                " \u{2502} ",
+                Style::default().fg(colors().muted),
+            ));
+        }
+        let is_active = *tab == app.active_tab;
+        let key_style = if is_active {
+            Style::default().fg(colors().accent).bold()
+        } else {
+            Style::default().fg(colors().muted)
+        };
+        let title_style = if is_active {
+            Style::default().fg(colors().accent).bold()
+        } else {
+            Style::default().fg(colors().text_muted)
+        };
+        spans.push(Span::styled(format!("[{}]", i + 1), key_style));
+        spans.push(Span::styled(format!(" {} ", tab.title()), title_style));
+    }
+    if window.clipped_right {
+        spans.push(Span::styled(
+            " \u{bb}",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+
+    let tabs = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(colors().border)),
+    );
 
     frame.render_widget(tabs, area);
 }
@@ -235,11 +270,11 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
         let metrics = crate::quality::CryptographyMetrics::from_sbom(&app.sbom);
         let readiness = metrics.quantum_readiness_score();
         let q_color = if readiness >= 80.0 {
-            Color::Green
+            colors().success
         } else if readiness >= 40.0 {
-            Color::Yellow
+            colors().warning
         } else {
-            Color::Red
+            colors().error
         };
         let mut s = vec![
             Span::styled(" Algo: ", Style::default().fg(colors().text_muted)),
@@ -270,7 +305,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
             s.push(Span::styled(" │ ", Style::default().fg(colors().muted)));
             s.push(Span::styled(
                 format!("Weak: {}", metrics.weak_algorithm_count),
-                Style::default().fg(Color::Red).bold(),
+                Style::default().fg(colors().critical).bold(),
             ));
         }
         s
@@ -386,16 +421,39 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let tab_name = app.active_tab.as_str();
 
     let hints = FooterHints::for_view_tab(tab_name);
-    let mut footer_spans = render_footer_hints(&hints);
 
-    // Append copy preview: [y] copy <value>
-    if let Some(yank_text) = super::events::get_yank_text(app) {
-        let truncated = if yank_text.len() > 30 {
-            let end = crate::tui::shared::floor_char_boundary(&yank_text, 27);
-            format!("{}...", &yank_text[..end])
+    // Budget the row (mirrors diff mode; the logic lives in theme.rs).
+    let yank_text = super::events::get_yank_text(app);
+    let yank_suffix = yank_text.map(|t| {
+        if t.len() > 30 {
+            let end = crate::tui::shared::floor_char_boundary(&t, 27);
+            format!("{}...", &t[..end])
         } else {
-            yank_text
+            t
+        }
+    });
+    let yank_width = yank_suffix.as_ref().map_or(0, |t| {
+        use unicode_width::UnicodeWidthStr;
+        10 + UnicodeWidthStr::width(t.as_str()) as u16
+    });
+
+    let (mut kept, mut elided) =
+        crate::tui::theme::fit_footer_hints(&hints, area.width.saturating_sub(yank_width));
+    // If even the surviving hints plus the yank preview overflow, drop the
+    // yank FIRST and re-offer its width to the tab-specific hints.
+    let elision_w = if elided { 2 } else { 0 };
+    let yank_suffix =
+        if crate::tui::theme::footer_hints_width(&kept) + elision_w + yank_width > area.width {
+            let refit = crate::tui::theme::fit_footer_hints(&hints, area.width);
+            kept = refit.0;
+            elided = refit.1;
+            None
+        } else {
+            yank_suffix
         };
+    let mut footer_spans = render_footer_hints(&kept, elided);
+
+    if let Some(truncated) = yank_suffix {
         footer_spans.push(Span::styled(" ", Style::default()));
         footer_spans.push(Span::styled("[y]", Style::default().fg(colors().accent)));
         footer_spans.push(Span::styled(
@@ -426,15 +484,28 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
     let cursor_char = "│";
 
+    let mode_label = match search.mode {
+        crate::tui::app_states::SearchMode::Substring => "[substring]",
+        crate::tui::app_states::SearchMode::Regex => "[regex]",
+    };
     let search_input = Paragraph::new(Line::from(vec![
-        Span::styled("/", Style::default().fg(colors().primary)),
+        Span::styled("/ ", Style::default().fg(colors().primary)),
+        Span::styled(
+            format!("{mode_label} "),
+            Style::default().fg(colors().text_muted),
+        ),
         Span::styled(&search.query, Style::default().fg(colors().text)),
         Span::styled(cursor_char, Style::default().fg(colors().accent)),
+        if search.search_error.is_some() {
+            Span::styled("  (invalid pattern)", Style::default().fg(colors().error))
+        } else {
+            Span::raw("")
+        },
     ]))
     .block(
         Block::default()
             .title(format!(
-                " Search ({} results) [↑↓] select [Enter] go [Esc] cancel ",
+                " Search ({} results) [\u{2191}\u{2193}] select [Enter] go [^R] regex [Esc] cancel ",
                 search.results.len()
             ))
             .title_style(Style::default().fg(colors().primary))
@@ -564,7 +635,13 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             Style::default().fg(colors().primary).bold(),
         )]),
         Line::from(vec![
-            Span::styled("  ✓ ■ ", Style::default().fg(colors().permissive)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("permissive")
+                ),
+                Style::default().fg(colors().permissive),
+            ),
             Span::styled("Permissive  ", Style::default().fg(colors().text)),
             Span::styled(
                 "(MIT, Apache, BSD)",
@@ -572,17 +649,35 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled("  © ■ ", Style::default().fg(colors().copyleft)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("copyleft")
+                ),
+                Style::default().fg(colors().copyleft),
+            ),
             Span::styled("Copyleft    ", Style::default().fg(colors().text)),
             Span::styled("(GPL, AGPL)", Style::default().fg(colors().text_muted)),
         ]),
         Line::from(vec![
-            Span::styled("  ◐ ■ ", Style::default().fg(colors().weak_copyleft)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("weak copyleft")
+                ),
+                Style::default().fg(colors().weak_copyleft),
+            ),
             Span::styled("Weak Copyleft ", Style::default().fg(colors().text)),
             Span::styled("(LGPL, MPL)", Style::default().fg(colors().text_muted)),
         ]),
         Line::from(vec![
-            Span::styled("  ⊘ ■ ", Style::default().fg(colors().proprietary)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("proprietary")
+                ),
+                Style::default().fg(colors().proprietary),
+            ),
             Span::styled("Proprietary ", Style::default().fg(colors().text)),
             Span::styled("(Commercial)", Style::default().fg(colors().text_muted)),
         ]),

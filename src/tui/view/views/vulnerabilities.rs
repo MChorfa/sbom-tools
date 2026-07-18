@@ -12,6 +12,14 @@ use ratatui::{
 };
 
 pub fn render_vulnerabilities(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
+    // Ensure the cache before ANY pane renders: the stats header reads it for
+    // the triage counts, and the previous placement (inside render_vuln_content)
+    // silently showed 0 on the first frame.
+    if !app.vuln_state.is_cache_valid() {
+        let cache = build_vuln_cache(app);
+        app.vuln_state.set_cache(cache);
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -42,11 +50,29 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &ViewApp) {
     .filter(|&&c| c > 0)
     .count();
 
-    // If only one severity (or zero) has data, show compact summary instead of 5 empty cards
-    if non_zero_severities <= 1 && stats.unknown_count > 0 {
+    // A single populated severity renders rows of empty '0' cards — show the
+    // compact summary instead (all-Critical/all-High SBOMs included, not just
+    // unknown-dominated ones). Zero-vuln SBOMs keep the full-card layout.
+    if stats.vuln_count > 0 && non_zero_severities <= 1 {
         render_stats_compact(frame, area, app);
         return;
     }
+
+    // With vulnerabilities present, reserve the bottom row of the stats area
+    // for the triage summary; the cards compress to 5 rows.
+    let compressed = stats.vuln_count > 0;
+    let cards_area = if compressed {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(4), Constraint::Length(1)])
+            .split(area);
+        if let Some(cache) = app.vuln_state.cached_data.as_ref() {
+            frame.render_widget(Paragraph::new(triage_summary_line(cache)), rows[1]);
+        }
+        rows[0]
+    } else {
+        area
+    };
 
     let has_unknown = stats.unknown_count > 0;
 
@@ -60,7 +86,7 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Constraint::Percentage(20),
                 Constraint::Percentage(20),
             ])
-            .split(area)
+            .split(cards_area)
     } else {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -70,7 +96,7 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Constraint::Percentage(25),
                 Constraint::Percentage(25),
             ])
-            .split(area)
+            .split(cards_area)
     };
 
     render_severity_card(
@@ -80,6 +106,7 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &ViewApp) {
         stats.critical_count,
         total,
         scheme.critical,
+        compressed,
     );
     render_severity_card(
         frame,
@@ -88,6 +115,7 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &ViewApp) {
         stats.high_count,
         total,
         scheme.high,
+        compressed,
     );
     render_severity_card(
         frame,
@@ -96,8 +124,17 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &ViewApp) {
         stats.medium_count,
         total,
         scheme.medium,
+        compressed,
     );
-    render_severity_card(frame, chunks[3], "LOW", stats.low_count, total, scheme.low);
+    render_severity_card(
+        frame,
+        chunks[3],
+        "LOW",
+        stats.low_count,
+        total,
+        scheme.low,
+        compressed,
+    );
 
     if has_unknown {
         render_severity_card(
@@ -107,8 +144,40 @@ fn render_stats(frame: &mut Frame, area: Rect, app: &ViewApp) {
             stats.unknown_count,
             total,
             scheme.muted,
+            compressed,
         );
     }
+}
+
+/// One-line triage summary answering the three questions that drive triage:
+/// actively exploited (KEV)? fix available? likely exploited soon (EPSS)?
+/// Counts are post-filter/post-dedupe — they describe the visible rows.
+fn triage_summary_line(cache: &VulnCache) -> Line<'static> {
+    let scheme = colors();
+    let on = |n: usize, color: ratatui::style::Color| {
+        if n > 0 {
+            Style::default().fg(color).bold()
+        } else {
+            Style::default().fg(scheme.muted)
+        }
+    };
+    Line::from(vec![
+        Span::styled(
+            format!("\u{26a1} KEV {}", cache.kev_count),
+            on(cache.kev_count, scheme.kev()),
+        ),
+        Span::styled(" [k]", Style::default().fg(scheme.accent)),
+        Span::styled(" \u{b7} ", Style::default().fg(scheme.muted)),
+        Span::styled(
+            format!("Fixable {}", cache.fixable_count),
+            on(cache.fixable_count, scheme.success),
+        ),
+        Span::styled(" \u{b7} ", Style::default().fg(scheme.muted)),
+        Span::styled(
+            format!("EPSS\u{2265}10% {}", cache.high_epss_count),
+            on(cache.high_epss_count, scheme.warning),
+        ),
+    ])
 }
 
 /// Compact stats when all/most vulns are same severity (e.g., all UNKNOWN).
@@ -129,11 +198,20 @@ fn render_stats_compact(frame: &mut Frame, area: Rect, app: &ViewApp) {
         ("Unknown", stats.unknown_count, scheme.muted)
     };
 
-    // Split into summary (left) and top components (right)
+    // Reserve a full-width bottom row for the triage summary (it does not fit
+    // inside the 35%-wide summary card at 80 cols), then split the rest into
+    // summary (left) and top components (right).
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(1)])
+        .split(area);
+    if let Some(cache) = app.vuln_state.cached_data.as_ref() {
+        frame.render_widget(Paragraph::new(triage_summary_line(cache)), rows[1]);
+    }
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(area);
+        .split(rows[0]);
 
     // Left: summary card
     let total_str = crate::tui::widgets::format_count(stats.vuln_count);
@@ -253,6 +331,7 @@ fn render_severity_card(
     count: usize,
     total: usize,
     color: Color,
+    compressed: bool,
 ) {
     let scheme = colors();
     let _pct = if total > 0 {
@@ -268,15 +347,19 @@ fn render_severity_card(
         0
     };
 
-    let lines = vec![
-        Line::from(vec![Span::styled(
-            format!(" {label} "),
-            Style::default()
-                .fg(scheme.severity_badge_fg(label))
-                .bg(color)
-                .bold(),
-        )]),
-        Line::from(""),
+    let mut lines = vec![Line::from(vec![Span::styled(
+        format!(" {label} "),
+        Style::default()
+            .fg(scheme.severity_badge_fg(label))
+            .bg(color)
+            .bold(),
+    )])];
+    // Compressed cards (a row was given up to the triage summary) drop the
+    // spacer so count + bar stay on screen; full-height cards keep it.
+    if !compressed {
+        lines.push(Line::from(""));
+    }
+    lines.extend(vec![
         Line::from(vec![Span::styled(
             count.to_string(),
             Style::default()
@@ -291,7 +374,7 @@ fn render_severity_card(
                 Style::default().fg(scheme.muted),
             ),
         ]),
-    ];
+    ]);
 
     let card = Paragraph::new(lines)
         .block(
@@ -324,7 +407,10 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
         "Off"
     };
 
-    let mut spans = vec![
+    // Two-row bar into the already-reserved 2-row area: state badges on row 1,
+    // key hints on row 2. The previous single ~185-col line clipped roughly
+    // half its controls at 80/120 cols while row 2 sat blank.
+    let mut state_spans = vec![
         Span::styled("Filter: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {filter_label} "),
@@ -333,7 +419,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .bg(scheme.accent)
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("KEV: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(
@@ -353,7 +439,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 })
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("Sort: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {} ", app.vuln_state.sort_by.label()),
@@ -362,7 +448,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .bg(scheme.primary)
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("Dedupe: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {dedupe_label} "),
@@ -375,7 +461,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 })
                 .bold(),
         ),
-        Span::raw("  "),
+        Span::raw(" "),
         Span::styled("Group: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {group_label} "),
@@ -384,55 +470,50 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 .bg(scheme.secondary)
                 .bold(),
         ),
-        Span::raw("  │  "),
-        Span::styled("[f]", Style::default().fg(scheme.accent)),
-        Span::raw(" filter  "),
-        Span::styled("[k]", Style::default().fg(scheme.accent)),
-        Span::raw(" kev  "),
-        Span::styled("[s]", Style::default().fg(scheme.accent)),
-        Span::raw(" sort  "),
-        Span::styled("[d]", Style::default().fg(scheme.accent)),
-        Span::raw(" dedupe  "),
-        Span::styled("[g]", Style::default().fg(scheme.accent)),
-        Span::raw(" group  "),
-        Span::styled("[/]", Style::default().fg(scheme.accent)),
-        Span::raw(" search  "),
-        Span::styled("[E]", Style::default().fg(scheme.accent)),
-        Span::raw(" expand  "),
-        Span::styled("[C]", Style::default().fg(scheme.accent)),
-        Span::raw(" collapse  "),
-        Span::styled("[Tab]", Style::default().fg(scheme.accent)),
-        Span::raw(" next group"),
     ];
 
-    // Show active search query
+    // Show active search query on the state row
     if app.vuln_state.search_active {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
+        state_spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
+        state_spans.push(Span::styled(
             format!("/{}", app.vuln_state.search_query),
             Style::default().fg(scheme.accent).bold(),
         ));
-        spans.push(Span::styled("█", Style::default().fg(scheme.accent)));
+        state_spans.push(Span::styled("█", Style::default().fg(scheme.accent)));
     } else if !app.vuln_state.search_query.is_empty() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
+        state_spans.push(Span::styled(" │ ", Style::default().fg(scheme.muted)));
+        state_spans.push(Span::styled(
             format!("\"{}\"", app.vuln_state.search_query),
             Style::default().fg(scheme.accent),
         ));
     }
 
-    let para = Paragraph::new(Line::from(spans));
+    // Hint row: 78 cols measured, so nothing clips at the 80-col minimum.
+    // "[/] search" lives in the global footer already.
+    let hint_spans = vec![
+        Span::styled("[f]", Style::default().fg(scheme.accent)),
+        Span::raw(" filter "),
+        Span::styled("[k]", Style::default().fg(scheme.accent)),
+        Span::raw(" kev "),
+        Span::styled("[s]", Style::default().fg(scheme.accent)),
+        Span::raw(" sort "),
+        Span::styled("[d]", Style::default().fg(scheme.accent)),
+        Span::raw(" dedupe "),
+        Span::styled("[g]", Style::default().fg(scheme.accent)),
+        Span::raw(" group "),
+        Span::styled("[E/C]", Style::default().fg(scheme.accent)),
+        Span::raw(" fold "),
+        Span::styled("[Tab]", Style::default().fg(scheme.accent)),
+        Span::raw(" next group"),
+    ];
+
+    let para = Paragraph::new(vec![Line::from(state_spans), Line::from(hint_spans)]);
     frame.render_widget(para, area);
 }
 
 /// Main content area with table and detail panel
 fn render_vuln_content(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
-    // Use cached data if available, otherwise rebuild
-    if !app.vuln_state.is_cache_valid() {
-        let cache = build_vuln_cache(app);
-        app.vuln_state.set_cache(cache);
-    }
-
+    // Cache is ensured at the top of render_vulnerabilities.
     // Clone cache data to avoid borrow conflicts (cache is already computed, clone is cheap for metadata)
     let Some(cache) = app.vuln_state.cached_data.clone() else {
         return;
@@ -919,9 +1000,18 @@ pub(crate) fn build_vuln_cache(app: &ViewApp) -> VulnCache {
         sorted
     };
 
-    // Compute aggregate flags for column visibility
-    let has_any_kev = vulns.iter().any(|v| v.is_kev);
-    let has_any_fix = vulns.iter().any(|v| v.fixed_version.is_some());
+    // Compute aggregate flags for column visibility + triage counts
+    let kev_count = vulns.iter().filter(|v| v.is_kev).count();
+    let fixable_count = vulns.iter().filter(|v| v.fixed_version.is_some()).count();
+    let high_epss_count = vulns
+        .iter()
+        .filter(|v| {
+            v.epss_score
+                .is_some_and(|e| e >= crate::tui::shared::vulnerabilities::HIGH_EPSS_THRESHOLD)
+        })
+        .count();
+    let has_any_kev = kev_count > 0;
+    let has_any_fix = fixable_count > 0;
     let has_any_date = vulns.iter().any(|v| v.published.is_some());
     let has_any_version = vulns.iter().any(|v| !v.affected_versions.is_empty());
 
@@ -936,6 +1026,9 @@ pub(crate) fn build_vuln_cache(app: &ViewApp) -> VulnCache {
         common_desc_prefix,
         top_components,
         has_any_kev,
+        kev_count,
+        fixable_count,
+        high_epss_count,
         has_any_fix,
         has_any_date,
         has_any_version,
@@ -1416,7 +1509,7 @@ fn render_vuln_table_panel(
                 // EPSS badge — only for higher-probability vulns to keep the ID column
                 // readable; band colors shared with diff-mode + CLI markdown.
                 if let Some(epss) = v.epss_score
-                    && epss >= 0.1
+                    && epss >= crate::tui::shared::vulnerabilities::HIGH_EPSS_THRESHOLD
                 {
                     id_spans.push(Span::styled(
                         format!("EPSS {:.0}%", epss * 100.0),
@@ -3550,6 +3643,11 @@ pub struct VulnCache {
     /// Whether any vuln is in KEV catalog
     #[allow(dead_code)]
     pub has_any_kev: bool,
+    /// Post-filter/post-dedupe triage counts — they describe the rows the
+    /// list currently shows, not the raw SBOM totals.
+    pub kev_count: usize,
+    pub fixable_count: usize,
+    pub high_epss_count: usize,
     /// Whether any vuln has a fix available (for column visibility)
     pub has_any_fix: bool,
     /// Whether any vuln has a published date (for age column)
@@ -3898,5 +3996,64 @@ mod tests {
         app.vuln_state.toggle_kev_filter();
         assert!(!app.vuln_state.filter_kev);
         assert_eq!(build_vuln_cache(&app).vulns.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod triage_tests {
+    use super::*;
+    use crate::model::{
+        CanonicalId, Component, NormalizedSbom, Severity, VulnerabilityRef, VulnerabilitySource,
+    };
+    use crate::tui::view::app::ViewApp;
+
+    fn triage_app() -> ViewApp {
+        let mut sbom = NormalizedSbom::default();
+
+        let mut kev_comp = Component::new("kev-lib".to_string(), "kev-ref".to_string())
+            .with_version("1.0.0".to_string());
+        let mut kev_vuln =
+            VulnerabilityRef::new("CVE-2024-0001".to_string(), VulnerabilitySource::Nvd);
+        kev_vuln.severity = Some(Severity::Critical);
+        kev_vuln.is_kev = true;
+        kev_vuln.epss_score = Some(0.73);
+        kev_comp.vulnerabilities.push(kev_vuln);
+        sbom.components
+            .insert(CanonicalId::from_name_version("kev-lib", None), kev_comp);
+
+        let mut fix_comp = Component::new("fix-lib".to_string(), "fix-ref".to_string())
+            .with_version("2.0.0".to_string());
+        let mut fix_vuln =
+            VulnerabilityRef::new("CVE-2024-0002".to_string(), VulnerabilitySource::Nvd);
+        fix_vuln.severity = Some(Severity::High);
+        fix_vuln.remediation = Some(crate::model::Remediation {
+            remediation_type: crate::model::RemediationType::Upgrade,
+            description: None,
+            fixed_version: Some("2.1.0".to_string()),
+        });
+        fix_comp.vulnerabilities.push(fix_vuln);
+        sbom.components
+            .insert(CanonicalId::from_name_version("fix-lib", None), fix_comp);
+
+        ViewApp::new(sbom, "", crate::model::BomProfile::Sbom)
+    }
+
+    /// The cache counts the three triage signals over the visible rows and
+    /// follows the active filter.
+    #[test]
+    fn build_vuln_cache_counts_triage_signals() {
+        let mut app = triage_app();
+        let cache = build_vuln_cache(&app);
+        assert_eq!(cache.kev_count, 1);
+        assert_eq!(cache.high_epss_count, 1, "0.73 >= 0.1");
+        assert_eq!(cache.fixable_count, 1);
+
+        app.vuln_state.filter_kev = true;
+        let filtered = build_vuln_cache(&app);
+        assert_eq!(filtered.kev_count, 1);
+        assert_eq!(
+            filtered.fixable_count, 0,
+            "the fixable vuln is not KEV, so the filtered count drops"
+        );
     }
 }

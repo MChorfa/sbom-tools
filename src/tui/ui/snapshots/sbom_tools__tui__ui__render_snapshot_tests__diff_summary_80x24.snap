@@ -4,25 +4,25 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5
+[1] Summary  │ [2] Components  │ [3] Dependencies  │ [4] Licenses  »
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌ Summary ─────────────────────────────────────────────────────────────────────┐
 │ High Risk   Score: 53.5  │  15 changes, 3 major bumps                        │
+│Comp +4 -4 ~5 │ Deps +0 -0 │ Vuln ▲0 ▼0 │ Lic +0 -0                           │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ Components ──────┐┌ Dependencies ────┐┌ Vulnerabilities ─┐┌ Licenses ────────┐
-│ + ADDED      4   ││ + ADDED     0    ││ ▲ NEW       0    ││ New:      0      │
-└──────────────────┘└──────────────────┘└──────────────────┘└──────────────────┘
-┌ Matching ────────────────────────────────────┐┌ Security Policy ─────────────┐
-└──────────────────────────────────────────────┘└──────────────────────────────┘
-┌ Changes by Ecosystem ────────────────┐┌ SBOM Comparison ─────────────────────┐
-│██12███    1                          ││                   Old     New   Delta│
-└──────────────────────────────────────┘└──────────────────────────────────────┘
-┌ All Changes (15) — MAJOR:3 minor:1 patch:1 +4 -4 meta:2 ─────────────────────┐
-│── Metadata Changes ──                                                        │
-│ ~ META  created: 2024-01-15T10:00:00+00:00 → 2024-06-15T10:00:00+00:00       │
-│ ~ META  primary_component_version: 1.0.0 → 2.0.0                             │
-│ ~ acme-webapp 1.0.0 → 2.0.0 MAJOR                                            │
+┌ All Changes (15) — MAJOR:3 minor:1 patch:1 +4 -4 meta:2 [1-11/16 j/k] ───────┐
+│── Metadata Changes ──                                                        ▲
+│ ~ META  created: 2024-01-15T10:00:00+00:00 → 2024-06-15T10:00:00+00:00       █
+│ ~ META  primary_component_version: 1.0.0 → 2.0.0                             █
+│ ~ acme-webapp 1.0.0 → 2.0.0 MAJOR                                            █
+│ ~ axios 0.21.1 → 1.4.0 MAJOR                                                 █
+│ ~ react 17.0.1 → 18.2.0 MAJOR                                                ║
+│ - jquery 3.5.1                                                               ║
+│ - moment 2.29.1                                                              ║
+│ - request 2.88.2                                                             ║
+│ - underscore 1.12.0                                                          ║
+│ + dayjs 1.11.7                                                               ▼
 └──────────────────────────────────────────────────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
-                  Tab switch  / search  e export  ? help  q quit
+           j/k scroll │  Tab switch  / search  e export  ? help  q quit

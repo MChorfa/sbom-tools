@@ -172,6 +172,8 @@ pub enum ThemeName {
     Light,
     /// High-contrast theme
     HighContrast,
+    /// Monochrome theme (grayscale only; forced by `NO_COLOR`)
+    Monochrome,
 }
 
 impl ThemeName {
@@ -182,6 +184,7 @@ impl ThemeName {
             Self::Dark => "dark",
             Self::Light => "light",
             Self::HighContrast => "high-contrast",
+            Self::Monochrome => "monochrome",
         }
     }
 }
@@ -200,6 +203,7 @@ impl std::str::FromStr for ThemeName {
             "dark" => Ok(Self::Dark),
             "light" => Ok(Self::Light),
             "high-contrast" | "highcontrast" | "hc" => Ok(Self::HighContrast),
+            "monochrome" | "mono" => Ok(Self::Monochrome),
             _ => Err(format!("unknown theme: {s}")),
         }
     }

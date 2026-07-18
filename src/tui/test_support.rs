@@ -114,3 +114,56 @@ pub(crate) fn demo_multi_diff() -> crate::diff::MultiDiffResult {
         .diff_multi(&baseline, "baseline", "demo-old.cdx.json", &targets)
         .expect("multi diff must succeed")
 }
+
+/// Build a timeline result over three versions (v1 -> v2 -> v3) so both
+/// adjacent and cumulative pairs exist. Uses the real `MultiDiffEngine`.
+pub(crate) fn demo_timeline() -> crate::diff::TimelineResult {
+    let v1 = parse_sbom_str(DEMO_OLD).expect("v1 fixture must parse");
+    let v2 = parse_sbom_str(DEMO_NEW).expect("v2 fixture must parse");
+    let v3 = parse_sbom_str(AIBOM_BSI).expect("v3 fixture must parse");
+    let sboms: [(&NormalizedSbom, &str, &str); 3] = [
+        (&v1, "v1", "demo-old.cdx.json"),
+        (&v2, "v2", "demo-new.cdx.json"),
+        (&v3, "v3", "aibom.cdx.json"),
+    ];
+    let mut engine = crate::diff::MultiDiffEngine::new();
+    engine.timeline(&sboms).expect("timeline must succeed")
+}
+
+/// Eight synthetic SBOMs (alternating demo-old/demo-new, names v1..v8) so the
+/// matrix column viewport actually clips at 80 cols and clustering yields
+/// interleaved members.
+pub(crate) fn demo_matrix_large() -> crate::diff::MatrixResult {
+    let a = parse_sbom_str(DEMO_OLD).expect("fixture must parse");
+    let b = parse_sbom_str(DEMO_NEW).expect("fixture must parse");
+    let names = ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"];
+    let sboms: Vec<(&NormalizedSbom, &str, &str)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (if i % 2 == 0 { &a } else { &b }, *name, "demo.cdx.json"))
+        .collect();
+    let mut engine = crate::diff::MultiDiffEngine::new();
+    // 0.8: identical-content SBOMs (similarity 1.0) cluster together while
+    // the ~0.54 cross-pairs stay apart, yielding two interleaved clusters.
+    engine
+        .matrix(&sboms, Some(0.8))
+        .expect("matrix must succeed")
+}
+
+/// Build an NxN matrix result over the same three fixtures, with a similarity
+/// threshold so `clustering` is populated (needed by the cluster-navigation
+/// tests).
+pub(crate) fn demo_matrix() -> crate::diff::MatrixResult {
+    let a = parse_sbom_str(DEMO_OLD).expect("fixture must parse");
+    let b = parse_sbom_str(DEMO_NEW).expect("fixture must parse");
+    let c = parse_sbom_str(AIBOM_BSI).expect("fixture must parse");
+    let sboms: [(&NormalizedSbom, &str, &str); 3] = [
+        (&a, "alpha", "demo-old.cdx.json"),
+        (&b, "beta", "demo-new.cdx.json"),
+        (&c, "gamma", "aibom.cdx.json"),
+    ];
+    let mut engine = crate::diff::MultiDiffEngine::new();
+    engine
+        .matrix(&sboms, Some(0.5))
+        .expect("matrix must succeed")
+}

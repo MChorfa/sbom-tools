@@ -16,6 +16,7 @@ pub mod quality;
 pub mod search;
 pub mod sidebyside;
 pub mod source;
+pub mod summary;
 pub mod timeline;
 pub mod vulnerabilities;
 
@@ -41,13 +42,16 @@ pub use overlays::{
     ShortcutsContext, ShortcutsOverlayState, ViewSwitcherState,
 };
 pub use quality::{QualityState, QualityViewMode};
-pub use search::{ChangeType, DiffSearchResult, DiffSearchState, SearchMode, VulnChangeType};
+pub use search::{
+    ChangeType, DiffSearchResult, DiffSearchState, SearchMatcher, SearchMode, VulnChangeType,
+};
 pub use sidebyside::{
     AlignedRow, AlignmentMode, ChangeTypeFilter, ScrollSyncMode, SideBySideState,
     UnifiedChangeType, UnifiedEntry,
 };
 pub use source::{SourceDiffState, SourcePanelState, SourceSide, SourceViewMode};
-pub use timeline::{TimelineComponentFilter, TimelineSortBy, TimelineState};
+pub use summary::SummaryState;
+pub use timeline::{TimelineChartMetric, TimelineComponentFilter, TimelineSortBy, TimelineState};
 pub use vulnerabilities::{
     DiffVulnItem, DiffVulnStatus, VulnFilter, VulnSort, VulnerabilitiesState,
 };

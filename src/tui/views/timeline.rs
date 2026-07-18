@@ -14,7 +14,13 @@ use ratatui::{
 };
 
 /// Render the timeline analysis view
-pub fn render_timeline(f: &mut Frame, area: Rect, result: &TimelineResult, state: &TimelineState) {
+pub fn render_timeline(
+    f: &mut Frame,
+    area: Rect,
+    result: &TimelineResult,
+    state: &TimelineState,
+    status: Option<&str>,
+) {
     let chunks = if state.show_statistics {
         Layout::default()
             .direction(Direction::Vertical)
@@ -62,7 +68,7 @@ pub fn render_timeline(f: &mut Frame, area: Rect, result: &TimelineResult, state
     render_component_history(f, main_chunks[1], result, state);
 
     // Status bar
-    render_status_bar(f, status_chunk, result, state);
+    render_status_bar(f, status_chunk, result, state, status);
 
     // Render overlays
     if state.show_version_diff_modal {
@@ -263,6 +269,34 @@ fn render_statistics_panel(f: &mut Frame, area: Rect, result: &TimelineResult) {
             Span::raw("  "),
             Span::styled("Compliance: ", Style::default().fg(scheme.text_muted)),
             Span::styled(compliance_trend_str, Style::default().fg(compliance_color)),
+            Span::raw("  "),
+            Span::styled("License \u{394}: ", Style::default().fg(scheme.text_muted)),
+            // evolution_summary.license_changes is never populated by the
+            // engine; the real churn lives on each step's diff result.
+            Span::styled(
+                result
+                    .incremental_diffs
+                    .iter()
+                    .map(|d| d.licenses.component_changes.len())
+                    .sum::<usize>()
+                    .to_string(),
+                Style::default().fg(scheme.accent),
+            ),
+            {
+                let conflicts: usize = result
+                    .incremental_diffs
+                    .iter()
+                    .map(|d| d.licenses.conflicts.len())
+                    .sum();
+                if conflicts > 0 {
+                    Span::styled(
+                        format!(" ({conflicts} conflicts)"),
+                        Style::default().fg(scheme.error),
+                    )
+                } else {
+                    Span::raw("")
+                }
+            },
         ]),
         vuln_trend_line,
     ];
@@ -277,8 +311,33 @@ fn render_statistics_panel(f: &mut Frame, area: Rect, result: &TimelineResult) {
 }
 
 fn render_timeline_bar(f: &mut Frame, area: Rect, result: &TimelineResult, state: &TimelineState) {
+    use crate::tui::app::TimelineChartMetric;
     let scheme = colors();
-    let selected = state.selected_version;
+    // Bars stay in chronological raw order (time axis); the highlights map
+    // the display-space selection back to raw indices.
+    let order = ordered_version_indices(result, state);
+    let selected = order.get(state.selected_version).copied().unwrap_or(0);
+    let compare_raw = state.compare_version.and_then(|c| order.get(c)).copied();
+
+    // Metric series: fall back to Components when a series is missing.
+    let vuln_trend = &result.evolution_summary.vulnerability_trend;
+    let dep_trend = &result.evolution_summary.dependency_trend;
+    let metric = match state.chart_metric {
+        TimelineChartMetric::Vulnerabilities if vuln_trend.len() == result.sboms.len() => {
+            TimelineChartMetric::Vulnerabilities
+        }
+        TimelineChartMetric::Dependencies if dep_trend.len() == result.sboms.len() => {
+            TimelineChartMetric::Dependencies
+        }
+        _ => TimelineChartMetric::Components,
+    };
+    let value = |i: usize| -> u64 {
+        match metric {
+            TimelineChartMetric::Components => result.sboms[i].component_count as u64,
+            TimelineChartMetric::Vulnerabilities => vuln_trend[i].counts.total() as u64,
+            TimelineChartMetric::Dependencies => dep_trend[i].total_edges as u64,
+        }
+    };
 
     // Calculate bar width based on zoom level
     let bar_width = 5 + (u16::from(state.chart_zoom) * 2);
@@ -299,26 +358,38 @@ fn render_timeline_bar(f: &mut Frame, area: Rect, result: &TimelineResult, state
         .map(|(i, sbom)| {
             let style = if i == selected {
                 Style::default().fg(scheme.accent)
-            } else if state.compare_version == Some(i) {
+            } else if compare_raw == Some(i) {
                 Style::default().fg(scheme.warning)
             } else {
                 Style::default().fg(scheme.primary)
             };
 
+            // Prefer the timestamp's MM-DD slice (a time axis shows time);
+            // fall back to the truncated name.
+            let label = sbom
+                .timestamp
+                .as_deref()
+                .and_then(|t| t.get(5..10))
+                .map_or_else(
+                    || {
+                        sbom.name
+                            .chars()
+                            .take(bar_width as usize - 1)
+                            .collect::<String>()
+                    },
+                    ToString::to_string,
+                );
+
             Bar::default()
-                .value(sbom.component_count as u64)
-                .label(Line::from(
-                    sbom.name
-                        .chars()
-                        .take(bar_width as usize - 1)
-                        .collect::<String>(),
-                ))
+                .value(value(i))
+                .label(Line::from(label))
                 .style(style)
         })
         .collect();
 
     let title = format!(
-        " Component Count Evolution ({}-{}/{}) [+/-: zoom, h/l: scroll] ",
+        " {} Evolution ({}-{}/{}) [m: metric, +/-: zoom, h/l: scroll] ",
+        metric.label(),
         start_idx + 1,
         end_idx,
         result.sboms.len()
@@ -334,17 +405,73 @@ fn render_timeline_bar(f: &mut Frame, area: Rect, result: &TimelineResult, state
         .data(BarGroup::default().bars(&bars))
         .bar_width(bar_width)
         .bar_gap(1)
-        .max(
-            result
-                .sboms
-                .iter()
-                .map(|s| s.component_count)
-                .max()
-                .unwrap_or(100) as u64
-                + 10,
-        );
+        .max((0..result.sboms.len()).map(value).max().unwrap_or(100) + 10);
 
     f.render_widget(barchart, area);
+}
+
+/// Display order of version indices for the Versions table. Chronological is
+/// the identity; the other keys use the same descending-base +
+/// reverse-on-Ascending convention as `ordered_comparison_indices`. The
+/// timeline BAR stays in raw chronological order (it is a time axis).
+pub(crate) fn ordered_version_indices(
+    result: &TimelineResult,
+    state: &TimelineState,
+) -> Vec<usize> {
+    use crate::tui::app::{SortDirection, TimelineSortBy};
+
+    let changes = |i: usize| -> usize {
+        if i == 0 {
+            0
+        } else {
+            result
+                .incremental_diffs
+                .get(i - 1)
+                .map_or(0, |d| d.summary.total_changes)
+        }
+    };
+
+    let mut idx: Vec<usize> = (0..result.sboms.len()).collect();
+    match state.sort_by {
+        // Descending base = newest-first, so the shared Ascending reverse
+        // below yields oldest-first (the identity) under the default.
+        TimelineSortBy::Chronological => idx.reverse(),
+        TimelineSortBy::Changes => idx.sort_by_key(|b| std::cmp::Reverse(changes(*b))),
+        TimelineSortBy::ComponentCount => idx.sort_by(|a, b| {
+            result.sboms[*b]
+                .component_count
+                .cmp(&result.sboms[*a].component_count)
+        }),
+        TimelineSortBy::Name => {
+            idx.sort_by(|a, b| result.sboms[*b].name.cmp(&result.sboms[*a].name));
+        }
+    }
+    if matches!(state.sort_direction, SortDirection::Ascending) {
+        idx.reverse();
+    }
+    idx
+}
+
+/// The precomputed diff for a version pair: adjacent steps use
+/// `incremental_diffs`; any pair anchored at the baseline (v1) uses
+/// `cumulative_from_first` (the engine writes 0->k at index k-1). Everything
+/// else has no precomputed diff.
+pub(crate) fn resolve_version_diff(
+    result: &TimelineResult,
+    raw_a: usize,
+    raw_b: usize,
+) -> Option<&crate::diff::DiffResult> {
+    if raw_a == raw_b {
+        return None;
+    }
+    let (lo, hi) = (raw_a.min(raw_b), raw_a.max(raw_b));
+    if hi - lo == 1 {
+        result.incremental_diffs.get(lo)
+    } else if lo == 0 {
+        result.cumulative_from_first.get(hi - 1)
+    } else {
+        None
+    }
 }
 
 fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, state: &TimelineState) {
@@ -352,14 +479,18 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
     let is_active = matches!(state.active_panel, TimelinePanel::Versions);
     let selected = state.selected_version;
 
-    let rows: Vec<Row> = result
-        .sboms
+    let order = ordered_version_indices(result, state);
+    // Date column only when the pane is wide enough (the 40% pane at 120 cols).
+    let show_date = area.width >= 46;
+
+    let rows: Vec<Row> = order
         .iter()
         .enumerate()
-        .map(|(i, sbom)| {
-            // Get diff info if available
-            let (added, removed) = if i > 0 {
-                result.incremental_diffs.get(i - 1).map_or((0, 0), |d| {
+        .map(|(i, &raw)| {
+            let sbom = &result.sboms[raw];
+            // Diff info and compliance key off the RAW (chronological) index.
+            let (added, removed) = if raw > 0 {
+                result.incremental_diffs.get(raw - 1).map_or((0, 0), |d| {
                     (d.summary.components_added, d.summary.components_removed)
                 })
             } else {
@@ -386,7 +517,7 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
                 style
             };
 
-            let change_str = if i == 0 {
+            let change_str = if raw == 0 {
                 "initial".to_string()
             } else {
                 format!("+{added} -{removed}")
@@ -399,7 +530,7 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
             };
 
             // CRA Phase 2 compliance indicator for this version
-            let compliance_indicator = result.evolution_summary.compliance_trend.get(i).map_or(
+            let compliance_indicator = result.evolution_summary.compliance_trend.get(raw).map_or(
                 ("-", scheme.text_muted),
                 |snap| {
                     // Find CRA Phase 2 score
@@ -416,17 +547,35 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
                 },
             );
 
-            Row::new(vec![
-                Cell::from(format!("{}.", i + 1)).style(style),
+            // True version numbers stay stable under sort: show raw + 1.
+            let mut cells = vec![
+                Cell::from(format!("{}.", raw + 1)).style(style),
                 Cell::from(sbom.name.clone()).style(name_style),
+            ];
+            if show_date {
+                let date = sbom
+                    .timestamp
+                    .as_deref()
+                    .and_then(|t| t.get(..10))
+                    .unwrap_or("-")
+                    .to_string();
+                cells.push(Cell::from(date).style(style.fg(scheme.text_muted)));
+            }
+            cells.extend([
                 Cell::from(sbom.component_count.to_string()).style(style),
                 Cell::from(change_str).style(style.fg(change_color)),
                 Cell::from(compliance_indicator.0).style(style.fg(compliance_indicator.1)),
-            ])
+            ]);
+            Row::new(cells)
         })
         .collect();
 
-    let header = Row::new(vec!["#", "Version", "Comps", "Changes", "CRA"])
+    let header_cells: Vec<&str> = if show_date {
+        vec!["#", "Version", "Date", "Comps", "Changes", "CRA"]
+    } else {
+        vec!["#", "Version", "Comps", "Changes", "CRA"]
+    };
+    let header = Row::new(header_cells)
         .style(
             Style::default()
                 .fg(scheme.primary)
@@ -434,13 +583,24 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
         )
         .bottom_margin(1);
 
-    let widths = [
-        Constraint::Length(4),
-        Constraint::Min(10),
-        Constraint::Length(6),
-        Constraint::Length(10),
-        Constraint::Length(4),
-    ];
+    let widths: Vec<Constraint> = if show_date {
+        vec![
+            Constraint::Length(4),
+            Constraint::Min(10),
+            Constraint::Length(10),
+            Constraint::Length(6),
+            Constraint::Length(10),
+            Constraint::Length(4),
+        ]
+    } else {
+        vec![
+            Constraint::Length(4),
+            Constraint::Min(10),
+            Constraint::Length(6),
+            Constraint::Length(10),
+            Constraint::Length(4),
+        ]
+    };
 
     let border_color = if is_active {
         scheme.accent
@@ -462,18 +622,18 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
     f.render_widget(table, area);
 }
 
-fn render_component_history(
-    f: &mut Frame,
-    area: Rect,
+/// The Components panel's display list: added+removed evolutions tagged with
+/// `is_removed`, filtered by the active component filter.
+///
+/// Single source of truth for every consumer that resolves
+/// `selected_component` — the panel render, the history modal, and the
+/// event-side name lookup — so a filtered display can never desync from the
+/// selection index again.
+pub(crate) fn filtered_evolution_entries(
     result: &TimelineResult,
-    state: &TimelineState,
-) {
-    let scheme = colors();
-    let is_active = matches!(state.active_panel, TimelinePanel::Components);
-    let selected = state.selected_component;
-
-    // Get component evolution data with filtering
-    let all_evolutions: Vec<_> = result
+    filter: TimelineComponentFilter,
+) -> Vec<(&crate::diff::ComponentEvolution, bool)> {
+    result
         .evolution_summary
         .components_added
         .iter()
@@ -485,30 +645,52 @@ fn render_component_history(
                 .iter()
                 .map(|e| (e, true)),
         )
-        .collect();
-
-    let filtered_evolutions: Vec<_> = all_evolutions
-        .iter()
-        .filter(|(evo, is_removed)| {
-            match state.component_filter {
-                TimelineComponentFilter::All => true,
-                TimelineComponentFilter::Added => !*is_removed,
-                TimelineComponentFilter::Removed => *is_removed,
-                TimelineComponentFilter::VersionChanged => {
-                    // Check if version changed
-                    evo.current_version.as_ref() != Some(&evo.first_seen_version)
-                }
-                TimelineComponentFilter::Stable => {
-                    !*is_removed && evo.current_version.as_ref() == Some(&evo.first_seen_version)
-                }
+        .filter(|(evo, is_removed)| match filter {
+            TimelineComponentFilter::All => true,
+            TimelineComponentFilter::Added => !*is_removed,
+            TimelineComponentFilter::Removed => *is_removed,
+            TimelineComponentFilter::VersionChanged => {
+                evo.current_version.as_ref() != Some(&evo.first_seen_version)
+            }
+            TimelineComponentFilter::Stable => {
+                !*is_removed && evo.current_version.as_ref() == Some(&evo.first_seen_version)
             }
         })
-        .collect();
+        .collect()
+}
 
+fn render_component_history(
+    f: &mut Frame,
+    area: Rect,
+    result: &TimelineResult,
+    state: &TimelineState,
+) {
+    let scheme = colors();
+    let is_active = matches!(state.active_panel, TimelinePanel::Components);
+    let selected = state.selected_component;
+
+    let filtered_evolutions = filtered_evolution_entries(result, state.component_filter);
+    if filtered_evolutions.is_empty() {
+        crate::tui::widgets::render_no_results_state(
+            f,
+            area,
+            "Filter",
+            state.component_filter.label(),
+        );
+        return;
+    }
+
+    // Window around the selection sized to the REAL panel height (borders +
+    // table header + spacing = 4 rows of chrome): with the selection bounds
+    // now populated, the cursor can travel past the fold and must stay
+    // visible at any terminal size.
+    let visible_rows = (area.height.saturating_sub(4) as usize).max(1);
+    let window_start = selected.saturating_sub(visible_rows - 1);
     let rows: Vec<Row> = filtered_evolutions
         .iter()
         .enumerate()
-        .take(20)
+        .skip(window_start)
+        .take(visible_rows)
         .map(|(i, (evo, is_removed))| {
             let style = if i == selected {
                 Style::default()
@@ -563,10 +745,12 @@ fn render_component_history(
         scheme.text
     };
 
+    let unfiltered_total = result.evolution_summary.components_added.len()
+        + result.evolution_summary.components_removed.len();
     let title = format!(
         " Component Evolution ({}/{}) [f: filter, Enter: detail] ",
         filtered_evolutions.len(),
-        all_evolutions.len()
+        unfiltered_total
     );
 
     let table = Table::new(rows, widths)
@@ -582,7 +766,13 @@ fn render_component_history(
     f.render_widget(table, area);
 }
 
-fn render_status_bar(f: &mut Frame, area: Rect, result: &TimelineResult, _state: &TimelineState) {
+fn render_status_bar(
+    f: &mut Frame,
+    area: Rect,
+    result: &TimelineResult,
+    _state: &TimelineState,
+    status: Option<&str>,
+) {
     let scheme = colors();
     let total_added: usize = result
         .incremental_diffs
@@ -595,7 +785,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, result: &TimelineResult, _state:
         .map(|d| d.summary.components_removed)
         .sum();
 
-    let status = Line::from(vec![
+    let mut spans = vec![
         Span::styled("Added: ", Style::default().fg(scheme.text_muted)),
         Span::styled(total_added.to_string(), Style::default().fg(scheme.added)),
         Span::raw("  "),
@@ -604,21 +794,12 @@ fn render_status_bar(f: &mut Frame, area: Rect, result: &TimelineResult, _state:
             total_removed.to_string(),
             Style::default().fg(scheme.removed),
         ),
-        Span::raw("  │  "),
-        Span::styled("/", Style::default().fg(scheme.primary)),
-        Span::raw(": search  "),
-        Span::styled("g", Style::default().fg(scheme.primary)),
-        Span::raw(": jump  "),
-        Span::styled("d", Style::default().fg(scheme.primary)),
-        Span::raw(": diff  "),
-        Span::styled("t", Style::default().fg(scheme.primary)),
-        Span::raw(": stats  "),
-        Span::styled("f", Style::default().fg(scheme.primary)),
-        Span::raw(": filter"),
-    ]);
+        Span::raw("  \u{2502}  "),
+    ];
+    crate::tui::views::matrix_status_tail(&mut spans, area, status, "timeline");
 
     let block = Block::default().borders(Borders::ALL);
-    let paragraph = Paragraph::new(status).block(block);
+    let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, area);
 }
 
@@ -640,25 +821,26 @@ fn render_version_diff_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let selected = state.selected_version;
-    let compare = state.compare_version.unwrap_or(0);
+    // selected/compare are display indices; resolve to raw chronological
+    // versions, then orient low -> high so added/removed match the
+    // precomputed diff's direction regardless of which endpoint is selected.
+    let order = ordered_version_indices(result, state);
+    let raw_sel = order.get(state.selected_version).copied().unwrap_or(0);
+    let raw_cmp = order
+        .get(state.compare_version.unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
+    let (raw_a, raw_b) = (raw_sel.min(raw_cmp), raw_sel.max(raw_cmp));
 
-    let sbom_a = result.sboms.get(selected);
-    let sbom_b = result.sboms.get(compare);
+    let sbom_a = result.sboms.get(raw_a);
+    let sbom_b = result.sboms.get(raw_b);
 
     let (name_a, name_b) = match (sbom_a, sbom_b) {
         (Some(a), Some(b)) => (a.name.clone(), b.name.clone()),
         _ => return,
     };
 
-    // Get diff between versions if available
-    let diff_info = if selected > 0 && compare == selected - 1 {
-        result.incremental_diffs.get(compare)
-    } else if compare > 0 && selected == compare - 1 {
-        result.incremental_diffs.get(selected)
-    } else {
-        None
-    };
+    let diff_info = resolve_version_diff(result, raw_a, raw_b);
 
     let mut lines = vec![
         Line::from(vec![
@@ -669,12 +851,16 @@ fn render_version_diff_modal(
                     .fg(scheme.primary)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" ↔ "),
+            Span::raw(" \u{2192} "),
             Span::styled(
                 &name_b,
                 Style::default()
                     .fg(scheme.warning)
                     .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  (chronological order)",
+                Style::default().fg(scheme.text_muted),
             ),
         ]),
         Line::from(""),
@@ -740,11 +926,11 @@ fn render_version_diff_modal(
         }
     } else {
         lines.push(Line::from(vec![Span::styled(
-            "No direct diff available between these versions.",
+            "No precomputed diff between these versions.",
             Style::default().fg(scheme.text_muted),
         )]));
         lines.push(Line::from(vec![Span::styled(
-            "Select adjacent versions for detailed diff.",
+            "Only adjacent-step and baseline (v1 \u{2192} vN) diffs are precomputed.",
             Style::default().fg(scheme.text_muted),
         )]));
     }
@@ -784,16 +970,12 @@ fn render_component_history_modal(
 
     f.render_widget(Clear, modal_area);
 
-    // Get selected component
-    let all_evolutions: Vec<_> = result
-        .evolution_summary
-        .components_added
-        .iter()
-        .chain(result.evolution_summary.components_removed.iter())
-        .collect();
-
-    let evo = match all_evolutions.get(state.selected_component) {
-        Some(e) => *e,
+    // Resolve the selection through the SAME filtered list the Components
+    // panel displays (the unfiltered list opened the wrong component's
+    // history whenever a filter was active).
+    let entries = filtered_evolution_entries(result, state.component_filter);
+    let evo = match entries.get(state.selected_component) {
+        Some((e, _)) => *e,
         None => return,
     };
 
@@ -890,29 +1072,7 @@ fn render_component_history_modal(
 
 /// Render search overlay
 fn render_search_overlay(f: &mut Frame, area: Rect, state: &TimelineState) {
-    let scheme = colors();
-
-    let search_area = Rect::new(area.x, area.height - 3, area.width, 3);
-    f.render_widget(Clear, search_area);
-
-    let search_text = Line::from(vec![
-        Span::styled("Search: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(&state.search.query, Style::default().fg(scheme.text)),
-        Span::styled("│", Style::default().fg(scheme.accent)),
-        Span::raw("  "),
-        Span::styled(
-            state.search.match_position(),
-            Style::default().fg(scheme.text_muted),
-        ),
-    ]);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
-
-    let paragraph = Paragraph::new(search_text).block(block);
-    f.render_widget(paragraph, search_area);
+    crate::tui::views::render_multi_search_bar(f, area, "Search: ", &state.search);
 }
 
 /// Render jump overlay

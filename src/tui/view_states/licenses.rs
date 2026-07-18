@@ -94,13 +94,13 @@ impl ViewState for LicensesView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
+            Shortcut::primary("g", "group"),
+            Shortcut::primary("s", "sort"),
+            Shortcut::primary("r", "risk"),
+            Shortcut::primary("c", "compat"),
+            Shortcut::primary("p", "panel"),
+            Shortcut::new("j/k", "Navigate"),
             Shortcut::new("Enter", "Go to components"),
-            Shortcut::new("g", "Group by"),
-            Shortcut::new("s", "Sort"),
-            Shortcut::new("r", "Risk filter"),
-            Shortcut::new("c", "Compatibility"),
-            Shortcut::new("p", "Panel focus"),
         ]
     }
 }

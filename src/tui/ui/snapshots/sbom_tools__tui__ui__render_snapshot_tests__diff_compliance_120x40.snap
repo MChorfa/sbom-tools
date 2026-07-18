@@ -5,22 +5,22 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5] Vulnerabilities   │  [6] Quality   │
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  Compliance Standards (←/→)
  ✓ Min  │  ✗ Std  │  ✗ NTIA  │  ✗ CRA-1  │  ✗ CRA-2  │  ✗ FDA  │  ✗ SSDF  │  ✗ EO14028  │  ✗ CNSA2  │  ✗ PQC  │  ✗ BSI
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ EU CRA Phase 1 (2026): FAIL 5% → FAIL 5%  unchanged ─────────────────────────────────────────────────────────────────┐
-│Errors: 3  Warnings: 14  Info: 26  │  New: 13  Resolved: 13                                                           │
+│Errors: 3  Warnings: 14  Info: 26  │  New: 12  Resolved: 12                                                           │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ Compliance Diff Overview ────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                                                      │
 │  Violation Diff:                                                                                                     │
 │                                                                                                                      │
-│      + 13 new violations introduced                                                                                  │
-│      - 13 violations resolved                                                                                        │
-│      = 30 violations persistent                                                                                      │
+│      + 12 new violations introduced                                                                                  │
+│      - 12 violations resolved                                                                                        │
+│      = 31 violations persistent                                                                                      │
 │                                                                                                                      │
 │    Error count:  3 → 3  (0)                                                                                          │
 │                                                                                                                      │
@@ -42,4 +42,4 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 f filter [All]  g group [flat]  ←/→ switch standard  v cycle view [Overview]  j/k navigate (0)  E export  ? help
 
  Components: 15 │ Vulns: 0 │ Score: 53.5
- ←→ standard  v view  g group  ↑↓ select │  Tab switch  / search  e export  ? help  q quit [y] copy SBOM must have creat
+    …  ←→ standard  v view │  Tab switch  / search  e export  ? help  q quit [y] copy SBOM must have creator/tool...

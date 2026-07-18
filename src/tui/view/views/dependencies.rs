@@ -296,12 +296,12 @@ fn render_dependency_tree(
             }
         }
 
-        // P1: Depth-based color gradient for node names
+        // P1: Depth-based color gradient for node names. Depth 2+ merges into
+        // text_muted: a dedicated light-gray RGB step was near-invisible on
+        // the light theme's background (matches widgets/tree.rs).
         let depth_color = match node.depth {
-            0 => scheme.text,               // Root: bold white
-            1 => scheme.text,               // Direct deps: white
-            2 => Color::Rgb(180, 180, 180), // Depth 2: light gray
-            _ => scheme.text_muted,         // Depth 3+: muted gray
+            0 | 1 => scheme.text,   // Root and direct deps
+            _ => scheme.text_muted, // Depth 2+: muted
         };
         let name_style = if is_selected {
             Style::default().bg(scheme.selection).fg(scheme.text).bold()
@@ -1231,6 +1231,17 @@ pub(crate) struct DependencyGraph {
     max_depth: usize,
 }
 
+/// Sort component IDs by their display name (falling back to the raw ID when
+/// unmapped), with the ID as tiebreaker for stability. Case-sensitive cmp,
+/// matching the component tree's name ordering.
+fn sort_ids_by_display_name(ids: &mut [String], names: &HashMap<String, String>) {
+    ids.sort_by(|a, b| {
+        let name_a = names.get(a).map_or(a.as_str(), String::as_str);
+        let name_b = names.get(b).map_or(b.as_str(), String::as_str);
+        name_a.cmp(name_b).then_with(|| a.cmp(b))
+    });
+}
+
 fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
     let mut names: HashMap<String, String> = HashMap::new();
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
@@ -1272,9 +1283,10 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
         }
     }
 
-    // Sort edge children for stable ordering across renders
+    // Sort edge children by the display name users actually see (raw
+    // canonical-ID order looked arbitrary on screen), stable across renders.
     for children in edges.values_mut() {
-        children.sort();
+        sort_ids_by_display_name(children, &names);
     }
 
     // Build reverse edges for O(1) "used by" lookups
@@ -1289,7 +1301,7 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
     }
     // Sort parent lists for stable display ordering
     for parents in reverse_edges.values_mut() {
-        parents.sort();
+        sort_ids_by_display_name(parents, &names);
     }
 
     // Find roots (components with no incoming edges), sorted for stable ordering
@@ -1298,7 +1310,7 @@ fn build_dependency_graph(app: &ViewApp) -> DependencyGraph {
         .filter(|id| !has_parent.contains(*id))
         .cloned()
         .collect();
-    roots.sort();
+    sort_ids_by_display_name(&mut roots, &names);
 
     let mut graph = DependencyGraph {
         names,
@@ -1382,6 +1394,29 @@ fn calculate_max_depth(deps: &DependencyGraph) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: dependency lists must order by the visible display name,
+    /// not the raw canonical ID (SPDXRef IDs made the tree look unsorted).
+    #[test]
+    fn sort_ids_by_display_name_orders_by_visible_label() {
+        let mut names = HashMap::new();
+        names.insert("SPDXRef-2".to_string(), "alpha@1.0".to_string());
+        names.insert("SPDXRef-1".to_string(), "zeta@2.0".to_string());
+
+        let mut ids = vec!["SPDXRef-1".to_string(), "SPDXRef-2".to_string()];
+        sort_ids_by_display_name(&mut ids, &names);
+        assert_eq!(
+            ids,
+            ["SPDXRef-2", "SPDXRef-1"],
+            "alpha sorts before zeta despite the reverse ID order"
+        );
+
+        // Tiebreak: identical display names fall back to ID order.
+        names.insert("SPDXRef-3".to_string(), "alpha@1.0".to_string());
+        let mut ids = vec!["SPDXRef-3".to_string(), "SPDXRef-2".to_string()];
+        sort_ids_by_display_name(&mut ids, &names);
+        assert_eq!(ids, ["SPDXRef-2", "SPDXRef-3"]);
+    }
 
     /// Build a minimal graph from edges (parent -> children); roots are nodes
     /// with no incoming edge. Only the fields `calculate_max_depth` reads are

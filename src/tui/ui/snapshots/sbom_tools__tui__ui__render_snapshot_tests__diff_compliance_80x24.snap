@@ -5,7 +5,7 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5
+« [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
  Compliance Standards (←/→)
@@ -17,13 +17,13 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │                                                                              │
 │  Violation Diff:                                                             │
 │                                                                              │
-│      + 13 new violations introduced                                          │
-│      - 13 violations resolved                                                │
-│      = 30 violations persistent                                              │
+│      + 12 new violations introduced                                          │
+│      - 12 violations resolved                                                │
+│      = 31 violations persistent                                              │
 │                                                                              │
 │    Error count:  3 → 3  (0)                                                  │
 └──────────────────────────────────────────────────────────────────────────────┘
 f filter [All]  g group [flat]  ←/→ switch standard  v cycle view [Overview]  j/
 
  Components: 15 │ Vulns: 0 │ Score: 53.5
- ←→ standard  v view  g group  ↑↓ select │  Tab switch  / search  e export  ? he
+    …  ←→ standard  v view │  Tab switch  / search  e export  ? help  q quit

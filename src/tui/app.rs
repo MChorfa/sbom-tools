@@ -66,6 +66,7 @@ pub use super::app_states::{
     SimilarityThreshold,
     SortDirection,
     // Timeline states
+    TimelineChartMetric,
     TimelineComponentFilter,
     TimelineSortBy,
     TimelineState,
@@ -91,7 +92,6 @@ pub struct ModeStates {
 ///
 /// Groups all overlay visibility flags and complex overlay states.
 pub struct AppOverlays {
-    pub(crate) show_help: bool,
     pub(crate) show_export: bool,
     pub(crate) show_legend: bool,
     pub(crate) search: DiffSearchState,
@@ -104,7 +104,6 @@ pub struct AppOverlays {
 impl AppOverlays {
     pub fn new() -> Self {
         Self {
-            show_help: false,
             show_export: false,
             show_legend: false,
             search: DiffSearchState::new(),
@@ -115,18 +114,9 @@ impl AppOverlays {
         }
     }
 
-    pub const fn toggle_help(&mut self) {
-        self.show_help = !self.show_help;
-        if self.show_help {
-            self.show_export = false;
-            self.show_legend = false;
-        }
-    }
-
     pub const fn toggle_export(&mut self) {
         self.show_export = !self.show_export;
         if self.show_export {
-            self.show_help = false;
             self.show_legend = false;
         }
     }
@@ -134,25 +124,30 @@ impl AppOverlays {
     pub const fn toggle_legend(&mut self) {
         self.show_legend = !self.show_legend;
         if self.show_legend {
-            self.show_help = false;
             self.show_export = false;
         }
     }
 
     pub const fn close_all(&mut self) {
-        self.show_help = false;
         self.show_export = false;
         self.show_legend = false;
         self.search.active = false;
         self.threshold_tuning.visible = false;
+        self.shortcuts.visible = false;
+        self.component_deep_dive.visible = false;
+        self.view_switcher.visible = false;
     }
 
     pub const fn has_active(&self) -> bool {
-        self.show_help
-            || self.show_export
+        self.show_export
             || self.show_legend
             || self.search.active
             || self.threshold_tuning.visible
+            // The cross-view modals must be visible to the mouse subsystem,
+            // or a click while one is painted falls through to the tab bar.
+            || self.shortcuts.visible
+            || self.component_deep_dive.visible
+            || self.view_switcher.visible
     }
 }
 
@@ -231,6 +226,15 @@ pub struct App {
     // ========================================================================
     // Each view handles its own key events via the ViewState trait.
     // State is synced back to `tabs.*` after each event for rendering.
+    /// Tab-bar window computed by the last render — shared with the mouse
+    /// hit-test so render geometry and click geometry cannot drift.
+    pub(crate) tab_window: crate::tui::shared::TabWindow,
+    /// Frame area from the last render: the mouse handler reproduces each
+    /// mode's Layout::split geometry (panels shrink below their Length
+    /// constraints at 80x24, so no fixed row constants survive both sizes)
+    /// and ratatui's table auto-scroll from it.
+    pub(crate) last_frame_area: Option<ratatui::layout::Rect>,
+    pub(crate) summary_view: crate::tui::view_states::SummaryView,
     pub(crate) components_view: crate::tui::view_states::ComponentsView,
     pub(crate) dependencies_view: crate::tui::view_states::DependenciesView,
     pub(crate) licenses_view: crate::tui::view_states::LicensesView,
@@ -243,6 +247,27 @@ pub struct App {
 }
 
 impl App {
+    /// The active tab's `ViewState` — the single source for its footer
+    /// primaries and the ?/K overlay's This-Tab section. `None` in the multi
+    /// modes (their `active_tab` is a stale preference restore).
+    pub(crate) fn active_view_state(&self) -> Option<&dyn crate::tui::traits::ViewState> {
+        if !matches!(self.mode, AppMode::Diff | AppMode::View) {
+            return None;
+        }
+        Some(match self.active_tab {
+            TabKind::Summary | TabKind::Overview | TabKind::Tree => &self.summary_view,
+            TabKind::Components => &self.components_view,
+            TabKind::Dependencies => &self.dependencies_view,
+            TabKind::Licenses => &self.licenses_view,
+            TabKind::Vulnerabilities => &self.vulnerabilities_view,
+            TabKind::Quality => &self.quality_view,
+            TabKind::Compliance => &self.compliance_view,
+            TabKind::SideBySide => &self.sidebyside_view,
+            TabKind::GraphChanges => &self.graph_changes_view,
+            TabKind::Source => &self.source_view,
+        })
+    }
+
     /// Lazily compute compliance results for all standards when first needed.
     ///
     /// Each SBOM's optional CRA sidecar is threaded into its checkers so
@@ -284,11 +309,6 @@ impl App {
                 checker.check(sbom)
             })
             .collect()
-    }
-
-    /// Toggle help overlay
-    pub const fn toggle_help(&mut self) {
-        self.overlays.toggle_help();
     }
 
     /// Toggle export dialog
@@ -785,7 +805,18 @@ impl App {
         self.overlays.close_all();
 
         match kind {
-            OverlayKind::Help => self.overlays.show_help = true,
+            OverlayKind::Help => {
+                // The hardcoded help overlay is gone; Help IS the shortcuts
+                // overlay now (context derived from the mode).
+                let context = match self.mode {
+                    AppMode::MultiDiff => ShortcutsContext::MultiDiff,
+                    AppMode::Timeline => ShortcutsContext::Timeline,
+                    AppMode::Matrix => ShortcutsContext::Matrix,
+                    AppMode::Diff => ShortcutsContext::Diff,
+                    AppMode::View => ShortcutsContext::View,
+                };
+                self.overlays.shortcuts.show(context);
+            }
             OverlayKind::Export => self.overlays.show_export = true,
             OverlayKind::Legend => self.overlays.show_legend = true,
             OverlayKind::Search => {
@@ -802,42 +833,6 @@ impl App {
         super::traits::TabTarget::from_tab_kind(self.active_tab)
     }
 
-    /// Get keyboard shortcuts for the current view
-    #[must_use]
-    pub fn current_shortcuts(&self) -> Vec<super::traits::Shortcut> {
-        use super::traits::Shortcut;
-
-        let mut shortcuts = vec![
-            Shortcut::primary("?", "Help"),
-            Shortcut::primary("q", "Quit"),
-            Shortcut::primary("Tab", "Next tab"),
-            Shortcut::primary("/", "Search"),
-        ];
-
-        // Add view-specific shortcuts
-        match self.active_tab {
-            TabKind::Components => {
-                shortcuts.push(Shortcut::new("f", "Filter"));
-                shortcuts.push(Shortcut::new("s", "Sort"));
-                shortcuts.push(Shortcut::new("m", "Multi-select"));
-            }
-            TabKind::Dependencies => {
-                shortcuts.push(Shortcut::new("t", "Transitive"));
-                shortcuts.push(Shortcut::new("+/-", "Depth"));
-            }
-            TabKind::Vulnerabilities => {
-                shortcuts.push(Shortcut::new("f", "Filter"));
-                shortcuts.push(Shortcut::new("s", "Sort"));
-            }
-            TabKind::Quality => {
-                shortcuts.push(Shortcut::new("v", "View mode"));
-            }
-            _ => {}
-        }
-
-        shortcuts
-    }
-
     // ========================================================================
     // ViewState inner state accessors
     // ========================================================================
@@ -849,6 +844,12 @@ impl App {
         self.quality_view.inner_mut()
     }
 
+    pub(crate) fn summary_state(&self) -> &super::app_states::SummaryState {
+        self.summary_view.inner()
+    }
+    pub(crate) fn summary_state_mut(&mut self) -> &mut super::app_states::SummaryState {
+        self.summary_view.inner_mut()
+    }
     pub(crate) fn graph_changes_state(&self) -> &super::app_states::GraphChangesState {
         self.graph_changes_view.inner()
     }
@@ -937,6 +938,14 @@ impl App {
 
         // 5. Vulnerability totals (was inline in render_vulnerabilities)
         self.prepare_vulnerability_totals();
+
+        // 5b. Summary All Changes total (drives the scroll bound)
+        let summary_total = self
+            .data
+            .diff_result
+            .as_ref()
+            .map_or(0, crate::tui::views::all_changes_line_count);
+        self.summary_state_mut().set_total(summary_total);
 
         // 6. Graph changes total (was inline in render_graph_changes)
         let graph_total = self

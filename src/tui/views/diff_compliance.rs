@@ -11,7 +11,9 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs},
 };
 
-use crate::quality::{ComplianceLevel, ComplianceResult, ViolationSeverity};
+use crate::quality::{
+    ComplianceLevel, ComplianceResult, Violation, ViolationCategory, ViolationSeverity,
+};
 use crate::tui::app_states::{ComplianceSeverityFilter, DiffComplianceViewMode};
 use crate::tui::render_context::RenderContext;
 use crate::tui::shared::compliance as shared_compliance;
@@ -974,13 +976,18 @@ fn render_violation_table(
         .skip(scroll_offset)
         .take(visible_end - scroll_offset)
         .map(|(i, v)| {
-            let style = if i == selected {
-                Style::default().bg(colors().selection)
+            // Selection is conveyed by shape + weight as well as background,
+            // so it survives NO_COLOR / monochrome terminals.
+            let is_selected = i == selected;
+            let style = if is_selected {
+                Style::default().bg(colors().selection).bold()
             } else {
                 Style::default()
             };
+            let marker = if is_selected { "\u{25b6} " } else { "  " };
             Row::new(vec![
-                Cell::from(v.severity.as_str()).style(Style::default().fg(v.severity_color)),
+                Cell::from(format!("{marker}{}", v.severity))
+                    .style(Style::default().fg(v.severity_color)),
                 Cell::from(v.category.as_str()),
                 Cell::from(v.message.as_str()),
                 Cell::from(v.element.as_str()).style(Style::default().fg(colors().text_muted)),
@@ -1093,12 +1100,16 @@ fn render_grouped_violation_table(
         .skip(scroll_offset)
         .take(visible_end - scroll_offset)
         .map(|(i, item)| {
+            // Selection is conveyed by shape + weight as well as background,
+            // so it survives NO_COLOR / monochrome terminals. The \u{25bc}/\u{25b6}
+            // arrows in header text mark EXPANSION state and are kept as-is.
             let is_selected = i == selected;
             let base_style = if is_selected {
-                Style::default().bg(colors().selection)
+                Style::default().bg(colors().selection).bold()
             } else {
                 Style::default()
             };
+            let marker = if is_selected { "\u{25b6}" } else { " " };
 
             match item {
                 GroupedItem::Header {
@@ -1109,7 +1120,7 @@ fn render_grouped_violation_table(
                     let arrow = if *expanded { "\u{25bc}" } else { "\u{25b6}" };
                     let header_text = format!("{arrow} {element} ({count} issues)");
                     Row::new(vec![
-                        Cell::from(""),
+                        Cell::from(marker),
                         Cell::from(""),
                         Cell::from(header_text).style(
                             Style::default()
@@ -1123,7 +1134,7 @@ fn render_grouped_violation_table(
                 GroupedItem::Violation(v) => {
                     let cleaned = clean_message(&v.message, &v.element);
                     Row::new(vec![
-                        Cell::from(format!("  {}", v.severity))
+                        Cell::from(format!("{marker} {}", v.severity))
                             .style(Style::default().fg(v.severity_color)),
                         Cell::from(format!("  {}", v.category)),
                         Cell::from(format!("  {cleaned}")),
@@ -1239,14 +1250,64 @@ fn render_help_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 // Violation diff computation
 // ============================================================================
 
-/// Compute violations present in new but not in old (by message matching).
-fn compute_new_violations(old: &ComplianceResult, new: &ComplianceResult) -> Vec<ViolationEntry> {
-    let old_messages: std::collections::HashSet<&str> =
-        old.violations.iter().map(|v| v.message.as_str()).collect();
+/// Stable identity key for diffing violations across two compliance runs.
+///
+/// Deliberately excludes `message` — messages embed mutable details (spec
+/// versions, counts, element names), so keying on them double-counted any
+/// reworded violation as 1 new + 1 resolved. Also excludes `rule_id`, which is
+/// `#[serde(skip)]` and resets to the default on deserialization.
+fn violation_key(v: &Violation) -> (ViolationSeverity, ViolationCategory, &str, Option<&str>) {
+    (
+        v.severity,
+        v.category,
+        v.requirement.as_str(),
+        v.element.as_deref(),
+    )
+}
 
-    new.violations
+/// Violations in `from` whose identity key has no remaining match in
+/// `against` (multiset semantics: duplicate keys match one-for-one rather
+/// than collapsing, so two identical violations vs one still reports a diff).
+fn unmatched_violations<'a>(
+    from: &'a ComplianceResult,
+    against: &ComplianceResult,
+) -> Vec<&'a Violation> {
+    let mut against_keys: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
+    for v in &against.violations {
+        *against_keys.entry(violation_key(v)).or_insert(0) += 1;
+    }
+    from.violations
         .iter()
-        .filter(|v| !old_messages.contains(v.message.as_str()))
+        .filter(|v| match against_keys.get_mut(&violation_key(v)) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                false
+            }
+            _ => true,
+        })
+        .collect()
+}
+
+/// Violations present in new but not in old (introduced), by stable key.
+fn diff_new_violations<'a>(
+    old: &ComplianceResult,
+    new: &'a ComplianceResult,
+) -> Vec<&'a Violation> {
+    unmatched_violations(new, old)
+}
+
+/// Violations present in old but not in new (resolved), by stable key.
+fn diff_resolved_violations<'a>(
+    old: &'a ComplianceResult,
+    new: &ComplianceResult,
+) -> Vec<&'a Violation> {
+    unmatched_violations(old, new)
+}
+
+/// Compute violations present in new but not in old.
+fn compute_new_violations(old: &ComplianceResult, new: &ComplianceResult) -> Vec<ViolationEntry> {
+    diff_new_violations(old, new)
+        .into_iter()
         .map(ViolationEntry::from_violation)
         .collect()
 }
@@ -1256,12 +1317,8 @@ fn compute_resolved_violations(
     old: &ComplianceResult,
     new: &ComplianceResult,
 ) -> Vec<ViolationEntry> {
-    let new_messages: std::collections::HashSet<&str> =
-        new.violations.iter().map(|v| v.message.as_str()).collect();
-
-    old.violations
-        .iter()
-        .filter(|v| !new_messages.contains(v.message.as_str()))
+    diff_resolved_violations(old, new)
+        .into_iter()
         .map(ViolationEntry::from_violation)
         .collect()
 }
@@ -1314,34 +1371,189 @@ pub fn resolve_selected_group_element(ctx: &RenderContext) -> Option<String> {
     })
 }
 
+/// Resolve the `selected`-th violation of the given diff view mode, applying
+/// the severity filter so the index matches the filtered table rows.
+///
+/// Single source of truth for detail/event lookups: the render path
+/// (`get_selected_diff_violation`) and the event path ("go to component" in
+/// `events/compliance.rs`) both resolve through here, so they can never
+/// disagree with the table again (the previous copies keyed on message text
+/// and skipped the severity filter, selecting the wrong violation).
+pub(crate) fn nth_diff_violation<'a>(
+    old: &'a ComplianceResult,
+    new: &'a ComplianceResult,
+    mode: DiffComplianceViewMode,
+    sev_filter: ComplianceSeverityFilter,
+    selected: usize,
+) -> Option<&'a Violation> {
+    match mode {
+        DiffComplianceViewMode::Overview => None,
+        DiffComplianceViewMode::NewViolations => diff_new_violations(old, new)
+            .into_iter()
+            .filter(|v| sev_filter.matches(v.severity))
+            .nth(selected),
+        DiffComplianceViewMode::ResolvedViolations => diff_resolved_violations(old, new)
+            .into_iter()
+            .filter(|v| sev_filter.matches(v.severity))
+            .nth(selected),
+        DiffComplianceViewMode::OldViolations => old
+            .violations
+            .iter()
+            .filter(|v| sev_filter.matches(v.severity))
+            .nth(selected),
+        DiffComplianceViewMode::NewSbomViolations => new
+            .violations
+            .iter()
+            .filter(|v| sev_filter.matches(v.severity))
+            .nth(selected),
+    }
+}
+
 /// Get the actual Violation reference for the currently selected entry in diff mode.
-fn get_selected_diff_violation<'a>(
-    ctx: &'a RenderContext,
-) -> Option<&'a crate::quality::Violation> {
+fn get_selected_diff_violation<'a>(ctx: &'a RenderContext) -> Option<&'a Violation> {
     let idx = ctx.compliance.selected_standard;
     let old = ctx.old_compliance_results?.get(idx)?;
     let new = ctx.new_compliance_results?.get(idx)?;
-    let selected = ctx.compliance.selected_violation;
+    nth_diff_violation(
+        old,
+        new,
+        ctx.compliance.view_mode,
+        ctx.compliance.severity_filter,
+        ctx.compliance.selected_violation,
+    )
+}
 
-    match ctx.compliance.view_mode {
-        DiffComplianceViewMode::Overview => None,
-        DiffComplianceViewMode::NewViolations => {
-            let old_messages: std::collections::HashSet<&str> =
-                old.violations.iter().map(|v| v.message.as_str()).collect();
-            new.violations
-                .iter()
-                .filter(|v| !old_messages.contains(v.message.as_str()))
-                .nth(selected)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_violation(
+        severity: ViolationSeverity,
+        requirement: &str,
+        element: Option<&str>,
+        message: &str,
+    ) -> Violation {
+        Violation {
+            severity,
+            category: ViolationCategory::DocumentMetadata,
+            message: message.to_string(),
+            element: element.map(str::to_string),
+            requirement: requirement.to_string(),
+            rule_id: "SBOM-CRA-GENERAL",
+            component_id: None,
+            counts: None,
+            standard_refs: Vec::new(),
         }
-        DiffComplianceViewMode::ResolvedViolations => {
-            let new_messages: std::collections::HashSet<&str> =
-                new.violations.iter().map(|v| v.message.as_str()).collect();
-            old.violations
-                .iter()
-                .filter(|v| !new_messages.contains(v.message.as_str()))
-                .nth(selected)
+    }
+
+    fn mk_result(violations: Vec<Violation>) -> ComplianceResult {
+        let error_count = violations
+            .iter()
+            .filter(|v| v.severity == ViolationSeverity::Error)
+            .count();
+        let warning_count = violations
+            .iter()
+            .filter(|v| v.severity == ViolationSeverity::Warning)
+            .count();
+        let info_count = violations
+            .iter()
+            .filter(|v| v.severity == ViolationSeverity::Info)
+            .count();
+        ComplianceResult {
+            is_compliant: violations.is_empty(),
+            level: ComplianceLevel::NtiaMinimum,
+            violations,
+            error_count,
+            warning_count,
+            info_count,
+            conformity_summary: None,
+            applicability: crate::quality::Applicability::Applicable,
         }
-        DiffComplianceViewMode::OldViolations => old.violations.get(selected),
-        DiffComplianceViewMode::NewSbomViolations => new.violations.get(selected),
+    }
+
+    /// Regression: the same violation identity whose message merely embeds a
+    /// mutable detail ("CycloneDX 1.5 ..." -> "CycloneDX 1.6 ...") must not be
+    /// double-counted as 1 new + 1 resolved (the old message-keyed diff did).
+    #[test]
+    fn reworded_message_is_neither_new_nor_resolved() {
+        let old = mk_result(vec![mk_violation(
+            ViolationSeverity::Warning,
+            "SpecVersion",
+            None,
+            "CycloneDX 1.5 is outdated, consider upgrading to 1.7+",
+        )]);
+        let new = mk_result(vec![mk_violation(
+            ViolationSeverity::Warning,
+            "SpecVersion",
+            None,
+            "CycloneDX 1.6 is outdated, consider upgrading to 1.7+",
+        )]);
+
+        assert!(compute_new_violations(&old, &new).is_empty());
+        assert!(compute_resolved_violations(&old, &new).is_empty());
+    }
+
+    /// A genuinely new violation (distinct requirement or element) still
+    /// counts, and duplicate keys match one-for-one (multiset semantics).
+    #[test]
+    fn distinct_keys_and_duplicates_diff_correctly() {
+        // Distinct requirement -> new.
+        let old = mk_result(vec![]);
+        let new = mk_result(vec![mk_violation(
+            ViolationSeverity::Error,
+            "ComponentVersion",
+            Some("lodash"),
+            "missing version",
+        )]);
+        assert_eq!(compute_new_violations(&old, &new).len(), 1);
+
+        // Multiset: two identical keys in old, one in new -> 1 resolved, 0 new.
+        let dup = || {
+            mk_violation(
+                ViolationSeverity::Error,
+                "ComponentSupplier",
+                Some("left-pad"),
+                "missing supplier",
+            )
+        };
+        let old = mk_result(vec![dup(), dup()]);
+        let new = mk_result(vec![dup()]);
+        assert_eq!(compute_new_violations(&old, &new).len(), 0);
+        assert_eq!(compute_resolved_violations(&old, &new).len(), 1);
+    }
+
+    /// The shared detail/event lookup applies the same severity filter as the
+    /// table, so a selected index resolves to the violation the row shows.
+    #[test]
+    fn severity_filter_composes_with_key_diff() {
+        let old = mk_result(vec![]);
+        let new = mk_result(vec![
+            mk_violation(ViolationSeverity::Warning, "ReqA", None, "warn first"),
+            mk_violation(ViolationSeverity::Error, "ReqB", None, "error second"),
+        ]);
+
+        let selected = nth_diff_violation(
+            &old,
+            &new,
+            DiffComplianceViewMode::NewViolations,
+            ComplianceSeverityFilter::ErrorsOnly,
+            0,
+        )
+        .expect("one error-severity new violation");
+        assert_eq!(
+            selected.requirement, "ReqB",
+            "filtered index 0 must be the error row, matching the table"
+        );
+
+        // Unfiltered, index 0 is the warning row instead.
+        let unfiltered = nth_diff_violation(
+            &old,
+            &new,
+            DiffComplianceViewMode::NewViolations,
+            ComplianceSeverityFilter::All,
+            0,
+        )
+        .expect("first new violation");
+        assert_eq!(unfiltered.requirement, "ReqA");
     }
 }

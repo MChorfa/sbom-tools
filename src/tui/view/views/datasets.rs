@@ -25,10 +25,14 @@ pub fn render_datasets(frame: &mut Frame, area: Rect, app: &ViewApp) {
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
 
     if datasets.is_empty() {
-        let msg = Paragraph::new("No datasets found in this AI-BOM.")
-            .block(Block::default().borders(Borders::ALL).title(" Datasets "))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No datasets found",
+            Some("Requires CycloneDX data components"),
+            None,
+        );
         return;
     }
 

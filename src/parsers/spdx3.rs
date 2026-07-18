@@ -36,10 +36,30 @@ impl Spdx3Parser {
     /// Parse SPDX 3.0 JSON-LD content
     fn parse_json_ld(&self, content: &str) -> Result<NormalizedSbom, ParseError> {
         let content = super::strip_bom(content);
-        let doc: Spdx3Document =
+        let mut doc: Spdx3Document =
             serde_json::from_str(content).map_err(|e| ParseError::JsonError(e.to_string()))?;
 
+        // The official 3.0.1 JSON schema also permits a document that IS a
+        // single bare element (no @graph, no element array — the schema's
+        // else-branch; e.g. the spdx-3-model person1/tool1 examples). Such
+        // a document deserializes above as an empty Spdx3Document; re-read
+        // it as the one element it is.
+        if Self::is_bare_element(&doc) {
+            let element: Spdx3Element =
+                serde_json::from_str(content).map_err(|e| ParseError::JsonError(e.to_string()))?;
+            doc.element = Some(vec![element]);
+        }
+
         Ok(self.convert_to_normalized(doc))
+    }
+
+    /// Whether a parsed top-level document is actually a bare single
+    /// element (typed, but with no element/@graph payload and not an
+    /// SpdxDocument envelope).
+    fn is_bare_element(doc: &Spdx3Document) -> bool {
+        doc.element.is_none()
+            && doc.graph.is_none()
+            && doc.type_.as_deref().is_some_and(|t| t != "SpdxDocument")
     }
 
     /// Parse from a JSON reader (streaming)
@@ -47,8 +67,32 @@ impl Spdx3Parser {
         &self,
         reader: R,
     ) -> Result<NormalizedSbom, ParseError> {
-        let doc: Spdx3Document =
+        // Buffer into a Value so the rare bare-single-element form (see
+        // parse_json_ld) can be re-read as an element without a second
+        // pass over the stream. The clone below only happens for that form
+        // — a single element, so it stays small.
+        let value: serde_json::Value =
             serde_json::from_reader(reader).map_err(|e| ParseError::JsonError(e.to_string()))?;
+        let is_bare = value.get("element").is_none()
+            && value.get("@graph").is_none()
+            && value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| t != "SpdxDocument");
+        let bare_element = if is_bare {
+            Some(
+                serde_json::from_value::<Spdx3Element>(value.clone())
+                    .map_err(|e| ParseError::JsonError(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let mut doc: Spdx3Document =
+            serde_json::from_value(value).map_err(|e| ParseError::JsonError(e.to_string()))?;
+
+        if let Some(element) = bare_element {
+            doc.element = Some(vec![element]);
+        }
 
         Ok(self.convert_to_normalized(doc))
     }
@@ -64,7 +108,13 @@ impl Spdx3Parser {
         let mut annotations: Vec<Spdx3Annotation> = Vec::new();
         let mut vuln_assessments: Vec<Spdx3VulnAssessment> = Vec::new();
         let mut license_elements: HashMap<String, String> = HashMap::new();
-        let mut creation_info_nodes: HashMap<String, Spdx3CreationInfo> = HashMap::new();
+        // Standalone CreationInfo `@graph` nodes, keyed by their blank-node
+        // `@id`: canonical SPDX 3.0.1 puts one CreationInfo node in the graph
+        // and every element references it as `"creationInfo": "_:..."`.
+        let mut creation_info_map: HashMap<String, Spdx3CreationInfo> = HashMap::new();
+        // Bom / software_Sbom / Bundle collections, kept so the document's
+        // rootElement can be chased through an Sbom container to the package.
+        let mut collection_map: HashMap<String, Spdx3Collection> = HashMap::new();
         let mut seen_ids: HashSet<String> = HashSet::new();
         let mut duplicate_count: usize = 0;
 
@@ -103,6 +153,10 @@ impl Spdx3Parser {
                     | Spdx3Element::SoftwareAgent(a) => a.spdx_id.clone(),
                     Spdx3Element::LicenseExpression(l) => l.spdx_id.clone(),
                     Spdx3Element::SimpleLicensingText(l) => l.spdx_id.clone(),
+                    Spdx3Element::Bom(c) | Spdx3Element::Bundle(c) => c.spdx_id.clone(),
+                    // CreationInfo is not an Element; its blank-node "@id"
+                    // ("_:...") cannot collide with element spdxIds (IRIs).
+                    Spdx3Element::CreationInfo(ci) => ci.id.clone(),
                     _ => None,
                 };
                 if let Some(id) = &element_id
@@ -124,28 +178,43 @@ impl Spdx3Parser {
                     | Spdx3Element::LifecycleScopedRelationship(rel) => {
                         relationships.push(rel);
                     }
-                    // Resolve the agent type from the enum variant (like
-                    // resolved_vex_state below): serde's internally-tagged
-                    // enum consumes `type`, so Spdx3Agent's own tag field is
-                    // always None here — without this every Person and
-                    // Organization creator was typed Tool, which the BSI
-                    // §5.2.1 creator gate does not accept.
+                    // The agent kind lives in the enum variant: serde's
+                    // internally-tagged enum consumes the `type` key, so a
+                    // #[serde(rename = "type")] field on Spdx3Agent was never
+                    // populated and every creator classified as a Tool.
+                    // Record the variant here, before that information is lost.
                     Spdx3Element::Person(mut agent) => {
-                        agent.resolved_type = Some(CreatorType::Person);
+                        agent.resolved_type_tag = Some("Person");
                         if let Some(id) = &agent.spdx_id {
                             agent_map.insert(id.clone(), agent);
                         }
                     }
                     Spdx3Element::Organization(mut agent) => {
-                        agent.resolved_type = Some(CreatorType::Organization);
+                        agent.resolved_type_tag = Some("Organization");
                         if let Some(id) = &agent.spdx_id {
                             agent_map.insert(id.clone(), agent);
                         }
                     }
-                    Spdx3Element::Tool(mut agent) | Spdx3Element::SoftwareAgent(mut agent) => {
-                        agent.resolved_type = Some(CreatorType::Tool);
+                    Spdx3Element::Tool(mut agent) => {
+                        agent.resolved_type_tag = Some("Tool");
                         if let Some(id) = &agent.spdx_id {
                             agent_map.insert(id.clone(), agent);
+                        }
+                    }
+                    Spdx3Element::SoftwareAgent(mut agent) => {
+                        agent.resolved_type_tag = Some("SoftwareAgent");
+                        if let Some(id) = &agent.spdx_id {
+                            agent_map.insert(id.clone(), agent);
+                        }
+                    }
+                    Spdx3Element::CreationInfo(ci) => {
+                        if let Some(id) = &ci.id {
+                            creation_info_map.insert(id.clone(), ci);
+                        }
+                    }
+                    Spdx3Element::Bom(coll) | Spdx3Element::Bundle(coll) => {
+                        if let Some(id) = &coll.spdx_id {
+                            collection_map.insert(id.clone(), coll);
                         }
                     }
                     Spdx3Element::Vulnerability(vuln) => {
@@ -195,14 +264,6 @@ impl Spdx3Parser {
                             license_elements.insert(id, text);
                         }
                     }
-                    Spdx3Element::CreationInfo(node) => {
-                        // Shared creation-info node referenced from elements'
-                        // string-valued `creationInfo` (canonical @graph
-                        // serialization); collected by @id for resolution.
-                        if let Some(id) = node.id {
-                            creation_info_nodes.insert(id, node.info);
-                        }
-                    }
                     Spdx3Element::SpdxDocument(inner) => {
                         // In @graph serialization the document metadata lives
                         // on a node inside the graph, not the top level.
@@ -224,6 +285,21 @@ impl Spdx3Parser {
                         if doc.description.is_none() {
                             doc.description = inner.description;
                         }
+                        if doc.profile_conformance.is_none() {
+                            doc.profile_conformance = inner.profile_conformance;
+                        }
+                        if doc.data_license.is_none() {
+                            doc.data_license = inner.data_license;
+                        }
+                        if doc.namespace_map.is_none() {
+                            doc.namespace_map = inner.namespace_map;
+                        }
+                        if doc.imports.is_none() {
+                            doc.imports = inner.imports;
+                        }
+                        if doc.verified_using.is_none() {
+                            doc.verified_using = inner.verified_using;
+                        }
                     }
                     _ => {} // Skip unknown element types
                 }
@@ -237,20 +313,11 @@ impl Spdx3Parser {
             );
         }
 
-        // Resolve the document's creationInfo: an inline object, or — in the
-        // canonical flat-@graph serialization — a string reference into the
-        // CreationInfo nodes collected above.
-        let creation_info = doc
-            .creation_info
-            .as_ref()
-            .and_then(|ci| ci.resolve(&creation_info_nodes))
-            .cloned();
-
         // Build document metadata
-        let mut document = self.convert_metadata(&doc, creation_info.as_ref(), &agent_map);
-        // SPDX 3.0 expresses the BSI §5.2.2 "completeness of the dependency
-        // enumeration" via the relationships' explicit `completeness`
-        // property (the CycloneDX equivalent is compositions.aggregate).
+        let mut document = self.convert_metadata(&doc, &agent_map, &creation_info_map);
+        // BSI TR-03183-2 §5.2.2 requires the completeness of the dependency
+        // enumeration to be clearly indicated; SPDX 3 carries it per
+        // relationship.
         document.completeness_declaration = derive_completeness_declaration(&relationships);
         let mut sbom = NormalizedSbom::new(document);
 
@@ -280,12 +347,24 @@ impl Spdx3Parser {
             sbom.add_component(comp);
         }
 
-        // Set primary component from rootElement
+        // Set primary component from rootElement. Canonical documents chain
+        // SpdxDocument.rootElement → software_Sbom/Bom collection →
+        // collection.rootElement → package, so when the direct lookup misses,
+        // follow exactly one level of collection indirection (bounded, no
+        // recursion — a reference cycle cannot loop).
         if let Some(root_elements) = &doc.root_element {
-            for root_id in root_elements {
+            'roots: for root_id in root_elements {
                 if let Some(canonical_id) = id_map.get(root_id) {
                     sbom.set_primary_component(canonical_id.clone());
-                    break; // Use first root element as primary
+                    break; // Use first resolvable root element as primary
+                }
+                if let Some(coll) = collection_map.get(root_id) {
+                    for inner_id in coll.root_element.iter().flatten() {
+                        if let Some(canonical_id) = id_map.get(inner_id) {
+                            sbom.set_primary_component(canonical_id.clone());
+                            break 'roots;
+                        }
+                    }
                 }
             }
         }
@@ -318,9 +397,17 @@ impl Spdx3Parser {
         // Store SPDX 3.0-specific data in extensions (Phases 2, 4)
         let mut spdx_ext = serde_json::Map::new();
         if let Some(data_license) = &doc.data_license {
+            // Canonical 3.0.1 dataLicense is an IRI ref to a
+            // simplelicensing_LicenseExpression element — resolve it to the
+            // expression ("CC0-1.0"). Unresolvable values (inline literals,
+            // NoAssertion consts) keep the raw string.
+            let resolved = license_elements
+                .get(data_license)
+                .cloned()
+                .unwrap_or_else(|| data_license.clone());
             spdx_ext.insert(
                 "dataLicense".to_string(),
-                serde_json::Value::String(data_license.clone()),
+                serde_json::Value::String(resolved),
             );
         }
         if let Some(ns_map) = &doc.namespace_map
@@ -369,17 +456,31 @@ impl Spdx3Parser {
         sbom
     }
 
-    /// Convert SPDX 3.0 document metadata.
-    ///
-    /// `creation_info` is the document's creationInfo already resolved
-    /// through the shared `@graph` CreationInfo nodes (string-reference
-    /// form), or the inline object; `None` when absent or dangling.
+    /// Convert SPDX 3.0 document metadata
     fn convert_metadata(
         &self,
         doc: &Spdx3Document,
-        creation_info: Option<&Spdx3CreationInfo>,
         agent_map: &HashMap<String, Spdx3Agent>,
+        ci_map: &HashMap<String, Spdx3CreationInfo>,
     ) -> DocumentMetadata {
+        // Resolve the document's creationInfo: canonical @graph documents
+        // store a string ref to a standalone CreationInfo node; the inline
+        // object form resolves to itself. A document whose SpdxDocument-level
+        // creationInfo is absent or unresolvable but whose graph holds
+        // exactly ONE CreationInfo node unambiguously uses that one (with
+        // several, guessing would misattribute creators).
+        let creation_info = doc
+            .creation_info
+            .as_ref()
+            .and_then(|ci_ref| ci_ref.resolve(ci_map))
+            .or_else(|| {
+                if ci_map.len() == 1 {
+                    ci_map.values().next()
+                } else {
+                    None
+                }
+            });
+
         let created = creation_info
             .and_then(|ci| ci.created.as_ref())
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
@@ -433,15 +534,9 @@ impl Spdx3Parser {
             }
         }
 
-        // No declared specVersion stays empty — never fabricate one: the
-        // compliance version gates (e.g. BSI TR-03183-2 §4) deliberately
-        // skip an empty/unparseable spec_version instead of false-failing
-        // with a version the document never claimed (a fabricated "3.0"
-        // here made every specVersion-less SPDX 3 document hard-fail the
-        // §4 gate as "SPDX 3.0 < 3.0.1").
         let spec_version = creation_info
             .and_then(|ci| ci.spec_version.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| "3.0".to_string());
 
         // Extract profile conformance
         let profile_conformance = doc.profile_conformance.as_ref().map(|ps| ps.join(", "));
@@ -472,8 +567,6 @@ impl Spdx3Parser {
             vulnerability_disclosure_url: None,
             support_end_date: None,
             lifecycle_phase: None,
-            // Overridden by the caller with the relationship-derived value
-            // (see `derive_completeness_declaration`).
             completeness_declaration: crate::model::CompletenessDeclaration::Unknown,
             signature,
             distribution_classification: profile_conformance,
@@ -1435,21 +1528,10 @@ fn is_inverse_dependency(normalized: &str) -> bool {
     )
 }
 
-/// Fold the explicit `completeness` values declared on SPDX 3.0 dependency
-/// relationships into the document-level
-/// [`CompletenessDeclaration`](crate::model::CompletenessDeclaration).
-///
-/// SPDX 3.0/3.0.1 Relationships carry a `completeness` property
-/// (`complete` / `incomplete` / `noAssertion`) stating whether the `to`
-/// list exhausts the relationship — for dependency relationships this is
-/// exactly the "completeness of the dependency enumeration" BSI
-/// TR-03183-2 §5.2.2 requires to be clearly indicated (the CycloneDX
-/// equivalent is compositions.aggregate). Any dependency relationship
-/// declared `incomplete` makes the enumeration incomplete; otherwise an
-/// explicit `complete` wins over `noAssertion` (mapped to NotSpecified);
-/// no declared value anywhere stays Unknown. Non-dependency relationships
-/// (licence, AFFECTS, …) are ignored — their completeness does not
-/// describe the dependency enumeration.
+/// Fold per-relationship `completeness` assertions (SPDX 3) into the
+/// document-level [`CompletenessDeclaration`]. Only dependency-family
+/// relationships count; any `incomplete` wins, then `complete`, then
+/// `noAssertion` (NotSpecified), else Unknown.
 fn derive_completeness_declaration(
     relationships: &[Spdx3Relationship],
 ) -> crate::model::CompletenessDeclaration {
@@ -1538,8 +1620,8 @@ struct Spdx3Document {
     type_: Option<String>,
     /// Document name
     name: Option<String>,
-    /// Creation info (inline object or string reference into the `@graph`)
-    creation_info: Option<Spdx3CreationInfoOrRef>,
+    /// Creation info
+    creation_info: Option<Spdx3CreationInfoRef>,
     /// Data license (always CC0-1.0)
     data_license: Option<String>,
     /// Namespace map for cross-document references (Phase 4)
@@ -1572,6 +1654,12 @@ struct Spdx3Document {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct Spdx3CreationInfo {
+    /// Blank-node identifier (`"@id": "_:creationinfo"`) carried when this
+    /// appears as a standalone `@graph` node (the canonical serialization);
+    /// inline objects have none. CreationInfo is not an Element, so it is
+    /// identified by `@id`, never `spdxId`.
+    #[serde(rename = "@id")]
+    id: Option<String>,
     /// Creation timestamp
     created: Option<String>,
     /// References to Agent elements who created this
@@ -1584,46 +1672,32 @@ struct Spdx3CreationInfo {
     comment: Option<String>,
 }
 
-/// `creationInfo` as serialized on elements: either an inline object, or —
-/// in the canonical SPDX 3.0/3.0.1 flat-`@graph` serialization emitted by
-/// official SPDX tooling and the spec's own annex examples — a string
-/// reference (e.g. `"_:creationinfo"`) to a shared top-level `CreationInfo`
-/// node in the `@graph`. Typing the field as the struct alone hard-failed
-/// the whole parse (`invalid type: string`) for every canonical document.
+/// Element `creationInfo`: the SPDX 3.0.1 schema allows either an inline
+/// CreationInfo object or a string reference (blank node / IRI) to a
+/// standalone CreationInfo node in `@graph`. Canonical serializations (the
+/// spec examples, tools-java, the official Python bindings) always use the
+/// string form — typing this as a plain struct made every spec-canonical
+/// document fail to parse with "invalid type: string, expected struct"
+/// (issue #305).
 #[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
-enum Spdx3CreationInfoOrRef {
-    /// Inline object form.
+enum Spdx3CreationInfoRef {
     Inline(Spdx3CreationInfo),
-    /// Reference to a shared `CreationInfo` node by its `@id`.
     Ref(String),
 }
 
-impl Spdx3CreationInfoOrRef {
-    /// Resolve to the inline info, or the shared `@graph` node the string
-    /// reference points at (`None` when the reference dangles).
+impl Spdx3CreationInfoRef {
+    /// Resolve to concrete creation info: inline objects resolve to
+    /// themselves; string refs look up the indexed standalone node.
     fn resolve<'a>(
         &'a self,
-        nodes: &'a HashMap<String, Spdx3CreationInfo>,
+        ci_map: &'a HashMap<String, Spdx3CreationInfo>,
     ) -> Option<&'a Spdx3CreationInfo> {
         match self {
-            Self::Inline(info) => Some(info),
-            Self::Ref(id) => nodes.get(id),
+            Self::Inline(ci) => Some(ci),
+            Self::Ref(id) => ci_map.get(id),
         }
     }
-}
-
-/// A shared `CreationInfo` node appearing as its own element in a JSON-LD
-/// `@graph`, addressed from elements' string-valued `creationInfo` via its
-/// blank-node `@id`.
-#[derive(Debug, Deserialize, Clone)]
-struct Spdx3CreationInfoNode {
-    /// Blank-node identifier (e.g. `"_:creationinfo"`).
-    #[serde(rename = "@id", alias = "spdxId")]
-    id: Option<String>,
-    /// The creation-info payload itself.
-    #[serde(flatten)]
-    info: Spdx3CreationInfo,
 }
 
 /// Polymorphic SPDX 3.0 element
@@ -1652,6 +1726,10 @@ enum Spdx3Element {
     Organization(Spdx3Agent),
     Tool(Spdx3Agent),
     SoftwareAgent(Spdx3Agent),
+    /// Bom / software_Sbom collection: not a component itself, but its
+    /// rootElement links the SpdxDocument to the primary package (canonical
+    /// documents chain SpdxDocument → Sbom → package).
+    #[serde(alias = "software_Sbom", alias = "Sbom")]
     Bom(Spdx3Collection),
     Bundle(Spdx3Collection),
     /// SPDX 3.0 license expression element
@@ -1719,10 +1797,11 @@ enum Spdx3Element {
     /// strings, so it uses a metadata-only struct rather than the full
     /// `Spdx3Document` (whose `element` is objects).
     SpdxDocument(Box<Spdx3DocumentMeta>),
-    /// A shared `CreationInfo` node in a flat `@graph` (the canonical
-    /// SPDX 3.0/3.0.1 serialization): elements point at it via a
-    /// string-valued `creationInfo` carrying its `@id`.
-    CreationInfo(Spdx3CreationInfoNode),
+    /// Standalone CreationInfo node in a JSON-LD `@graph` (the canonical
+    /// serialization): elements point at it via `"creationInfo": "_:..."`
+    /// string refs. Previously fell into `Unknown`, silently discarding the
+    /// document's created timestamp, creators, and spec version.
+    CreationInfo(Spdx3CreationInfo),
     /// Catch-all for unknown types (deserialized as raw JSON)
     #[serde(other)]
     Unknown,
@@ -1736,9 +1815,18 @@ enum Spdx3Element {
 struct Spdx3DocumentMeta {
     spdx_id: Option<String>,
     name: Option<String>,
-    creation_info: Option<Spdx3CreationInfoOrRef>,
+    creation_info: Option<Spdx3CreationInfoRef>,
     root_element: Option<Vec<String>>,
     description: Option<String>,
+    profile_conformance: Option<Vec<String>>,
+    /// AnyLicenseInfo reference — in canonical documents an IRI string
+    /// pointing at a simplelicensing_LicenseExpression element (resolved
+    /// against the graph when emitting extensions), not a bare literal.
+    data_license: Option<String>,
+    namespace_map: Option<Vec<Spdx3NamespaceMap>>,
+    #[serde(rename = "import")]
+    imports: Option<Vec<Spdx3ExternalMap>>,
+    verified_using: Option<Vec<Spdx3IntegrityMethod>>,
 }
 
 /// SPDX 3.0 Package (Software profile)
@@ -1748,12 +1836,10 @@ struct Spdx3DocumentMeta {
 struct Spdx3Package {
     spdx_id: Option<String>,
     name: Option<String>,
-    // ── Software-profile properties. The official SPDX 3.0/3.0.1 JSON-LD
-    //    context prefixes these with `software_` ("software_packageVersion");
-    //    the unprefixed spelling also occurs in the wild. Alias both, the
-    //    same way the ELEMENT types alias `software_Package` above — without
-    //    the aliases the prefixed (canonical) spelling silently deserialized
-    //    to None, stripping versions/purls from conformant documents. ──
+    // Software-profile properties: canonical JSON-LD serializes them with
+    // the `software_` prefix (the @context defines the prefixed names, and
+    // the official examples use them exclusively); the unprefixed aliases
+    // stay accepted for pre-existing compact producers.
     #[serde(alias = "software_packageVersion")]
     package_version: Option<String>,
     #[serde(alias = "software_packageUrl")]
@@ -1774,16 +1860,17 @@ struct Spdx3Package {
     primary_purpose: Option<String>,
     #[serde(alias = "software_additionalPurpose")]
     additional_purpose: Option<Vec<String>>,
-    #[serde(alias = "software_contentIdentifier")]
+    // Deliberately NOT aliased to "software_contentIdentifier": the canonical
+    // property is an ARRAY of ContentIdentifier objects, so binding it to
+    // this (unused) string field would hard-fail spec-valid documents.
     content_identifier: Option<String>,
     #[serde(alias = "software_attributionText")]
     attribution_text: Option<Vec<String>>,
-    #[serde(alias = "software_supportLevel")]
     support_level: Option<String>,
     valid_until_time: Option<String>,
     built_time: Option<String>,
     release_time: Option<String>,
-    creation_info: Option<Spdx3CreationInfoOrRef>,
+    creation_info: Option<Spdx3CreationInfoRef>,
     // ── AI profile (ai_AIPackage). camelCase rename_all would drop the `ai_`
     //    prefix, so each key is renamed explicitly. ──
     #[serde(rename = "ai_typeOfModel")]
@@ -1915,6 +2002,31 @@ where
     })
 }
 
+/// Deserialize a snippet range that is either the compact string form
+/// ("310:420") or the canonical SPDX 3.0.1 PositiveIntegerRange object
+/// (`{"beginIntegerRange": 310, "endIntegerRange": 420}`). Unknown shapes
+/// yield `None` rather than failing the whole document — a mistyped range
+/// must never make an otherwise-valid SBOM unreadable.
+fn de_range_opt<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| match v {
+        serde_json::Value::String(s) => Some(s),
+        serde_json::Value::Object(map) => {
+            let get = |k: &str| map.get(k).and_then(serde_json::Value::as_u64);
+            match (get("beginIntegerRange"), get("endIntegerRange")) {
+                (Some(begin), Some(end)) => Some(format!("{begin}:{end}")),
+                (Some(begin), None) => Some(format!("{begin}:")),
+                (None, Some(end)) => Some(format!(":{end}")),
+                (None, None) => None,
+            }
+        }
+        _ => None,
+    }))
+}
+
 /// Normalize one SPDX 3.0 `ai_metric` value into the typed `MetricEntry`.
 ///
 /// SPDX metric entries are commonly objects such as `{ "ai_name": "accuracy",
@@ -1957,15 +2069,13 @@ fn spdx3_metric_to_entry(value: serde_json::Value) -> crate::model::MetricEntry 
 struct Spdx3File {
     spdx_id: Option<String>,
     name: Option<String>,
-    /// Software-profile property: the canonical JSON-LD context spells it
-    /// `software_copyrightText` (see the alias note on [`Spdx3Package`]).
     #[serde(alias = "software_copyrightText")]
     copyright_text: Option<String>,
     description: Option<String>,
     verified_using: Option<Vec<Spdx3IntegrityMethod>>,
     #[serde(alias = "software_fileKind")]
     file_kind: Option<String>,
-    creation_info: Option<Spdx3CreationInfoOrRef>,
+    creation_info: Option<Spdx3CreationInfoRef>,
 }
 
 /// SPDX 3.0 Snippet (Software profile)
@@ -1975,25 +2085,31 @@ struct Spdx3File {
 struct Spdx3Snippet {
     spdx_id: Option<String>,
     name: Option<String>,
-    /// Software-profile properties: the canonical JSON-LD context prefixes
-    /// them with `software_` (see the alias note on [`Spdx3Package`]).
     #[serde(alias = "software_copyrightText")]
     copyright_text: Option<String>,
     description: Option<String>,
-    /// Byte range within the containing file (e.g., "310:420").
-    /// Deliberately NOT aliased to `software_byteRange`: the canonical
-    /// serialization of that term is a PositiveIntegerRange OBJECT, which
-    /// would hard-fail this string field instead of being ignored.
+    /// Byte range within the containing file. Compact producers emit a
+    /// "310:420" string; canonical 3.0.1 emits a PositiveIntegerRange object
+    /// — both normalize to the "begin:end" string form.
+    #[serde(
+        alias = "software_byteRange",
+        default,
+        deserialize_with = "de_range_opt"
+    )]
     byte_range: Option<String>,
-    /// Line range within the containing file (e.g., "5:23"); see
-    /// [`Self::byte_range`] for why `software_lineRange` is not aliased.
+    /// Line range within the containing file (same dual form as byte_range)
+    #[serde(
+        alias = "software_lineRange",
+        default,
+        deserialize_with = "de_range_opt"
+    )]
     line_range: Option<String>,
     /// Containing file reference
     #[serde(alias = "software_snippetFromFile")]
     snippet_from_file: Option<String>,
     /// Integrity methods (hashes)
     verified_using: Option<Vec<Spdx3IntegrityMethod>>,
-    creation_info: Option<Spdx3CreationInfoOrRef>,
+    creation_info: Option<Spdx3CreationInfoRef>,
 }
 
 /// SPDX 3.0 Relationship (first-class element)
@@ -2008,7 +2124,7 @@ struct Spdx3Relationship {
     start_time: Option<String>,
     end_time: Option<String>,
     completeness: Option<String>,
-    creation_info: Option<Spdx3CreationInfoOrRef>,
+    creation_info: Option<Spdx3CreationInfoRef>,
 }
 
 /// SPDX 3.0 Vulnerability (Security profile)
@@ -2019,12 +2135,17 @@ struct Spdx3Vulnerability {
     spdx_id: Option<String>,
     name: Option<String>,
     description: Option<String>,
+    // Canonical 3.0.1 serializes the Security-profile timestamps with the
+    // security_ prefix (the @context defines only the prefixed names).
+    #[serde(alias = "security_publishedTime")]
     published_time: Option<String>,
+    #[serde(alias = "security_modifiedTime")]
     modified_time: Option<String>,
+    #[serde(alias = "security_withdrawnTime")]
     withdrawn_time: Option<String>,
     external_identifier: Option<Vec<Spdx3ExternalIdentifier>>,
     external_ref: Option<Vec<Spdx3ExternalRef>>,
-    creation_info: Option<Spdx3CreationInfoOrRef>,
+    creation_info: Option<Spdx3CreationInfoRef>,
 }
 
 /// SPDX 3.0 Vulnerability Assessment Relationship
@@ -2035,19 +2156,35 @@ struct Spdx3VulnAssessment {
     spdx_id: Option<String>,
     from: Option<String>,
     to: Option<Vec<String>>,
+    // Canonical 3.0.1 serializes Security-profile payload properties with
+    // the security_ prefix; two also differ at the base name (vectorString,
+    // justificationType). Without these aliases the type-tag aliases routed
+    // canonical assessments to the right variant but every field parsed as
+    // None — CVSS scores and VEX justifications silently vanished.
+    #[serde(alias = "security_assessedElement")]
     assessed_element: Option<String>,
+    #[serde(alias = "security_publishedTime")]
     published_time: Option<String>,
+    #[serde(alias = "security_modifiedTime")]
     modified_time: Option<String>,
     supplied_by: Option<String>,
     /// CVSS fields
+    #[serde(alias = "security_score")]
     score: Option<f32>,
+    #[serde(alias = "security_severity")]
     severity: Option<String>,
+    #[serde(alias = "security_vectorString", alias = "vectorString")]
     vector: Option<String>,
     /// VEX fields
+    #[serde(alias = "security_statusNotes")]
     status_notes: Option<String>,
+    #[serde(alias = "security_justificationType", alias = "justificationType")]
     justification: Option<String>,
+    #[serde(alias = "security_impactStatement")]
     impact_statement: Option<String>,
+    #[serde(alias = "security_actionStatement")]
     action_statement: Option<String>,
+    #[serde(alias = "security_vexVersion")]
     vex_version: Option<String>,
     /// Resolved VEX state (set during first-pass from enum variant)
     #[serde(skip)]
@@ -2077,36 +2214,22 @@ struct Spdx3Agent {
     spdx_id: Option<String>,
     name: Option<String>,
     description: Option<String>,
-    /// The original type tag for discriminating agent types. Only populated
-    /// when the agent is deserialized standalone: routed through the
-    /// internally-tagged [`Spdx3Element`] enum, serde consumes `type` and
-    /// this stays `None` — the variant is recorded in
-    /// [`Self::resolved_type`] instead.
-    #[serde(rename = "type")]
-    agent_type_tag: Option<String>,
-    /// Creator type resolved from the [`Spdx3Element`] variant during the
-    /// first categorization pass (see the note on
-    /// [`Self::agent_type_tag`]).
+    /// Agent kind, resolved from the matched `Spdx3Element` variant during
+    /// the first pass. NOT deserialized: serde's internally-tagged enum
+    /// consumes the `type` key before the payload struct sees it, so a
+    /// `#[serde(rename = "type")]` field here was always `None` and every
+    /// agent was misclassified as a Tool.
     #[serde(skip)]
-    resolved_type: Option<CreatorType>,
+    resolved_type_tag: Option<&'static str>,
 }
 
 impl Spdx3Agent {
-    /// Get the creator type from the resolved element variant, falling back
-    /// to the raw type tag (standalone deserialization).
+    /// Get the creator type based on the resolved agent kind
     fn agent_type(&self) -> (CreatorType, &'static str) {
-        match &self.resolved_type {
-            Some(CreatorType::Person) => return (CreatorType::Person, "Person"),
-            Some(CreatorType::Organization) => {
-                return (CreatorType::Organization, "Organization");
-            }
-            Some(CreatorType::Tool) => return (CreatorType::Tool, "Tool"),
-            None => {}
-        }
-        match self.agent_type_tag.as_deref() {
+        match self.resolved_type_tag {
             Some("Person") => (CreatorType::Person, "Person"),
             Some("Organization") => (CreatorType::Organization, "Organization"),
-            Some("Tool") | Some("SoftwareAgent") => (CreatorType::Tool, "Tool"),
+            Some("Tool" | "SoftwareAgent") => (CreatorType::Tool, "Tool"),
             _ => (CreatorType::Tool, "Agent"),
         }
     }
@@ -2172,11 +2295,7 @@ struct Spdx3ExternalRef {
     comment: Option<String>,
 }
 
-/// SPDX 3.0 License Expression element (SimpleLicensing profile).
-/// The canonical JSON-LD context prefixes the profile's properties
-/// (`simplelicensing_licenseExpression`), mirroring the element-type
-/// aliases above — both spellings must deserialize or canonical documents
-/// silently lose their licences (a BSI §5.2.2 gating field).
+/// SPDX 3.0 License Expression element (SimpleLicensing profile)
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -2188,8 +2307,7 @@ struct Spdx3LicenseExpression {
     license_list_version: Option<String>,
 }
 
-/// SPDX 3.0 Simple Licensing Text element (see the alias note on
-/// [`Spdx3LicenseExpression`]).
+/// SPDX 3.0 Simple Licensing Text element
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -2529,231 +2647,344 @@ mod tests {
         assert!((total - 101.0).abs() < 1e-9, "got {total}");
     }
 
-    /// The canonical SPDX 3.0.1 flat-@graph serialization shares ONE
-    /// CreationInfo node ({"type":"CreationInfo","@id":"_:creationinfo",…})
-    /// that elements reference via a string-valued `creationInfo`. This
-    /// hard-failed the whole parse ("invalid type: string"), so the only
-    /// SPDX format the BSI §4 gate accepts could not be validated at all.
+    /// The verbatim minimal reproducer from issue #305: canonical SPDX 3.0.1
+    /// @graph serialization with string creationInfo refs, a standalone
+    /// CreationInfo node, a software_Sbom container between document and
+    /// package, and software_-prefixed property names. Must parse to one
+    /// component with full document metadata (was: 0 components in v0.1.22,
+    /// hard serde error after the first @graph fix).
     #[test]
-    fn spdx3_shared_creationinfo_string_ref_parses() {
-        let doc = include_str!("../../tests/fixtures/spdx3/shared-creationinfo.spdx3.json");
+    fn spdx3_issue_305_canonical_reproducer_parses() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "@graph": [
+            { "type": "CreationInfo", "@id": "_:ci", "specVersion": "3.0.1",
+              "created": "2026-07-10T15:23:05Z",
+              "createdBy": ["urn:example:creator"], "createdUsing": ["urn:example:tool"] },
+            { "type": "Organization", "spdxId": "urn:example:creator",
+              "creationInfo": "_:ci", "name": "Example Org" },
+            { "type": "Tool", "spdxId": "urn:example:tool",
+              "creationInfo": "_:ci", "name": "ExampleTool" },
+            { "type": "SpdxDocument", "spdxId": "urn:example:document",
+              "creationInfo": "_:ci", "name": "example",
+              "profileConformance": ["core", "software", "simpleLicensing"],
+              "dataLicense": "urn:example:license-cc0",
+              "rootElement": ["urn:example:sbom"] },
+            { "type": "simplelicensing_LicenseExpression",
+              "spdxId": "urn:example:license-cc0", "creationInfo": "_:ci",
+              "simplelicensing_licenseExpression": "CC0-1.0" },
+            { "type": "software_Sbom", "spdxId": "urn:example:sbom",
+              "creationInfo": "_:ci", "rootElement": ["urn:example:package"],
+              "software_sbomType": ["source"] },
+            { "type": "software_Package", "spdxId": "urn:example:package",
+              "creationInfo": "_:ci", "name": "example-package",
+              "software_packageVersion": "1.0.0",
+              "software_primaryPurpose": "source" }
+          ]
+        }"#;
         let sbom = Spdx3Parser::new()
             .parse_str(doc)
-            .expect("canonical shared-creationinfo serialization must parse");
+            .expect("canonical SPDX 3.0.1 JSON-LD must parse");
 
-        // The document-level creationInfo resolves through the shared node.
+        assert_eq!(sbom.component_count(), 1, "the software_Package must parse");
+        let pkg = spdx3_component(&sbom, "example-package");
+        assert_eq!(pkg.version.as_deref(), Some("1.0.0"));
+
+        assert_eq!(sbom.document.name.as_deref(), Some("example"));
         assert_eq!(sbom.document.spec_version, "3.0.1");
-        assert!(
-            sbom.document.has_known_timestamp(),
-            "created must resolve through the shared CreationInfo node"
+        assert_eq!(
+            sbom.document.created,
+            DateTime::parse_from_rfc3339("2026-07-10T15:23:05Z")
+                .expect("valid RFC3339")
+                .with_timezone(&Utc)
         );
         assert!(
             sbom.document
                 .creators
                 .iter()
-                .any(|c| c.creator_type == CreatorType::Organization
-                    && c.name.starts_with("Demo Corp")),
-            "createdBy must resolve to the Organization agent, got {:?}",
+                .any(|c| matches!(c.creator_type, CreatorType::Organization)
+                    && c.name == "Example Org"),
+            "createdBy must resolve through the CreationInfo node to the \
+             Organization agent, got {:?}",
             sbom.document.creators
         );
-
-        // Elements carrying string creationInfo refs parse normally.
-        assert_eq!(sbom.component_count(), 2);
-        assert_eq!(
-            spdx3_component(&sbom, "app").version.as_deref(),
-            Some("1.0.0")
+        assert!(
+            sbom.document
+                .creators
+                .iter()
+                .any(|c| matches!(c.creator_type, CreatorType::Tool) && c.name == "ExampleTool"),
+            "createdUsing must resolve to the Tool agent, got {:?}",
+            sbom.document.creators
         );
-        assert!(edge_between(&sbom, "app", "lib"));
-
-        // The dependsOn relationship's completeness maps to the model.
         assert_eq!(
-            sbom.document.completeness_declaration,
-            crate::model::CompletenessDeclaration::Complete
+            sbom.primary_component().map(|c| c.name.as_str()),
+            Some("example-package"),
+            "rootElement must resolve through the software_Sbom container"
+        );
+        assert_eq!(
+            sbom.document.distribution_classification.as_deref(),
+            Some("core, software, simpleLicensing"),
+            "profileConformance must lift from the @graph SpdxDocument node"
+        );
+        let ext = sbom
+            .extensions
+            .spdx
+            .as_ref()
+            .expect("spdx extensions present");
+        assert_eq!(
+            ext.get("dataLicense").and_then(|v| v.as_str()),
+            Some("CC0-1.0"),
+            "dataLicense IRI ref must resolve through the LicenseExpression element"
         );
     }
 
-    /// A dangling creationInfo reference must degrade gracefully (metadata
-    /// unknown), never fail the parse or fabricate values.
+    /// A bare single-element document (no @graph, no element array) is
+    /// valid per the official 3.0.1 JSON schema's else-branch (e.g. the
+    /// spdx-3-model person1/tool1 examples) and must parse to that element
+    /// on both the string and reader paths.
     #[test]
-    fn spdx3_dangling_creationinfo_ref_degrades_gracefully() {
+    fn spdx3_bare_single_element_document_parses() {
         let doc = r#"{
           "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
-          "type": "SpdxDocument", "spdxId": "urn:doc",
-          "creationInfo": "_:nonexistent",
-          "element": [
-            {"type": "software_Package", "spdxId": "urn:pkg", "name": "pkg",
-             "creationInfo": "_:nonexistent",
-             "software_packageVersion": "1.0"}
+          "type": "software_Package", "spdxId": "urn:pkg", "name": "solo",
+          "software_packageVersion": "3.2.1",
+          "creationInfo": {"specVersion": "3.0.1", "created": "2026-01-01T00:00:00Z"}
+        }"#;
+        let sbom = Spdx3Parser::new()
+            .parse_str(doc)
+            .expect("bare element must parse");
+        assert_eq!(sbom.component_count(), 1);
+        let pkg = spdx3_component(&sbom, "solo");
+        assert_eq!(pkg.version.as_deref(), Some("3.2.1"));
+
+        let sbom2 = Spdx3Parser::new()
+            .parse_json_reader(doc.as_bytes())
+            .expect("reader path must parse the bare element too");
+        assert_eq!(sbom2.component_count(), 1);
+    }
+
+    /// The other schema-valid creationInfo form — an inline object (the
+    /// 3.0.1 schema's CreationInfo_derived is anyOf [object, ref]) — must
+    /// keep working alongside the string-ref form.
+    #[test]
+    fn spdx3_creation_info_inline_object_form_parses() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "@graph": [
+            {"type": "Organization", "spdxId": "urn:org", "name": "Acme"},
+            {"type": "SpdxDocument", "spdxId": "urn:doc", "name": "d",
+             "creationInfo": {"specVersion": "3.0.1",
+               "created": "2026-01-01T00:00:00Z", "createdBy": ["urn:org"]},
+             "rootElement": ["urn:pkg"]},
+            {"type": "software_Package", "spdxId": "urn:pkg", "name": "p",
+             "creationInfo": {"specVersion": "3.0.1", "created": "2026-01-01T00:00:00Z"}}
           ]
         }"#;
         let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
         assert_eq!(sbom.component_count(), 1);
-        assert_eq!(sbom.document.spec_version, "");
-        assert!(!sbom.document.has_known_timestamp());
+        assert_eq!(sbom.document.spec_version, "3.0.1");
+        assert!(
+            sbom.document
+                .creators
+                .iter()
+                .any(|c| matches!(c.creator_type, CreatorType::Organization) && c.name == "Acme"),
+            "inline creationInfo createdBy must resolve, got {:?}",
+            sbom.document.creators
+        );
     }
 
-    /// A document whose creationInfo carries no specVersion must NOT be
-    /// assigned a fabricated "3.0" — the version stays empty so compliance
-    /// version gates (BSI §4) skip instead of failing with a version the
-    /// document never declared.
+    /// Creator kinds come from the element variant (Person / Organization /
+    /// Tool / SoftwareAgent): serde's internally-tagged enum consumes the
+    /// `type` key, so the old tag-field approach classified every agent as
+    /// a Tool — has_org_creator could never pass for SPDX 3.0 documents.
     #[test]
-    fn spdx3_missing_spec_version_stays_empty() {
+    fn spdx3_agent_kinds_resolved_from_variant() {
         let doc = r#"{
           "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
-          "type": "SpdxDocument", "spdxId": "urn:doc",
-          "creationInfo": {"created": "2026-01-15T10:00:00Z"},
-          "element": [
-            {"type": "software_Package", "spdxId": "urn:pkg", "name": "pkg"}
+          "@graph": [
+            {"type": "CreationInfo", "@id": "_:ci", "specVersion": "3.0.1",
+             "created": "2026-01-01T00:00:00Z",
+             "createdBy": ["urn:alice", "urn:acme"], "createdUsing": ["urn:tool"]},
+            {"type": "Person", "spdxId": "urn:alice", "creationInfo": "_:ci", "name": "Alice"},
+            {"type": "Organization", "spdxId": "urn:acme", "creationInfo": "_:ci", "name": "Acme"},
+            {"type": "Tool", "spdxId": "urn:tool", "creationInfo": "_:ci", "name": "maker"},
+            {"type": "SpdxDocument", "spdxId": "urn:doc", "creationInfo": "_:ci", "name": "d"}
           ]
         }"#;
         let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
-        assert_eq!(
-            sbom.document.spec_version, "",
-            "no declared specVersion must stay empty, not become a fabricated \"3.0\""
-        );
-        // Silent side: a declared specVersion still comes through verbatim.
+        let kind_of = |name: &str| {
+            sbom.document
+                .creators
+                .iter()
+                .find(|c| c.name == name)
+                .map(|c| c.creator_type.clone())
+                .unwrap_or_else(|| panic!("creator {name} missing: {:?}", sbom.document.creators))
+        };
+        assert!(matches!(kind_of("Alice"), CreatorType::Person));
+        assert!(matches!(kind_of("Acme"), CreatorType::Organization));
+        assert!(matches!(kind_of("maker"), CreatorType::Tool));
+    }
+
+    /// Canonical software_-prefixed property names must map like their
+    /// unprefixed counterparts (the JSON-LD @context defines the prefixed
+    /// forms; official examples use them exclusively).
+    #[test]
+    fn spdx3_prefixed_software_properties_accepted() {
         let doc = r#"{
           "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
           "type": "SpdxDocument", "spdxId": "urn:doc",
-          "creationInfo": {"specVersion": "3.0.1", "created": "2026-01-15T10:00:00Z"},
-          "element": []
+          "element": [
+            {"type": "software_Package", "spdxId": "urn:pkg", "name": "p",
+             "software_packageVersion": "2.1.0",
+             "software_packageUrl": "pkg:cargo/p@2.1.0",
+             "software_copyrightText": "(c) Example",
+             "software_primaryPurpose": "library"}
+          ]
+        }"#;
+        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
+        let pkg = spdx3_component(&sbom, "p");
+        assert_eq!(pkg.version.as_deref(), Some("2.1.0"));
+        assert_eq!(pkg.identifiers.purl.as_deref(), Some("pkg:cargo/p@2.1.0"));
+        assert_eq!(pkg.copyright.as_deref(), Some("(c) Example"));
+        assert!(matches!(pkg.component_type, ComponentType::Library));
+    }
+
+    /// The simplelicensing_-prefixed license expression key must resolve
+    /// through hasDeclaredLicense (was silently dropped, losing the license).
+    #[test]
+    fn spdx3_prefixed_license_expression_resolves() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "type": "SpdxDocument", "spdxId": "urn:doc",
+          "element": [
+            {"type": "software_Package", "spdxId": "urn:pkg", "name": "p"},
+            {"type": "simplelicensing_LicenseExpression", "spdxId": "urn:lic",
+             "simplelicensing_licenseExpression": "MIT"},
+            {"type": "Relationship", "spdxId": "urn:rel",
+             "relationshipType": "hasDeclaredLicense",
+             "from": "urn:pkg", "to": ["urn:lic"]}
+          ]
+        }"#;
+        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
+        let pkg = spdx3_component(&sbom, "p");
+        assert!(
+            pkg.licenses.declared.iter().any(|l| l.expression == "MIT"),
+            "prefixed license expression must resolve, got {:?}",
+            pkg.licenses.declared
+        );
+    }
+
+    /// Document metadata must resolve when the graph has a single
+    /// CreationInfo node but nothing references it resolvably (here: no
+    /// SpdxDocument node at all) — pins the single-node fallback in
+    /// convert_metadata.
+    #[test]
+    fn spdx3_single_creation_info_fallback_resolves_metadata() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "@graph": [
+            {"type": "CreationInfo", "@id": "_:ci", "specVersion": "3.0.1",
+             "created": "2026-02-02T00:00:00Z", "createdBy": ["urn:org"]},
+            {"type": "Organization", "spdxId": "urn:org", "creationInfo": "_:ci", "name": "Acme"},
+            {"type": "software_Package", "spdxId": "urn:pkg", "creationInfo": "_:ci", "name": "p"}
+          ]
         }"#;
         let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
         assert_eq!(sbom.document.spec_version, "3.0.1");
+        assert!(
+            sbom.document
+                .creators
+                .iter()
+                .any(|c| matches!(c.creator_type, CreatorType::Organization) && c.name == "Acme"),
+            "the lone CreationInfo node must supply document metadata, got {:?}",
+            sbom.document.creators
+        );
     }
 
-    /// The official SPDX 3.0.1 JSON-LD context prefixes software-profile
-    /// properties ("software_packageVersion"); both spellings must
-    /// deserialize. The spdx3_lib helper already uses the prefixed form —
-    /// before the aliases its version/purl silently deserialized to None.
+    /// Primary-component resolution must chase through a Bundle exactly
+    /// like a Bom/software_Sbom (pins the Bundle half of the or-pattern).
     #[test]
-    fn spdx3_software_prefixed_properties_deserialize() {
+    fn spdx3_bundle_rootelement_indirection_sets_primary() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "@graph": [
+            {"type": "SpdxDocument", "spdxId": "urn:doc", "name": "d",
+             "rootElement": ["urn:bundle"]},
+            {"type": "Bundle", "spdxId": "urn:bundle", "rootElement": ["urn:pkg"]},
+            {"type": "software_Package", "spdxId": "urn:pkg", "name": "p"}
+          ]
+        }"#;
+        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
+        assert_eq!(
+            sbom.primary_component().map(|c| c.name.as_str()),
+            Some("p"),
+            "rootElement must resolve through the Bundle"
+        );
+    }
+
+    /// Canonical software_byteRange/lineRange are PositiveIntegerRange
+    /// OBJECTS; they must normalize to the compact "begin:end" form and
+    /// must never hard-fail the document (an alias binding them to a plain
+    /// string field did exactly that).
+    #[test]
+    fn spdx3_canonical_snippet_ranges_accepted() {
+        let doc = r#"{
+          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+          "type": "SpdxDocument", "spdxId": "urn:doc",
+          "element": [
+            {"type": "software_Snippet", "spdxId": "urn:snip", "name": "s",
+             "software_byteRange": {"beginIntegerRange": 310, "endIntegerRange": 420},
+             "software_lineRange": {"beginIntegerRange": 5, "endIntegerRange": 23}}
+          ]
+        }"#;
+        let sbom = Spdx3Parser::new()
+            .parse_str(doc)
+            .expect("canonical range objects must not fail the parse");
+        let snip = spdx3_component(&sbom, "s");
+        let desc = snip.description.as_deref().unwrap_or_default();
+        assert!(
+            desc.contains("310:420") && desc.contains("5:23"),
+            "ranges must normalize to begin:end, got {desc:?}"
+        );
+    }
+
+    /// Canonical security_-prefixed assessment payloads must be extracted:
+    /// the type-tag aliases already routed these variants, but every payload
+    /// field deserialized as None — CVSS scores silently vanished.
+    #[test]
+    fn spdx3_canonical_security_assessment_fields_extracted() {
         let sbom = spdx3_lib(
-            r#"{"type": "Relationship", "spdxId": "urn:rel:noop",
-                "relationshipType": "DEPENDS_ON", "from": "urn:pkg:lib", "to": []}"#,
+            r#"{"type": "security_CvssV3VulnAssessmentRelationship",
+                "spdxId": "urn:assess:cvss", "from": "urn:vuln:cve",
+                "security_assessedElement": "urn:pkg:lib",
+                "security_score": 9.8, "security_severity": "critical",
+                "security_vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}"#,
         );
         let lib = spdx3_component(&sbom, "lib");
-        assert_eq!(
-            lib.version.as_deref(),
-            Some("1.0"),
-            "software_packageVersion must deserialize"
+        let vuln = lib.vulnerabilities.first().expect("vulnerability attached");
+        let cvss = vuln.cvss.first().expect("canonical CVSS payload extracted");
+        assert!(
+            (cvss.base_score - 9.8_f32).abs() < 1e-4,
+            "got {}",
+            cvss.base_score
         );
-        assert_eq!(
-            lib.identifiers.purl.as_deref(),
-            Some("pkg:npm/lib@1.0"),
-            "software_packageUrl must deserialize"
-        );
-
-        // Sibling software-profile properties carry the prefix too.
-        let pkg: Spdx3Package = serde_json::from_str(
-            r#"{
-                "type": "software_Package",
-                "spdxId": "urn:x:p",
-                "name": "p",
-                "software_downloadLocation": "https://example.com/p.tgz",
-                "software_copyrightText": "Copyright 2026",
-                "software_primaryPurpose": "library"
-            }"#,
-        )
-        .expect("prefixed package properties should deserialize");
-        assert_eq!(
-            pkg.download_location.as_deref(),
-            Some("https://example.com/p.tgz")
-        );
-        assert_eq!(pkg.copyright_text.as_deref(), Some("Copyright 2026"));
-        assert_eq!(pkg.primary_purpose.as_deref(), Some("library"));
-
-        // Silent side: the unprefixed spelling keeps working.
-        let pkg: Spdx3Package = serde_json::from_str(
-            r#"{"type": "software_Package", "spdxId": "urn:x:q", "name": "q",
-                "packageVersion": "2.0", "packageUrl": "pkg:npm/q@2.0"}"#,
-        )
-        .expect("unprefixed package properties should deserialize");
-        assert_eq!(pkg.package_version.as_deref(), Some("2.0"));
-        assert_eq!(pkg.package_url.as_deref(), Some("pkg:npm/q@2.0"));
+        assert!(matches!(cvss.version, CvssVersion::V31));
     }
 
-    /// SPDX 3 relationship `completeness` on dependency relationships must
-    /// map onto the document-level CompletenessDeclaration (BSI §5.2.2:
-    /// "the completeness of this enumeration MUST be clearly indicated").
+    /// Guard against alias typos routing Sbom containers to Unknown (the
+    /// same class of bug test_spdx3_ai_dataset_type_tags_deserialize guards
+    /// for AI/Dataset packages).
     #[test]
-    fn spdx3_relationship_completeness_maps_to_declaration() {
-        use crate::model::CompletenessDeclaration;
-        let with_completeness = |value: &str| {
-            spdx3_lib(&format!(
-                r#"{{"type": "Relationship", "spdxId": "urn:rel:dep",
-                    "relationshipType": "dependsOn", "from": "urn:pkg:lib",
-                    "to": [], "completeness": "{value}"}}"#
+    fn spdx3_sbom_container_type_tags_deserialize() {
+        for tag in ["software_Sbom", "Sbom", "Bom"] {
+            let el: Spdx3Element = serde_json::from_str(&format!(
+                r#"{{"type": "{tag}", "spdxId": "urn:x:bom", "rootElement": ["urn:p"]}}"#
             ))
-            .document
-            .completeness_declaration
-        };
-        assert_eq!(
-            with_completeness("complete"),
-            CompletenessDeclaration::Complete
-        );
-        assert_eq!(
-            with_completeness("incomplete"),
-            CompletenessDeclaration::Incomplete
-        );
-        assert_eq!(
-            with_completeness("noAssertion"),
-            CompletenessDeclaration::NotSpecified
-        );
-
-        // Silent side: no completeness declared anywhere stays Unknown.
-        let sbom = spdx3_lib(
-            r#"{"type": "Relationship", "spdxId": "urn:rel:dep",
-                "relationshipType": "dependsOn", "from": "urn:pkg:lib", "to": []}"#,
-        );
-        assert_eq!(
-            sbom.document.completeness_declaration,
-            CompletenessDeclaration::Unknown
-        );
-    }
-
-    /// `incomplete` on any dependency relationship wins over `complete`,
-    /// and completeness on NON-dependency relationships is ignored (it does
-    /// not describe the dependency enumeration).
-    #[test]
-    fn spdx3_completeness_incomplete_wins_and_non_dependency_ignored() {
-        use crate::model::CompletenessDeclaration;
-        let doc = r#"{
-          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
-          "type": "SpdxDocument", "spdxId": "urn:doc",
-          "element": [
-            {"type": "software_Package", "spdxId": "urn:a", "name": "a"},
-            {"type": "software_Package", "spdxId": "urn:b", "name": "b"},
-            {"type": "Relationship", "spdxId": "urn:rel:1",
-             "relationshipType": "dependsOn", "from": "urn:a", "to": ["urn:b"],
-             "completeness": "complete"},
-            {"type": "Relationship", "spdxId": "urn:rel:2",
-             "relationshipType": "dependsOn", "from": "urn:b", "to": [],
-             "completeness": "incomplete"}
-          ]
-        }"#;
-        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
-        assert_eq!(
-            sbom.document.completeness_declaration,
-            CompletenessDeclaration::Incomplete,
-            "any incomplete dependency enumeration makes the declaration Incomplete"
-        );
-
-        let doc = r#"{
-          "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
-          "type": "SpdxDocument", "spdxId": "urn:doc",
-          "element": [
-            {"type": "software_Package", "spdxId": "urn:a", "name": "a"},
-            {"type": "Relationship", "spdxId": "urn:rel:1",
-             "relationshipType": "contains", "from": "urn:a", "to": [],
-             "completeness": "complete"}
-          ]
-        }"#;
-        let sbom = Spdx3Parser::new().parse_str(doc).expect("parse");
-        assert_eq!(
-            sbom.document.completeness_declaration,
-            CompletenessDeclaration::Unknown,
-            "completeness on a non-dependency relationship must not count"
-        );
+            .unwrap_or_else(|e| panic!("{tag} should deserialize: {e}"));
+            assert!(
+                matches!(el, Spdx3Element::Bom(_)),
+                "tag {tag} must map to the Bom collection variant"
+            );
+        }
     }
 }

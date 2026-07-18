@@ -1,0 +1,28 @@
+---
+source: src/tui/view/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
+
+[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  »
+
+────────────────────────────────────────────────────────────────────────────────
+┌ Components ─┐┌ Vulnerabili┐┌ Licenses ───┐┌ Document Info ───────────────────┐
+│      9      ││      0     ││      3      ││Name:    acme-webapp              │
+│ Components  ││Vulnerabilit││Unique Licens││Format:   CycloneDX 1.5           │
+│2 ecosystems ││ 0C 0H 0M 0L││  1 unknown  ││Created: 2024-06-15 10:00:00 (AGE)│
+└─────────────┘└────────────┘└─────────────┘│                                  │
+┌ Statistics ──────────────────────────────┐│[e] Export (JSON, SARIF, Markdown,│
+│── Vulnerability Severity ──              │└──────────────────────────────────┘
+│  Critical ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)│┌ Top Vulnerable Components (0) ───┐
+│      High ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││Component                      C M│
+│    Medium ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││                                  │
+│       Low ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││                                  │
+│── End-of-Life Status ──                  ││                                  │
+│       EOL ████░░░░░░░░░░░░░░░░    2 (22%)││                                  │
+│  Near EOL ██░░░░░░░░░░░░░░░░░░    1 (11%)││                                  │
+│  Sec Only ██░░░░░░░░░░░░░░░░░░    1 (11%)││                                  │
+│ Supported █████████████████░░░    8 (88%)││                                  │
+└──────────────────────────────────────────┘└──────────────────────────────────┘
+ Components: 9 │ Vulns: 0 │ Licenses: 3
+                  Tab switch  / search  e export  ? help  q quit

@@ -92,30 +92,15 @@ fn get_selected_violation_component(app: &App) -> Option<String> {
     let idx = ctx.compliance.selected_standard;
     let old = ctx.old_compliance_results?.get(idx)?;
     let new = ctx.new_compliance_results?.get(idx)?;
-    let selected = ctx.compliance.selected_violation;
 
-    use crate::tui::app_states::DiffComplianceViewMode;
-    let violation = match ctx.compliance.view_mode {
-        DiffComplianceViewMode::Overview => None,
-        DiffComplianceViewMode::NewViolations => {
-            let old_messages: std::collections::HashSet<&str> =
-                old.violations.iter().map(|v| v.message.as_str()).collect();
-            new.violations
-                .iter()
-                .filter(|v| !old_messages.contains(v.message.as_str()))
-                .nth(selected)
-        }
-        DiffComplianceViewMode::ResolvedViolations => {
-            let new_messages: std::collections::HashSet<&str> =
-                new.violations.iter().map(|v| v.message.as_str()).collect();
-            old.violations
-                .iter()
-                .filter(|v| !new_messages.contains(v.message.as_str()))
-                .nth(selected)
-        }
-        DiffComplianceViewMode::OldViolations => old.violations.get(selected),
-        DiffComplianceViewMode::NewSbomViolations => new.violations.get(selected),
-    };
-
-    violation.and_then(|v| v.element.clone())
+    // Resolve through the shared key-based, severity-filtered lookup so the
+    // "go to component" action targets the same violation the table shows.
+    crate::tui::views::nth_diff_violation(
+        old,
+        new,
+        ctx.compliance.view_mode,
+        ctx.compliance.severity_filter,
+        ctx.compliance.selected_violation,
+    )
+    .and_then(|v| v.element.clone())
 }

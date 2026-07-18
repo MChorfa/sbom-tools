@@ -6,7 +6,7 @@ use crate::tui::view::app::{ComponentDetailTab, FocusPanel, TreeFilter, ViewApp}
 use crate::tui::widgets::{SeverityBadge, Tree, TreeNode, truncate_str};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
 };
 
 pub fn render_tree(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
@@ -53,6 +53,40 @@ fn render_tree_panel(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     } else {
         format!(" Components ({}) ", app.stats.component_count)
     };
+
+    // Zero matches previously rendered a silent blank panel; explain why it's
+    // empty and how to recover (mirrors the dependency tree's empty state).
+    if app.cached_tree_nodes.is_empty() {
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+        let inner = block.inner(chunks[1]);
+        frame.render_widget(block, chunks[1]);
+
+        let (message, hint) = if !app.tree_search_query.is_empty() {
+            (
+                format!("No components match \"{}\"", app.tree_search_query),
+                "Press [/] to edit search or [Esc] to clear",
+            )
+        } else if !matches!(app.tree_filter, TreeFilter::All) {
+            (
+                format!("No components match filter '{}'", app.tree_filter.label()),
+                "Press [f] to change filter",
+            )
+        } else {
+            ("No components in this SBOM".to_string(), "")
+        };
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            inner,
+            "\u{2205}",
+            &message,
+            if hint.is_empty() { None } else { Some(hint) },
+            None,
+        );
+        return;
+    }
 
     let tree = Tree::new(&app.cached_tree_nodes)
         .block(
@@ -167,7 +201,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp, filtered_coun
     frame.render_widget(para, area);
 }
 
-fn render_detail_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
+fn render_detail_panel(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     let scheme = colors();
     let border_color = if app.focus_panel == FocusPanel::Right {
         scheme.border_focused
@@ -189,21 +223,24 @@ fn render_detail_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
         let scroll = app.component_detail_scroll;
 
-        // Render tab content based on selected tab
-        match app.component_tab {
+        // Render tab content based on selected tab. Each arm returns the
+        // clamped scroll; writing it back makes event-side over-scroll
+        // (unbounded saturating_add) self-correcting within one frame.
+        let clamped = match app.component_tab {
             ComponentDetailTab::Overview => {
-                render_overview_tab(frame, chunks[1], comp, border_color, scroll);
+                render_overview_tab(frame, chunks[1], comp, border_color, scroll)
             }
             ComponentDetailTab::Identifiers => {
-                render_identifiers_tab(frame, chunks[1], comp, border_color, scroll);
+                render_identifiers_tab(frame, chunks[1], comp, border_color, scroll)
             }
             ComponentDetailTab::Vulnerabilities => {
-                render_vulnerabilities_tab(frame, chunks[1], comp, border_color, scroll);
+                render_vulnerabilities_tab(frame, chunks[1], comp, border_color, scroll)
             }
             ComponentDetailTab::Dependencies => {
-                render_dependencies_tab(frame, chunks[1], app, comp, border_color, scroll);
+                render_dependencies_tab(frame, chunks[1], app, comp, border_color, scroll)
             }
-        }
+        };
+        app.component_detail_scroll = clamped;
     } else if let Some((group_label, child_ids)) = app.get_selected_group_info() {
         // Group node selected - show group-specific stats
         render_group_stats_panel(frame, area, app, &group_label, &child_ids, border_color);
@@ -271,6 +308,69 @@ fn render_component_tab_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// Shared tail for the component-detail tabs: titled block, wrap-aware
+/// scroll clamp, and a scrollbar when the content overflows. Returns the
+/// clamped scroll so the caller can write it back to app state.
+fn render_detail_paragraph(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    border_color: Color,
+    lines: Vec<Line<'_>>,
+    scroll: u16,
+) -> u16 {
+    let scheme = colors();
+    let block = Block::default()
+        .title(title.to_string())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    let content_height = crate::tui::shared::text::wrapped_line_count(&lines, inner.width)
+        .min(u16::MAX as usize) as u16;
+    let clamped = scroll.min(content_height.saturating_sub(inner.height));
+    let panel = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: true })
+        .scroll((clamped, 0));
+    frame.render_widget(panel, area);
+    if content_height > inner.height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .thumb_style(Style::default().fg(scheme.secondary))
+            .track_style(Style::default().fg(scheme.muted));
+        let mut sb = ScrollbarState::new(content_height as usize).position(clamped as usize);
+        frame.render_stateful_widget(scrollbar, inner, &mut sb);
+    }
+    clamped
+}
+
+/// Badge background for an EOL status (shared by the risk-summary badge and
+/// the End-of-Life detail section).
+fn eol_status_color(scheme: &crate::tui::theme::ColorScheme, status: EolStatus) -> Color {
+    match status {
+        EolStatus::Supported => scheme.success,
+        EolStatus::SecurityOnly => scheme.warning,
+        EolStatus::ApproachingEol => scheme.high,
+        EolStatus::EndOfLife => scheme.critical,
+        _ => scheme.muted,
+    }
+}
+
+/// Badge background for a staleness level (shared by the risk-summary badge
+/// and the Staleness detail section).
+fn staleness_color(
+    scheme: &crate::tui::theme::ColorScheme,
+    level: crate::model::StalenessLevel,
+) -> Color {
+    use crate::model::StalenessLevel;
+    match level {
+        StalenessLevel::Fresh => scheme.success,
+        StalenessLevel::Aging => scheme.warning,
+        StalenessLevel::Stale => scheme.high,
+        StalenessLevel::Abandoned | StalenessLevel::Deprecated => scheme.critical,
+        StalenessLevel::Archived => scheme.error,
+    }
+}
+
 /// Render the Overview tab - basic component info
 fn render_overview_tab(
     frame: &mut Frame,
@@ -278,7 +378,7 @@ fn render_overview_tab(
     comp: &Component,
     border_color: Color,
     scroll: u16,
-) {
+) -> u16 {
     let scheme = colors();
     let label_style = Style::default().fg(scheme.text_muted);
     let absent = Style::default().fg(scheme.muted);
@@ -291,6 +391,57 @@ fn render_overview_tab(
         comp.name.clone(),
         Style::default().fg(scheme.text).bold(),
     )]));
+
+    // Compact risk summary: the signals a security tool exists for, above
+    // the identifier plumbing.
+    {
+        use crate::model::StalenessLevel;
+        use crate::tui::view::severity::severity_category;
+        let mut risk_spans: Vec<Span> = Vec::new();
+        if !comp.vulnerabilities.is_empty() {
+            risk_spans.push(Span::styled(
+                format!(" {} vulns ", comp.vulnerabilities.len()),
+                SeverityBadge::style_for(severity_category(&comp.vulnerabilities)),
+            ));
+        }
+        if let Some(eol) = &comp.eol
+            && eol.status != EolStatus::Supported
+        {
+            let eol_color = eol_status_color(&scheme, eol.status);
+            if !risk_spans.is_empty() {
+                risk_spans.push(Span::raw(" "));
+            }
+            risk_spans.push(Span::styled(
+                format!(" {} ", eol.status.label()),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(eol_color)
+                    .bold(),
+            ));
+        }
+        if let Some(staleness) = &comp.staleness
+            && staleness.level != StalenessLevel::Fresh
+        {
+            let stale_color = staleness_color(&scheme, staleness.level);
+            if !risk_spans.is_empty() {
+                risk_spans.push(Span::raw(" "));
+            }
+            risk_spans.push(Span::styled(
+                format!(" {} ", staleness.level.label()),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(stale_color)
+                    .bold(),
+            ));
+        }
+        if risk_spans.is_empty() {
+            risk_spans.push(Span::styled(
+                "no known risk signals",
+                Style::default().fg(scheme.success),
+            ));
+        }
+        lines.push(Line::from(risk_spans));
+    }
 
     // Version (always shown)
     lines.push(Line::from(vec![
@@ -327,84 +478,6 @@ fn render_overview_tab(
         ));
     }
     lines.push(Line::from(type_spans));
-
-    // ── Identifiers ──
-
-    // PURL (always shown, full value — wrap handles overflow)
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("PURL:      ", label_style),
-        if let Some(purl) = &comp.identifiers.purl {
-            Span::styled(purl.as_str(), Style::default().fg(scheme.info))
-        } else {
-            Span::styled("—", absent)
-        },
-    ]));
-
-    // Hash (always shown, full value — wrap handles overflow)
-    if let Some(hash) = comp.hashes.first() {
-        let algo = hash.algorithm.to_string();
-        lines.push(Line::from(vec![
-            Span::styled("Hash:      ", label_style),
-            Span::styled(format!("{algo}:"), Style::default().fg(scheme.text_muted)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("           ", label_style),
-            Span::styled(&hash.value, Style::default().fg(scheme.text)),
-        ]));
-    } else {
-        lines.push(Line::from(vec![
-            Span::styled("Hash:      ", label_style),
-            Span::styled("—", absent),
-        ]));
-    }
-
-    // ── Supplier ──
-
-    if let Some(supplier) = &comp.supplier {
-        lines.push(Line::from(""));
-        lines.push(Line::styled(
-            "Supplier:",
-            Style::default().fg(scheme.accent).bold(),
-        ));
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::raw(&supplier.name),
-        ]));
-        if let Some(url) = supplier.urls.first() {
-            lines.push(Line::from(vec![
-                Span::styled("  URL: ", label_style),
-                Span::styled(url, Style::default().fg(scheme.info)),
-            ]));
-        }
-    }
-
-    // ── Licenses (always shown) ──
-
-    lines.push(Line::from(""));
-    if comp.licenses.declared.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled("Licenses:  ", label_style),
-            Span::styled("None declared", absent),
-        ]));
-    } else {
-        lines.push(Line::styled(
-            "Licenses:",
-            Style::default().fg(scheme.success).bold(),
-        ));
-        for lic in comp.licenses.declared.iter().take(3) {
-            lines.push(Line::from(vec![
-                Span::styled("  • ", label_style),
-                Span::raw(&lic.expression),
-            ]));
-        }
-        if comp.licenses.declared.len() > 3 {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  ... and {} more", comp.licenses.declared.len() - 3),
-                label_style,
-            )]));
-        }
-    }
 
     // ── Vulnerabilities (always shown) ──
 
@@ -447,15 +520,8 @@ fn render_overview_tab(
     // ── Staleness ──
 
     if let Some(staleness) = &comp.staleness {
-        use crate::model::StalenessLevel;
         lines.push(Line::from(""));
-        let stale_color = match staleness.level {
-            StalenessLevel::Fresh => scheme.success,
-            StalenessLevel::Aging => scheme.warning,
-            StalenessLevel::Stale => scheme.high,
-            StalenessLevel::Abandoned | StalenessLevel::Deprecated => scheme.critical,
-            StalenessLevel::Archived => scheme.error,
-        };
+        let stale_color = staleness_color(&scheme, staleness.level);
         lines.push(Line::from(vec![
             Span::styled("Staleness: ", label_style),
             Span::styled(
@@ -477,15 +543,8 @@ fn render_overview_tab(
     // ── End-of-Life ──
 
     if let Some(eol) = &comp.eol {
-        use crate::model::EolStatus;
         lines.push(Line::from(""));
-        let eol_color = match eol.status {
-            EolStatus::Supported => scheme.success,
-            EolStatus::SecurityOnly => scheme.warning,
-            EolStatus::ApproachingEol => scheme.high,
-            EolStatus::EndOfLife => scheme.critical,
-            _ => scheme.muted,
-        };
+        let eol_color = eol_status_color(&scheme, eol.status);
         lines.push(Line::from(vec![
             Span::styled(format!("{} End-of-Life: ", eol.status.icon()), label_style),
             Span::styled(
@@ -556,6 +615,66 @@ fn render_overview_tab(
         }
     }
 
+    // ── Identifiers ──
+
+    // PURL (always shown, full value — wrap handles overflow)
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("PURL:      ", label_style),
+        if let Some(purl) = &comp.identifiers.purl {
+            Span::styled(purl.as_str(), Style::default().fg(scheme.info))
+        } else {
+            Span::styled("—", absent)
+        },
+    ]));
+
+    // ── Supplier ──
+
+    if let Some(supplier) = &comp.supplier {
+        lines.push(Line::from(""));
+        lines.push(Line::styled(
+            "Supplier:",
+            Style::default().fg(scheme.accent).bold(),
+        ));
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::raw(&supplier.name),
+        ]));
+        if let Some(url) = supplier.urls.first() {
+            lines.push(Line::from(vec![
+                Span::styled("  URL: ", label_style),
+                Span::styled(url, Style::default().fg(scheme.info)),
+            ]));
+        }
+    }
+
+    // ── Licenses (always shown) ──
+
+    lines.push(Line::from(""));
+    if comp.licenses.declared.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Licenses:  ", label_style),
+            Span::styled("None declared", absent),
+        ]));
+    } else {
+        lines.push(Line::styled(
+            "Licenses:",
+            Style::default().fg(scheme.success).bold(),
+        ));
+        for lic in comp.licenses.declared.iter().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled("  • ", label_style),
+                Span::raw(&lic.expression),
+            ]));
+        }
+        if comp.licenses.declared.len() > 3 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  ... and {} more", comp.licenses.declared.len() - 3),
+                label_style,
+            )]));
+        }
+    }
+
     // ── ML model / dataset metadata (CycloneDX ML BOM, SPDX 3.0 AI) ──
     lines.extend(crate::tui::shared::components::render_ml_dataset_lines(
         comp.ml_model.as_ref(),
@@ -592,17 +711,7 @@ fn render_overview_tab(
         ),
     ]));
 
-    let panel = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(" Overview ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
-        )
-        .wrap(Wrap { trim: true })
-        .scroll((scroll, 0));
-
-    frame.render_widget(panel, area);
+    render_detail_paragraph(frame, area, " Overview ", border_color, lines, scroll)
 }
 
 /// Render the Identifiers tab - PURL, CPE, SWID, hashes
@@ -612,7 +721,7 @@ fn render_identifiers_tab(
     comp: &Component,
     border_color: Color,
     scroll: u16,
-) {
+) -> u16 {
     let scheme = colors();
     let mut lines = vec![];
     let width = area.width as usize;
@@ -735,17 +844,7 @@ fn render_identifiers_tab(
         ));
     }
 
-    let panel = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(" Identifiers ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
-        )
-        .wrap(Wrap { trim: true })
-        .scroll((scroll, 0));
-
-    frame.render_widget(panel, area);
+    render_detail_paragraph(frame, area, " Identifiers ", border_color, lines, scroll)
 }
 
 /// Render the Vulnerabilities tab - detailed vuln list
@@ -755,7 +854,7 @@ fn render_vulnerabilities_tab(
     comp: &Component,
     border_color: Color,
     scroll: u16,
-) {
+) -> u16 {
     let scheme = colors();
     let mut lines = vec![];
     let width = area.width as usize;
@@ -826,17 +925,14 @@ fn render_vulnerabilities_tab(
         }
     }
 
-    let panel = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(" Vulnerabilities ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
-        )
-        .wrap(Wrap { trim: true })
-        .scroll((scroll, 0));
-
-    frame.render_widget(panel, area);
+    render_detail_paragraph(
+        frame,
+        area,
+        " Vulnerabilities ",
+        border_color,
+        lines,
+        scroll,
+    )
 }
 
 /// Render the Dependencies tab - direct dependencies
@@ -847,7 +943,7 @@ fn render_dependencies_tab(
     comp: &Component,
     border_color: Color,
     scroll: u16,
-) {
+) -> u16 {
     let scheme = colors();
     let mut lines = vec![];
 
@@ -963,17 +1059,7 @@ fn render_dependencies_tab(
         }
     }
 
-    let panel = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(" Dependencies ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
-        )
-        .wrap(Wrap { trim: true })
-        .scroll((scroll, 0));
-
-    frame.render_widget(panel, area);
+    render_detail_paragraph(frame, area, " Dependencies ", border_color, lines, scroll)
 }
 
 /// Render component stats panel when no component is selected

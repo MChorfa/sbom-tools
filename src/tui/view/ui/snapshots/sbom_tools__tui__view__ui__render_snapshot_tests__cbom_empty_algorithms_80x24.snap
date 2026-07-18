@@ -1,0 +1,28 @@
+---
+source: src/tui/view/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  VIEW  │ SBOM │ CycloneDX  │ [CBOM]
+
+« [2] Algorithms  │ [3] Certs  │ [4] Keys  │ [5] Protocols  │ [6] Quality  »
+
+────────────────────────────────────────────────────────────────────────────────
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│                                       ∅                                      │
+│                                                                              │
+│                              No algorithms found                             │
+│                                                                              │
+│             Requires CycloneDX 1.6+ CBOM data (cryptoProperties)             │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ Algo: 0 │ Certs: 0 │ Keys: 0 │ Quantum: 100%
+     …  s sort  ↑↓ select │  Tab switch  / search  e export  ? help  q quit

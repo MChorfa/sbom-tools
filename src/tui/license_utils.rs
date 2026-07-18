@@ -79,8 +79,12 @@ fn find_operator(expr: &str, op: &str) -> Option<usize> {
     None
 }
 
-/// License category for classification
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// License category for classification.
+///
+/// Declaration order is a risk gradient (Permissive < WeakCopyleft <
+/// StrongCopyleft < NetworkCopyleft < Proprietary < PublicDomain < Unknown);
+/// `Ord` follows it, so `BTreeMap`-keyed views iterate in risk order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LicenseCategory {
     Permissive,
     WeakCopyleft,

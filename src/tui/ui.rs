@@ -13,7 +13,7 @@ use super::widgets::{
 use crate::config::TuiPreferences;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::io::{self, stdout};
 
@@ -68,6 +68,7 @@ pub fn run_tui(app: &mut App) -> io::Result<()> {
 /// Main render function
 fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    app.last_frame_area = Some(area);
 
     // Check minimum terminal size
     if check_terminal_size(area.width, area.height).is_err() {
@@ -79,7 +80,13 @@ fn render(frame: &mut Frame, app: &mut App) {
     match app.mode {
         AppMode::MultiDiff => {
             if let Some(ref result) = app.data.multi_diff_result {
-                views::render_multi_dashboard(frame, area, result, &app.tabs.multi_diff);
+                views::render_multi_dashboard(
+                    frame,
+                    area,
+                    result,
+                    &app.tabs.multi_diff,
+                    app.status_message.as_deref(),
+                );
             }
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
@@ -87,7 +94,13 @@ fn render(frame: &mut Frame, app: &mut App) {
         }
         AppMode::Timeline => {
             if let Some(ref result) = app.data.timeline_result {
-                views::render_timeline(frame, area, result, &app.tabs.timeline);
+                views::render_timeline(
+                    frame,
+                    area,
+                    result,
+                    &app.tabs.timeline,
+                    app.status_message.as_deref(),
+                );
             }
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
@@ -95,7 +108,13 @@ fn render(frame: &mut Frame, app: &mut App) {
         }
         AppMode::Matrix => {
             if let Some(ref result) = app.data.matrix_result {
-                views::render_matrix(frame, area, result, &app.tabs.matrix);
+                views::render_matrix(
+                    frame,
+                    area,
+                    result,
+                    &app.tabs.matrix,
+                    app.status_message.as_deref(),
+                );
             }
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
@@ -122,6 +141,14 @@ fn render(frame: &mut Frame, app: &mut App) {
 
     // Render tabs with shortcuts
     render_tabs(frame, chunks[1], app);
+
+    // Record the side-by-side panel viewport height before the read-only
+    // RenderContext is built: content area minus context bar (2) and panel
+    // borders (2). The scroll clamp keeps the selected row inside this window.
+    if app.active_tab == TabKind::SideBySide {
+        let rows = chunks[2].height.saturating_sub(4) as usize;
+        app.side_by_side_state_mut().set_viewport_rows(rows);
+    }
 
     // Render content based on active tab.
     // Migrated tabs use RenderContext (read-only); unmigrated tabs still use &mut App.
@@ -164,10 +191,6 @@ fn render(frame: &mut Frame, app: &mut App) {
     render_footer(frame, chunks[4], app);
 
     // Render overlays
-    if app.overlays.show_help {
-        render_help_overlay(frame, area, diff_tab_count(app));
-    }
-
     if app.overlays.search.active {
         render_search_overlay(frame, area, &app.overlays.search);
     }
@@ -185,6 +208,13 @@ fn render(frame: &mut Frame, app: &mut App) {
     if app.overlays.threshold_tuning.visible {
         super::views::render_threshold_tuning(frame, &app.overlays.threshold_tuning);
     }
+
+    // Cross-view overlays (K shortcuts, D deep-dive). The K/D handlers set
+    // these visible in Diff/View mode too, but only the multi-mode render
+    // branches painted them — leaving an invisible modal swallowing input.
+    // Safe unconditionally: each inner renderer self-gates on .visible, and
+    // the view switcher's V key is mode-gated to Multi/Timeline/Matrix.
+    render_cross_view_overlays(frame, app);
 }
 
 /// Build a human-readable label for an SBOM: "name@version" or just "name".
@@ -330,30 +360,10 @@ pub(crate) fn diff_tab_label(key: &str, title: &str) -> String {
     format!("[{key}] {title} ")
 }
 
-fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
+fn render_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
+    use unicode_width::UnicodeWidthStr;
+
     let tabs_data = diff_tab_entries(app);
-
-    let titles: Vec<Line> = tabs_data
-        .iter()
-        .map(|(kind, key, title)| {
-            let is_active = *kind == app.active_tab;
-            let key_style = if is_active {
-                Style::default().fg(colors().accent).bold()
-            } else {
-                Style::default().fg(colors().muted)
-            };
-            let title_style = if is_active {
-                Style::default().fg(colors().accent).bold()
-            } else {
-                Style::default().fg(colors().text_muted)
-            };
-
-            Line::from(vec![
-                Span::styled(format!("[{key}]"), key_style),
-                Span::styled(format!(" {title} "), title_style),
-            ])
-        })
-        .collect();
 
     // Derive selection from the actual entry order (handles the variable
     // GraphChanges/Source positions without a parallel index table).
@@ -362,43 +372,57 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         .position(|(kind, _, _)| *kind == app.active_tab)
         .unwrap_or(0);
 
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(colors().border)),
-        )
-        .highlight_style(Style::default().fg(colors().accent))
-        .select(selected_idx)
-        .divider(Span::styled(" │ ", Style::default().fg(colors().muted)));
+    // Window the entries against the real width. The ratatui Tabs widget
+    // truncated silently, hiding half the tabs at 80 cols with no indicator.
+    let widths: Vec<u16> = tabs_data
+        .iter()
+        .map(|(_, key, title)| UnicodeWidthStr::width(diff_tab_label(key, title).as_str()) as u16)
+        .collect();
+    let window = crate::tui::shared::tab_window(&widths, 3, selected_idx, area.width);
+    app.tab_window = window;
+
+    let mut spans: Vec<Span> = Vec::new();
+    if window.clipped_left {
+        spans.push(Span::styled(
+            "\u{ab} ",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+    for (i, (kind, key, title)) in tabs_data[window.start..window.end].iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(
+                " \u{2502} ",
+                Style::default().fg(colors().muted),
+            ));
+        }
+        let is_active = *kind == app.active_tab;
+        let key_style = if is_active {
+            Style::default().fg(colors().accent).bold()
+        } else {
+            Style::default().fg(colors().muted)
+        };
+        let title_style = if is_active {
+            Style::default().fg(colors().accent).bold()
+        } else {
+            Style::default().fg(colors().text_muted)
+        };
+        spans.push(Span::styled(format!("[{key}]"), key_style));
+        spans.push(Span::styled(format!(" {title} "), title_style));
+    }
+    if window.clipped_right {
+        spans.push(Span::styled(
+            " \u{bb}",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+
+    let tabs = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(colors().border)),
+    );
 
     frame.render_widget(tabs, area);
-}
-
-/// Number of number-key-addressable tabs currently shown in the diff-mode tab
-/// bar. Mirrors the tab set assembled in [`render_tabs`] so the help overlay's
-/// "Jump to tab" hint never advertises a number the user cannot reach.
-fn diff_tab_count(app: &App) -> usize {
-    // Base tabs: Summary, Components, Dependencies, Licenses, Vulnerabilities,
-    // Quality (always present).
-    let mut count = 6;
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
-        // Compliance + Side-by-side.
-        count += 2;
-    }
-    if app
-        .data
-        .diff_result
-        .as_ref()
-        .is_some_and(|r| !r.graph_changes.is_empty())
-    {
-        count += 1;
-    }
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
-        // Source.
-        count += 1;
-    }
-    count
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
@@ -512,32 +536,60 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Get tab-specific hints based on mode
-    let tab_name = match app.active_tab {
-        TabKind::Summary | TabKind::Overview => "summary",
-        TabKind::Tree => "components",
-        TabKind::Components => "components",
-        TabKind::Dependencies => "dependencies",
-        TabKind::Licenses => "licenses",
-        TabKind::Vulnerabilities => "vulnerabilities",
-        TabKind::Quality => "quality",
-        TabKind::Compliance => "compliance",
-        TabKind::SideBySide => "sidebyside",
-        TabKind::GraphChanges => "graph",
-        TabKind::Source => "source",
-    };
+    // Tab-specific hints come from the active tab's ViewState::shortcuts()
+    // primaries — the same source that feeds the ?/K overlay, so the footer
+    // and the help surface can no longer drift.
+    let owned: Vec<(String, String)> = app
+        .active_view_state()
+        .map(|v| {
+            v.shortcuts()
+                .into_iter()
+                .filter(|s| s.primary)
+                .map(|s| (s.key, s.description))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut hints: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(k, d)| (k.as_str(), d.as_str()))
+        .collect();
+    hints.extend(FooterHints::global());
 
-    let hints = FooterHints::for_diff_tab(tab_name);
-    let mut footer_spans = render_footer_hints(&hints);
-
-    // Append copy preview: [y] copy <value>
-    if let Some(yank_text) = super::events::get_yank_text(app) {
-        let truncated = if yank_text.len() > 30 {
-            let end = super::shared::floor_char_boundary(&yank_text, 27);
-            format!("{}...", &yank_text[..end])
+    // Budget the row: reserve the yank preview's width, keep the global
+    // ?/q tail intact by dropping tab-specific hints (marked with a leading
+    // ellipsis), and sacrifice the yank preview before the globals.
+    let yank_text = super::events::get_yank_text(app);
+    let yank_suffix = yank_text.map(|t| {
+        if t.len() > 30 {
+            let end = super::shared::floor_char_boundary(&t, 27);
+            format!("{}...", &t[..end])
         } else {
-            yank_text
+            t
+        }
+    });
+    let yank_width = yank_suffix.as_ref().map_or(0, |t| {
+        use unicode_width::UnicodeWidthStr;
+        // " [y] copy " + text
+        10 + UnicodeWidthStr::width(t.as_str()) as u16
+    });
+
+    let (mut kept, mut elided) =
+        crate::tui::theme::fit_footer_hints(&hints, area.width.saturating_sub(yank_width));
+    // If even the surviving hints plus the yank preview overflow, drop the
+    // yank FIRST and re-offer its width to the tab-specific hints.
+    let elision_w = if elided { 2 } else { 0 };
+    let yank_suffix =
+        if crate::tui::theme::footer_hints_width(&kept) + elision_w + yank_width > area.width {
+            let refit = crate::tui::theme::fit_footer_hints(&hints, area.width);
+            kept = refit.0;
+            elided = refit.1;
+            None
+        } else {
+            yank_suffix
         };
+    let mut footer_spans = render_footer_hints(&kept, elided);
+
+    if let Some(truncated) = yank_suffix {
         footer_spans.push(Span::styled(" ", Style::default()));
         footer_spans.push(Span::styled("[y]", Style::default().fg(colors().accent)));
         footer_spans.push(Span::styled(
@@ -553,191 +605,18 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(footer, area);
 }
 
-fn render_help_overlay(frame: &mut Frame, area: Rect, tab_count: usize) {
-    let popup_area = centered_rect(65, 80, area);
-    frame.render_widget(Clear, popup_area);
-
-    // Pad to the fixed-width key column used elsewhere in this overlay so the
-    // descriptions stay aligned regardless of the digit count.
-    let jump_key = if tab_count <= 1 {
-        "1".to_string()
-    } else {
-        format!("1-{tab_count}")
-    };
-    let jump_key = format!("  {jump_key:<15}");
-
-    let help_text = vec![
-        Line::styled(
-            "━━━ Keyboard Shortcuts ━━━",
-            Style::default().fg(colors().accent).bold(),
-        ),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Navigation",
-            Style::default().fg(colors().primary).bold(),
-        )]),
-        Line::from(vec![
-            Span::styled("  Tab/Shift+Tab  ", Style::default().fg(colors().accent)),
-            Span::styled("Switch between views", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled(jump_key, Style::default().fg(colors().accent)),
-            Span::styled("Jump to specific tab", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  ↑/↓ or j/k     ", Style::default().fg(colors().accent)),
-            Span::styled("Navigate items up/down", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  PgUp/PgDown    ", Style::default().fg(colors().accent)),
-            Span::styled("Page up/down (page)", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Home/End       ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Jump to start/end of list",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  p / ←→         ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Toggle panel focus (Side-by-side)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  J/K            ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Scroll both panels (Side-by-side)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Actions",
-            Style::default().fg(colors().primary).bold(),
-        )]),
-        Line::from(vec![
-            Span::styled("  Enter          ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "View details / Expand node / Go to component",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  b / Backspace  ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Navigate back (follow breadcrumb trail)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  c              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Go to component (from Dependencies)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  /              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Search components & vulnerabilities",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  f              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Cycle filter (All→Added→Removed→Modified)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  s              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Cycle sort (Name→Version→Ecosystem)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  g              ", Style::default().fg(colors().accent)),
-            Span::styled("Cycle grouping mode", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  t              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Toggle transitive dependencies",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  e              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Export report (JSON/SARIF/Markdown/HTML)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  l              ", Style::default().fg(colors().accent)),
-            Span::styled("Show color legend", Style::default().fg(colors().text)),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "General",
-            Style::default().fg(colors().primary).bold(),
-        )]),
-        Line::from(vec![
-            Span::styled("  T              ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Toggle theme (dark/light/high-contrast)",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  y / Ctrl+C     ", Style::default().fg(colors().accent)),
-            Span::styled(
-                "Copy selected item to clipboard",
-                Style::default().fg(colors().text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Shift+drag     ", Style::default().fg(colors().accent)),
-            Span::styled("Select text with mouse", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?              ", Style::default().fg(colors().accent)),
-            Span::styled("Toggle this help", Style::default().fg(colors().text)),
-        ]),
-        Line::from(vec![
-            Span::styled("  q / Esc        ", Style::default().fg(colors().accent)),
-            Span::styled("Quit / Close overlay", Style::default().fg(colors().text)),
-        ]),
-        Line::from(""),
-        Line::styled(
-            "Press any key to close",
-            Style::default().fg(colors().text_muted),
-        ),
-    ];
-
-    let help = Paragraph::new(help_text)
-        .block(
-            Block::default()
-                .title(" Help ")
-                .title_style(Style::default().fg(colors().accent).bold())
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(colors().accent)),
-        )
-        .style(Style::default().fg(colors().text));
-
-    frame.render_widget(help, popup_area);
-}
-
 fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearchState) {
     // Calculate popup size based on results (add 1 for error line if present)
     let result_count = search_state.results.len().min(10);
     let error_lines = u16::from(search_state.search_error.is_some());
-    let popup_height = (result_count as u16 + 5 + error_lines).max(5 + error_lines);
+    // With results: input + blank + results + blank + help line + 2 borders
+    // (the previous +5 clipped the help hints whenever any result rendered).
+    // Without results there is no trailing blank line, so one row less.
+    let popup_height = if result_count > 0 {
+        result_count as u16 + 6 + error_lines
+    } else {
+        5 + error_lines
+    };
 
     let popup_area = Rect {
         x: area.x + 2,
@@ -913,7 +792,9 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, search_state: &DiffSearc
         Span::styled("[Enter]", Style::default().fg(colors().accent)),
         Span::raw(" select "),
         Span::styled("[Esc]", Style::default().fg(colors().accent)),
-        Span::raw(" close"),
+        Span::raw(" close "),
+        Span::styled("[^R]", Style::default().fg(colors().accent)),
+        Span::raw(" regex"),
     ]));
 
     let search = Paragraph::new(lines).block(
@@ -994,7 +875,13 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             Style::default().fg(colors().primary).bold(),
         )]),
         Line::from(vec![
-            Span::styled("  ✓ ■ ", Style::default().fg(colors().permissive)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("permissive")
+                ),
+                Style::default().fg(colors().permissive),
+            ),
             Span::styled("Permissive  ", Style::default().fg(colors().text)),
             Span::styled(
                 "(MIT, Apache, BSD)",
@@ -1002,17 +889,35 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled("  © ■ ", Style::default().fg(colors().copyleft)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("copyleft")
+                ),
+                Style::default().fg(colors().copyleft),
+            ),
             Span::styled("Copyleft    ", Style::default().fg(colors().text)),
             Span::styled("(GPL, AGPL)", Style::default().fg(colors().text_muted)),
         ]),
         Line::from(vec![
-            Span::styled("  ◐ ■ ", Style::default().fg(colors().weak_copyleft)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("weak copyleft")
+                ),
+                Style::default().fg(colors().weak_copyleft),
+            ),
             Span::styled("Weak Copyleft ", Style::default().fg(colors().text)),
             Span::styled("(LGPL, MPL)", Style::default().fg(colors().text_muted)),
         ]),
         Line::from(vec![
-            Span::styled("  ⊘ ■ ", Style::default().fg(colors().proprietary)),
+            Span::styled(
+                format!(
+                    "  {} ■ ",
+                    crate::tui::shared::licenses::category_glyph_str("proprietary")
+                ),
+                Style::default().fg(colors().proprietary),
+            ),
             Span::styled("Proprietary ", Style::default().fg(colors().text)),
             Span::styled("(Commercial)", Style::default().fg(colors().text_muted)),
         ]),
@@ -1056,12 +961,12 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 /// Render cross-view overlays (view switcher, shortcuts, component deep dive)
-fn render_cross_view_overlays(frame: &mut Frame, app: &App) {
+fn render_cross_view_overlays(frame: &mut Frame, app: &mut App) {
     // Render view switcher overlay
     views::render_view_switcher(frame, &app.overlays.view_switcher);
 
     // Render shortcuts overlay
-    views::render_shortcuts_overlay(frame, &app.overlays.shortcuts);
+    views::render_shortcuts_overlay(frame, &mut app.overlays.shortcuts);
 
     // Render component deep dive modal
     views::render_component_deep_dive(frame, &app.overlays.component_deep_dive);

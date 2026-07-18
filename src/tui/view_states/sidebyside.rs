@@ -4,9 +4,13 @@
 //! change/search navigation, and detail modal. Search match computation
 //! remains in the sync bridge since it needs `app.data.diff_result`.
 
-use crate::tui::app_states::sidebyside::SideBySideState;
+use crate::tui::app_states::sidebyside::{AlignmentMode, SideBySideState};
 use crate::tui::traits::{EventResult, Shortcut, ViewContext, ViewState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+
+/// Status hint shown when a row-cursor action is pressed in Grouped mode,
+/// which has no row selection.
+const GROUPED_HINT: &str = "Row actions need a row cursor — press [a] for Aligned mode";
 
 /// Side-by-side tab view implementing the `ViewState` trait.
 pub struct SideBySideView {
@@ -57,10 +61,15 @@ impl ViewState for SideBySideView {
 
         match key.code {
             // Toggle focus between panels. `Tab` is reserved for global tab
-            // switching; `p`/arrows toggle panel focus here.
+            // switching; `p`/arrows toggle panel focus here. Unified renders
+            // a single panel, so there is nothing to focus-toggle.
             KeyCode::Char('p') | KeyCode::Left | KeyCode::Right => {
-                self.inner.toggle_focus();
-                EventResult::Consumed
+                if self.inner.alignment_mode == AlignmentMode::Unified {
+                    EventResult::status("Unified view is a single panel")
+                } else {
+                    self.inner.toggle_focus();
+                    EventResult::Consumed
+                }
             }
             // Scroll
             KeyCode::Up | KeyCode::Char('k') => {
@@ -87,13 +96,23 @@ impl ViewState for SideBySideView {
                 self.inner.go_to_bottom();
                 EventResult::Consumed
             }
-            // Synchronized scroll
+            // Synchronized scroll. In row-selection modes the panels already
+            // move in lockstep with the selection (raw offset nudges would be
+            // snapped back by the per-frame clamp), so J/K move the cursor.
             KeyCode::Char('K') => {
-                self.inner.scroll_both_up();
+                if self.inner.alignment_mode.uses_row_selection() {
+                    self.inner.scroll_up();
+                } else {
+                    self.inner.scroll_both_up();
+                }
                 EventResult::Consumed
             }
             KeyCode::Char('J') => {
-                self.inner.scroll_both_down();
+                if self.inner.alignment_mode.uses_row_selection() {
+                    self.inner.scroll_down();
+                } else {
+                    self.inner.scroll_both_down();
+                }
                 EventResult::Consumed
             }
             // Toggle alignment mode
@@ -114,14 +133,56 @@ impl ViewState for SideBySideView {
                 self.inner.start_search();
                 EventResult::Consumed
             }
-            // Change navigation
-            KeyCode::Char('n' | ']') => {
-                self.inner.next_change();
-                EventResult::status(format!("Change {}", self.inner.change_position()))
+            // n/N navigate a pinned (confirmed) search when one exists, like
+            // every pager; otherwise they jump between changes. ]/[ stay pure
+            // change-navigation so change-jumping remains reachable while a
+            // search is pinned. Match navigation is Aligned-only: the match
+            // indices are computed over the aligned row order, which neither
+            // Unified (different sorted list) nor Grouped (no row cursor)
+            // share.
+            KeyCode::Char('n') => {
+                if self.inner.alignment_mode == AlignmentMode::Aligned
+                    && self.inner.search_query.is_some()
+                    && !self.inner.search_matches.is_empty()
+                {
+                    self.inner.next_match();
+                    EventResult::status(format!("Match {}", self.inner.match_position()))
+                } else if self.inner.alignment_mode == AlignmentMode::Grouped {
+                    EventResult::status(GROUPED_HINT)
+                } else {
+                    self.inner.next_change();
+                    EventResult::status(format!("Change {}", self.inner.change_position()))
+                }
             }
-            KeyCode::Char('N' | '[') => {
-                self.inner.prev_change();
-                EventResult::status(format!("Change {}", self.inner.change_position()))
+            KeyCode::Char('N') => {
+                if self.inner.alignment_mode == AlignmentMode::Aligned
+                    && self.inner.search_query.is_some()
+                    && !self.inner.search_matches.is_empty()
+                {
+                    self.inner.prev_match();
+                    EventResult::status(format!("Match {}", self.inner.match_position()))
+                } else if self.inner.alignment_mode == AlignmentMode::Grouped {
+                    EventResult::status(GROUPED_HINT)
+                } else {
+                    self.inner.prev_change();
+                    EventResult::status(format!("Change {}", self.inner.change_position()))
+                }
+            }
+            KeyCode::Char(']') => {
+                if self.inner.alignment_mode == AlignmentMode::Grouped {
+                    EventResult::status(GROUPED_HINT)
+                } else {
+                    self.inner.next_change();
+                    EventResult::status(format!("Change {}", self.inner.change_position()))
+                }
+            }
+            KeyCode::Char('[') => {
+                if self.inner.alignment_mode == AlignmentMode::Grouped {
+                    EventResult::status(GROUPED_HINT)
+                } else {
+                    self.inner.prev_change();
+                    EventResult::status(format!("Change {}", self.inner.change_position()))
+                }
             }
             // Filter toggles
             KeyCode::Char('1') => {
@@ -155,13 +216,34 @@ impl ViewState for SideBySideView {
                 self.inner.filter.show_all();
                 EventResult::status("Showing all changes")
             }
-            // Detail modal
+            // Detail modal — needs a row cursor, which Grouped mode lacks.
             KeyCode::Enter | KeyCode::Char(' ') => {
-                self.inner.toggle_detail_modal();
-                EventResult::Consumed
+                if self.inner.alignment_mode == AlignmentMode::Grouped {
+                    EventResult::status(GROUPED_HINT)
+                } else {
+                    self.inner.toggle_detail_modal();
+                    EventResult::Consumed
+                }
             }
-            // Yank: data-dependent, return Ignored for bridge
-            KeyCode::Char('y') => EventResult::Ignored,
+            // Yank: data-dependent, return Ignored for bridge (except in
+            // Grouped mode, where the bridge would yank an invisible row 0).
+            KeyCode::Char('y') => {
+                if self.inner.alignment_mode == AlignmentMode::Grouped {
+                    EventResult::status(GROUPED_HINT)
+                } else {
+                    EventResult::Ignored
+                }
+            }
+            // Esc clears a pinned search; otherwise falls through to the
+            // global overlay-close fallback.
+            KeyCode::Esc => {
+                if self.inner.search_query.is_some() {
+                    self.inner.cancel_search();
+                    EventResult::status("Search cleared")
+                } else {
+                    EventResult::Ignored
+                }
+            }
             _ => EventResult::Ignored,
         }
     }
@@ -176,15 +258,15 @@ impl ViewState for SideBySideView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Scroll"),
-            Shortcut::new("J/K", "Sync scroll"),
-            Shortcut::new("p/Tab", "Panel focus"),
-            Shortcut::new("a", "Alignment"),
+            Shortcut::primary("a", "align"),
+            Shortcut::primary("n/N", "change"),
+            Shortcut::primary("Enter", "detail"),
+            Shortcut::primary("\u{2190}\u{2192}/p", "panel"),
+            Shortcut::primary("J/K", "scroll"),
+            Shortcut::new("j/k", "Scroll"),
             Shortcut::new("s", "Sync mode"),
             Shortcut::new("/", "Search"),
-            Shortcut::new("n/N", "Next/Prev change"),
             Shortcut::new("1-3", "Filter toggles"),
-            Shortcut::new("Enter", "Detail"),
         ]
     }
 }
@@ -318,5 +400,167 @@ mod tests {
 
         view.handle_key(make_key(KeyCode::Esc), &mut ctx);
         assert!(!view.inner().show_detail_modal);
+    }
+}
+
+#[cfg(test)]
+mod grouped_gating_tests {
+    use super::*;
+    use crate::tui::traits::ViewMode;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn make_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn make_ctx() -> ViewContext<'static> {
+        let status: &'static mut Option<String> = Box::leak(Box::new(None));
+        ViewContext {
+            mode: ViewMode::Diff,
+            focused: true,
+            width: 80,
+            height: 24,
+            tick: 0,
+            status_message: status,
+        }
+    }
+
+    fn grouped_view() -> SideBySideView {
+        let mut view = SideBySideView::new();
+        view.inner_mut().alignment_mode = AlignmentMode::Grouped;
+        view
+    }
+
+    /// Row actions must not fire invisibly in Grouped mode — they explain
+    /// themselves instead of toggling state on an invisible row 0.
+    #[test]
+    fn grouped_gates_row_actions_with_hint() {
+        let mut ctx = make_ctx();
+
+        let mut view = grouped_view();
+        let result = view.handle_key(make_key(KeyCode::Enter), &mut ctx);
+        assert!(
+            !view.inner().show_detail_modal,
+            "Enter must not open the detail modal in Grouped mode"
+        );
+        assert!(
+            matches!(&result, EventResult::StatusMessage(m) if m.contains("Aligned")),
+            "Enter returns the Grouped hint, got {result}"
+        );
+
+        let result = view.handle_key(make_key(KeyCode::Char('y')), &mut ctx);
+        assert!(
+            matches!(&result, EventResult::StatusMessage(m) if m.contains("Aligned")),
+            "'y' returns the Grouped hint, got {result}"
+        );
+
+        let result = view.handle_key(make_key(KeyCode::Char('n')), &mut ctx);
+        assert!(
+            matches!(&result, EventResult::StatusMessage(m) if m.contains("Aligned")),
+            "'n' returns the Grouped hint, got {result}"
+        );
+    }
+
+    /// n/N navigate a pinned search; ]/[ keep jumping between changes.
+    #[test]
+    fn n_navigates_pinned_search_matches() {
+        let mut ctx = make_ctx();
+        let mut view = SideBySideView::new(); // Aligned default
+        {
+            let inner = view.inner_mut();
+            // Seed real rows: recompute derives totals/change_indices from
+            // aligned_rows, so set_totals alone leaves change nav empty.
+            inner.aligned_rows = (0..12)
+                .map(|_| crate::tui::app_states::AlignedRow {
+                    left_name: Some("pkg".to_string()),
+                    left_version: Some("1.0".to_string()),
+                    right_name: Some("pkg".to_string()),
+                    right_version: Some("2.0".to_string()),
+                    change_type: crate::diff::ChangeType::Modified,
+                    component_id: None,
+                })
+                .collect();
+            inner.recompute_row_model();
+            inner.start_search();
+            if let Some(q) = inner.search_query.as_mut() {
+                q.push('x');
+            }
+            inner.update_search_matches(vec![2, 5, 9]);
+            inner.confirm_search();
+        }
+
+        view.handle_key(make_key(KeyCode::Char('n')), &mut ctx);
+        assert_eq!(view.inner().current_match_idx, 1, "'n' advances the match");
+        view.handle_key(make_key(KeyCode::Char('n')), &mut ctx);
+        assert_eq!(view.inner().current_match_idx, 2);
+        assert_eq!(
+            view.inner().current_change_idx,
+            None,
+            "match navigation must not consume change navigation"
+        );
+
+        view.handle_key(make_key(KeyCode::Char(']')), &mut ctx);
+        assert!(
+            view.inner().current_change_idx.is_some(),
+            "']' still jumps between changes while a search is pinned"
+        );
+    }
+
+    /// Esc clears a pinned search once, then falls through.
+    #[test]
+    fn esc_clears_pinned_search() {
+        let mut ctx = make_ctx();
+        let mut view = SideBySideView::new();
+        {
+            let inner = view.inner_mut();
+            inner.start_search();
+            inner.update_search_matches(vec![1]);
+            inner.confirm_search();
+        }
+
+        let result = view.handle_key(make_key(KeyCode::Esc), &mut ctx);
+        assert!(matches!(result, EventResult::StatusMessage(_)));
+        assert!(view.inner().search_query.is_none(), "search cleared");
+
+        let result = view.handle_key(make_key(KeyCode::Esc), &mut ctx);
+        assert_eq!(
+            result,
+            EventResult::Ignored,
+            "second Esc falls through to the global fallback"
+        );
+    }
+
+    /// Pins: 'p'/Left/Right in Unified mode must NOT toggle panel focus
+    /// (Unified renders a single panel) and must explain themselves with the
+    /// "Unified view is a single panel" status; Aligned keeps the toggle.
+    #[test]
+    fn unified_gates_panel_focus_toggle_with_status() {
+        let mut ctx = make_ctx();
+        let mut view = SideBySideView::new();
+        view.inner_mut().alignment_mode = AlignmentMode::Unified;
+
+        for code in [KeyCode::Char('p'), KeyCode::Left, KeyCode::Right] {
+            let result = view.handle_key(make_key(code), &mut ctx);
+            assert!(
+                !view.inner().focus_right,
+                "{code:?} must not toggle panel focus in Unified mode"
+            );
+            assert!(
+                matches!(&result, EventResult::StatusMessage(m) if m.contains("single panel")),
+                "{code:?} must return the single-panel status, got {result}"
+            );
+        }
+
+        // Control: Aligned mode still toggles focus through 'p', so the guard
+        // cannot pass by disabling the binding outright.
+        view.inner_mut().alignment_mode = AlignmentMode::Aligned;
+        assert_eq!(
+            view.handle_key(make_key(KeyCode::Char('p')), &mut ctx),
+            EventResult::Consumed
+        );
+        assert!(
+            view.inner().focus_right,
+            "'p' must still toggle panel focus in Aligned mode"
+        );
     }
 }

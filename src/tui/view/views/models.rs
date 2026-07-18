@@ -25,10 +25,14 @@ pub fn render_models(frame: &mut Frame, area: Rect, app: &ViewApp) {
     models.sort_by(|a, b| a.name.cmp(&b.name));
 
     if models.is_empty() {
-        let msg = Paragraph::new("No machine-learning models found in this AI-BOM.")
-            .block(Block::default().borders(Borders::ALL).title(" Models "))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(msg, area);
+        crate::tui::widgets::render_empty_state_enhanced(
+            frame,
+            area,
+            "∅",
+            "No machine-learning models found",
+            Some("Requires CycloneDX machine-learning-model components"),
+            None,
+        );
         return;
     }
 

@@ -38,7 +38,9 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // Check if vulnerability chart has data (used for dynamic height)
     let severity_counts = result.vulnerabilities.introduced_by_severity();
     let has_vulns = severity_counts.values().any(|&v| v > 0);
-    let chart_height = if has_vulns { 10 } else { 3 };
+    // No-vuln charts need real height: SBOM Comparison has 6 content lines +
+    // borders (it previously got 3 rows and rendered header-only).
+    let chart_height = if has_vulns { 10 } else { 8 };
 
     // Count findings for dynamic height
     let findings_count = count_findings(result);
@@ -46,33 +48,45 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // Determine height for insights + policy merged row
     let has_quality_delta = result.quality_delta.is_some();
     let has_match_metrics = result.match_metrics.is_some();
-    let has_vex_data = result
-        .vulnerabilities
-        .introduced
-        .iter()
-        .chain(&result.vulnerabilities.resolved)
-        .chain(&result.vulnerabilities.persistent)
-        .any(|v| v.vex_state.is_some())
-        || !result.vulnerabilities.vex_changes.is_empty();
+    let has_vex_data = diff_total_vulns(result) > 0;
     let insights_policy_h: u16 = if has_quality_delta || has_match_metrics || has_vex_data {
         5
     } else {
         3
     };
 
-    // Merged summary height: risk (2 lines) + blank line + findings + border (2)
-    let summary_height = (findings_count + 5).clamp(7, 13) as u16;
+    let plan = summary_layout_plan(area.height, findings_count, insights_policy_h, chart_height);
 
-    // Main layout: merged summary, stats, insights+policy, charts, all changes
+    if plan.compact {
+        // Dense risk strip + tall scrollable All Changes: at small heights the
+        // stacked fixed rows collapsed every box to ~1 line (empty bordered
+        // shells, 3 visible changes).
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(4), Constraint::Min(6)])
+            .split(area);
+        render_compact_summary_header(frame, rows[0], ctx);
+        render_all_changes(frame, rows[1], ctx);
+        return;
+    }
+
+    // Plan-driven rows: hidden rows drop their constraints entirely instead
+    // of rendering empty shells.
+    let mut constraints = vec![
+        Constraint::Length(plan.summary_h), // Risk + Findings (merged)
+        Constraint::Length(6),              // Stats cards (4 columns)
+    ];
+    if plan.show_insights {
+        constraints.push(Constraint::Length(insights_policy_h));
+    }
+    if plan.show_charts {
+        constraints.push(Constraint::Length(chart_height));
+    }
+    constraints.push(Constraint::Min(6)); // All changes (scrollable)
+
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(summary_height), // Row 0: Risk + Findings (merged)
-            Constraint::Length(6),              // Row 1: Stats cards (4 columns)
-            Constraint::Length(insights_policy_h), // Row 2: Insights + Policy (merged)
-            Constraint::Length(chart_height),   // Row 3: Charts
-            Constraint::Min(6),                 // Row 4: All changes (scrollable)
-        ])
+        .constraints(constraints)
         .split(area);
 
     // Row 0: Merged risk assessment + key findings
@@ -94,48 +108,85 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     render_vulnerabilities_card(frame, stats_chunks[2], ctx);
     render_license_card(frame, stats_chunks[3], ctx);
 
-    // Row 2: Insights + Policy merged
-    render_insights_policy_row(frame, main_chunks[2], ctx);
-
-    // Row 3: Bar charts (or collapsed when no vulns)
-    if has_vulns {
-        let chart_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(main_chunks[3]);
-
-        render_ecosystem_breakdown_chart(frame, chart_chunks[0], result);
-        render_severity_chart(frame, chart_chunks[1], result);
-    } else {
-        let chart_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(main_chunks[3]);
-
-        render_ecosystem_breakdown_chart(frame, chart_chunks[0], result);
-        render_sbom_comparison(frame, chart_chunks[1], ctx);
+    let mut row = 2;
+    if plan.show_insights {
+        render_insights_policy_row(frame, main_chunks[row], ctx);
+        row += 1;
     }
 
-    // Row 4: All changes (scrollable, sorted by importance)
-    render_all_changes(frame, main_chunks[4], ctx);
+    if plan.show_charts {
+        let chart_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_chunks[row]);
+
+        render_ecosystem_breakdown_chart(frame, chart_chunks[0], result);
+        if has_vulns {
+            render_severity_chart(frame, chart_chunks[1], result);
+        } else {
+            render_sbom_comparison(frame, chart_chunks[1], ctx);
+        }
+        row += 1;
+    }
+
+    // Last row: All changes (scrollable, sorted by importance)
+    render_all_changes(frame, main_chunks[row], ctx);
+}
+
+/// Layout decision for the diff Summary at a given content height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SummaryLayoutPlan {
+    summary_h: u16,
+    show_insights: bool,
+    show_charts: bool,
+    compact: bool,
+}
+
+/// Deterministic degradation cascade for the Summary rows: shrink the header,
+/// then drop the charts, then the insights, and finally fall back to the
+/// compact strip when even header+stats+changes cannot fit.
+fn summary_layout_plan(
+    content_h: u16,
+    findings_count: usize,
+    insights_h: u16,
+    chart_h: u16,
+) -> SummaryLayoutPlan {
+    let mut summary_h = (findings_count + 5).clamp(7, 13) as u16;
+    let mut show_insights = true;
+    let mut show_charts = true;
+
+    let demand = |summary_h: u16, insights: bool, charts: bool| -> u16 {
+        summary_h + 6 + if insights { insights_h } else { 0 } + if charts { chart_h } else { 0 } + 6
+    };
+
+    // (a) shrink the header
+    while demand(summary_h, show_insights, show_charts) > content_h && summary_h > 7 {
+        summary_h -= 1;
+    }
+    // (b) drop the charts row
+    if demand(summary_h, show_insights, show_charts) > content_h {
+        show_charts = false;
+    }
+    // (c) drop the insights row
+    if demand(summary_h, show_insights, show_charts) > content_h {
+        show_insights = false;
+    }
+    // (d) compact fallback
+    let compact = demand(7, false, false) > content_h;
+
+    SummaryLayoutPlan {
+        summary_h,
+        show_insights,
+        show_charts,
+        compact,
+    }
 }
 
 /// Render the Quality Delta / Matching / VEX insights row (items 1.1, 1.2, 1.3).
 fn render_insights_row(frame: &mut Frame, area: Rect, result: &crate::diff::DiffResult) {
     let has_quality = result.quality_delta.is_some();
     let has_matching = result.match_metrics.is_some();
-    let total_vulns = result.vulnerabilities.introduced.len()
-        + result.vulnerabilities.resolved.len()
-        + result.vulnerabilities.persistent.len();
-    let has_vex = total_vulns > 0
-        && (result
-            .vulnerabilities
-            .introduced
-            .iter()
-            .chain(&result.vulnerabilities.resolved)
-            .chain(&result.vulnerabilities.persistent)
-            .any(|v| v.vex_state.is_some())
-            || !result.vulnerabilities.vex_changes.is_empty());
+    let has_vex = diff_total_vulns(result) > 0;
 
     // Split row into columns for each present insight card
     let col_count = usize::from(has_quality) + usize::from(has_matching) + usize::from(has_vex);
@@ -161,7 +212,7 @@ fn render_insights_row(frame: &mut Frame, area: Rect, result: &crate::diff::Diff
 
     // --- 1.2: Match Metrics card ---
     if let Some(mm) = &result.match_metrics {
-        render_match_metrics_card(frame, chunks[col], mm);
+        render_match_metrics_card(frame, chunks[col], mm, result);
         col += 1;
     }
 
@@ -241,7 +292,12 @@ fn render_quality_delta_card(frame: &mut Frame, area: Rect, qd: &crate::diff::Qu
 }
 
 /// Render match metrics card (item 1.2).
-fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::MatchMetrics) {
+fn render_match_metrics_card(
+    frame: &mut Frame,
+    area: Rect,
+    mm: &crate::diff::MatchMetrics,
+    result: &crate::diff::DiffResult,
+) {
     let scheme = colors();
     let total_matched = mm.exact_matches + mm.fuzzy_matches + mm.rule_matches;
 
@@ -306,6 +362,29 @@ fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::Ma
                 }),
             ),
         ]));
+        // Name the shakiest pairing (the likeliest source of a bogus
+        // "modified" row) — but only when something is actually inexact:
+        // <0.995 keeps exact-only diffs from naming an arbitrary component.
+        if mm.min_match_score < 0.995
+            && let Some((_, name)) = result
+                .components
+                .modified
+                .iter()
+                .filter_map(|c| c.match_info.as_ref().map(|m| (m.score, c.name.as_str())))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+            && let Some(last) = lines.last_mut()
+        {
+            last.push_span(Span::styled(
+                format!(
+                    " ({})",
+                    crate::tui::widgets::truncate_str(
+                        name,
+                        (area.width as usize).saturating_sub(31)
+                    )
+                ),
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
     }
 
     let paragraph = Paragraph::new(lines).block(
@@ -315,6 +394,15 @@ fn render_match_metrics_card(frame: &mut Frame, area: Rect, mm: &crate::diff::Ma
             .border_style(Style::default().fg(scheme.secondary)),
     );
     frame.render_widget(paragraph, area);
+}
+
+/// Total vulnerability rows in the diff (introduced + resolved + persistent):
+/// the VEX card's visibility gate — a diff whose new vulns have ZERO VEX
+/// coverage (the pure gap case) must still show the card.
+fn diff_total_vulns(result: &crate::diff::DiffResult) -> usize {
+    result.vulnerabilities.introduced.len()
+        + result.vulnerabilities.resolved.len()
+        + result.vulnerabilities.persistent.len()
 }
 
 /// Render VEX coverage card (item 1.3).
@@ -342,26 +430,62 @@ fn render_vex_coverage_card(frame: &mut Frame, area: Rect, result: &crate::diff:
         ),
     ])];
 
-    if vex.actionable > 0 {
+    // The security worklist: newly introduced vulns with no triage at all
+    // (computed by vex_summary, previously never rendered).
+    if vex.introduced_without_vex > 0 || vex.persistent_without_vex > 0 {
         lines.push(Line::from(vec![
+            Span::styled("Gaps: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!("{} new", vex.introduced_without_vex),
+                Style::default().fg(scheme.error).bold(),
+            ),
+            Span::styled(" \u{b7} ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!("{} ongoing", vex.persistent_without_vex),
+                Style::default().fg(scheme.warning),
+            ),
+            Span::styled(" (no VEX)", Style::default().fg(scheme.text_muted)),
+        ]));
+    }
+
+    if vex.actionable > 0
+        || !result.vulnerabilities.vex_changes.is_empty()
+        || !vex.by_state.is_empty()
+    {
+        let mut spans = vec![
             Span::styled("Actionable: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
                 format!("{}", vex.actionable),
                 Style::default().fg(scheme.warning).bold(),
             ),
-            Span::styled(" require attention", Style::default().fg(scheme.text_muted)),
-        ]));
-    }
-
-    let vex_changes_count = result.vulnerabilities.vex_changes.len();
-    if vex_changes_count > 0 {
-        lines.push(Line::from(vec![
-            Span::styled("VEX transitions: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
-                format!("{vex_changes_count}"),
-                Style::default().fg(scheme.accent).bold(),
+                format!(
+                    " \u{b7} \u{394}{}",
+                    result.vulnerabilities.vex_changes.len()
+                ),
+                Style::default().fg(scheme.accent),
             ),
-        ]));
+        ];
+        // Compact by_state tail, most-actionable-first so the important
+        // counts survive clipping in the ~26-col card (codes/colors match
+        // render_vex_badge_spans).
+        use crate::model::VexState;
+        for (state, code, color) in [
+            (VexState::Affected, "AF", scheme.critical),
+            (VexState::UnderInvestigation, "UI", scheme.medium),
+            (VexState::NotAffected, "NA", scheme.low),
+            (VexState::Fixed, "FX", scheme.low),
+        ] {
+            if let Some(n) = vex.by_state.get(&state)
+                && *n > 0
+            {
+                spans.push(Span::styled(
+                    format!(" {code}:{n}"),
+                    Style::default().fg(color),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
     }
 
     let paragraph = Paragraph::new(lines).block(
@@ -377,7 +501,7 @@ fn render_vex_coverage_card(frame: &mut Frame, area: Rect, result: &crate::diff:
 fn compute_risk_level(
     result: &crate::diff::DiffResult,
     scheme: &crate::tui::theme::ColorScheme,
-) -> (&'static str, Color) {
+) -> (&'static str, Color, Color) {
     let major_bumps = count_major_bumps(&result.components.modified);
     let critical_vulns = *result
         .vulnerabilities
@@ -394,16 +518,19 @@ fn compute_risk_level(
         + result.summary.components_removed
         + result.summary.components_modified;
 
+    // Badge foreground follows the theme convention (severity_badge_fg):
+    // light text on the dark critical/error backgrounds, dark text on the
+    // bright warning/success ones.
     if critical_vulns > 0 {
-        ("Critical Risk", scheme.critical)
+        ("Critical Risk", scheme.critical, scheme.badge_fg_light)
     } else if high_vulns > 0 || major_bumps >= 3 {
-        ("High Risk", scheme.error)
+        ("High Risk", scheme.error, scheme.badge_fg_light)
     } else if major_bumps > 0 || new_vulns > 0 || result.summary.components_removed > 3 {
-        ("Medium Risk", scheme.warning)
+        ("Medium Risk", scheme.warning, scheme.badge_fg_dark)
     } else if total_changes > 0 {
-        ("Low Risk", scheme.success)
+        ("Low Risk", scheme.success, scheme.badge_fg_dark)
     } else {
-        ("No Changes", scheme.muted)
+        ("No Changes", scheme.muted, scheme.badge_fg_dark)
     }
 }
 
@@ -460,6 +587,9 @@ fn count_findings(result: &crate::diff::DiffResult) -> usize {
         count += 1;
     }
 
+    // ML regressions (up to 3 lines + one overflow line)
+    count += result.ml_regressions.len().min(3) + usize::from(result.ml_regressions.len() > 3);
+
     // Added components
     if !result.components.added.is_empty() {
         count += 1;
@@ -478,24 +608,21 @@ fn count_findings(result: &crate::diff::DiffResult) -> usize {
 
 /// Merged summary header: risk assessment + key findings in one bordered card.
 /// Reduces visual clutter by combining two sections into one with a separator.
-fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-    let scheme = colors();
-    let Some(result) = ctx.diff_result.as_ref() else {
-        return;
-    };
-
-    let (risk_label, risk_color) = compute_risk_level(result, &scheme);
+/// The one-line risk strip: badge + semantic score + change/major-bump counts.
+/// Shared by the full header and the compact 80x24 header.
+fn summary_risk_line(
+    result: &crate::diff::DiffResult,
+    scheme: &crate::tui::theme::ColorScheme,
+) -> Line<'static> {
+    let (risk_label, risk_color, risk_badge_fg) = compute_risk_level(result, scheme);
     let score = result.semantic_score;
     let total_changes = result.summary.total_changes;
     let major_bumps = count_major_bumps(&result.components.modified);
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Line 1: Risk badge + Score + Changes
     let mut line1 = vec![
         Span::styled(
             format!(" {risk_label} "),
-            Style::default().fg(Color::Black).bg(risk_color).bold(),
+            Style::default().fg(risk_badge_fg).bg(risk_color).bold(),
         ),
         Span::raw("  Score: "),
         Span::styled(
@@ -514,7 +641,83 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             Style::default().fg(scheme.warning).bold(),
         ));
     }
-    lines.push(Line::from(line1));
+    Line::from(line1)
+}
+
+/// Compact Summary header for small terminals: the risk strip plus a single
+/// dense stat line covering components/deps/vulns/licenses.
+fn render_compact_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+    let scheme = colors();
+    let Some(result) = ctx.diff_result.as_ref() else {
+        return;
+    };
+    let (_, risk_color, _) = compute_risk_level(result, &scheme);
+    let s = &result.summary;
+
+    let stat_line = Line::from(vec![
+        Span::styled("Comp ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("+{}", s.components_added),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(
+            format!(" -{}", s.components_removed),
+            Style::default().fg(scheme.removed),
+        ),
+        Span::styled(
+            format!(" ~{}", s.components_modified),
+            Style::default().fg(scheme.modified),
+        ),
+        Span::styled(" \u{2502} Deps ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("+{}", s.dependencies_added),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(
+            format!(" -{}", s.dependencies_removed),
+            Style::default().fg(scheme.removed),
+        ),
+        Span::styled(" \u{2502} Vuln ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("\u{25b2}{}", s.vulnerabilities_introduced),
+            Style::default().fg(scheme.critical),
+        ),
+        Span::styled(
+            format!(" \u{25bc}{}", s.vulnerabilities_resolved),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(" \u{2502} Lic ", Style::default().fg(scheme.text_muted)),
+        Span::styled(
+            format!("+{}", s.licenses_added),
+            Style::default().fg(scheme.added),
+        ),
+        Span::styled(
+            format!(" -{}", s.licenses_removed),
+            Style::default().fg(scheme.removed),
+        ),
+    ]);
+
+    let para = Paragraph::new(vec![summary_risk_line(result, &scheme), stat_line]).block(
+        Block::default()
+            .title(" Summary ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(risk_color)),
+    );
+    frame.render_widget(para, area);
+}
+
+fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+    let scheme = colors();
+    let Some(result) = ctx.diff_result.as_ref() else {
+        return;
+    };
+
+    let (_, risk_color, _) = compute_risk_level(result, &scheme);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Line 1: Risk badge + Score + Changes
+    lines.push(summary_risk_line(result, &scheme));
 
     // Line 2: SBOM metadata + Quality + Matching
     let mut line2: Vec<Span> = Vec::new();
@@ -559,7 +762,7 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         Style::default().fg(scheme.border),
     )));
 
-    // Key findings (reuse logic from render_key_findings)
+    // Key findings
     // Critical vulnerabilities
     for vuln in result
         .vulnerabilities
@@ -571,7 +774,10 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         lines.push(Line::from(vec![
             Span::styled(
                 " \u{26a0} CRITICAL ",
-                Style::default().fg(Color::Black).bg(scheme.critical).bold(),
+                Style::default()
+                    .fg(scheme.severity_badge_fg("critical"))
+                    .bg(scheme.critical)
+                    .bold(),
             ),
             Span::styled(
                 format!(" {} in {}", vuln.id, vuln.component_name),
@@ -597,7 +803,10 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         lines.push(Line::from(vec![
             Span::styled(
                 " \u{25b2} MAJOR ",
-                Style::default().fg(Color::Black).bg(scheme.warning).bold(),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(scheme.warning)
+                    .bold(),
             ),
             Span::raw(format!(" {} ", comp.name)),
             Span::styled(old_v.to_string(), Style::default().fg(scheme.muted)),
@@ -629,6 +838,35 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 Style::default().fg(scheme.warning),
             ),
         ]));
+    }
+    // ML performance regressions (CLI --fail-on-ml-regression gate data,
+    // previously invisible interactively)
+    for reg in result.ml_regressions.iter().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                " \u{25bc} ML REGRESSION ",
+                Style::default()
+                    .fg(scheme.badge_fg_light)
+                    .bg(scheme.error)
+                    .bold(),
+            ),
+            Span::styled(
+                format!(
+                    " {} {}: {:.2} \u{2192} {:.2}",
+                    reg.component, reg.metric, reg.previous_value, reg.new_value
+                ),
+                Style::default().fg(scheme.error),
+            ),
+        ]));
+    }
+    if result.ml_regressions.len() > 3 {
+        lines.push(Line::styled(
+            format!(
+                "   \u{2026} +{} more ML regressions",
+                result.ml_regressions.len() - 3
+            ),
+            Style::default().fg(scheme.muted),
+        ));
     }
     // Added/removed summaries
     let added_count = result.components.added.len();
@@ -705,321 +943,6 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(risk_color));
     let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
-}
-
-/// Compact risk header (kept for reference, no longer called from main layout).
-#[allow(dead_code)]
-fn render_risk_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-    let scheme = colors();
-    let Some(result) = ctx.diff_result.as_ref() else {
-        return;
-    };
-
-    let (risk_label, risk_color) = compute_risk_level(result, &scheme);
-    let score = result.semantic_score;
-    let total_changes = result.summary.total_changes;
-    let major_bumps = count_major_bumps(&result.components.modified);
-
-    // Line 1: Risk badge + Score + Changes
-    let mut line1_spans = vec![
-        Span::styled(
-            format!(" {risk_label} "),
-            Style::default().fg(Color::Black).bg(risk_color).bold(),
-        ),
-        Span::raw("  Score: "),
-        Span::styled(
-            format!("{score:.1}"),
-            Style::default().fg(risk_color).bold(),
-        ),
-        Span::raw("  \u{2502}  "),
-        Span::styled(
-            format!("{total_changes} changes"),
-            Style::default().fg(scheme.text),
-        ),
-    ];
-    if major_bumps > 0 {
-        line1_spans.push(Span::styled(
-            format!(", {major_bumps} major bumps"),
-            Style::default().fg(scheme.warning).bold(),
-        ));
-    }
-    let line1 = Line::from(line1_spans);
-
-    // Line 2: Quality delta + Matching + Enrichment
-    let mut line2_spans: Vec<Span> = Vec::new();
-    if let Some(delta) = result.quality_delta.as_ref() {
-        let old_g = delta
-            .old_grade
-            .as_ref()
-            .map_or("?", crate::quality::QualityGrade::letter);
-        let new_g = delta
-            .new_grade
-            .as_ref()
-            .map_or("?", crate::quality::QualityGrade::letter);
-        let delta_str = if delta.overall_score_delta > 0.5 {
-            format!(" (+{:.1})", delta.overall_score_delta)
-        } else if delta.overall_score_delta < -0.5 {
-            format!(" ({:.1})", delta.overall_score_delta)
-        } else {
-            " (unchanged)".to_string()
-        };
-        line2_spans.push(Span::raw("Quality: "));
-        line2_spans.push(Span::styled(
-            format!("{old_g} \u{2192} {new_g}"),
-            Style::default().fg(scheme.text).bold(),
-        ));
-        line2_spans.push(Span::styled(delta_str, Style::default().fg(scheme.muted)));
-    }
-    if let Some(metrics) = result.match_metrics.as_ref() {
-        if !line2_spans.is_empty() {
-            line2_spans.push(Span::raw("  \u{2502}  "));
-        }
-        line2_spans.push(Span::raw("Matching: "));
-        line2_spans.push(Span::styled(
-            format!(
-                "{} exact, {} fuzzy",
-                metrics.exact_matches, metrics.fuzzy_matches
-            ),
-            Style::default().fg(scheme.text),
-        ));
-        if metrics.avg_match_score > 0.0 {
-            line2_spans.push(Span::styled(
-                format!("  Avg: {:.2}", metrics.avg_match_score),
-                Style::default().fg(scheme.muted),
-            ));
-        }
-    }
-    #[cfg(feature = "enrichment")]
-    {
-        if ctx.enrichment_stats_old.is_some() || ctx.enrichment_stats_new.is_some() {
-            line2_spans.push(Span::styled(
-                "  [enriched]",
-                Style::default().fg(scheme.added),
-            ));
-        }
-    }
-    let line2 = Line::from(line2_spans);
-
-    // Line 3: SBOM metadata (format, component counts, dependency counts)
-    let mut line3_spans: Vec<Span> = Vec::new();
-    if let Some(old) = ctx.old_sbom {
-        let fmt = &old.document.format;
-        line3_spans.push(Span::styled(
-            format!("{fmt} {}", old.document.format_version),
-            Style::default().fg(scheme.accent),
-        ));
-    }
-    if let (Some(old), Some(new)) = (ctx.old_sbom, ctx.new_sbom) {
-        line3_spans.push(Span::raw("  \u{2502}  ")); // │ separator
-        line3_spans.push(Span::styled(
-            format!(
-                "Old: {} comps, {} deps",
-                old.component_count(),
-                old.edges.len()
-            ),
-            Style::default().fg(scheme.muted),
-        ));
-        line3_spans.push(Span::raw("  "));
-        line3_spans.push(Span::styled(
-            format!(
-                "New: {} comps, {} deps",
-                new.component_count(),
-                new.edges.len()
-            ),
-            Style::default().fg(scheme.text),
-        ));
-    }
-    let line3 = Line::from(line3_spans);
-
-    let block = Block::default()
-        .title(" Risk Assessment ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(risk_color));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height >= 1 {
-        frame
-            .buffer_mut()
-            .set_line(inner.x, inner.y, &line1, inner.width);
-    }
-    if inner.height >= 2 {
-        frame
-            .buffer_mut()
-            .set_line(inner.x, inner.y + 1, &line2, inner.width);
-    }
-    if inner.height >= 3 {
-        frame
-            .buffer_mut()
-            .set_line(inner.x, inner.y + 2, &line3, inner.width);
-    }
-}
-
-/// Key findings section (kept for reference, logic merged into render_summary_header).
-#[allow(dead_code)]
-fn render_key_findings(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-    let scheme = colors();
-    let Some(result) = ctx.diff_result.as_ref() else {
-        return;
-    };
-
-    let mut findings: Vec<Line> = Vec::new();
-
-    // 1. Critical vulnerabilities
-    for vuln in result
-        .vulnerabilities
-        .introduced
-        .iter()
-        .filter(|v| v.severity == "Critical")
-        .take(2)
-    {
-        findings.push(Line::from(vec![
-            Span::styled(
-                " \u{26a0} CRITICAL ",
-                Style::default().fg(Color::Black).bg(scheme.critical).bold(),
-            ),
-            Span::styled(
-                format!(" {} in {}", vuln.id, vuln.component_name),
-                Style::default().fg(scheme.critical),
-            ),
-        ]));
-    }
-
-    // 2. Major version bumps
-    for comp in result
-        .components
-        .modified
-        .iter()
-        .filter(|c| {
-            matches!(
-                version_change_level(c.old_version.as_deref(), c.new_version.as_deref()),
-                VersionLevel::Major
-            )
-        })
-        .take(3)
-    {
-        let old_v = comp.old_version.as_deref().unwrap_or("?");
-        let new_v = comp.new_version.as_deref().unwrap_or("?");
-        findings.push(Line::from(vec![
-            Span::styled(
-                " \u{25b2} MAJOR ",
-                Style::default().fg(Color::Black).bg(scheme.warning).bold(),
-            ),
-            Span::raw(format!(" {} ", comp.name)),
-            Span::styled(old_v.to_string(), Style::default().fg(scheme.muted)),
-            Span::styled(" \u{2192} ", Style::default().fg(scheme.modified)),
-            Span::styled(
-                new_v.to_string(),
-                Style::default().fg(scheme.modified).bold(),
-            ),
-        ]));
-    }
-
-    // 3. License conflicts
-    if !result.licenses.conflicts.is_empty() {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{26a0} ", Style::default().fg(scheme.critical)),
-            Span::styled(
-                format!(
-                    "{} license conflicts detected",
-                    result.licenses.conflicts.len()
-                ),
-                Style::default().fg(scheme.critical),
-            ),
-        ]));
-    }
-
-    // 4. Quality regressions
-    if let Some(delta) = &result.quality_delta
-        && !delta.regressions.is_empty()
-    {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{25bc} ", Style::default().fg(scheme.warning)),
-            Span::styled(
-                format!("Quality regressions: {}", delta.regressions.join(", ")),
-                Style::default().fg(scheme.warning),
-            ),
-        ]));
-    }
-
-    // 5. Added components summary
-    let added_count = result.components.added.len();
-    if added_count > 0 {
-        let names: Vec<&str> = result
-            .components
-            .added
-            .iter()
-            .take(4)
-            .map(|c| c.name.as_str())
-            .collect();
-        let suffix = if added_count > 4 {
-            format!(", +{} more", added_count - 4)
-        } else {
-            String::new()
-        };
-        findings.push(Line::from(vec![
-            Span::styled(" + ", Style::default().fg(scheme.added).bold()),
-            Span::styled(
-                format!("{added_count} added"),
-                Style::default().fg(scheme.added),
-            ),
-            Span::styled(
-                format!(" ({}{})", names.join(", "), suffix),
-                Style::default().fg(scheme.muted),
-            ),
-        ]));
-    }
-
-    // 6. Removed components summary
-    let removed_count = result.components.removed.len();
-    if removed_count > 0 {
-        let names: Vec<&str> = result
-            .components
-            .removed
-            .iter()
-            .take(4)
-            .map(|c| c.name.as_str())
-            .collect();
-        let suffix = if removed_count > 4 {
-            format!(", +{} more", removed_count - 4)
-        } else {
-            String::new()
-        };
-        findings.push(Line::from(vec![
-            Span::styled(" - ", Style::default().fg(scheme.removed).bold()),
-            Span::styled(
-                format!("{removed_count} removed"),
-                Style::default().fg(scheme.removed),
-            ),
-            Span::styled(
-                format!(" ({}{})", names.join(", "), suffix),
-                Style::default().fg(scheme.muted),
-            ),
-        ]));
-    }
-
-    // 7. Vulnerability status
-    let new_vulns = result.vulnerabilities.introduced.len();
-    if new_vulns > 0 {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{26a0} ", Style::default().fg(scheme.critical)),
-            Span::styled(
-                format!("{new_vulns} new vulnerabilities introduced"),
-                Style::default().fg(scheme.critical),
-            ),
-        ]));
-    } else {
-        findings.push(Line::from(vec![
-            Span::styled(" \u{2713} ", Style::default().fg(scheme.added)),
-            Span::styled("No new vulnerabilities", Style::default().fg(scheme.added)),
-        ]));
-    }
-
-    let block = Block::default()
-        .title(" Key Findings ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(scheme.border));
-    let paragraph = Paragraph::new(findings).block(block);
     frame.render_widget(paragraph, area);
 }
 
@@ -1229,18 +1152,7 @@ fn render_insights_policy_row(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
     let has_quality = result.quality_delta.is_some();
     let has_matching = result.match_metrics.is_some();
-    let total_vulns = result.vulnerabilities.introduced.len()
-        + result.vulnerabilities.resolved.len()
-        + result.vulnerabilities.persistent.len();
-    let has_vex = total_vulns > 0
-        && (result
-            .vulnerabilities
-            .introduced
-            .iter()
-            .chain(&result.vulnerabilities.resolved)
-            .chain(&result.vulnerabilities.persistent)
-            .any(|v| v.vex_state.is_some())
-            || !result.vulnerabilities.vex_changes.is_empty());
+    let has_vex = diff_total_vulns(result) > 0;
     let has_insights = has_quality || has_matching || has_vex;
 
     if has_insights {
@@ -1512,49 +1424,108 @@ fn render_ecosystem_breakdown_chart(
 ) {
     let scheme = colors();
 
-    // Count changes per ecosystem across added, removed, modified
-    let mut eco_counts: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    // Per-ecosystem (added, removed, modified) triples: the previous flat sum
+    // hid the change direction, and its rotating palette could paint an
+    // ecosystem in the semantically-critical red.
+    let mut eco_counts: std::collections::HashMap<&str, (u64, u64, u64)> =
+        std::collections::HashMap::new();
     for comp in &result.components.added {
-        let eco = comp.ecosystem.as_deref().unwrap_or("unknown");
-        *eco_counts.entry(eco).or_default() += 1;
+        eco_counts
+            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
+            .or_default()
+            .0 += 1;
     }
     for comp in &result.components.removed {
-        let eco = comp.ecosystem.as_deref().unwrap_or("unknown");
-        *eco_counts.entry(eco).or_default() += 1;
+        eco_counts
+            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
+            .or_default()
+            .1 += 1;
     }
     for comp in &result.components.modified {
-        let eco = comp.ecosystem.as_deref().unwrap_or("unknown");
-        *eco_counts.entry(eco).or_default() += 1;
+        eco_counts
+            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
+            .or_default()
+            .2 += 1;
     }
 
     let mut ecosystems: Vec<_> = eco_counts.into_iter().collect();
-    ecosystems.sort_by(|a, b| b.1.cmp(&a.1));
+    ecosystems.sort_by(|a, b| {
+        let ta = a.1.0 + a.1.1 + a.1.2;
+        let tb = b.1.0 + b.1.1 + b.1.2;
+        tb.cmp(&ta).then_with(|| a.0.cmp(b.0))
+    });
 
-    let palette = scheme.chart_palette();
-    let bars: Vec<Bar> = ecosystems
+    let block = Block::default()
+        .title(" Changes by Ecosystem ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(scheme.border));
+
+    if ecosystems.len() <= 1 {
+        // Single ecosystem: a labelled tally row beats a labelless bar.
+        let lines: Vec<Line> = ecosystems
+            .iter()
+            .map(|(eco, (a, r, m))| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:<12} ", crate::tui::widgets::truncate_str(eco, 12)),
+                        Style::default().fg(scheme.text),
+                    ),
+                    Span::styled(format!("+{a}"), Style::default().fg(scheme.added)),
+                    Span::raw("  "),
+                    Span::styled(format!("-{r}"), Style::default().fg(scheme.removed)),
+                    Span::raw("  "),
+                    Span::styled(format!("~{m}"), Style::default().fg(scheme.modified)),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+        return;
+    }
+
+    // Multi-ecosystem: grouped bars — one group per ecosystem (top 3 by
+    // total), three semantic bars (+/-/~) per group. Grouped, not stacked:
+    // ratatui's BarChart has no stacked mode.
+    let groups: Vec<BarGroup> = ecosystems
         .iter()
-        .take(5)
-        .enumerate()
-        .map(|(i, (name, count))| {
-            Bar::default()
-                .value(*count)
-                .label(Line::from(crate::tui::widgets::truncate_str(name, 8)))
-                .style(Style::default().fg(palette[i % palette.len()]))
+        .take(3)
+        .map(|(eco, (a, r, m))| {
+            // ratatui only prints a bar's value when it fits inside
+            // bar_width(3); compact 4+-digit counts to "Nk" so huge diffs
+            // don't silently lose their numbers.
+            let compact = |v: u64| {
+                let mut bar = Bar::default().value(v);
+                if v > 999 {
+                    bar = bar.text_value(format!("{}k", v / 1000));
+                }
+                bar
+            };
+            let bars = vec![
+                compact(*a)
+                    .label(Line::from("+"))
+                    .style(Style::default().fg(scheme.added)),
+                compact(*r)
+                    .label(Line::from("-"))
+                    .style(Style::default().fg(scheme.removed)),
+                compact(*m)
+                    .label(Line::from("~"))
+                    .style(Style::default().fg(scheme.modified)),
+            ];
+            BarGroup::default()
+                .label(Line::from(crate::tui::widgets::truncate_str(eco, 8)))
+                .bars(&bars)
         })
         .collect();
 
-    let bar_chart = BarChart::default()
-        .block(
-            Block::default()
-                .title(" Changes by Ecosystem ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(scheme.border)),
-        )
-        .bar_width(7)
-        .bar_gap(1)
+    let mut bar_chart = BarChart::default()
+        .block(block)
+        .bar_width(3)
+        .bar_gap(0)
+        .group_gap(2)
         .value_style(Style::default().fg(scheme.text).bold())
-        .label_style(Style::default().fg(scheme.text))
-        .data(BarGroup::default().bars(&bars));
+        .label_style(Style::default().fg(scheme.text));
+    for g in groups {
+        bar_chart = bar_chart.data(g);
+    }
 
     frame.render_widget(bar_chart, area);
 }
@@ -1661,7 +1632,13 @@ fn metadata_change_lines<'a>(
         let old = change.old_value.as_deref().unwrap_or("\u{2205}");
         let new = change.new_value.as_deref().unwrap_or("\u{2205}");
         lines.push(Line::from(vec![
-            Span::styled(badge, Style::default().fg(Color::Black).bg(color).bold()),
+            Span::styled(
+                badge,
+                Style::default()
+                    .fg(scheme.change_badge_fg())
+                    .bg(color)
+                    .bold(),
+            ),
             Span::raw(" "),
             Span::styled(change.field.clone(), Style::default().fg(color)),
             Span::styled(": ", Style::default().fg(scheme.muted)),
@@ -2011,10 +1988,29 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     } else {
         String::new()
     };
+    // Scroll window: the list was previously pinned at .scroll((0,0)) with no
+    // key handling, silently hiding everything below the fold — users read
+    // the visible handful as the complete change set.
+    let visible = area.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(visible);
+    let offset = ctx.summary.scroll_offset.min(max_scroll);
+
+    let window_suffix = if lines.len() > visible {
+        format!(
+            "[{}-{}/{} j/k] ",
+            offset + 1,
+            (offset + visible).min(lines.len()),
+            lines.len()
+        )
+    } else {
+        String::new()
+    };
     let title = format!(
-        " All Changes ({total}) \u{2014} MAJOR:{major} minor:{minor} patch:{patch} +{added} -{removed} {meta_suffix}"
+        " All Changes ({total}) \u{2014} MAJOR:{major} minor:{minor} patch:{patch} +{added} -{removed} {meta_suffix}{window_suffix}"
     );
 
+    let overflows = lines.len() > visible;
+    let total_lines = lines.len();
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
@@ -2022,11 +2018,56 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(scheme.border)),
         )
-        .scroll((0, 0));
+        .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0));
 
     frame.render_widget(paragraph, area);
+
+    if overflows {
+        crate::tui::widgets::render_scrollbar(
+            frame,
+            area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            total_lines,
+            offset,
+        );
+    }
 }
 
+/// Number of lines `render_all_changes` builds for this diff — drives the
+/// Summary scroll bound set in `App::prepare_render`. Mirrors the render
+/// exactly: metadata section (header + rows) when non-empty, plus the
+/// priority-sorted entries (introduced Critical/High vulns, modified,
+/// removed, added), or the single empty-state line.
+pub(crate) fn all_changes_line_count(result: &crate::diff::DiffResult) -> usize {
+    let crit = result
+        .vulnerabilities
+        .introduced
+        .iter()
+        .filter(|v| v.severity == "Critical")
+        .count();
+    let high = result
+        .vulnerabilities
+        .introduced
+        .iter()
+        .filter(|v| v.severity == "High")
+        .count();
+    let entries = crit
+        + high
+        + result.components.modified.len()
+        + result.components.removed.len()
+        + result.components.added.len();
+    let meta = result.metadata_changes.len();
+    let meta_lines = if meta > 0 { meta + 1 } else { 0 };
+    if entries == 0 && meta_lines == 0 {
+        1
+    } else {
+        entries + meta_lines
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VersionLevel {
     Patch,
     Minor,
@@ -2035,29 +2076,150 @@ enum VersionLevel {
     Unknown,
 }
 
+/// Classify a version change via the diff engine's lenient classifier, which
+/// handles v-prefixes (Go), short versions (`1.2`), 4-segment versions, and
+/// pre-release promotion — strict `semver::Version::parse` classified all of
+/// those as Unknown, silently undercounting major bumps and the Risk level.
 fn version_change_level(old: Option<&str>, new: Option<&str>) -> VersionLevel {
-    match (old, new) {
-        (Some(o), Some(n)) => {
-            if let (Ok(old_v), Ok(new_v)) = (semver::Version::parse(o), semver::Version::parse(n)) {
-                if new_v.major > old_v.major {
-                    VersionLevel::Major
-                } else if new_v.major < old_v.major {
-                    VersionLevel::Downgrade
-                } else if new_v.minor > old_v.minor {
-                    VersionLevel::Minor
-                } else if new_v.minor < old_v.minor {
-                    VersionLevel::Downgrade
-                } else if new_v.patch > old_v.patch {
-                    VersionLevel::Patch
-                } else if new_v.patch < old_v.patch {
-                    VersionLevel::Downgrade
-                } else {
-                    VersionLevel::Unknown
-                }
-            } else {
-                VersionLevel::Unknown
-            }
-        }
+    use crate::diff::VersionChangeType;
+
+    let (Some(o), Some(n)) = (old, new) else {
+        return VersionLevel::Unknown;
+    };
+    match crate::diff::classify_version_strings(o, n) {
+        VersionChangeType::MajorUpgrade => VersionLevel::Major,
+        VersionChangeType::MinorUpgrade => VersionLevel::Minor,
+        VersionChangeType::PatchUpgrade => VersionLevel::Patch,
+        VersionChangeType::Downgrade => VersionLevel::Downgrade,
         _ => VersionLevel::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod version_level_tests {
+    use super::*;
+
+    /// Regression: non-strict-semver ecosystems (Go v-prefix, 2-component,
+    /// 4-segment, pre-release promotion) previously all classified as Unknown,
+    /// undercounting major bumps and the Summary Risk level.
+    #[test]
+    fn version_level_classifies_non_semver_ecosystems() {
+        // Go-style v-prefix.
+        assert_eq!(
+            version_change_level(Some("v1.2.3"), Some("v2.0.0")),
+            VersionLevel::Major
+        );
+        // Two-component version.
+        assert_eq!(
+            version_change_level(Some("1.2"), Some("1.3")),
+            VersionLevel::Minor
+        );
+        // Four-segment version must not fall to Unknown.
+        assert_ne!(
+            version_change_level(Some("1.2.3.4"), Some("1.2.3.5")),
+            VersionLevel::Unknown
+        );
+        // Downgrade detection.
+        assert_eq!(
+            version_change_level(Some("2.0.0"), Some("1.9.0")),
+            VersionLevel::Downgrade
+        );
+        // Pre-release promotion within the same triple is a patch-level step.
+        assert_eq!(
+            version_change_level(Some("1.0.0-alpha"), Some("1.0.0")),
+            VersionLevel::Patch
+        );
+        // Honestly unknown: non-numeric schemes and missing versions.
+        assert_eq!(
+            version_change_level(Some("abc"), Some("def")),
+            VersionLevel::Unknown
+        );
+        assert_eq!(
+            version_change_level(None, Some("1.0.0")),
+            VersionLevel::Unknown
+        );
+    }
+
+    /// Go pseudo-versions must classify deterministically without panicking.
+    #[test]
+    fn version_level_go_pseudo_version() {
+        let level = version_change_level(
+            Some("v0.0.0-20200101000000-abcdef123456"),
+            Some("v0.0.0-20210101000000-fedcba654321"),
+        );
+        assert_eq!(
+            level,
+            VersionLevel::Patch,
+            "pseudo-version timestamp bump orders as a pre-release (patch) step"
+        );
+    }
+}
+
+#[cfg(test)]
+mod risk_badge_tests {
+    use super::*;
+
+    /// Badge foreground must follow the theme convention: light text on the
+    /// dark critical/error badge backgrounds, dark text on bright ones
+    /// (previously hardcoded black everywhere).
+    #[test]
+    fn compute_risk_level_badge_fg() {
+        let scheme = crate::tui::theme::ColorScheme::dark();
+
+        // Critical risk: one Critical introduced vulnerability.
+        let mut critical = crate::diff::DiffResult::default();
+        let vref = crate::model::VulnerabilityRef::new(
+            "CVE-2024-0001".to_string(),
+            crate::model::VulnerabilitySource::Osv,
+        );
+        let comp =
+            crate::model::Component::new("liba".to_string(), "pkg:npm/liba@1.0.0".to_string());
+        let mut detail = crate::diff::VulnerabilityDetail::from_ref(&vref, &comp);
+        detail.severity = "Critical".to_string();
+        critical.vulnerabilities.introduced.push(detail);
+
+        let (label, _, badge_fg) = compute_risk_level(&critical, &scheme);
+        assert_eq!(label, "Critical Risk");
+        assert_eq!(badge_fg, scheme.badge_fg_light);
+
+        // Low risk: additions only.
+        let mut low = crate::diff::DiffResult::default();
+        low.summary.components_added = 1;
+        let (label, _, badge_fg) = compute_risk_level(&low, &scheme);
+        assert_eq!(label, "Low Risk");
+        assert_eq!(badge_fg, scheme.badge_fg_dark);
+    }
+}
+
+#[cfg(test)]
+mod layout_plan_tests {
+    use super::*;
+
+    /// Table-driven degradation cascade: shrink header -> drop charts ->
+    /// drop insights -> compact strip.
+    #[test]
+    fn summary_layout_plan_cascade() {
+        // 80x24 content height (17): even minimal rows don't fit -> compact.
+        let p = summary_layout_plan(17, 6, 5, 8);
+        assert!(p.compact, "17 rows must go compact: {p:?}");
+
+        // Demo 120x40 arithmetic: 8+6+5+8+6 = 33 fits exactly with the
+        // header shrunk to 8.
+        let p = summary_layout_plan(33, 6, 5, 8);
+        assert!(!p.compact);
+        assert_eq!(p.summary_h, 8);
+        assert!(p.show_insights && p.show_charts);
+
+        // Roomy: header keeps its natural clamp.
+        let p = summary_layout_plan(40, 6, 5, 8);
+        assert!(!p.compact);
+        assert_eq!(p.summary_h, 11, "(findings 6 + 5).clamp(7,13)");
+        assert!(p.show_insights && p.show_charts);
+
+        // Mid-tier: too tight for charts, keeps insights.
+        let p = summary_layout_plan(25, 6, 5, 8);
+        assert!(!p.compact, "25 rows is not compact: {p:?}");
+        assert!(!p.show_charts, "charts drop first: {p:?}");
+        assert!(p.show_insights, "insights survive at 25 rows: {p:?}");
     }
 }

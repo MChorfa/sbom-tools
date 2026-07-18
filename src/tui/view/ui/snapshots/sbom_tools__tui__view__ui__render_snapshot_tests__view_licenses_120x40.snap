@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
- [1] Overview   │  [2] Components   │  [3] Vulns   │  [4] Licenses   │  [5] Deps   │  [6] Quality   │  [7] Compliance
+[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License Details ───────────────────────────────────┐
@@ -12,15 +12,18 @@ Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License 
                                                                   │                                                    │
 ┌ Licenses (3) ──────────────────────────────────────────────────┐│Category: Permissive                                │
 │  License                         Count          Category       ││Risk: Low                                           │
-│▶ MIT                                6 ████████  Permissive     ││Family: MIT                                         │
-│  Apache-2.0                         2 ███       Permissive     ││Components: 6                                       │
-│  Unknown                            1 ██        Unknown        ││                                                    │
+│▶ MIT                                6 ████████  ✓ Permissive   ││Family: MIT                                         │
+│  Apache-2.0                         2 ███       ✓ Permissive   ││Components: 6                                       │
+│  Unknown                            1 ██        ? Unknown      ││                                                    │
 │                                                                ││Characteristics:                                    │
 │                                                                ││✓ Commercial use allowed                            │
 │                                                                ││✓ Modification allowed                              │
 │                                                                ││✓ Distribution allowed                              │
 │                                                                ││✗ Patent grant                                      │
 │                                                                ││✗ Copyleft/Share-alike                              │
+│                                                                ││                                                    │
+│                                                                ││Compatibility:                                      │
+│                                                                ││✓ No conflicts with 1 other licenses                │
 │                                                                ││                                                    │
 │                                                                ││Components: 6                                       │
 │                                                                ││[Enter] jump to component  [K/J] scroll             │
@@ -30,9 +33,6 @@ Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License 
 │                                                                ││L lodash@4.17.21                                    │
 │                                                                ││L react@18.2.0                                      │
 │                                                                ││L zod@3.21.4                                        │
-│                                                                ││                                                    │
-│                                                                ││                                                    │
-│                                                                ││                                                    │
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 │                                                                ││                                                    │

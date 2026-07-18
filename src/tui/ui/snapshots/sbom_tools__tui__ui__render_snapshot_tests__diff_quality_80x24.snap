@@ -4,10 +4,10 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
- [1] Summary   │  [2] Components   │  [3] Dependencies   │  [4] Licenses   │  [5
+« [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
-┌ Quality: 49/100 (F) → 49/100 (F)   ──────────────────────────────────────────┐
+┌ Quality: 49/100 (F) → 49/100 (F)  unchanged ─────────────────────────────────┐
 │ Old: ██████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  49%  Old│
 │──────────────────────────────────────────────────────────────────────────────│
 │ New: ██████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  49%  New│
@@ -25,4 +25,4 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │  [P2] Add SBOM creation tool information (+8pts)  Provenance                 ▼
 └──────────────────────────────────────────────────────────────────────────────┘
  Components: 15 │ Vulns: 0 │ Score: 53.5
- v view │  Tab switch  / search  e export  ? help  q quit [y] copy Fix 1 complia
+             v view │  Tab switch  / search  e export  ? help  q quit

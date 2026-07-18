@@ -66,6 +66,21 @@ pub struct MlRegression {
     pub new_value: f64,
 }
 
+/// Whether a higher value of the named ML metric is better (`Some(true)`),
+/// worse (`Some(false)`), or unknown (`None`). Slice-qualified names
+/// ("accuracy@validation") key on the base metric. Shared by the CLI
+/// regression gate and the TUI so their notions of "regressed" cannot drift.
+#[must_use]
+pub fn ml_metric_higher_is_better(metric: &str) -> Option<bool> {
+    let metric = metric.split('@').next().unwrap_or(metric);
+    match metric {
+        "accuracy" | "f1" | "f1_score" | "precision" | "recall" | "auc" | "roc_auc" | "bleu"
+        | "rouge" => Some(true),
+        "loss" | "error" | "error_rate" | "perplexity" | "latency" | "latency_ms" => Some(false),
+        _ => None,
+    }
+}
+
 impl DiffResult {
     /// Create a new empty diff result
     pub fn new() -> Self {
@@ -1160,6 +1175,9 @@ pub struct VulnerabilityDetail {
     /// Whether this vulnerability is in CISA's Known Exploited Vulnerabilities catalog
     #[serde(default)]
     pub is_kev: bool,
+    /// Whether the KEV entry is known to be used in ransomware campaigns
+    #[serde(default)]
+    pub is_ransomware: bool,
     /// FIRST EPSS exploit-probability score (0.0 - 1.0), if enriched
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epss_score: Option<f64>,
@@ -1250,6 +1268,7 @@ impl VulnerabilityDetail {
                 )
             }),
             is_kev: vuln.is_kev,
+            is_ransomware: vuln.is_ransomware_related(),
             epss_score: vuln.epss_score,
             component_depth: None,
             published_date,
@@ -1538,4 +1557,22 @@ pub struct GraphChangesByImpact {
     pub medium: usize,
     pub high: usize,
     pub critical: usize,
+}
+
+#[cfg(test)]
+mod ml_metric_direction_tests {
+    use super::ml_metric_higher_is_better;
+
+    /// Locks the '@slice' strip and the table now shared by engine and TUI.
+    #[test]
+    fn ml_metric_direction_table() {
+        assert_eq!(ml_metric_higher_is_better("accuracy"), Some(true));
+        assert_eq!(
+            ml_metric_higher_is_better("accuracy@validation"),
+            Some(true)
+        );
+        assert_eq!(ml_metric_higher_is_better("loss"), Some(false));
+        assert_eq!(ml_metric_higher_is_better("latency_ms"), Some(false));
+        assert_eq!(ml_metric_higher_is_better("custom_metric"), None);
+    }
 }

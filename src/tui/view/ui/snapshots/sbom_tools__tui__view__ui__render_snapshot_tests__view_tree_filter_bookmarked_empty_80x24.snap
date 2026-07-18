@@ -1,0 +1,28 @@
+---
+source: src/tui/view/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
+
+« [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  »
+
+────────────────────────────────────────────────────────────────────────────────
+Group:  Ecosystem   Filter:  Bookmarked  (0)┌ Component Overview ──────────────┐
+                                            │Component Statistics              │
+┌ Components (0/9) ────────────────────────┐│                                  │
+│┌────────────────────────────────────────┐││Total Components: 9               │
+││                                        │││                                  │
+││                    ∅                   │││By Type:                          │
+││                                        │││Other Files     9 100% ██████     │
+││ No components match filter 'Bookmarked'│││                                  │
+││                                        │││Vulnerability Status:             │
+││       Press [f] to change filter       │││Critical        0  0%             │
+││                                        │││High            0  0%             │
+││                                        │││Medium          0  0%             │
+││                                        │││Low             0  0%             │
+││                                        │││Clean           9 100% ██████     │
+││                                        │││                                  │
+│└────────────────────────────────────────┘││                                  │
+└──────────────────────────────────────────┘└──────────────────────────────────┘
+ Components: 9 │ Vulns: 0 │ Licenses: 3 │ Group:  Ecosystem  Filter:  Bookmarked
+   …  p panel  Enter select │  Tab switch  / search  e export  ? help  q quit

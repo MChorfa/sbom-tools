@@ -222,6 +222,12 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.close_overlays(),
             KeyCode::Char('?') if app.show_help => app.toggle_help(),
+            KeyCode::Down | KeyCode::Char('j') if app.show_help => {
+                app.help_scroll = (app.help_scroll + 1).min(app.help_max_scroll);
+            }
+            KeyCode::Up | KeyCode::Char('k') if app.show_help => {
+                app.help_scroll = app.help_scroll.saturating_sub(1);
+            }
             KeyCode::Char('e') if app.show_export => app.toggle_export(),
             KeyCode::Char('l') if app.show_legend => app.toggle_legend(),
             // Export format selection
@@ -331,12 +337,26 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
 
     // Global keys
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => {
+        KeyCode::Char('q') => {
             // Save last active tab before quitting
             let mut prefs = TuiPreferences::load();
             prefs.last_view_tab = Some(app.active_tab.as_str().to_string());
             let _ = prefs.save();
             app.should_quit = true;
+        }
+        // Esc backs out one level instead of quitting the app (overlays and
+        // ACTIVE local searches already consumed Esc earlier in this
+        // function, so this arm only fires at top level).
+        KeyCode::Esc => {
+            // First rung: clear an APPLIED (Enter-confirmed) tree search, so
+            // the tree empty-state's "[Esc] to clear" promise stays truthful.
+            if app.active_tab == ViewTab::Tree && !app.tree_search_query.is_empty() {
+                app.clear_tree_search();
+            } else if app.focus_panel == super::app::FocusPanel::Right {
+                app.focus_panel = super::app::FocusPanel::Left;
+            } else if app.navigation_ctx.has_history() {
+                app.go_back();
+            }
         }
         KeyCode::Char('?') => {
             app.toggle_help();
@@ -372,11 +392,19 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
             app.toggle_legend();
         }
         KeyCode::Char('T') => {
-            // Toggle theme (dark -> light -> high-contrast) and save preference
+            // Toggle theme (dark -> light -> high-contrast) and save preference.
+            // Monochrome is sticky (NO_COLOR): the toggle is a no-op there, and
+            // skipping the save keeps the user's colored preference intact for
+            // sessions without NO_COLOR.
+            let before = crate::tui::theme::current_theme_name();
             let theme_name = toggle_theme();
-            let mut prefs = TuiPreferences::load();
-            prefs.theme = theme_name.parse().unwrap_or_default();
-            let _ = prefs.save();
+            if theme_name != before
+                && let Ok(parsed) = theme_name.parse()
+            {
+                let mut prefs = TuiPreferences::load();
+                prefs.theme = parsed;
+                let _ = prefs.save();
+            }
         }
         KeyCode::Char('P') => {
             // Cycle BOM profile (SBOM → CBOM → AI-BOM → SBOM) and re-score.
@@ -1035,6 +1063,15 @@ fn handle_search_key(app: &mut ViewApp, key: KeyEvent) {
         KeyCode::Esc => {
             app.stop_search();
         }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            use crate::tui::app_states::SearchMode;
+            app.search_state.mode = match app.search_state.mode {
+                SearchMode::Substring => SearchMode::Regex,
+                SearchMode::Regex => SearchMode::Substring,
+            };
+            app.execute_search();
+            app.set_status_message(format!("Search mode: {}", app.search_state.mode.label()));
+        }
         KeyCode::Enter => {
             // Jump to selected result
             if let Some(result) = app
@@ -1167,17 +1204,27 @@ pub fn handle_mouse_event(app: &mut ViewApp, mouse: event::MouseEvent) {
 
 /// Handle click on tab bar
 fn handle_tab_click(app: &mut ViewApp, x: u16) {
-    // Derive hit regions from the profile's actual rendered tabs (matches
-    // view/ui.rs render_tabs), rather than a hardcoded SBOM label list that
-    // mis-selected under the CBOM/AI-BOM profiles.
+    // Shared geometry with the last render (windowed): marker clicks select
+    // the adjacent hidden tab, mirroring diff mode.
     let tabs = ViewTab::tabs_for_profile(app.bom_profile);
     let labels: Vec<String> = tabs
         .iter()
         .enumerate()
         .map(|(i, tab)| format!("[{}] {} ", i + 1, tab.title()))
         .collect();
-    if let Some(idx) = crate::tui::shared::tab_bar_hit(&labels, 0, 3, x) {
-        app.select_tab(tabs[idx]);
+    match crate::tui::shared::tab_bar_hit_windowed(&labels, app.tab_window, 0, 3, x) {
+        crate::tui::shared::TabHit::Tab(idx) => app.select_tab(tabs[idx]),
+        crate::tui::shared::TabHit::PrevMarker => {
+            if app.tab_window.start > 0 {
+                app.select_tab(tabs[app.tab_window.start - 1]);
+            }
+        }
+        crate::tui::shared::TabHit::NextMarker => {
+            if app.tab_window.end < tabs.len() {
+                app.select_tab(tabs[app.tab_window.end]);
+            }
+        }
+        crate::tui::shared::TabHit::Miss => {}
     }
 }
 

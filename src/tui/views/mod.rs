@@ -18,11 +18,15 @@ mod vulnerabilities;
 pub use components::render_components;
 pub use dependencies::render_dependencies;
 pub(crate) use dependencies::update_graph_cache;
+pub(crate) use diff_compliance::nth_diff_violation;
 pub use diff_compliance::{
     diff_compliance_violation_count, render_diff_compliance, resolve_selected_group_element,
 };
 pub use graph_changes::render_graph_changes;
 pub use licenses::render_licenses;
+pub(crate) use matrix::extend_with_status_or_hints as matrix_status_tail;
+pub(crate) use matrix::ordered_sbom_indices;
+pub(crate) use matrix::render_multi_search_bar;
 pub use matrix::{MatrixPanel, render_matrix};
 pub(crate) use multi_dashboard::ordered_comparison_indices;
 pub use multi_dashboard::{MultiDashboardPanel, render_multi_dashboard};
@@ -34,7 +38,12 @@ pub use quality::render_quality;
 pub use sidebyside::render_sidebyside;
 pub(crate) use sidebyside::{build_aligned_rows, build_unified_entries};
 pub use source::render_source;
+pub(crate) use summary::all_changes_line_count;
 pub use summary::render_summary;
+pub(crate) use timeline::filtered_evolution_entries;
+pub(crate) use timeline::ordered_version_indices;
+#[cfg(test)]
+pub(crate) use timeline::resolve_version_diff;
 pub use timeline::{TimelinePanel, render_timeline};
 pub(crate) use vulnerabilities::count_grouped_items;
 pub use vulnerabilities::render_vulnerabilities;

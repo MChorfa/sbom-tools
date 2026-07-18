@@ -19,6 +19,7 @@ pub fn render_multi_dashboard(
     area: Rect,
     result: &MultiDiffResult,
     state: &MultiDiffState,
+    status: Option<&str>,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -72,7 +73,7 @@ pub fn render_multi_dashboard(
     }
 
     // Status bar
-    render_status_bar(f, chunks[3], result, state);
+    render_status_bar(f, chunks[3], result, state, status);
 
     // Render overlays
     if state.show_detail_modal {
@@ -182,6 +183,20 @@ fn render_baseline_info(f: &mut Frame, area: Rect, result: &MultiDiffResult) {
 
     let paragraph = Paragraph::new(text).block(block);
     f.render_widget(paragraph, area);
+}
+
+/// Deviation severity band: (severity name for `severity_bg_tint`, magnitude
+/// glyph that survives NO_COLOR and red/green confusion).
+pub(crate) fn deviation_band(deviation: f64) -> (&'static str, &'static str) {
+    if deviation > 0.5 {
+        ("critical", "\u{2587}")
+    } else if deviation > 0.3 {
+        ("high", "\u{2585}")
+    } else if deviation > 0.1 {
+        ("medium", "\u{2583}")
+    } else {
+        ("low", "\u{2581}")
+    }
 }
 
 /// Raw `result.comparisons` indices in the order shown in the Targets list, after the
@@ -316,17 +331,10 @@ fn render_targets_list(
                     .bg(scheme.selection)
                     .add_modifier(Modifier::BOLD)
             } else if state.heat_map_mode {
-                // Heat map background color based on deviation
-                let bg = if deviation > 0.5 {
-                    scheme.error_bg
-                } else if deviation > 0.3 {
-                    scheme.warning
-                } else if deviation > 0.1 {
-                    scheme.selection
-                } else {
-                    scheme.muted
-                };
-                Style::default().bg(bg)
+                // Theme-tuned severity tint (pale in light themes, Reset
+                // under monochrome — the glyph below carries the magnitude).
+                let (band, _) = deviation_band(deviation);
+                Style::default().bg(scheme.severity_bg_tint(band))
             } else {
                 Style::default()
             };
@@ -341,7 +349,15 @@ fn render_targets_list(
             Row::new(vec![
                 Cell::from(comp.target.name.clone()).style(name_style),
                 Cell::from(comp.target.component_count.to_string()).style(style),
-                Cell::from(format!("{:.1}%", deviation * 100.0)).style(style.fg(deviation_color)),
+                // Glyph LAST: in the narrow 20% column truncation must eat
+                // the magnitude cue, never the digits (a clipped "100.0" that
+                // reads "10" inverts the apparent magnitude).
+                Cell::from(format!(
+                    "{:.1}% {}",
+                    deviation * 100.0,
+                    deviation_band(deviation).1
+                ))
+                .style(style.fg(deviation_color)),
                 Cell::from(comp.diff.summary.total_changes.to_string()).style(style),
             ])
         })
@@ -505,12 +521,35 @@ fn render_variable_components(
     state: &MultiDiffState,
 ) {
     let scheme = colors();
+
+    if result.summary.variable_components.is_empty() {
+        let block = Block::default()
+            .title(" Variable Components (0 total) [v: drill-down] ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(scheme.critical));
+        let placeholder = Paragraph::new(Line::from(Span::styled(
+            "No variable components \u{2014} all targets match the baseline",
+            Style::default().fg(scheme.text_muted),
+        )))
+        .block(block);
+        f.render_widget(placeholder, area);
+        return;
+    }
+    // Window around the selection sized to the REAL pane height (borders +
+    // table header + spacing = 4 rows of chrome): with the selection bounds
+    // now populated, the drill-down cursor can travel past the fold and must
+    // stay visible at any terminal size.
+    let visible_rows = (area.height.saturating_sub(4) as usize).max(1);
+    let window_start = state
+        .selected_variable_component
+        .saturating_sub(visible_rows - 1);
     let rows: Vec<Row> = result
         .summary
         .variable_components
         .iter()
         .enumerate()
-        .take(15) // Limit to first 15
+        .skip(window_start)
+        .take(visible_rows)
         .map(|(i, vc)| {
             let is_selected = i == state.selected_variable_component;
             let base_style = if is_selected {
@@ -521,19 +560,19 @@ fn render_variable_components(
                 Style::default()
             };
 
-            let (badge, impact_style) = match vc.security_impact {
-                SecurityImpact::Critical => (
-                    "[C] ",
-                    base_style.fg(scheme.critical).add_modifier(Modifier::BOLD),
-                ),
-                SecurityImpact::High => ("[H] ", base_style.fg(scheme.high)),
-                SecurityImpact::Medium => ("[M] ", base_style.fg(scheme.medium)),
-                SecurityImpact::Low => ("[L] ", base_style.fg(scheme.low)),
+            let impact_style = match vc.security_impact {
+                SecurityImpact::Critical => {
+                    base_style.fg(scheme.critical).add_modifier(Modifier::BOLD)
+                }
+                SecurityImpact::High => base_style.fg(scheme.high),
+                SecurityImpact::Medium => base_style.fg(scheme.medium),
+                SecurityImpact::Low => base_style.fg(scheme.low),
             };
 
-            // Build name cell with color-coded security badge prefix
+            // App-standard severity chip instead of the hand-rolled "[C] ".
             let name_line = Line::from(vec![
-                Span::styled(badge, impact_style),
+                crate::tui::theme::severity_indicator(vc.security_impact.label()),
+                Span::raw(" "),
                 Span::styled(vc.name.clone(), base_style),
             ]);
 
@@ -579,12 +618,18 @@ fn render_variable_components(
     f.render_widget(table, area);
 }
 
-fn render_status_bar(f: &mut Frame, area: Rect, result: &MultiDiffResult, _state: &MultiDiffState) {
+fn render_status_bar(
+    f: &mut Frame,
+    area: Rect,
+    result: &MultiDiffResult,
+    _state: &MultiDiffState,
+    status: Option<&str>,
+) {
     let scheme = colors();
     let universal_count = result.summary.universal_components.len();
     let inconsistent_count = result.summary.inconsistent_components.len();
 
-    let status = Line::from(vec![
+    let mut spans = vec![
         Span::styled("Universal: ", Style::default().fg(scheme.text_muted)),
         Span::styled(
             universal_count.to_string(),
@@ -602,23 +647,12 @@ fn render_status_bar(f: &mut Frame, area: Rect, result: &MultiDiffResult, _state
             inconsistent_count.to_string(),
             Style::default().fg(scheme.removed),
         ),
-        Span::raw("  │  "),
-        Span::styled("/", Style::default().fg(scheme.primary)),
-        Span::raw(": search  "),
-        Span::styled("f", Style::default().fg(scheme.primary)),
-        Span::raw(": filter  "),
-        Span::styled("s", Style::default().fg(scheme.primary)),
-        Span::raw(": sort  "),
-        Span::styled("v", Style::default().fg(scheme.primary)),
-        Span::raw(": variable  "),
-        Span::styled("h", Style::default().fg(scheme.primary)),
-        Span::raw(": heatmap  "),
-        Span::styled("x", Style::default().fg(scheme.primary)),
-        Span::raw(": cross-target"),
-    ]);
+        Span::raw("  \u{2502}  "),
+    ];
+    crate::tui::views::matrix_status_tail(&mut spans, area, status, "multi");
 
     let block = Block::default().borders(Borders::ALL);
-    let paragraph = Paragraph::new(status).block(block);
+    let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, area);
 }
 
@@ -671,19 +705,13 @@ fn render_cross_target_analysis(
             .collect::<Vec<_>>()
             .join(", ");
 
-        let (badge, badge_color) = match vc.security_impact {
-            SecurityImpact::Critical => ("[C]", scheme.critical),
-            SecurityImpact::High => ("[H]", scheme.high),
-            SecurityImpact::Medium => ("[M]", scheme.medium),
-            SecurityImpact::Low => ("[L]", scheme.low),
-        };
-
         cross_target_info.push(Line::from(vec![
             Span::styled(
                 format!("{}. ", i + 1),
                 Style::default().fg(scheme.text_muted),
             ),
-            Span::styled(format!("{badge} "), Style::default().fg(badge_color)),
+            crate::tui::theme::severity_indicator(vc.security_impact.label()),
+            Span::raw(" "),
             Span::styled(&vc.name, Style::default().fg(scheme.text)),
             Span::raw(": "),
             Span::styled(versions_str, Style::default().fg(scheme.accent)),
@@ -1002,30 +1030,7 @@ fn render_variable_drill_down(
 
 /// Render search overlay
 fn render_search_overlay(f: &mut Frame, area: Rect, state: &MultiDiffState) {
-    let scheme = colors();
-
-    // Search bar at bottom of screen
-    let search_area = Rect::new(area.x, area.height - 3, area.width, 3);
-    f.render_widget(Clear, search_area);
-
-    let search_text = Line::from(vec![
-        Span::styled("Search: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(&state.search.query, Style::default().fg(scheme.text)),
-        Span::styled("│", Style::default().fg(scheme.accent)), // Cursor
-        Span::raw("  "),
-        Span::styled(
-            state.search.match_position(),
-            Style::default().fg(scheme.text_muted),
-        ),
-    ]);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
-
-    let paragraph = Paragraph::new(search_text).block(block);
-    f.render_widget(paragraph, search_area);
+    crate::tui::views::render_multi_search_bar(f, area, "Search: ", &state.search);
 }
 
 /// Panels in the multi-dashboard
@@ -1125,5 +1130,27 @@ mod ordering_tests {
                     > 0
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod deviation_band_tests {
+    use super::deviation_band;
+
+    /// Bands map to the theme's severity tints with symbolic magnitude glyphs
+    /// that survive NO_COLOR.
+    #[test]
+    fn deviation_band_maps_to_theme_tint() {
+        crate::tui::test_support::pin_theme();
+        let scheme = crate::tui::theme::colors();
+        assert_eq!(deviation_band(0.55), ("critical", "\u{2587}"));
+        assert_eq!(deviation_band(0.35), ("high", "\u{2585}"));
+        assert_eq!(deviation_band(0.15), ("medium", "\u{2583}"));
+        assert_eq!(deviation_band(0.05), ("low", "\u{2581}"));
+        // Each named band resolves through the theme's per-scheme tints.
+        assert_eq!(
+            scheme.severity_bg_tint(deviation_band(0.55).0),
+            scheme.severity_bg_tint("critical")
+        );
     }
 }

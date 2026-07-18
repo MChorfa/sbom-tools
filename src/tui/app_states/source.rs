@@ -1498,6 +1498,30 @@ impl SourcePanelState {
     }
 
     /// Find a change annotation for a node_id, checking ancestors if no direct match.
+    /// Expand every strict ancestor of each annotated path so the annotated
+    /// rows are visible with their +/-/~ gutters without dumping their
+    /// children (e.g. `root.components.[3]` expands `root` and
+    /// `root.components` but not the component node itself).
+    ///
+    /// The tree previously opened fully collapsed: gutter blank, minimap
+    /// reporting "0 changes", and n/N inert until the user expanded by hand.
+    pub fn expand_annotated_paths(&mut self) {
+        let mut inserted = false;
+        let keys: Vec<String> = self.change_annotations.keys().cloned().collect();
+        for key in keys {
+            let parts: Vec<&str> = key.split('.').collect();
+            for len in 1..parts.len() {
+                let ancestor = parts[..len].join(".");
+                if self.expanded.insert(ancestor) {
+                    inserted = true;
+                }
+            }
+        }
+        if inserted {
+            self.invalidate_flat_cache();
+        }
+    }
+
     pub fn find_annotation(&self, node_id: &str) -> Option<SourceChangeStatus> {
         if let Some(status) = self.change_annotations.get(node_id) {
             return Some(*status);
@@ -1703,6 +1727,18 @@ impl SourcePanelState {
         if self.change_indices.is_empty() {
             self.build_change_indices();
         }
+        // The user may have re-collapsed the tree; reveal the annotated
+        // paths again. Indices are NOT rebuilt here: expand_annotated_paths
+        // invalidates the flat cache, and rebuilding mid-event would mark it
+        // valid again BEFORE the render path's cross-panel alignment runs —
+        // the render rebuilds (aligned) on the next frame and the jump lands
+        // on the following press.
+        if self.change_indices.is_empty()
+            && !self.change_annotations.is_empty()
+            && self.view_mode == SourceViewMode::Tree
+        {
+            self.expand_annotated_paths();
+        }
         if self.change_indices.is_empty() {
             return;
         }
@@ -1729,6 +1765,13 @@ impl SourcePanelState {
     pub fn prev_change(&mut self) {
         if self.change_indices.is_empty() {
             self.build_change_indices();
+        }
+        if self.change_indices.is_empty()
+            && !self.change_annotations.is_empty()
+            && self.view_mode == SourceViewMode::Tree
+        {
+            // See next_change: expand only; the render path rebuilds aligned.
+            self.expand_annotated_paths();
         }
         if self.change_indices.is_empty() {
             return;
@@ -1913,6 +1956,10 @@ pub struct SourceDiffState {
     /// Whether alignment gaps have been inserted into the current flat caches.
     /// Reset when either panel's flat cache is invalidated.
     pub(crate) alignment_applied: bool,
+    /// Frame row where the detail bottom strip starts (set by the render
+    /// path while `show_detail` is on; `None` otherwise). The mouse handler
+    /// uses it to keep strip clicks from falling through to the tree lists.
+    pub(crate) detail_strip_top: Option<u16>,
 }
 
 impl SourceDiffState {
@@ -1920,6 +1967,7 @@ impl SourceDiffState {
         Self {
             old_panel: SourcePanelState::new(old_raw),
             new_panel: SourcePanelState::new(new_raw),
+            detail_strip_top: None,
             active_side: SourceSide::New,
             sync_mode: super::ScrollSyncMode::Locked,
             show_detail: false,
@@ -2090,6 +2138,12 @@ impl SourceDiffState {
                 }
             }
         }
+
+        // Open with the diff revealed: expand the ancestors of every
+        // annotated path so gutters, the minimap count, and n/N all work
+        // from the first frame.
+        self.old_panel.expand_annotated_paths();
+        self.new_panel.expand_annotated_paths();
     }
 
     /// Count change annotations by status.
@@ -2273,8 +2327,13 @@ impl SourceDiffState {
                 let span = old_comp_spans[old_idx];
                 let insert_pos = if new_idx < new_comp_entries.len() {
                     new_comp_entries[new_idx].0
+                } else if let Some(last) = new_comp_entries.last() {
+                    // Past the end of the new panel's components — insert at
+                    // the end of the components REGION (last component + its
+                    // span), not after the whole panel, or later sections
+                    // (vulnerabilities, dependencies) render above the gap.
+                    last.0 + new_comp_spans[new_comp_entries.len() - 1]
                 } else {
-                    // Past end of new components - insert at end of new panel
                     self.new_panel.cached_flat_items.len()
                 };
                 new_insertions.push((insert_pos, span));
@@ -2289,6 +2348,9 @@ impl SourceDiffState {
                 let span = new_comp_spans[new_idx];
                 let insert_pos = if old_idx < old_comp_entries.len() {
                     old_comp_entries[old_idx].0
+                } else if let Some(last) = old_comp_entries.last() {
+                    // See above: keep the gap inside the components region.
+                    last.0 + old_comp_spans[old_comp_entries.len() - 1]
                 } else {
                     self.old_panel.cached_flat_items.len()
                 };
@@ -2418,4 +2480,81 @@ fn extract_component_name(node: &JsonTreeNode) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod auto_expand_tests {
+    use super::*;
+    use crate::tui::test_support::{DEMO_NEW, DEMO_OLD, demo_diff};
+
+    fn populated_state() -> SourceDiffState {
+        let (diff, _, _) = demo_diff();
+        let mut source = SourceDiffState::new(DEMO_OLD, DEMO_NEW);
+        source.populate_annotations(&diff);
+        source
+    }
+
+    /// Regression for the "0 changes" open: populate must reveal the
+    /// annotated rows so gutters/minimap/n-N work from the first frame.
+    #[test]
+    fn annotated_paths_expanded_on_populate() {
+        let mut source = populated_state();
+        assert!(
+            source.old_panel.expanded.contains("root.components"),
+            "ancestors of annotated paths must be expanded"
+        );
+        source.old_panel.build_change_indices();
+        source.new_panel.build_change_indices();
+        assert!(
+            !source.old_panel.change_indices.is_empty(),
+            "old panel must have visible change rows"
+        );
+        assert!(
+            !source.new_panel.change_indices.is_empty(),
+            "new panel must have visible change rows"
+        );
+    }
+
+    /// Ancestors expand; the annotated leaf itself stays collapsed so its
+    /// children aren't dumped.
+    #[test]
+    fn expand_annotated_paths_expands_ancestors_not_leaf() {
+        let source = populated_state();
+        let leaf = source
+            .new_panel
+            .change_annotations
+            .keys()
+            .find(|k| k.starts_with("root.components.["))
+            .expect("component annotations exist")
+            .clone();
+        assert!(source.new_panel.expanded.contains("root"));
+        assert!(source.new_panel.expanded.contains("root.components"));
+        assert!(
+            !source.new_panel.expanded.contains(&leaf),
+            "the annotated node itself must stay collapsed: {leaf}"
+        );
+    }
+
+    /// If the user re-collapses the tree, the change jumper re-reveals it
+    /// (expansion only — the index rebuild is deferred to the render path so
+    /// cross-panel alignment always precedes it).
+    #[test]
+    fn next_change_reveals_recollapsed_tree() {
+        let mut source = populated_state();
+        source.new_panel.expanded.clear();
+        source.new_panel.expanded.insert("root".to_string());
+        source.new_panel.invalidate_flat_cache();
+
+        source.new_panel.next_change();
+        assert!(
+            source.new_panel.expanded.contains("root.components"),
+            "next_change must re-expand the annotated ancestors"
+        );
+        // The render path's lazy rebuild then finds the change rows again.
+        source.new_panel.build_change_indices();
+        assert!(
+            !source.new_panel.change_indices.is_empty(),
+            "the deferred rebuild must find the revealed change rows"
+        );
+    }
 }

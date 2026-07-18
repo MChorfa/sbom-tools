@@ -1,0 +1,29 @@
+---
+source: src/tui/view/ui/render_snapshot_tests.rs
+assertion_line: 781
+expression: text
+---
+sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
+
+« [4] Keys  │ [5] Protocols  │ [6] Quality  │ [7] PQC Compliance  │ [8] Source
+
+────────────────────────────────────────────────────────────────────────────────
+┌ PQC Compliance ──────────────────────────────────────────────────────────────┐
+│ CNSA 2.0: NON-COMPLIANT (10 errors)   │   NIST PQC: NON-COMPLIANT (3 errors) │
+│                                                                              │
+│ Algorithm-by-Algorithm Assessment                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Algorithm       Family           Level    CNSA 2.0        NIST PQC           ▲
+│                                                                              █
+│▶ML-KEM-1024     ML-KEM           5        PASS            OK                 ║
+│ ML-KEM-768      ML-KEM           3        FAIL            OK                 ▼
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ ML-KEM-1024 ─────────────────────────────────────────────────────────────────┐
+│[NIST PQC] 'ML-KEM-1024' uses NIST-approved PQC algorithm (FIPS 203/204/205)  │
+│  Req: FIPS 203/204/205: approved                                             │
+│  NIST PQC: FIPS 203/204/205                                                  │
+│… +2 more lines — see the Compliance tab                                      │
+└──────────────────────────────────────────────────────────────────────────────┘
+ Algo: 11 │ Certs: 1 │ Keys: 2 │ Quantum: 82%
+           ↑↓ select │  Tab switch  / search  e export  ? help  q quit

@@ -25,6 +25,15 @@ pub(super) fn handle_sidebyside_keys(app: &mut App, key: KeyEvent) -> bool {
         update_sidebyside_search_matches(app);
     }
 
+    // A filter toggle rebuilds the aligned rows, invalidating the index space
+    // of a pinned search's matches — recompute so n/N keep landing on rows.
+    if !app.side_by_side_state().search_active
+        && app.side_by_side_state().search_query.is_some()
+        && matches!(key.code, KeyCode::Char('0' | '1' | '2' | '3'))
+    {
+        update_sidebyside_search_matches(app);
+    }
+
     match result {
         EventResult::StatusMessage(msg) => {
             app.status_message = Some(msg);
@@ -42,10 +51,16 @@ fn handle_data_dependent_keys(app: &mut App, key: KeyEvent) -> bool {
     if key.code == KeyCode::Char('y') {
         let info = get_current_row_info(app);
         if let Some(text) = info {
-            app.set_status_message(format!(
-                "Copied: {}",
-                text.chars().take(50).collect::<String>()
-            ));
+            // Actually copy — the status previously claimed "Copied" without
+            // ever touching the clipboard.
+            if crate::tui::clipboard::copy_to_clipboard(&text) {
+                app.set_status_message(format!(
+                    "Copied: {}",
+                    text.chars().take(50).collect::<String>()
+                ));
+            } else {
+                app.set_status_message("Clipboard unavailable");
+            }
         }
         true
     } else {

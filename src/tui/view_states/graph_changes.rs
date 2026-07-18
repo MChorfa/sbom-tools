@@ -78,9 +78,10 @@ impl ViewState for GraphChangesView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
+            Shortcut::primary("\u{2191}\u{2193}", "select"),
+            Shortcut::primary("PgUp/Dn", "page"),
+            Shortcut::new("j/k", "Navigate"),
             Shortcut::new("g/G", "First/Last"),
-            Shortcut::new("PgUp/PgDn", "Page"),
         ]
     }
 }

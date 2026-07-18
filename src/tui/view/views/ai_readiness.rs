@@ -16,5 +16,5 @@ use ratatui::layout::Rect;
 
 /// Render the AI-Readiness tab (AI-BOM mode).
 pub fn render_ai_readiness(frame: &mut Frame, area: Rect, app: &ViewApp) {
-    shared::render_quality_summary(frame, area, &app.quality_report, 0);
+    shared::render_quality_summary(frame, area, &app.quality_report, 0, app.ai_readiness_scroll);
 }

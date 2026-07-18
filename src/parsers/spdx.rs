@@ -4,16 +4,16 @@
 //! For SPDX 3.0 (JSON-LD), see the [`super::spdx3`] module.
 
 use crate::model::{
-    CanonicalId, Component, ComponentType, Creator, CreatorType, DependencyEdge, DependencyType,
-    DocumentMetadata, ExternalRefType, ExternalReference, Hash, HashAlgorithm, LicenseExpression,
-    NormalizedSbom, Organization, SbomFormat,
+    CanonicalId, Component, ComponentType, Contact, Creator, CreatorType, DependencyEdge,
+    DependencyType, DocumentMetadata, ExternalRefType, ExternalReference, Hash, HashAlgorithm,
+    LicenseExpression, NormalizedSbom, Organization, SbomFormat,
 };
 use crate::parsers::traits::{ParseError, SbomParser};
 use chrono::{DateTime, Utc};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Accumulate a possibly-multi-line SPDX `<text>…</text>` value.
 ///
@@ -95,18 +95,16 @@ impl SpdxParser {
     /// Parse tag-value format into `SpdxDocument`
     fn parse_tag_value_format(&self, content: &str) -> SpdxDocument {
         let mut doc = SpdxDocument {
-            spdx_version: String::new(),
-            spdx_id: String::new(),
-            name: String::new(),
-            data_license: String::new(),
-            document_namespace: None,
-            creation_info: None,
             packages: Some(Vec::new()),
             relationships: Some(Vec::new()),
-            external_document_refs: None,
+            ..SpdxDocument::default()
         };
 
         let mut current_package: Option<SpdxPackage> = None;
+        let mut current_file: Option<SpdxFile> = None;
+        let mut current_extracted: Option<SpdxExtractedLicense> = None;
+        let mut files: Vec<SpdxFile> = Vec::new();
+        let mut extracted_licenses: Vec<SpdxExtractedLicense> = Vec::new();
         // Once a File section starts, its tags (including SPDXID) must not be
         // attributed to the enclosing package — SPDX tag-value packages have
         // no explicit terminator, so a File's SPDXID used to clobber the
@@ -141,10 +139,19 @@ impl SpdxParser {
                     "SPDXVersion" => doc.spdx_version = value.to_string(),
                     "FileName" => {
                         // A File section begins: close the current package so
-                        // subsequent File tags can't overwrite it.
+                        // subsequent File tags can't overwrite it, and start
+                        // collecting the file (files are inventory too —
+                        // relationships and DESCRIBES reference them).
                         if let Some(pkg) = current_package.take() {
                             packages.push(pkg);
                         }
+                        if let Some(file) = current_file.take() {
+                            files.push(file);
+                        }
+                        current_file = Some(SpdxFile {
+                            file_name: value.to_string(),
+                            ..SpdxFile::default()
+                        });
                         in_file_section = true;
                     }
                     "SPDXID" if current_package.is_some() => {
@@ -152,10 +159,55 @@ impl SpdxParser {
                             pkg.spdx_id = value.to_string();
                         }
                     }
-                    // A File's SPDXID (or any SPDXID once we're past the header)
-                    // must not overwrite the document SPDXID.
-                    "SPDXID" if in_file_section => {}
+                    // A File's SPDXID must not overwrite the document
+                    // SPDXID — it identifies the file being collected.
+                    "SPDXID" if in_file_section => {
+                        if let Some(ref mut file) = current_file {
+                            file.spdx_id = value.to_string();
+                        }
+                    }
                     "SPDXID" => doc.spdx_id = value.to_string(),
+                    "FileChecksum" => {
+                        if let Some(ref mut file) = current_file
+                            && let Some(checksum) = self.parse_checksum_line(value)
+                        {
+                            file.checksums.get_or_insert_with(Vec::new).push(checksum);
+                        }
+                    }
+                    "FileCopyrightText" => {
+                        if let Some(ref mut file) = current_file {
+                            file.copyright_text = Some(value.to_string());
+                        }
+                    }
+                    // File-scoped concluded license (packages use the
+                    // PackageLicenseConcluded tag, so there is no clash).
+                    "LicenseConcluded" => {
+                        if let Some(ref mut file) = current_file {
+                            file.license_concluded = Some(value.to_string());
+                        }
+                    }
+                    // ExtractedLicensingInfo block: the definition each
+                    // LicenseRef-* token points at.
+                    "LicenseID" => {
+                        if let Some(lic) = current_extracted.take() {
+                            extracted_licenses.push(lic);
+                        }
+                        current_extracted = Some(SpdxExtractedLicense {
+                            license_id: value.to_string(),
+                            name: None,
+                            extracted_text: None,
+                        });
+                    }
+                    "LicenseName" => {
+                        if let Some(ref mut lic) = current_extracted {
+                            lic.name = Some(value.to_string());
+                        }
+                    }
+                    "ExtractedText" => {
+                        if let Some(ref mut lic) = current_extracted {
+                            lic.extracted_text = Some(value.to_string());
+                        }
+                    }
                     "DocumentName" => doc.name = value.to_string(),
                     "DataLicense" => doc.data_license = value.to_string(),
                     "DocumentNamespace" => doc.document_namespace = Some(value.to_string()),
@@ -165,25 +217,17 @@ impl SpdxParser {
                         creation_info.license_list_version = Some(value.to_string());
                     }
                     "PackageName" => {
-                        // Save previous package
+                        // Save previous package / close a trailing file block
                         if let Some(pkg) = current_package.take() {
                             packages.push(pkg);
                         }
+                        if let Some(file) = current_file.take() {
+                            files.push(file);
+                        }
                         in_file_section = false;
                         current_package = Some(SpdxPackage {
-                            spdx_id: String::new(),
                             name: value.to_string(),
-                            version_info: None,
-                            download_location: None,
-                            files_analyzed: None,
-                            license_concluded: None,
-                            license_declared: None,
-                            copyright_text: None,
-                            supplier: None,
-                            originator: None,
-                            checksums: None,
-                            external_refs: None,
-                            description: None,
+                            ..SpdxPackage::default()
                         });
                     }
                     "PackageVersion" => {
@@ -216,6 +260,46 @@ impl SpdxParser {
                             pkg.supplier = Some(value.to_string());
                         }
                     }
+                    "PackageOriginator" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.originator = Some(value.to_string());
+                        }
+                    }
+                    "PackageDescription" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.description = Some(value.to_string());
+                        }
+                    }
+                    "PackageSummary" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.summary = Some(value.to_string());
+                        }
+                    }
+                    "PackageHomePage" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.homepage = Some(value.to_string());
+                        }
+                    }
+                    "PrimaryPackagePurpose" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.primary_package_purpose = Some(value.to_string());
+                        }
+                    }
+                    "BuiltDate" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.built_date = Some(value.to_string());
+                        }
+                    }
+                    "ReleaseDate" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.release_date = Some(value.to_string());
+                        }
+                    }
+                    "ValidUntilDate" => {
+                        if let Some(ref mut pkg) = current_package {
+                            pkg.valid_until_date = Some(value.to_string());
+                        }
+                    }
                     "Relationship" => {
                         if let Some(rel) = self.parse_relationship_line(value) {
                             relationships.push(rel);
@@ -240,14 +324,23 @@ impl SpdxParser {
             }
         }
 
-        // Don't forget the last package
+        // Don't forget trailing blocks
         if let Some(pkg) = current_package {
             packages.push(pkg);
+        }
+        if let Some(file) = current_file {
+            files.push(file);
+        }
+        if let Some(lic) = current_extracted {
+            extracted_licenses.push(lic);
         }
 
         doc.creation_info = Some(creation_info);
         doc.packages = Some(packages);
         doc.relationships = Some(relationships);
+        doc.files = (!files.is_empty()).then_some(files);
+        doc.has_extracted_licensing_infos =
+            (!extracted_licenses.is_empty()).then_some(extracted_licenses);
 
         doc
     }
@@ -305,15 +398,9 @@ impl SpdxParser {
         reader.config_mut().trim_text(true);
 
         let mut doc = SpdxDocument {
-            spdx_version: String::new(),
-            spdx_id: String::new(),
-            name: String::new(),
-            data_license: String::new(),
-            document_namespace: None,
-            creation_info: None,
             packages: Some(Vec::new()),
             relationships: Some(Vec::new()),
-            external_document_refs: None,
+            ..SpdxDocument::default()
         };
 
         let mut packages: Vec<SpdxPackage> = Vec::new();
@@ -357,21 +444,7 @@ impl SpdxParser {
                             in_creation_info = true;
                         }
                         "Package" => {
-                            let mut pkg = SpdxPackage {
-                                spdx_id: String::new(),
-                                name: String::new(),
-                                version_info: None,
-                                download_location: None,
-                                files_analyzed: None,
-                                license_concluded: None,
-                                license_declared: None,
-                                copyright_text: None,
-                                supplier: None,
-                                originator: None,
-                                checksums: None,
-                                external_refs: None,
-                                description: None,
-                            };
+                            let mut pkg = SpdxPackage::default();
                             // Extract package URI from rdf:about attribute for SPDX ID
                             for attr in e.attributes().filter_map(std::result::Result::ok) {
                                 let attr_name = Self::local_name(attr.key.as_ref());
@@ -759,52 +832,86 @@ impl SpdxParser {
 
         let mut id_map: HashMap<String, CanonicalId> = HashMap::new();
 
+        // LicenseRef-* definitions: the indirection target for license
+        // expressions ("LicenseRef-3" → "CyberNeko License").
+        let license_names: HashMap<&str, &str> = spdx
+            .has_extracted_licensing_infos
+            .iter()
+            .flatten()
+            .filter(|lic| !lic.license_id.is_empty())
+            .filter_map(|lic| {
+                lic.name
+                    .as_deref()
+                    .map(|name| (lic.license_id.as_str(), name))
+            })
+            .collect();
+
         // Convert packages to components
+        let mut package_ids: HashSet<String> = HashSet::new();
         if let Some(packages) = &spdx.packages {
             for pkg in packages {
-                let comp = self.convert_package(pkg);
+                let comp = self.convert_package(pkg, &license_names);
                 id_map.insert(pkg.spdx_id.clone(), comp.canonical_id.clone());
+                package_ids.insert(pkg.spdx_id.clone());
                 sbom.add_component(comp);
             }
         }
 
+        // Convert files and snippets to components (they are inventory:
+        // relationships and documentDescribes reference them by SPDXID,
+        // and the SPDX 3.0 parser already treats them as components).
+        if let Some(files) = &spdx.files {
+            for file in files {
+                // A malformed entry with neither id nor name is
+                // unaddressable — skip it rather than fail or pollute.
+                if file.spdx_id.is_empty() && file.file_name.is_empty() {
+                    continue;
+                }
+                let comp = self.convert_file(file, &license_names);
+                if !file.spdx_id.is_empty() {
+                    id_map.insert(file.spdx_id.clone(), comp.canonical_id.clone());
+                }
+                sbom.add_component(comp);
+            }
+        }
+        if let Some(snippets) = &spdx.snippets {
+            for snippet in snippets {
+                if snippet.spdx_id.is_empty() && snippet.name.is_none() {
+                    continue;
+                }
+                let comp = self.convert_snippet(snippet, &license_names);
+                if !snippet.spdx_id.is_empty() {
+                    id_map.insert(snippet.spdx_id.clone(), comp.canonical_id.clone());
+                }
+                sbom.add_component(comp);
+            }
+        }
+
+        // Primary component: documentDescribes and DESCRIBES/DESCRIBED_BY
+        // relationships are spec-equivalent mechanisms, so gather described
+        // ids from BOTH before choosing — preferring an id that names a
+        // package (documents often list files first, and the primary
+        // product component is what compliance keys on).
+        let doc_id = |id: &str| id == spdx.spdx_id || id == "SPDXRef-DOCUMENT";
+        let mut described: Vec<&String> = spdx.document_describes.iter().flatten().collect();
+        for rel in spdx.relationships.iter().flatten() {
+            if rel.relationship_type == "DESCRIBES" && doc_id(&rel.spdx_element_id) {
+                described.push(&rel.related_spdx_element);
+            } else if rel.relationship_type == "DESCRIBED_BY" && doc_id(&rel.related_spdx_element) {
+                described.push(&rel.spdx_element_id);
+            }
+        }
+        let chosen = described
+            .iter()
+            .find(|id| package_ids.contains(**id))
+            .or_else(|| described.iter().find(|id| id_map.contains_key(**id)));
+        if let Some(primary_id) = chosen.and_then(|id| id_map.get(*id)) {
+            Self::set_primary_and_disclosure(&mut sbom, &primary_id.clone());
+        }
+
         // Convert relationships to dependency edges
-        // Also identify primary component from DESCRIBES relationships
         if let Some(relationships) = &spdx.relationships {
             for rel in relationships {
-                // Check for DESCRIBES relationship from document to identify primary component
-                // SPDX format: "SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package"
-                if rel.relationship_type == "DESCRIBES"
-                    && (rel.spdx_element_id == spdx.spdx_id
-                        || rel.spdx_element_id == "SPDXRef-DOCUMENT")
-                    && let Some(described_id) = id_map.get(&rel.related_spdx_element)
-                {
-                    // Set the first described package as primary component
-                    if sbom.primary_component_id.is_none() {
-                        sbom.set_primary_component(described_id.clone());
-                    }
-
-                    // Harvest a document-level disclosure URL from ANY
-                    // described component's advisory refs — but only
-                    // URL-shaped locators (a bare CPE string or other
-                    // identifier must never become the disclosure URL).
-                    if sbom.document.vulnerability_disclosure_url.is_none()
-                        && let Some(comp) = sbom.components.get(described_id)
-                    {
-                        for ext_ref in &comp.external_refs {
-                            if matches!(ext_ref.ref_type, ExternalRefType::Advisories)
-                                && (ext_ref.url.starts_with("http://")
-                                    || ext_ref.url.starts_with("https://")
-                                    || ext_ref.url.starts_with("mailto:"))
-                            {
-                                sbom.document.vulnerability_disclosure_url =
-                                    Some(ext_ref.url.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-
                 // Map SPDX relationship types.
                 // `*_DEPENDENCY_OF` types have inverse direction:
                 //   "A DEV_DEPENDENCY_OF B" means B depends on A,
@@ -838,9 +945,18 @@ impl SpdxParser {
                     "BUILD_TOOL_OF" => Some((DependencyType::BuildDependsOn, true)),
                     "DEV_TOOL_OF" => Some((DependencyType::DevDependsOn, true)),
                     "TEST_TOOL_OF" => Some((DependencyType::TestDependsOn, true)),
-                    "DOCUMENTATION_OF" => Some((DependencyType::Describes, true)),
+                    // "A DOCUMENTATION_OF B" — A documents B, matching the
+                    // Describes edge direction (was inverted).
+                    "DOCUMENTATION_OF" => Some((DependencyType::Describes, false)),
                     "PACKAGE_OF" => Some((DependencyType::Contains, true)),
                     "EXAMPLE_OF" => Some((DependencyType::DependsOn, true)),
+                    // Inverses of already-mapped forward types: which
+                    // spelling a generator picks must not decide whether
+                    // the edge exists.
+                    "CONTAINED_BY" => Some((DependencyType::Contains, true)),
+                    "GENERATED_FROM" => Some((DependencyType::Generates, true)),
+                    "DESCENDANT_OF" => Some((DependencyType::AncestorOf, true)),
+                    "EXPANDED_FROM_ARCHIVE" => Some((DependencyType::CopyOf, false)),
                     _ => None,
                 };
 
@@ -860,8 +976,70 @@ impl SpdxParser {
             }
         }
 
+        // package.hasFiles is the dominant 2.2-era package→file containment
+        // mechanism; without it the file components would be graph orphans
+        // in documents that never emit explicit CONTAINS relationships.
+        // Deduped against relationship-derived Contains edges.
+        let mut contains_edges: HashSet<(CanonicalId, CanonicalId)> = sbom
+            .edges
+            .iter()
+            .filter(|e| matches!(e.relationship, DependencyType::Contains))
+            .map(|e| (e.from.clone(), e.to.clone()))
+            .collect();
+        for pkg in spdx.packages.iter().flatten() {
+            let Some(pkg_id) = id_map.get(&pkg.spdx_id) else {
+                continue;
+            };
+            for file_ref in pkg.has_files.iter().flatten() {
+                if let Some(file_id) = id_map.get(file_ref)
+                    && contains_edges.insert((pkg_id.clone(), file_id.clone()))
+                {
+                    sbom.add_edge(DependencyEdge::new(
+                        pkg_id.clone(),
+                        file_id.clone(),
+                        DependencyType::Contains,
+                    ));
+                }
+            }
+        }
+
+        // The primary package's validUntilDate (SPDX 2.3 "end of support")
+        // is the in-band source for the document's support-end date.
+        if sbom.document.support_end_date.is_none()
+            && let Some(primary_id) = &sbom.primary_component_id
+            && let Some(packages) = &spdx.packages
+            && let Some(pkg) = packages
+                .iter()
+                .find(|p| id_map.get(&p.spdx_id) == Some(primary_id))
+            && let Some(valid_until) = &pkg.valid_until_date
+            && let Ok(dt) = DateTime::parse_from_rfc3339(valid_until)
+        {
+            sbom.document.support_end_date = Some(dt.with_timezone(&Utc));
+        }
+
         sbom.calculate_content_hash();
         sbom
+    }
+
+    /// Set the primary component and lift its advisory reference into the
+    /// document's vulnerability-disclosure URL (shared by the
+    /// documentDescribes and DESCRIBES/DESCRIBED_BY selection paths).
+    fn set_primary_and_disclosure(sbom: &mut NormalizedSbom, primary_id: &CanonicalId) {
+        sbom.set_primary_component(primary_id.clone());
+        if let Some(comp) = sbom.components.get(primary_id) {
+            for ext_ref in &comp.external_refs {
+                // Only URL-shaped locators qualify — a bare CPE string or
+                // other identifier must never become the disclosure URL.
+                if matches!(ext_ref.ref_type, ExternalRefType::Advisories)
+                    && sbom.document.vulnerability_disclosure_url.is_none()
+                    && (ext_ref.url.starts_with("http://")
+                        || ext_ref.url.starts_with("https://")
+                        || ext_ref.url.starts_with("mailto:"))
+                {
+                    sbom.document.vulnerability_disclosure_url = Some(ext_ref.url.clone());
+                }
+            }
+        }
     }
 
     /// Convert SPDX creation info to `DocumentMetadata`
@@ -907,10 +1085,13 @@ impl SpdxParser {
                     |name| (CreatorType::Tool, name.trim()),
                 );
 
+                // SPDX 2.3 §6.8 grammar: "Person: name (email)" — split the
+                // trailing parenthesized email out of the display name.
+                let (name, email) = split_name_email(name);
                 creators.push(Creator {
                     creator_type,
-                    name: name.to_string(),
-                    email: None,
+                    name,
+                    email,
                 });
             }
         }
@@ -935,7 +1116,7 @@ impl SpdxParser {
     }
 
     /// Convert SPDX package to normalized Component
-    fn convert_package(&self, pkg: &SpdxPackage) -> Component {
+    fn convert_package(&self, pkg: &SpdxPackage, license_names: &HashMap<&str, &str>) -> Component {
         let mut comp = Component::new(pkg.name.clone(), pkg.spdx_id.clone());
 
         // Set version
@@ -956,56 +1137,86 @@ impl SpdxParser {
             }
         }
 
-        // Set component type (SPDX doesn't have explicit types, default to library)
-        comp.component_type = ComponentType::Library;
+        // Component type from SPDX 2.3 primaryPackagePurpose (older
+        // documents lack it; Library remains the default).
+        comp.component_type =
+            pkg.primary_package_purpose
+                .as_deref()
+                .map_or(ComponentType::Library, |purpose| {
+                    match purpose.to_uppercase().replace('-', "_").as_str() {
+                        "APPLICATION" => ComponentType::Application,
+                        "FRAMEWORK" => ComponentType::Framework,
+                        "LIBRARY" => ComponentType::Library,
+                        "CONTAINER" => ComponentType::Container,
+                        "OPERATING_SYSTEM" => ComponentType::OperatingSystem,
+                        "DEVICE" => ComponentType::Device,
+                        "FIRMWARE" => ComponentType::Firmware,
+                        "SOURCE" | "ARCHIVE" | "FILE" => ComponentType::File,
+                        "DATA" => ComponentType::Data,
+                        other => ComponentType::Other(other.to_lowercase()),
+                    }
+                });
 
-        // Set licenses
+        // Set licenses, resolving bare LicenseRef-* tokens through
+        // hasExtractedLicensingInfos for display.
         if let Some(declared) = &pkg.license_declared
             && declared != "NOASSERTION"
             && declared != "NONE"
         {
             comp.licenses
-                .add_declared(LicenseExpression::new(declared.clone()));
+                .add_declared(build_license(declared, license_names));
         }
         if let Some(concluded) = &pkg.license_concluded
             && concluded != "NOASSERTION"
             && concluded != "NONE"
         {
-            comp.licenses.concluded = Some(LicenseExpression::new(concluded.clone()));
+            comp.licenses.concluded = Some(build_license(concluded, license_names));
         }
 
-        // Set supplier
+        // Set supplier: strip the type prefix and move the parenthesized
+        // email into a Contact rather than discarding it.
         if let Some(supplier) = &pkg.supplier {
-            let name = supplier
+            let raw = supplier
                 .strip_prefix("Organization:")
                 .or_else(|| supplier.strip_prefix("Person:"))
                 .unwrap_or(supplier)
-                .trim()
-                .to_string();
-            if name != "NOASSERTION" {
-                comp.supplier = Some(Organization::new(name));
+                .trim();
+            let (name, email) = split_name_email(raw);
+            if name != "NOASSERTION" && !name.is_empty() {
+                let mut org = Organization::new(name);
+                if let Some(email) = email {
+                    org.contacts.push(Contact {
+                        name: None,
+                        email: Some(email),
+                        phone: None,
+                    });
+                }
+                comp.supplier = Some(org);
+            }
+        }
+
+        // Originator — the upstream origin of the package (dead field
+        // before: deserialized but never mapped, so Component.author was
+        // structurally None for SPDX).
+        if let Some(originator) = &pkg.originator {
+            let raw = originator
+                .strip_prefix("Organization:")
+                .or_else(|| originator.strip_prefix("Person:"))
+                .unwrap_or(originator)
+                .trim();
+            let (name, _email) = split_name_email(raw);
+            if name != "NOASSERTION" && !name.is_empty() {
+                comp.author = Some(name);
             }
         }
 
         // Set hashes
         if let Some(checksums) = &pkg.checksums {
             for checksum in checksums {
-                let algorithm = match checksum.algorithm.to_uppercase().as_str() {
-                    "MD5" => HashAlgorithm::Md5,
-                    "SHA1" => HashAlgorithm::Sha1,
-                    "SHA256" => HashAlgorithm::Sha256,
-                    "SHA384" => HashAlgorithm::Sha384,
-                    "SHA512" => HashAlgorithm::Sha512,
-                    "SHA3-256" => HashAlgorithm::Sha3_256,
-                    "SHA3-384" => HashAlgorithm::Sha3_384,
-                    "SHA3-512" => HashAlgorithm::Sha3_512,
-                    "BLAKE2B-256" => HashAlgorithm::Blake2b256,
-                    "BLAKE2B-384" => HashAlgorithm::Blake2b384,
-                    "BLAKE2B-512" => HashAlgorithm::Blake2b512,
-                    other => HashAlgorithm::Other(other.to_string()),
-                };
-                comp.hashes
-                    .push(Hash::new(algorithm, checksum.checksum_value.clone()));
+                comp.hashes.push(Hash::new(
+                    map_spdx_hash_algorithm(&checksum.algorithm),
+                    checksum.checksum_value.clone(),
+                ));
             }
         }
 
@@ -1023,10 +1234,12 @@ impl SpdxParser {
                     comp = comp.with_swhid(ext_ref.reference_locator.clone());
                     continue;
                 }
-                // Promote CPE and SWID identifiers to first-class identifiers.
-                // They arrive under the SECURITY category, but they identify
-                // the component — treating them as advisisory references made
-                // a bare CPE string satisfy security-contact/CVD checks.
+                // SECURITY category covers both identifiers and advisory
+                // links (Annex K): cpe22Type/cpe23Type/swid are identifiers,
+                // NOT advisory URLs. Treating them as Advisories leaked CPE
+                // strings into the document's vulnerability-disclosure URL
+                // (falsely passing EO 14028/CRA disclosure checks) and left
+                // Component.identifiers.cpe permanently empty for SPDX.
                 if ext_ref.reference_type.eq_ignore_ascii_case("cpe23Type")
                     || ext_ref.reference_type.eq_ignore_ascii_case("cpe22Type")
                     || ext_ref.reference_locator.starts_with("cpe:")
@@ -1061,13 +1274,146 @@ impl SpdxParser {
             }
         }
 
-        // Set other fields
-        comp.description.clone_from(&pkg.description);
+        // Homepage and download location become external references
+        if let Some(homepage) = &pkg.homepage
+            && homepage != "NOASSERTION"
+            && homepage != "NONE"
+        {
+            comp.external_refs.push(ExternalReference {
+                ref_type: ExternalRefType::Website,
+                url: homepage.clone(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+        }
+        if let Some(download) = &pkg.download_location
+            && download != "NOASSERTION"
+            && download != "NONE"
+        {
+            // SourceDistribution: the typed variant the SPDX emitter
+            // prefers when reconstructing downloadLocation, so the field
+            // round-trips instead of being displaced by the homepage.
+            comp.external_refs.push(ExternalReference {
+                ref_type: ExternalRefType::SourceDistribution,
+                url: download.clone(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+        }
+
+        // Set other fields; summary is the fallback description
+        comp.description = pkg.description.clone().or_else(|| pkg.summary.clone());
         comp.copyright.clone_from(&pkg.copyright_text);
 
         comp.calculate_content_hash();
         comp
     }
+
+    /// Convert an SPDX file entry to a normalized Component (files are
+    /// referenced by relationships and documentDescribes; the SPDX 3.0
+    /// parser already treats them as components).
+    fn convert_file(&self, file: &SpdxFile, license_names: &HashMap<&str, &str>) -> Component {
+        let mut comp = Component::new(file.file_name.clone(), file.spdx_id.clone());
+        comp.component_type = ComponentType::File;
+
+        if let Some(checksums) = &file.checksums {
+            for checksum in checksums {
+                comp.hashes.push(Hash::new(
+                    map_spdx_hash_algorithm(&checksum.algorithm),
+                    checksum.checksum_value.clone(),
+                ));
+            }
+        }
+        if let Some(concluded) = &file.license_concluded
+            && concluded != "NOASSERTION"
+            && concluded != "NONE"
+        {
+            comp.licenses.concluded = Some(build_license(concluded, license_names));
+        }
+        comp.copyright.clone_from(&file.copyright_text);
+
+        comp.calculate_content_hash();
+        comp
+    }
+
+    /// Convert an SPDX snippet entry to a normalized Component
+    fn convert_snippet(
+        &self,
+        snippet: &SpdxSnippet,
+        license_names: &HashMap<&str, &str>,
+    ) -> Component {
+        let name = snippet
+            .name
+            .clone()
+            .unwrap_or_else(|| snippet.spdx_id.clone());
+        let mut comp = Component::new(name, snippet.spdx_id.clone());
+        comp.component_type = ComponentType::File;
+
+        if let Some(from_file) = &snippet.snippet_from_file {
+            comp.description = Some(format!("Snippet from {from_file}"));
+        }
+        if let Some(concluded) = &snippet.license_concluded
+            && concluded != "NOASSERTION"
+            && concluded != "NONE"
+        {
+            comp.licenses.concluded = Some(build_license(concluded, license_names));
+        }
+        comp.copyright.clone_from(&snippet.copyright_text);
+
+        comp.calculate_content_hash();
+        comp
+    }
+}
+
+/// Map an SPDX checksum algorithm string to the normalized enum (shared by
+/// package and file conversion).
+fn map_spdx_hash_algorithm(algorithm: &str) -> HashAlgorithm {
+    match algorithm.to_uppercase().as_str() {
+        "MD5" => HashAlgorithm::Md5,
+        "SHA1" => HashAlgorithm::Sha1,
+        "SHA256" => HashAlgorithm::Sha256,
+        "SHA384" => HashAlgorithm::Sha384,
+        "SHA512" => HashAlgorithm::Sha512,
+        "SHA3-256" => HashAlgorithm::Sha3_256,
+        "SHA3-384" => HashAlgorithm::Sha3_384,
+        "SHA3-512" => HashAlgorithm::Sha3_512,
+        "BLAKE2B-256" => HashAlgorithm::Blake2b256,
+        "BLAKE2B-384" => HashAlgorithm::Blake2b384,
+        "BLAKE2B-512" => HashAlgorithm::Blake2b512,
+        "BLAKE3" => HashAlgorithm::Blake3,
+        other => HashAlgorithm::Other(other.to_string()),
+    }
+}
+
+/// Split an SPDX 2.3 §6.8 name string "Name (email)" into (name, email).
+/// The trailing parenthesized token is treated as an email only when it
+/// contains '@'; an empty "()" is stripped; anything else stays in the name.
+fn split_name_email(raw: &str) -> (String, Option<String>) {
+    let raw = raw.trim();
+    if let Some(open) = raw.rfind('(')
+        && raw.ends_with(')')
+    {
+        let inner = raw[open + 1..raw.len() - 1].trim();
+        let name = raw[..open].trim();
+        if inner.is_empty() {
+            return (name.to_string(), None);
+        }
+        if inner.contains('@') {
+            return (name.to_string(), Some(inner.to_string()));
+        }
+    }
+    (raw.to_string(), None)
+}
+
+/// Build a `LicenseExpression`, resolving a bare LicenseRef-* token to its
+/// hasExtractedLicensingInfos name for display (the raw expression remains
+/// the license identity).
+fn build_license(expr: &str, license_names: &HashMap<&str, &str>) -> LicenseExpression {
+    let mut lic = LicenseExpression::new(expr.to_string());
+    if let Some(name) = license_names.get(expr) {
+        lic.resolved_name = Some((*name).to_string());
+    }
+    lic
 }
 
 impl Default for SpdxParser {
@@ -1233,7 +1579,7 @@ impl SpdxParser {
 
 // SPDX JSON structures for deserialization
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpdxDocument {
     spdx_version: String,
@@ -1244,7 +1590,16 @@ struct SpdxDocument {
     document_namespace: Option<String>,
     creation_info: Option<SpdxCreationInfo>,
     packages: Option<Vec<SpdxPackage>>,
+    /// Files described by the document — real inventory: relationships
+    /// and documentDescribes reference them by SPDXID.
+    files: Option<Vec<SpdxFile>>,
+    snippets: Option<Vec<SpdxSnippet>>,
     relationships: Option<Vec<SpdxRelationship>>,
+    /// SPDXIDs of the elements this document describes — the 2.2-era
+    /// primary-component mechanism (equivalent to DESCRIBES relationships).
+    document_describes: Option<Vec<String>>,
+    /// LicenseRef-* definitions (licenseId → name/extractedText)
+    has_extracted_licensing_infos: Option<Vec<SpdxExtractedLicense>>,
     #[allow(dead_code)]
     external_document_refs: Option<Vec<SpdxExternalDocRef>>,
 }
@@ -1259,7 +1614,7 @@ struct SpdxCreationInfo {
     comment: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct SpdxPackage {
@@ -1277,6 +1632,60 @@ struct SpdxPackage {
     checksums: Option<Vec<SpdxChecksum>>,
     external_refs: Option<Vec<SpdxExternalRef>>,
     description: Option<String>,
+    /// SPDX 2.3 package purpose enum (APPLICATION, LIBRARY, CONTAINER, …)
+    primary_package_purpose: Option<String>,
+    homepage: Option<String>,
+    summary: Option<String>,
+    built_date: Option<String>,
+    release_date: Option<String>,
+    /// End of support — the in-band SPDX source for support_end_date
+    valid_until_date: Option<String>,
+    /// SPDXIDs of files this package owns (the dominant 2.2-era
+    /// package→file containment mechanism)
+    has_files: Option<Vec<String>>,
+}
+
+/// SPDX 2.x file entry (top-level `files` array / tag-value FileName block).
+/// String fields default to empty rather than being serde-required: one
+/// malformed entry must not fail the whole document (converter skips
+/// entries with neither an id nor a name).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct SpdxFile {
+    #[serde(rename = "SPDXID", default)]
+    spdx_id: String,
+    #[serde(default)]
+    file_name: String,
+    checksums: Option<Vec<SpdxChecksum>>,
+    license_concluded: Option<String>,
+    copyright_text: Option<String>,
+    comment: Option<String>,
+}
+
+/// SPDX 2.x snippet entry
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct SpdxSnippet {
+    #[serde(rename = "SPDXID", default)]
+    spdx_id: String,
+    name: Option<String>,
+    snippet_from_file: Option<String>,
+    license_concluded: Option<String>,
+    copyright_text: Option<String>,
+}
+
+/// One hasExtractedLicensingInfos entry: the definition a LicenseRef-*
+/// token points at.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct SpdxExtractedLicense {
+    #[serde(default)]
+    license_id: String,
+    name: Option<String>,
+    extracted_text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1489,5 +1898,338 @@ mod tests {
         // block still parses.
         assert_eq!(comp.identifiers.format_id, "SPDXRef-Package-libfoo");
         assert_eq!(comp.version.as_deref(), Some("2.0"));
+    }
+
+    /// The official-example JSON shape: documentDescribes (file listed
+    /// first!), files array, hasExtractedLicensingInfos, SECURITY/cpe23Type
+    /// refs, creator emails, primaryPackagePurpose, validUntilDate,
+    /// homepage. Everything here was silently dropped or misfiled before.
+    #[test]
+    fn spdx_json_core_fields_extracted() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+              "spdxVersion": "SPDX-2.3",
+              "SPDXID": "SPDXRef-DOCUMENT",
+              "name": "demo",
+              "dataLicense": "CC0-1.0",
+              "documentNamespace": "https://example.com/demo",
+              "creationInfo": {
+                "created": "2026-01-01T00:00:00Z",
+                "creators": [
+                  "Tool: LicenseFind-1.0",
+                  "Organization: ExampleCodeInspect ()",
+                  "Person: Jane Doe (jane.doe@example.com)"
+                ]
+              },
+              "documentDescribes": ["SPDXRef-File-a", "SPDXRef-Package-app"],
+              "hasExtractedLicensingInfos": [
+                {"licenseId": "LicenseRef-3", "name": "CyberNeko License",
+                 "extractedText": "..."}
+              ],
+              "packages": [{
+                "SPDXID": "SPDXRef-Package-app",
+                "name": "app",
+                "versionInfo": "1.0",
+                "primaryPackagePurpose": "APPLICATION",
+                "homepage": "https://app.example.com",
+                "downloadLocation": "https://dl.example.com/app-1.0.tgz",
+                "licenseDeclared": "LicenseRef-3",
+                "originator": "Organization: Upstream Org (contact@upstream.example)",
+                "supplier": "Person: Jane Doe (jane.doe@example.com)",
+                "validUntilDate": "2027-06-30T00:00:00Z",
+                "hasFiles": ["SPDXRef-File-a"],
+                "externalRefs": [
+                  {"referenceCategory": "SECURITY", "referenceType": "cpe23Type",
+                   "referenceLocator": "cpe:2.3:a:example:app:1.0:*:*:*:*:*:*:*"},
+                  {"referenceCategory": "SECURITY", "referenceType": "advisory",
+                   "referenceLocator": "https://example.com/security"}
+                ]
+              }],
+              "files": [{
+                "SPDXID": "SPDXRef-File-a",
+                "fileName": "./src/a.c",
+                "checksums": [{"algorithm": "BLAKE3", "checksumValue": "deadbeef"}],
+                "licenseConcluded": "MIT",
+                "copyrightText": "Copyright A"
+              }],
+              "relationships": [
+                {"spdxElementId": "SPDXRef-Package-app",
+                 "relationshipType": "CONTAINS",
+                 "relatedSpdxElement": "SPDXRef-File-a"}
+              ]
+            }"#,
+            )
+            .expect("parse");
+
+        // Files are components; relationships targeting them resolve.
+        assert_eq!(sbom.component_count(), 2, "package + file");
+        let file = component(&sbom, "./src/a.c");
+        assert!(matches!(file.component_type, ComponentType::File));
+        assert!(
+            matches!(
+                file.hashes.first().map(|h| &h.algorithm),
+                Some(HashAlgorithm::Blake3)
+            ),
+            "BLAKE3 must map to the typed variant"
+        );
+
+        // documentDescribes prefers the PACKAGE even though the file is
+        // listed first.
+        let app = component(&sbom, "app");
+        assert!(matches!(app.component_type, ComponentType::Application));
+        assert_eq!(
+            sbom.primary_component().map(|c| c.name.as_str()),
+            Some("app"),
+            "documentDescribes must select the package as primary"
+        );
+
+        // SECURITY/cpe23Type is an identifier, not an advisory URL.
+        assert_eq!(
+            app.identifiers.cpe.first().map(String::as_str),
+            Some("cpe:2.3:a:example:app:1.0:*:*:*:*:*:*:*")
+        );
+        assert_eq!(
+            sbom.document.vulnerability_disclosure_url.as_deref(),
+            Some("https://example.com/security"),
+            "the advisory link, never the CPE string"
+        );
+
+        // LicenseRef resolution, originator, supplier email-cleaning.
+        assert_eq!(
+            app.licenses
+                .declared
+                .first()
+                .and_then(|l| l.resolved_name.as_deref()),
+            Some("CyberNeko License")
+        );
+        assert_eq!(app.author.as_deref(), Some("Upstream Org"));
+        assert_eq!(
+            app.supplier.as_ref().map(|s| s.name.as_str()),
+            Some("Jane Doe"),
+            "supplier email must be stripped from the display name"
+        );
+        assert!(
+            app.external_refs
+                .iter()
+                .any(|r| matches!(r.ref_type, ExternalRefType::Website)
+                    && r.url == "https://app.example.com"),
+            "homepage must become a Website reference"
+        );
+        assert!(
+            app.external_refs.iter().any(|r| matches!(
+                r.ref_type,
+                ExternalRefType::SourceDistribution
+            ) && r.url == "https://dl.example.com/app-1.0.tgz"),
+            "downloadLocation must be a distribution ref (round-trips on emit)"
+        );
+        assert_eq!(
+            app.supplier
+                .as_ref()
+                .and_then(|s| s.contacts.first())
+                .and_then(|c| c.email.as_deref()),
+            Some("jane.doe@example.com"),
+            "supplier email must be preserved as a contact"
+        );
+
+        // hasFiles produced the containment edge, deduped against the
+        // explicit CONTAINS relationship (exactly one edge).
+        let app_id = app.canonical_id.clone();
+        let file_id = component(&sbom, "./src/a.c").canonical_id.clone();
+        assert_eq!(
+            sbom.edges
+                .iter()
+                .filter(|e| e.from == app_id
+                    && e.to == file_id
+                    && matches!(e.relationship, DependencyType::Contains))
+                .count(),
+            1,
+            "hasFiles + CONTAINS must dedupe to one containment edge"
+        );
+
+        // Creator emails per §6.8; empty "()" stripped.
+        let jane = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.name == "Jane Doe")
+            .expect("person creator");
+        assert_eq!(jane.email.as_deref(), Some("jane.doe@example.com"));
+        let org = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.creator_type == CreatorType::Organization)
+            .expect("org creator");
+        assert_eq!(org.name, "ExampleCodeInspect", "empty () must be stripped");
+
+        // Primary package validUntilDate → document support-end date.
+        assert!(sbom.document.support_end_date.is_some());
+    }
+
+    /// documentDescribes and DESCRIBES relationships are spec-equivalent:
+    /// the package-preferred primary rule must apply across the UNION of
+    /// both, so a file listed in documentDescribes cannot displace a
+    /// package named only via a relationship.
+    #[test]
+    fn spdx_primary_package_preferred_across_mechanisms() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+              "spdxVersion": "SPDX-2.3",
+              "SPDXID": "SPDXRef-DOCUMENT",
+              "name": "demo",
+              "dataLicense": "CC0-1.0",
+              "creationInfo": {"created": "2026-01-01T00:00:00Z", "creators": ["Tool: t-1"]},
+              "documentDescribes": ["SPDXRef-File-readme"],
+              "packages": [{"SPDXID": "SPDXRef-Package-app", "name": "app"}],
+              "files": [{"SPDXID": "SPDXRef-File-readme", "fileName": "README.md"}],
+              "relationships": [
+                {"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES",
+                 "relatedSpdxElement": "SPDXRef-Package-app"}
+              ]
+            }"#,
+            )
+            .expect("parse");
+        assert_eq!(
+            sbom.primary_component().map(|c| c.name.as_str()),
+            Some("app"),
+            "the package must win over the documentDescribes file"
+        );
+    }
+
+    /// One malformed file entry (no SPDXID, no fileName) must be skipped,
+    /// not fail the document or pollute the inventory.
+    #[test]
+    fn spdx_malformed_file_entry_is_skipped() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+              "spdxVersion": "SPDX-2.3",
+              "SPDXID": "SPDXRef-DOCUMENT",
+              "name": "demo",
+              "dataLicense": "CC0-1.0",
+              "creationInfo": {"created": "2026-01-01T00:00:00Z", "creators": ["Tool: t-1"]},
+              "packages": [{"SPDXID": "SPDXRef-p", "name": "p"}],
+              "files": [
+                {"copyrightText": "orphan"},
+                {"SPDXID": "SPDXRef-f", "fileName": "./ok.c"}
+              ]
+            }"#,
+            )
+            .expect("a malformed file entry must not fail the document");
+        assert_eq!(sbom.component_count(), 2, "package + the valid file only");
+    }
+
+    /// Inverse relationship spellings must produce the same edges as their
+    /// forward twins, and DOCUMENTATION_OF must not be direction-inverted.
+    #[test]
+    fn spdx_inverse_relationships_produce_edges() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+              "spdxVersion": "SPDX-2.3",
+              "SPDXID": "SPDXRef-DOCUMENT",
+              "name": "demo",
+              "dataLicense": "CC0-1.0",
+              "creationInfo": {"created": "2026-01-01T00:00:00Z", "creators": ["Tool: t-1"]},
+              "packages": [
+                {"SPDXID": "SPDXRef-a", "name": "a"},
+                {"SPDXID": "SPDXRef-b", "name": "b"},
+                {"SPDXID": "SPDXRef-c", "name": "c"},
+                {"SPDXID": "SPDXRef-d", "name": "d"}
+              ],
+              "relationships": [
+                {"spdxElementId": "SPDXRef-a", "relationshipType": "CONTAINED_BY",
+                 "relatedSpdxElement": "SPDXRef-b"},
+                {"spdxElementId": "SPDXRef-c", "relationshipType": "GENERATED_FROM",
+                 "relatedSpdxElement": "SPDXRef-d"},
+                {"spdxElementId": "SPDXRef-a", "relationshipType": "DOCUMENTATION_OF",
+                 "relatedSpdxElement": "SPDXRef-c"}
+              ]
+            }"#,
+            )
+            .expect("parse");
+
+        let id_of = |name: &str| component(&sbom, name).canonical_id.clone();
+        let edge = |from: &str, to: &str, dt: fn(&DependencyType) -> bool| {
+            let (f, t) = (id_of(from), id_of(to));
+            sbom.edges
+                .iter()
+                .any(|e| e.from == f && e.to == t && dt(&e.relationship))
+        };
+        // "a CONTAINED_BY b" = b contains a → edge b→a
+        assert!(edge("b", "a", |d| matches!(d, DependencyType::Contains)));
+        // "c GENERATED_FROM d" = d generates c → edge d→c
+        assert!(edge("d", "c", |d| matches!(d, DependencyType::Generates)));
+        // "a DOCUMENTATION_OF c" = a documents c → edge a→c (was inverted)
+        assert!(edge("a", "c", |d| matches!(d, DependencyType::Describes)));
+    }
+
+    /// Tag-value: file blocks become components, the new package tags parse,
+    /// and ExtractedLicensingInfo blocks resolve LicenseRef tokens — parity
+    /// with the JSON path.
+    #[test]
+    fn tag_value_files_and_new_tags_parse() {
+        let sbom = parse_tv(
+            "SPDXVersion: SPDX-2.3\n\
+             SPDXID: SPDXRef-DOCUMENT\n\
+             DocumentName: test\n\
+             Creator: Person: Jane Doe (jane.doe@example.com)\n\
+             PackageName: libfoo\n\
+             SPDXID: SPDXRef-Package-libfoo\n\
+             PackageVersion: 2.0\n\
+             PrimaryPackagePurpose: CONTAINER\n\
+             PackageHomePage: https://libfoo.example.com\n\
+             PackageOriginator: Organization: Foo Upstream ()\n\
+             PackageLicenseDeclared: LicenseRef-Beerware\n\
+             Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-libfoo\n\
+             FileName: ./src/foo.c\n\
+             SPDXID: SPDXRef-File-foo\n\
+             FileChecksum: SHA1: d6a770ba38583ed4bb4525bd96e50461655d2758\n\
+             FileCopyrightText: Copyright Foo\n\
+             LicenseConcluded: MIT\n\
+             LicenseID: LicenseRef-Beerware\n\
+             LicenseName: Beer-Ware License\n\
+             ExtractedText: <text>you can buy me a beer</text>\n",
+        );
+
+        assert_eq!(sbom.component_count(), 2, "package + file");
+        let pkg = component(&sbom, "libfoo");
+        assert!(matches!(pkg.component_type, ComponentType::Container));
+        assert_eq!(pkg.author.as_deref(), Some("Foo Upstream"));
+        assert_eq!(
+            pkg.licenses
+                .declared
+                .first()
+                .and_then(|l| l.resolved_name.as_deref()),
+            Some("Beer-Ware License"),
+            "tag-value LicenseID blocks must resolve LicenseRef tokens"
+        );
+        assert!(
+            pkg.external_refs
+                .iter()
+                .any(|r| matches!(r.ref_type, ExternalRefType::Website)),
+            "PackageHomePage must become a Website reference"
+        );
+
+        let file = component(&sbom, "./src/foo.c");
+        assert!(matches!(file.component_type, ComponentType::File));
+        assert!(!file.hashes.is_empty(), "FileChecksum must parse");
+        assert_eq!(
+            file.licenses
+                .concluded
+                .as_ref()
+                .map(|l| l.expression.as_str()),
+            Some("MIT")
+        );
+
+        let jane = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.name == "Jane Doe")
+            .expect("creator");
+        assert_eq!(jane.email.as_deref(), Some("jane.doe@example.com"));
     }
 }

@@ -90,7 +90,7 @@ pub fn render_view_switcher(f: &mut Frame, state: &ViewSwitcherState) {
 }
 
 /// Render the keyboard shortcuts overlay
-pub fn render_shortcuts_overlay(f: &mut Frame, state: &ShortcutsOverlayState) {
+pub fn render_shortcuts_overlay(f: &mut Frame, state: &mut ShortcutsOverlayState) {
     if !state.visible {
         return;
     }
@@ -98,30 +98,39 @@ pub fn render_shortcuts_overlay(f: &mut Frame, state: &ShortcutsOverlayState) {
     let scheme = colors();
     let area = f.area();
 
-    // Create a larger centered overlay
-    let overlay_width = 70;
-    let overlay_height = 30.min(area.height.saturating_sub(4));
-    let overlay_area = centered_rect(overlay_width, overlay_height, area);
-
-    // Clear the background
-    f.render_widget(Clear, overlay_area);
-
-    // Create the block
-    let title = format!(" Keyboard Shortcuts ({}) ", context_name(state.context));
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.background_alt));
-
-    let inner_area = block.inner(overlay_area);
-    f.render_widget(block, overlay_area);
-
     // Get shortcuts for the current context
     let shortcuts = get_shortcuts_for_context(state.context, state.profile);
 
     let mut lines: Vec<Line> = Vec::new();
+
+    // This-Tab section: the active tab's ViewState::shortcuts(), the same
+    // source that renders the footer primaries — one place to edit a binding.
+    if !state.tab_items.is_empty() {
+        let title = state.tab_title.as_deref().map_or_else(
+            || "This Tab".to_string(),
+            |t| format!("This Tab \u{2014} {t}"),
+        );
+        lines.push(Line::from(Span::styled(
+            title,
+            Style::default()
+                .fg(scheme.accent)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        for (key, description) in &state.tab_items {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{key:>12}"),
+                    Style::default()
+                        .fg(scheme.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(description.clone(), Style::default().fg(scheme.text)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
 
     for section in shortcuts {
         // Section header
@@ -153,14 +162,57 @@ pub fn render_shortcuts_overlay(f: &mut Frame, state: &ShortcutsOverlayState) {
     lines.push(Line::from(vec![
         Span::styled("Press ", Style::default().fg(scheme.text_muted)),
         Span::styled("Esc", Style::default().fg(scheme.accent)),
+        Span::styled(", ", Style::default().fg(scheme.text_muted)),
+        Span::styled("?", Style::default().fg(scheme.accent)),
         Span::styled(" or ", Style::default().fg(scheme.text_muted)),
         Span::styled("K", Style::default().fg(scheme.accent)),
         Span::styled(" to close", Style::default().fg(scheme.text_muted)),
     ]));
 
+    // Create a larger centered overlay
+    let overlay_width = 70;
+    let overlay_height = 30.min(area.height.saturating_sub(4));
+    let overlay_area = centered_rect(overlay_width, overlay_height, area);
+
+    // Clear the background
+    f.render_widget(Clear, overlay_area);
+
+    // Measure the content against the box and clamp the scroll offset so
+    // the event handler can step through exactly the hidden rows.
+    let total_lines = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    let inner_height = overlay_area.height.saturating_sub(2);
+    state.max_scroll = total_lines.saturating_sub(inner_height);
+    if state.scroll > state.max_scroll {
+        state.scroll = state.max_scroll;
+    }
+
+    // Create the block
+    let title = format!(" Keyboard Shortcuts ({}) ", context_name(state.context));
+    let mut block = Block::default()
+        .title(title)
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(scheme.accent))
+        .style(Style::default().bg(scheme.background_alt));
+    if state.max_scroll > 0 {
+        let below = state.max_scroll - state.scroll;
+        let hint = if below > 0 {
+            format!(" \u{2193} {below} more \u{2014} \u{2191}\u{2193}/j/k scroll ")
+        } else {
+            " \u{2191}\u{2193}/j/k scroll ".to_string()
+        };
+        block = block.title_bottom(
+            Line::from(Span::styled(hint, Style::default().fg(scheme.text_muted))).right_aligned(),
+        );
+    }
+
+    let inner_area = block.inner(overlay_area);
+    f.render_widget(block, overlay_area);
+
     let paragraph = Paragraph::new(lines)
         .alignment(Alignment::Left)
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: true })
+        .scroll((state.scroll, 0));
     f.render_widget(paragraph, inner_area);
 }
 
@@ -510,7 +562,8 @@ fn get_shortcuts_for_context(
                 item("h/l", "Left/Right"),
                 item("g/G", "First/Last"),
                 item("PgUp/PgDn", "Page up/down"),
-                item("Tab", "Next panel/tab"),
+                item("Home/End", "Jump to start/end"),
+                item("Tab", "Next tab"),
                 (jump_hint, "Jump to tab".to_string()),
             ],
         },
@@ -546,6 +599,8 @@ fn get_shortcuts_for_context(
                     item("v", "Variable components drill-down"),
                     item("x", "Toggle cross-target analysis"),
                     item("h", "Toggle heat map mode"),
+                    item("Ctrl+R", "Toggle regex (in search)"),
+                    item("n/N", "Next/prev search match"),
                 ],
             });
         }
@@ -561,6 +616,8 @@ fn get_shortcuts_for_context(
                     item("h/l", "Scroll chart"),
                     item("f", "Filter components"),
                     item("s", "Sort components"),
+                    item("Ctrl+R", "Toggle regex (in search)"),
+                    item("n/N", "Next/prev search match"),
                 ],
             });
         }
@@ -575,6 +632,8 @@ fn get_shortcuts_for_context(
                     item("H", "Toggle row/col highlight"),
                     item("C", "Show cluster details"),
                     item("x", "Export options"),
+                    item("Ctrl+R", "Toggle regex (in search)"),
+                    item("n/N", "Next/prev search match"),
                 ],
             });
         }
@@ -588,7 +647,11 @@ fn get_shortcuts_for_context(
                     item("t", "Toggle transitive deps"),
                     item("v", "Multi-select mode"),
                     item("Enter", "View details"),
-                    item("n/N", "Navigate to next/prev match"),
+                    item("n/N", "Next/prev search match (source/deps/side-by-side)"),
+                    item("c", "Go to component (dependencies)"),
+                    item("F", "Flag for review (components)"),
+                    item("o", "Open CVE in browser (components)"),
+                    item("n", "Cycle security note (components)"),
                     item("p", "Toggle panel focus"),
                     item("h/l", "Collapse/expand (tree tabs)"),
                     item("E", "Export compliance (compliance tab)"),
@@ -904,6 +967,39 @@ mod tests {
         assert_eq!(jump_range(&items), "1-8");
     }
 
+    /// The Diff section documents the components security loop (F/o/n) and
+    /// scopes the n/N description to where the binding is real — the 80x24
+    /// K-overlay snapshot clips before this section, so a snapshot can't
+    /// guard it.
+    #[test]
+    fn diff_section_documents_security_loop_and_scoped_match_nav() {
+        let items = flatten(ShortcutsContext::Diff, None);
+        let has = |k: &str, frag: &str| {
+            items
+                .iter()
+                .any(|(key, desc)| key == k && desc.contains(frag))
+        };
+        assert!(has("F", "Flag for review"));
+        assert!(has("o", "Open CVE"));
+        assert!(has("n", "Cycle security note"));
+        assert!(has("n/N", "source/deps/side-by-side"));
+        assert!(has("c", "Go to component"));
+        assert!(
+            !items
+                .iter()
+                .any(|(_, d)| d == "Navigate to next/prev match"),
+            "the unscoped n/N description must be gone"
+        );
+        // Rows folded in from the deleted prose help overlay.
+        assert!(
+            flatten(ShortcutsContext::Global, None)
+                .iter()
+                .chain(items.iter())
+                .any(|(k, _)| k == "Home/End"),
+            "Home/End must survive the help-overlay deletion"
+        );
+    }
+
     #[test]
     fn no_profile_falls_back_to_generic_hint_without_tab_section() {
         // Diff-mode passes None: keep the existing generic "1-8" hint and no
@@ -915,5 +1011,32 @@ mod tests {
         );
         let items: Vec<_> = sections.into_iter().flat_map(|s| s.items).collect();
         assert_eq!(jump_range(&items), "1-8");
+    }
+
+    /// The MultiDiff/Timeline/Matrix sections must document the phase-6
+    /// unified search: the Ctrl+R regex toggle and n/N match cycling
+    /// (get_shortcuts_for_context). No snapshot renders the overlay in a
+    /// multi mode, so deleting those rows would otherwise pass the suite.
+    #[test]
+    fn multi_contexts_document_search_capabilities() {
+        for ctx in [
+            ShortcutsContext::MultiDiff,
+            ShortcutsContext::Timeline,
+            ShortcutsContext::Matrix,
+        ] {
+            let items = flatten(ctx, None);
+            assert!(
+                items
+                    .iter()
+                    .any(|(k, d)| k == "Ctrl+R" && d.contains("regex")),
+                "{ctx:?} section must document the Ctrl+R regex toggle"
+            );
+            assert!(
+                items
+                    .iter()
+                    .any(|(k, d)| k == "n/N" && d.contains("search match")),
+                "{ctx:?} section must document n/N search-match cycling"
+            );
+        }
     }
 }

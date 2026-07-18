@@ -1,7 +1,7 @@
 //! Matrix mode event handlers.
 
 use crate::tui::App;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
     // Handle search input mode
@@ -64,7 +64,7 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         // Navigation
-        KeyCode::Tab | KeyCode::Char('p') => app.tabs.matrix.toggle_panel(),
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => app.tabs.matrix.toggle_panel(),
         KeyCode::Up | KeyCode::Char('k') => app.tabs.matrix.move_up(),
         KeyCode::Down | KeyCode::Char('j') => app.tabs.matrix.move_down(),
         KeyCode::Left | KeyCode::Char('h') => app.tabs.matrix.move_left(),
@@ -75,9 +75,27 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
             app.tabs.matrix.search.start();
         }
 
+        // In-place match cycling after Enter confirmed a search.
+        KeyCode::Char('n') if !app.tabs.matrix.search.matches.is_empty() => {
+            app.tabs.matrix.search.next_match();
+            if let Some(idx) = app.tabs.matrix.search.current_match_index() {
+                app.tabs.matrix.selected_row = idx;
+            }
+        }
+        KeyCode::Char('N') if !app.tabs.matrix.search.matches.is_empty() => {
+            app.tabs.matrix.search.prev_match();
+            if let Some(idx) = app.tabs.matrix.search.current_match_index() {
+                app.tabs.matrix.selected_row = idx;
+            }
+        }
+
         // Sort
         KeyCode::Char('s') => {
             app.tabs.matrix.toggle_sort();
+            // focus_row/focus_col and search matches are display indices;
+            // they would silently point at different SBOMs after the reorder.
+            app.tabs.matrix.clear_focus();
+            update_matrix_search_matches(app);
             app.set_status_message(format!(
                 "Sort: {} {}",
                 app.tabs.matrix.sort_by.label(),
@@ -86,6 +104,8 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
         }
         KeyCode::Char('S') => {
             app.tabs.matrix.toggle_sort_direction();
+            app.tabs.matrix.clear_focus();
+            update_matrix_search_matches(app);
         }
 
         // Threshold filter
@@ -181,11 +201,27 @@ pub(super) fn handle_matrix_search(app: &mut App, key: KeyEvent) {
             app.tabs.matrix.search.pop();
             update_matrix_search_matches(app);
         }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.tabs.matrix.search.toggle_mode();
+            update_matrix_search_matches(app);
+            app.set_status_message(format!(
+                "Search mode: {}",
+                app.tabs.matrix.search.mode.label()
+            ));
+        }
+        // Live preview: Up/Down move the visible selection through the
+        // matches before Enter confirms (one mental model everywhere).
         KeyCode::Down => {
             app.tabs.matrix.search.next_match();
+            if let Some(idx) = app.tabs.matrix.search.current_match_index() {
+                app.tabs.matrix.selected_row = idx;
+            }
         }
         KeyCode::Up => {
             app.tabs.matrix.search.prev_match();
+            if let Some(idx) = app.tabs.matrix.search.current_match_index() {
+                app.tabs.matrix.selected_row = idx;
+            }
         }
         KeyCode::Char(c) => {
             app.tabs.matrix.search.push(c);
@@ -196,23 +232,39 @@ pub(super) fn handle_matrix_search(app: &mut App, key: KeyEvent) {
 }
 
 pub(super) fn update_matrix_search_matches(app: &mut App) {
-    let query = app.tabs.matrix.search.query.to_lowercase();
+    let query = &app.tabs.matrix.search.query;
     if query.is_empty() {
+        app.tabs.matrix.search.error = None;
         app.tabs.matrix.search.update_matches(vec![]);
         return;
     }
 
+    // Shared matcher: same substring/regex semantics as every other search.
+    let matcher =
+        match crate::tui::app_states::SearchMatcher::build(query, app.tabs.matrix.search.mode) {
+            Ok(m) => {
+                app.tabs.matrix.search.error = None;
+                m
+            }
+            Err(e) => {
+                app.tabs.matrix.search.error = Some(e);
+                app.tabs.matrix.search.update_matches(vec![]);
+                return;
+            }
+        };
+
+    // Matches are DISPLAY positions so Enter selects the highlighted row
+    // under any sort (mirrors update_multi_diff_search_matches).
     let matches: Vec<usize> = app
         .data
         .matrix_result
         .as_ref()
         .map_or_else(Vec::new, |result| {
-            result
-                .sboms
+            crate::tui::views::ordered_sbom_indices(result, &app.tabs.matrix)
                 .iter()
                 .enumerate()
-                .filter(|(_, sbom)| sbom.name.to_lowercase().contains(&query))
-                .map(|(i, _)| i)
+                .filter(|(_, raw)| matcher.is_match(&result.sboms[**raw].name))
+                .map(|(display, _)| display)
                 .collect()
         });
 

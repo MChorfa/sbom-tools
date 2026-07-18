@@ -19,6 +19,30 @@ pub fn category_color(category: LicenseCategory) -> Color {
     }
 }
 
+/// Map a `LicenseCategory` to the redundant (colorblind-safe) glyph the legend
+/// overlay advertises. Keep in sync with `category_glyph_str`.
+pub fn category_glyph(category: LicenseCategory) -> &'static str {
+    match category {
+        LicenseCategory::Permissive | LicenseCategory::PublicDomain => "✓",
+        LicenseCategory::StrongCopyleft | LicenseCategory::NetworkCopyleft => "©",
+        LicenseCategory::WeakCopyleft => "◐",
+        LicenseCategory::Proprietary => "⊘",
+        LicenseCategory::Unknown => "?",
+    }
+}
+
+/// String-typed variant of [`category_glyph`] for the view path, keyed on
+/// `LicenseCategory::as_str()` names (case-insensitive).
+pub fn category_glyph_str(category: &str) -> &'static str {
+    match category.to_lowercase().as_str() {
+        "permissive" | "public domain" => "✓",
+        "copyleft" | "network copyleft" | "strong copyleft" => "©",
+        "weak copyleft" => "◐",
+        "proprietary" | "commercial" => "⊘",
+        _ => "?",
+    }
+}
+
 /// Map a `RiskLevel` to a theme color.
 pub fn risk_level_color(risk: RiskLevel) -> Color {
     let scheme = colors();
@@ -168,4 +192,91 @@ pub fn render_license_characteristics_lines(license: &str) -> Vec<Line<'static>>
     }
 
     lines
+}
+
+#[cfg(test)]
+mod glyph_tests {
+    use super::{category_glyph, category_glyph_str};
+    use crate::tui::license_utils::LicenseCategory;
+
+    /// Every category has a glyph, and the string-typed view path agrees with
+    /// the typed one for every variant (regression test for the legend
+    /// advertising a symbol system no list row rendered).
+    #[test]
+    fn category_glyph_covers_all_categories() {
+        let all = [
+            LicenseCategory::Permissive,
+            LicenseCategory::WeakCopyleft,
+            LicenseCategory::StrongCopyleft,
+            LicenseCategory::NetworkCopyleft,
+            LicenseCategory::Proprietary,
+            LicenseCategory::PublicDomain,
+            LicenseCategory::Unknown,
+        ];
+        for cat in all {
+            let glyph = category_glyph(cat);
+            assert!(!glyph.is_empty());
+            assert_eq!(
+                category_glyph_str(cat.as_str()),
+                glyph,
+                "string path disagrees for {:?} (as_str: {})",
+                cat,
+                cat.as_str()
+            );
+        }
+    }
+
+    /// Pins the category -> theme-color mapping: network copyleft (AGPL-class)
+    /// and proprietary carry the error slot, public domain and permissive carry
+    /// success — real risk colors, not the data-gap gray reserved for Unknown.
+    /// A silent regression to text_muted passes every snapshot (styles are
+    /// stripped) and the theme ratchet (no raw color literal involved).
+    #[test]
+    fn category_color_uses_risk_slots_not_data_gap_gray() {
+        crate::tui::test_support::pin_theme();
+        let s = crate::tui::theme::colors();
+        assert_eq!(
+            super::category_color(LicenseCategory::NetworkCopyleft),
+            s.error,
+            "AGPL-class network copyleft must use the error slot"
+        );
+        assert_eq!(
+            super::category_color(LicenseCategory::Proprietary),
+            s.error,
+            "proprietary must use the error slot"
+        );
+        assert_eq!(
+            super::category_color(LicenseCategory::PublicDomain),
+            s.success,
+            "public domain must use the success slot"
+        );
+        assert_eq!(
+            super::category_color(LicenseCategory::Permissive),
+            s.success,
+            "permissive must use the success slot"
+        );
+        assert_eq!(
+            super::category_color(LicenseCategory::WeakCopyleft),
+            s.info,
+            "weak copyleft must use the info slot"
+        );
+        assert_eq!(
+            super::category_color(LicenseCategory::StrongCopyleft),
+            s.warning,
+            "strong copyleft must use the warning slot"
+        );
+        assert_eq!(
+            super::category_color(LicenseCategory::Unknown),
+            s.text_muted,
+            "only Unknown is the data-gap gray"
+        );
+        assert_ne!(
+            s.error, s.text_muted,
+            "dark theme keeps the error slot distinct from the data-gap gray"
+        );
+        assert_ne!(
+            s.success, s.text_muted,
+            "dark theme keeps the success slot distinct from the data-gap gray"
+        );
+    }
 }

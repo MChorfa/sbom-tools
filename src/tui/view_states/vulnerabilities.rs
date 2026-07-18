@@ -75,10 +75,10 @@ impl ViewState for VulnerabilitiesView {
 
     fn shortcuts(&self) -> Vec<Shortcut> {
         vec![
-            Shortcut::primary("j/k", "Navigate"),
-            Shortcut::new("f", "Filter"),
-            Shortcut::new("s", "Sort"),
-            Shortcut::new("g", "Group by component"),
+            Shortcut::primary("f", "filter"),
+            Shortcut::primary("s", "sort"),
+            Shortcut::primary("g", "group"),
+            Shortcut::new("j/k", "Navigate"),
             Shortcut::new("E/C", "Expand/Collapse all"),
             Shortcut::new("Enter", "Detail/Toggle group"),
         ]

@@ -1,7 +1,7 @@
 //! Timeline mode event handlers.
 
 use crate::tui::App;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
     // Handle search input mode
@@ -59,7 +59,7 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         // Navigation
-        KeyCode::Tab | KeyCode::Char('p') => app.tabs.timeline.toggle_panel(),
+        KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('p') => app.tabs.timeline.toggle_panel(),
         KeyCode::Up | KeyCode::Char('k') => app.tabs.timeline.select_prev(),
         KeyCode::Down | KeyCode::Char('j') => app.tabs.timeline.select_next(),
 
@@ -68,9 +68,25 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
             app.tabs.timeline.search.start();
         }
 
+        // In-place match cycling after Enter confirmed a search.
+        KeyCode::Char('n') if !app.tabs.timeline.search.matches.is_empty() => {
+            app.tabs.timeline.search.next_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
+        }
+        KeyCode::Char('N') if !app.tabs.timeline.search.matches.is_empty() => {
+            app.tabs.timeline.search.prev_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
+        }
+
         // Sort and filter
         KeyCode::Char('s') => {
             app.tabs.timeline.toggle_sort();
+            // Search matches are display positions; recompute under the new order.
+            update_timeline_search_matches(app);
             app.set_status_message(format!(
                 "Sort: {} {}",
                 app.tabs.timeline.sort_by.label(),
@@ -79,9 +95,24 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
         }
         KeyCode::Char('S') => {
             app.tabs.timeline.toggle_sort_direction();
+            update_timeline_search_matches(app);
         }
         KeyCode::Char('f') => {
             app.tabs.timeline.toggle_component_filter();
+            // The filter changes how many components are visible; keep the
+            // navigation bound and the selection in sync with the filtered
+            // list (mirrors the multi-diff 'f' resync).
+            if let Some(result) = app.data.timeline_result.as_ref() {
+                let visible = crate::tui::views::filtered_evolution_entries(
+                    result,
+                    app.tabs.timeline.component_filter,
+                )
+                .len();
+                app.tabs.timeline.total_components = visible;
+                if app.tabs.timeline.selected_component >= visible {
+                    app.tabs.timeline.selected_component = visible.saturating_sub(1);
+                }
+            }
             app.set_status_message(format!(
                 "Filter: {}",
                 app.tabs.timeline.component_filter.label()
@@ -91,6 +122,15 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
         // Version diff modal
         KeyCode::Char('d') => {
             app.tabs.timeline.toggle_version_diff_modal();
+        }
+
+        // Chart metric
+        KeyCode::Char('m') => {
+            app.tabs.timeline.chart_metric = app.tabs.timeline.chart_metric.next();
+            app.set_status_message(format!(
+                "Chart metric: {}",
+                app.tabs.timeline.chart_metric.label()
+            ));
         }
 
         // Statistics panel
@@ -104,9 +144,15 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
             app.set_status_message(status.to_string());
         }
 
-        // Component history detail
+        // Component history detail. Guarded: with a filter yielding zero
+        // entries the modal would clear its rect and render nothing — an
+        // invisible overlay that swallows every key except Esc/q.
         KeyCode::Enter | KeyCode::Char(' ') => {
-            app.tabs.timeline.toggle_component_history();
+            if app.tabs.timeline.total_components > 0 {
+                app.tabs.timeline.toggle_component_history();
+            } else {
+                app.set_status_message("No components match the current filter");
+            }
         }
 
         // Jump to version
@@ -152,11 +198,27 @@ pub(super) fn handle_timeline_search(app: &mut App, key: KeyEvent) {
             app.tabs.timeline.search.pop();
             update_timeline_search_matches(app);
         }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.tabs.timeline.search.toggle_mode();
+            update_timeline_search_matches(app);
+            app.set_status_message(format!(
+                "Search mode: {}",
+                app.tabs.timeline.search.mode.label()
+            ));
+        }
+        // Live preview: Up/Down move the visible selection through the
+        // matches before Enter confirms (one mental model everywhere).
         KeyCode::Down => {
             app.tabs.timeline.search.next_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
         }
         KeyCode::Up => {
             app.tabs.timeline.search.prev_match();
+            if let Some(idx) = app.tabs.timeline.search.current_match_index() {
+                app.tabs.timeline.selected_version = idx;
+            }
         }
         KeyCode::Char(c) => {
             app.tabs.timeline.search.push(c);
@@ -167,23 +229,39 @@ pub(super) fn handle_timeline_search(app: &mut App, key: KeyEvent) {
 }
 
 pub(super) fn update_timeline_search_matches(app: &mut App) {
-    let query = app.tabs.timeline.search.query.to_lowercase();
+    let query = &app.tabs.timeline.search.query;
     if query.is_empty() {
+        app.tabs.timeline.search.error = None;
         app.tabs.timeline.search.update_matches(vec![]);
         return;
     }
 
+    // Shared matcher: same substring/regex semantics as every other search.
+    let matcher =
+        match crate::tui::app_states::SearchMatcher::build(query, app.tabs.timeline.search.mode) {
+            Ok(m) => {
+                app.tabs.timeline.search.error = None;
+                m
+            }
+            Err(e) => {
+                app.tabs.timeline.search.error = Some(e);
+                app.tabs.timeline.search.update_matches(vec![]);
+                return;
+            }
+        };
+
+    // Matches are DISPLAY positions so Enter selects the highlighted row
+    // under any sort.
     let matches: Vec<usize> = app
         .data
         .timeline_result
         .as_ref()
         .map_or_else(Vec::new, |result| {
-            result
-                .sboms
+            crate::tui::views::ordered_version_indices(result, &app.tabs.timeline)
                 .iter()
                 .enumerate()
-                .filter(|(_, sbom)| sbom.name.to_lowercase().contains(&query))
-                .map(|(i, _)| i)
+                .filter(|(_, raw)| matcher.is_match(&result.sboms[**raw].name))
+                .map(|(display, _)| display)
                 .collect()
         });
 
@@ -196,11 +274,33 @@ pub(super) fn handle_timeline_jump(app: &mut App, key: KeyEvent) {
             app.tabs.timeline.cancel_jump_mode();
         }
         KeyCode::Enter => {
+            // Validate the input BEFORE execute_jump: a rejected jump leaves
+            // the (display-index) selection untouched, and remapping it as if
+            // it were a raw version would relocate the selection and lie.
+            let target = app
+                .tabs
+                .timeline
+                .jump_input
+                .parse::<usize>()
+                .ok()
+                .map(|v| v.saturating_sub(1))
+                .filter(|t| *t < app.tabs.timeline.total_versions);
             app.tabs.timeline.execute_jump();
-            app.set_status_message(format!(
-                "Jumped to version {}",
-                app.tabs.timeline.selected_version + 1
-            ));
+            if let Some(raw) = target {
+                // execute_jump sets a RAW (chronological) version; the
+                // selection is a display index — map through the permutation.
+                if let Some(result) = app.data.timeline_result.as_ref()
+                    && let Some(display) =
+                        crate::tui::views::ordered_version_indices(result, &app.tabs.timeline)
+                            .iter()
+                            .position(|&r| r == raw)
+                {
+                    app.tabs.timeline.selected_version = display;
+                }
+                app.set_status_message(format!("Jumped to version {}", raw + 1));
+            } else {
+                app.set_status_message("Invalid version number".to_string());
+            }
         }
         KeyCode::Backspace => {
             app.tabs.timeline.jump_pop();

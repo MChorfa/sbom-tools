@@ -1,0 +1,34 @@
+---
+source: src/tui/view/ui/render_snapshot_tests.rs
+expression: text
+---
+sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
+
+« [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+
+────────────────────────────────────────────────────────────────────────────────
+Group:  License   │  [g] toggle  [Enter] ins┌ License Details ─────────────────┐
+✓ 8  ⚠ 0  ? 1  │  3 ┌ Legend ──────────────────────────────┐                   ▲
+                    │━━━ Color & Symbol Legend ━━━         │                   █
+┌ Licenses (3) ─────│                                      │ssive              █
+│  License          │Vulnerability Severity                │                   █
+│▶ MIT              │  C ■ Critical (CVSS 9.0-10.0)        │                   █
+│  Apache-2.0       │  H ■ High     (CVSS 7.0-8.9)         │                   █
+│  Unknown          │  M ■ Medium   (CVSS 4.0-6.9)         │                   █
+│                   │  L ■ Low      (CVSS 0.1-3.9)         │:                  █
+│                   │                                      │e allowed          █
+│                   │License Categories                    │allowed            █
+│                   │  ✓ ■ Permissive  (MIT, Apache, BSD)  │allowed            █
+│                   │  © ■ Copyleft    (GPL, AGPL)         │                   █
+│                   │  ◐ ■ Weak Copyleft (LGPL, MPL)       │e-alike            █
+│                   │  ⊘ ■ Proprietary (Commercial)        │                   █
+│                   │                                      │                   █
+│                   │Press any key to close                │with 1 other       █
+│                   │                                      │                   ║
+│                   └──────────────────────────────────────┘                   ║
+│                                          ││Components: 6 (1/7)               ║
+│                                          ││[Enter] jump to component  [K/J]  ║
+│                                          ││scroll                            ▼
+└──────────────────────────────────────────┘└──────────────────────────────────┘
+ Components: 9 │ Vulns: 0 │ Licenses: 3
+…  g group │  Tab switch  / search  e export  ? help  q quit [y] copy Apache-2.0
