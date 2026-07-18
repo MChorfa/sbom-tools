@@ -224,3 +224,346 @@ fn explicit_missing_config_path_is_an_error() {
         stderr(&output)
     );
 }
+
+// ---------------------------------------------------------------------------
+// `compliance:` config section (validate / quality defaults)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_compliance_standards_takes_effect_on_validate() {
+    // Default standard is ntia; a config value of [cra] is observable in the
+    // summary JSON's "standard" field.
+    let (_dir, cfg) = write_config("compliance:\n  standards: [cra]\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .arg("--summary")
+        .output()
+        .expect("validate should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("summary should be JSON");
+    assert!(
+        json["standard"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("CRA"),
+        "config compliance.standards=[cra] should select CRA, got: {json}"
+    );
+}
+
+#[test]
+fn explicit_standard_flag_overrides_config_compliance_standards() {
+    let (_dir, cfg) = write_config("compliance:\n  standards: [cra]\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "ntia", "--summary"])
+        .output()
+        .expect("validate should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("summary should be JSON");
+    assert_eq!(
+        json["standard"], "NTIA Minimum Elements",
+        "explicit --standard ntia must override the config file: {json}"
+    );
+}
+
+#[test]
+fn config_compliance_profile_takes_effect_on_quality() {
+    // Config profile accepts the same aliases as the CLI flag.
+    let (_dir, cfg) = write_config("compliance:\n  profile: cyber-resilience\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "quality"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "json"])
+        .output()
+        .expect("quality should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("quality output should be JSON");
+    assert_eq!(
+        json["profile"], "cra",
+        "config compliance.profile=cyber-resilience should select the cra profile: {json}"
+    );
+}
+
+#[test]
+fn explicit_profile_flag_overrides_config_compliance_profile() {
+    let (_dir, cfg) = write_config("compliance:\n  profile: cra\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "quality"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--profile", "security", "-o", "json"])
+        .output()
+        .expect("quality should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("quality output should be JSON");
+    assert_eq!(
+        json["profile"], "security",
+        "explicit --profile security must override the config file: {json}"
+    );
+}
+
+#[test]
+fn config_compliance_min_score_gates_quality_exit_code() {
+    // No CLI --min-score; the config's min_score: 100 must flip the exit code.
+    let (_dir, cfg) = write_config("compliance:\n  min_score: 100\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "quality"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "json"])
+        .output()
+        .expect("quality should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "config compliance.min_score=100 must gate the exit code; stderr:\n{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn config_compliance_fail_on_warning_takes_effect_on_validate() {
+    // ntia-warnings-only has warnings but no errors, so exit code 2 can only
+    // come from the config's fail_on_warning.
+    let (_dir, cfg) = write_config("compliance:\n  fail_on_warning: true\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("cyclonedx/ntia-warnings-only.cdx.json"))
+        .args(["--standard", "ntia", "--summary"])
+        .output()
+        .expect("validate should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "config compliance.fail_on_warning must flip the exit code; stderr:\n{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn invalid_compliance_section_fails_config_check_with_field_name() {
+    let (_dir, cfg) =
+        write_config("compliance:\n  standards: [not-a-standard]\n  profile: bogus\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "config", "check"])
+        .output()
+        .expect("config check should run");
+
+    assert!(
+        !output.status.success(),
+        "invalid compliance section should fail config check"
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("compliance.standards[0]") && err.contains("compliance.profile"),
+        "error should name the offending fields; stderr:\n{err}"
+    );
+}
+
+#[test]
+fn config_compliance_cra_sidecar_is_explicit_and_hard_errors_when_broken() {
+    // A sidecar configured in the file is treated like an explicit flag: a
+    // broken path aborts the command instead of being silently ignored.
+    let (_dir, cfg) = write_config("compliance:\n  cra_sidecar: /nonexistent/side.cra.json\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "cra", "--summary"])
+        .output()
+        .expect("validate should run");
+
+    assert!(
+        !output.status.success(),
+        "a configured broken sidecar must abort validate"
+    );
+    assert!(
+        stderr(&output).contains("Failed to load CRA sidecar"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Config `output.format` vs per-command supported sets (P2-review fixes)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_output_format_for_diff_does_not_break_bare_validate_and_quality() {
+    // Regression: a global `output.format` aimed at diff/view (Tui) used to
+    // hard-fail every bare validate/quality invocation. Config-sourced
+    // formats a command doesn't support now degrade to the command default;
+    // only explicit -o flags hard-error.
+    let (_dir, cfg) = write_config("output:\n  format: Tui\n");
+
+    let validate = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "ntia", "--summary"])
+        .output()
+        .expect("validate should run");
+    let err = stderr(&validate);
+    assert!(
+        !err.contains("not supported by"),
+        "config format Tui must not break bare validate: {err}"
+    );
+    serde_json::from_str::<serde_json::Value>(stdout(&validate).trim())
+        .expect("validate --summary should still emit JSON");
+
+    let quality = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "quality"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .output()
+        .expect("quality should run");
+    assert_eq!(
+        quality.status.code(),
+        Some(0),
+        "config format Tui must not break bare quality; stderr:\n{}",
+        stderr(&quality)
+    );
+}
+
+#[test]
+fn explicit_unsupported_output_flag_still_hard_errors_despite_config() {
+    // The config fallback only applies to config-sourced formats; a user who
+    // explicitly types `-o tui` must still get the hard error.
+    let (_dir, cfg) = write_config("output:\n  format: Tui\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "validate"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "ntia", "-o", "tui"])
+        .output()
+        .expect("validate should run");
+
+    assert!(
+        !output.status.success(),
+        "explicit -o tui must stay a hard error"
+    );
+    assert!(
+        stderr(&output).contains("not supported by `sbom-tools validate`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn config_output_format_accepts_lowercase_kebab_case_values() {
+    // Hand-written lowercase values (matching the CLI spellings) must load;
+    // only PascalCase used to deserialize.
+    let (_dir, cfg) = write_config("output:\n  format: json\n");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "diff"])
+        .arg(fixture_path("demo-old.cdx.json"))
+        .arg(fixture_path("demo-new.cdx.json"))
+        .output()
+        .expect("diff should run");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).trim_start().starts_with('{'),
+        "config output.format=json should produce JSON, got:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn config_init_generates_a_config_that_config_check_accepts() {
+    // Round-trip regression: `config init` used to emit `format: auto`, which
+    // the strict loader rejected — the tool's own scaffold bricked every
+    // subsequent command in that directory.
+    let dir = TempDir::new().expect("temp dir");
+
+    let init = base_command()
+        .args(["config", "init"])
+        .current_dir(dir.path())
+        .output()
+        .expect("config init should run");
+    assert!(init.status.success(), "{}", stderr(&init));
+    assert!(dir.path().join(".sbom-tools.yaml").exists());
+
+    let check = base_command()
+        .args(["config", "check"])
+        .current_dir(dir.path())
+        .output()
+        .expect("config check should run");
+    assert!(
+        check.status.success(),
+        "the generated config must pass config check; stderr:\n{}",
+        stderr(&check)
+    );
+    assert!(
+        stderr(&check).contains("Valid."),
+        "config check should report validity; stderr:\n{}",
+        stderr(&check)
+    );
+
+    // And a consuming command must run under the generated config.
+    let validate = base_command()
+        .arg("validate")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "ntia", "--summary"])
+        .current_dir(dir.path())
+        .output()
+        .expect("validate should run");
+    assert!(
+        !stderr(&validate).contains("Failed to parse config file"),
+        "the generated config must load for consuming commands; stderr:\n{}",
+        stderr(&validate)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// cra-docs honors the `compliance:` config section like validate/quality/view
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cra_docs_honors_config_compliance_sidecar_and_product_class() {
+    let dir = TempDir::new().expect("temp dir");
+    let sidecar = dir.path().join("app.cra.json");
+    std::fs::write(&sidecar, r#"{"manufacturerName": "ConfigCorp GmbH"}"#).expect("write sidecar");
+    let cfg = dir.path().join(".sbom-tools.yaml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "compliance:\n  cra_sidecar: {}\n  cra_product_class: critical\n",
+            sidecar.display()
+        ),
+    )
+    .expect("write config");
+    let out_dir = dir.path().join("dossier");
+
+    let output = base_command()
+        .args(["--config", cfg.to_str().unwrap(), "cra-docs"])
+        .arg(fixture_path("demo-new.cdx.json"))
+        .arg("--output")
+        .arg(&out_dir)
+        .output()
+        .expect("cra-docs should run");
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let doc = std::fs::read_to_string(out_dir.join("eu-declaration-of-conformity.md"))
+        .expect("DoC generated");
+    assert!(
+        doc.contains("ConfigCorp GmbH"),
+        "config-supplied sidecar must fill the dossier: {doc}"
+    );
+    assert!(
+        doc.contains("Critical (Annex IV)"),
+        "config-supplied product class must be applied: {doc}"
+    );
+}

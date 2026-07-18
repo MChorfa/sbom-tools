@@ -321,7 +321,7 @@ fn cli_validate_summary_outputs_multi_standard_json() {
     assert!(
         summaries
             .iter()
-            .any(|s| s["standard"] == "EU CRA Phase 2 (2029)")
+            .any(|s| s["standard"] == "EU CRA Phase 2 (2027)")
     );
 }
 

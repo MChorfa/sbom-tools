@@ -1,5 +1,6 @@
 ---
 source: tests/golden_reports.rs
+assertion_line: 165
 expression: "render(&HtmlReporter::new())"
 ---
 <!DOCTYPE html>
@@ -377,8 +378,8 @@ expression: "render(&HtmlReporter::new())"
         </thead>
         <tbody>
             <tr><td><strong>Status</strong></td><td><span class="badge badge-removed">Non-compliant</span></td><td><span class="badge badge-removed">Non-compliant</span></td><td></td></tr>
-            <tr><td><strong>Score</strong></td><td>60%</td><td>60%</td><td></td></tr>
-            <tr><td><strong>Level</strong></td><td>EU CRA Phase 2 (2029)</td><td>EU CRA Phase 2 (2029)</td><td></td></tr>
+            <tr><td><strong>Score</strong></td><td>5%</td><td>5%</td><td></td></tr>
+            <tr><td><strong>Level</strong></td><td>EU CRA Phase 2 (2027)</td><td>EU CRA Phase 2 (2027)</td><td></td></tr>
             <tr><td><strong>Errors</strong></td><td>3</td><td>3</td><td></td></tr>
             <tr><td><strong>Warnings</strong></td><td>[N]</td><td>[N]</td><td></td></tr>
         </tbody>
@@ -388,8 +389,8 @@ expression: "render(&HtmlReporter::new())"
         <thead><tr><th>Channel</th><th>Status</th></tr></thead>
         <tbody>
             <tr><td>PSIRT contact</td><td><span class="badge badge-medium">Missing</span></td></tr>
-            <tr><td>24-hour early warning (Art. 14(1))</td><td><span class="badge badge-medium">Missing</span></td></tr>
-            <tr><td>72-hour incident report (Art. 14(2))</td><td><span class="badge badge-medium">Missing</span></td></tr>
+            <tr><td>24-hour early warning (Art. 14(2)(a))</td><td><span class="badge badge-medium">Missing</span></td></tr>
+            <tr><td>72-hour notification (Art. 14(2)(b))</td><td><span class="badge badge-medium">Missing</span></td></tr>
             <tr><td>ENISA single reporting platform (Art. 14(7))</td><td><span class="badge badge-medium">Missing</span></td></tr>
         </tbody>
     </table>

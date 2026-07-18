@@ -54,32 +54,102 @@ fn ml_has_exploitability_reference(component: &crate::model::Component) -> bool 
     })
 }
 
-/// Scoring profile determines weights and thresholds
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Scoring profile determines weights and thresholds.
+///
+/// The `#[value(...)]` attributes are the single source of truth for the
+/// CLI spellings of `quality --profile` (help text, parse errors, shell
+/// completions) and for the config file's `compliance.profile` key, which
+/// parses through [`std::str::FromStr`] over the same table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[non_exhaustive]
 pub enum ScoringProfile {
     /// Minimal requirements - basic identification
+    #[value(name = "minimal")]
     Minimal,
     /// Standard requirements - recommended for most use cases
+    #[value(name = "standard")]
     Standard,
     /// Security-focused - emphasizes vulnerability info and supply chain
+    #[value(name = "security")]
     Security,
     /// License-focused - emphasizes license compliance
+    #[value(name = "license-compliance", alias = "license")]
     LicenseCompliance,
     /// EU Cyber Resilience Act - emphasizes supply chain transparency and security disclosure
+    #[value(name = "cra", alias = "cyber-resilience")]
     Cra,
-    /// BSI TR-03183-2 (German national CRA-aligned SBOM technical guideline).
-    /// Stricter than CRA on hashes and identifiers; uses CRA-style weights.
+    /// BSI TR-03183-2 v2.1.0 (German national CRA-aligned SBOM technical
+    /// guideline). Stricter than CRA on formats and hashes (SHA-512);
+    /// uses CRA-style weights.
+    #[value(
+        name = "bsi",
+        alias = "tr-03183",
+        alias = "tr03183",
+        alias = "bsi-tr-03183-2"
+    )]
     BsiTr03183_2,
     /// Comprehensive - all aspects equally weighted
+    #[value(name = "comprehensive", alias = "full")]
     Comprehensive,
     /// CBOM - cryptographic BOM focus (algorithm strength, PQC readiness, key/cert lifecycle)
+    #[value(name = "cbom", alias = "cryptographic")]
     Cbom,
     /// AI/ML readiness - evaluates model-card completeness for machine-learning components
+    #[value(name = "ai-readiness", alias = "ai_readiness")]
     AiReadiness,
 }
 
+impl std::fmt::Display for ScoringProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.canonical_name())
+    }
+}
+
+impl std::str::FromStr for ScoringProfile {
+    type Err = String;
+
+    /// Case-insensitive parse through the same name/alias table clap uses.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        for variant in <Self as clap::ValueEnum>::value_variants() {
+            if clap::ValueEnum::to_possible_value(variant).is_some_and(|pv| pv.matches(s, true)) {
+                return Ok(*variant);
+            }
+        }
+        Err(format!(
+            "unknown scoring profile '{s}'. Valid values: {}",
+            Self::valid_values()
+        ))
+    }
+}
+
 impl ScoringProfile {
+    /// The canonical CLI spelling (the `#[value(name = ...)]`).
+    #[must_use]
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Standard => "standard",
+            Self::Security => "security",
+            Self::LicenseCompliance => "license-compliance",
+            Self::Cra => "cra",
+            Self::BsiTr03183_2 => "bsi",
+            Self::Comprehensive => "comprehensive",
+            Self::Cbom => "cbom",
+            Self::AiReadiness => "ai-readiness",
+        }
+    }
+
+    /// Comma-separated list of every canonical value, for error messages.
+    #[must_use]
+    pub fn valid_values() -> String {
+        <Self as clap::ValueEnum>::value_variants()
+            .iter()
+            .map(|v| v.canonical_name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// Get the compliance level associated with this profile
     #[must_use]
     pub const fn compliance_level(&self) -> ComplianceLevel {
@@ -151,8 +221,9 @@ impl ScoringProfile {
                 provenance: 0.15,
                 lifecycle: 0.08,
             },
-            // BSI TR-03183-2 emphasises identifiers and integrity (mandatory hashes)
-            // even more than CRA, while still tracking provenance/dependencies.
+            // BSI TR-03183-2 emphasises identifiers (§5.2.4 additional tier)
+            // and integrity (§5.2.2 mandatory SHA-512 hashes) even more than
+            // CRA, while still tracking provenance/dependencies.
             Self::BsiTr03183_2 => ScoringWeights {
                 completeness: 0.10,
                 identifiers: 0.22,
@@ -484,6 +555,11 @@ pub struct QualityScorer {
     /// Optional CRA Annex III/IV product class. Sidecar `productClass` (when
     /// present on `cra_sidecar`) wins over this value at check time.
     cra_product_class: Option<crate::model::CraProductClass>,
+    /// Optional pinned evaluation clock for the embedded compliance check.
+    /// `None` means wall clock; set it (CLI `--as-of`, tests) so deadline-
+    /// sensitive checks (CRA Art. 14 readiness, SBOM age, EUCC certificate
+    /// expiry) are reproducible across runs.
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl QualityScorer {
@@ -495,6 +571,7 @@ impl QualityScorer {
             completeness_weights: CompletenessWeights::default(),
             cra_sidecar: None,
             cra_product_class: None,
+            as_of: None,
         }
     }
 
@@ -518,6 +595,16 @@ impl QualityScorer {
     #[must_use]
     pub const fn with_cra_product_class(mut self, class: crate::model::CraProductClass) -> Self {
         self.cra_product_class = Some(class);
+        self
+    }
+
+    /// Pin the evaluation clock of the embedded compliance check (mirrors
+    /// [`ComplianceChecker::with_as_of`]). Deadline-sensitive checks (CRA
+    /// Art. 14 readiness, SBOM age, EUCC certificate expiry) evaluate against
+    /// this instant instead of the wall clock — reproducible CI gates.
+    #[must_use]
+    pub const fn with_as_of(mut self, as_of: chrono::DateTime<chrono::Utc>) -> Self {
+        self.as_of = Some(as_of);
         self
     }
 
@@ -620,13 +707,17 @@ impl QualityScorer {
             total_components,
         );
 
-        // Run compliance check (with sidecar + product class if configured)
+        // Run compliance check (with sidecar + product class + pinned clock
+        // if configured)
         let mut compliance_checker = ComplianceChecker::new(self.profile.compliance_level());
         if let Some(sc) = self.cra_sidecar.clone() {
             compliance_checker = compliance_checker.with_sidecar(sc);
         }
         if let Some(c) = self.cra_product_class {
             compliance_checker = compliance_checker.with_product_class(c);
+        }
+        if let Some(t) = self.as_of {
+            compliance_checker = compliance_checker.with_as_of(t);
         }
         let compliance = compliance_checker.check(sbom);
 
@@ -676,16 +767,21 @@ impl QualityScorer {
 
     /// Score ML model-card completeness for the AI-readiness profile.
     ///
-    /// Filters to `MachineLearningModel` components and evaluates eleven checks
-    /// (AI-001..AI-011): AI-001..AI-009 cover model-card transparency, AI-010 is
-    /// a weight-hash integrity check, and AI-011 verifies the component is
-    /// connected to the vulnerability/exploitability tooling stack. The
-    /// returned `QualityReport` has all standard category scores zeroed/`None`;
-    /// the rich data lives in `ai_readiness_metrics`.
-    /// When the SBOM has no ML components the report is marked not-applicable.
+    /// Selects ML components with the same applicability semantics as the AI
+    /// compliance profiles ([`super::compliance::ai_shared::ai_bom_scope`]):
+    /// components typed `machine-learning-model` OR carrying parsed ML-model
+    /// metadata (CycloneDX modelCard / SPDX 3.0 AI profile), plus ML-looking
+    /// suspects (a `pkg:huggingface` PURL or `model-card` reference without
+    /// metadata), so "untype your models" cannot turn the profile N/A and
+    /// bypass `--min-score`. Each selected component is evaluated against
+    /// eleven checks (AI-001..AI-011): AI-001..AI-009 cover model-card
+    /// transparency, AI-010 is a weight-hash integrity check, and AI-011
+    /// verifies the component is connected to the vulnerability/exploitability
+    /// tooling stack. The returned `QualityReport` has all standard category
+    /// scores zeroed/`None`; the rich data lives in `ai_readiness_metrics`.
+    /// When the SBOM has no ML components (by type, metadata, or ML content
+    /// signals) the report is marked not-applicable.
     fn score_ai_readiness(&self, sbom: &NormalizedSbom) -> QualityReport {
-        use crate::model::ComponentType;
-
         // Standard metrics are still computed so the report is structurally valid.
         let completeness_metrics = CompletenessMetrics::from_sbom(sbom);
         let identifier_metrics = IdentifierMetrics::from_sbom(sbom);
@@ -697,7 +793,13 @@ impl QualityScorer {
         let auditability_metrics = AuditabilityMetrics::from_sbom(sbom);
         let lifecycle_metrics = LifecycleMetrics::from_sbom(sbom);
 
-        let compliance = ComplianceChecker::new(self.profile.compliance_level()).check(sbom);
+        let compliance = {
+            let mut checker = ComplianceChecker::new(self.profile.compliance_level());
+            if let Some(t) = self.as_of {
+                checker = checker.with_as_of(t);
+            }
+            checker.check(sbom)
+        };
 
         let make_report = |overall_score: f32,
                            grade: QualityGrade,
@@ -731,10 +833,19 @@ impl QualityScorer {
             ai_readiness_metrics: Some(metrics),
         };
 
-        let ml_components: Vec<_> = sbom
-            .components
-            .values()
-            .filter(|c| c.component_type == ComponentType::MachineLearningModel)
+        // Shared AI-BOM scope (same classification as `validate --standard
+        // ai-act/bsi-ai`): ML components by type OR parsed ML-model metadata,
+        // and untyped ML suspects. Suspects are scored rather than exempted —
+        // they carry no model card, so they score what they document — which
+        // keeps the profile applicable exactly when the compliance profiles
+        // consider the SBOM to contain ML content. Dataset-evidenced
+        // components are neither models nor suspects and are never scored.
+        let scope = super::compliance::ai_shared::ai_bom_scope(sbom);
+        let ml_components: Vec<_> = scope
+            .ml_components
+            .iter()
+            .chain(scope.untyped_ml_components.iter())
+            .copied()
             .collect();
 
         if ml_components.is_empty() {
@@ -742,7 +853,9 @@ impl QualityScorer {
                 ml_component_count: 0,
                 not_applicable: true,
                 na_reason: Some(
-                    "No machine-learning-model components found in this SBOM".to_string(),
+                    "No machine-learning-model components found in this SBOM (by declared \
+                     type, parsed ML-model metadata, or ML content signals)"
+                        .to_string(),
                 ),
                 checks: Vec::new(),
                 components_fully_documented: 0,
@@ -1343,6 +1456,35 @@ mod tests {
     }
 
     #[test]
+    fn with_as_of_pins_the_embedded_compliance_clock() {
+        // The CRA Art. 14 readiness checks escalate Warning→Error after the
+        // 2026-09-11 deadline for Important Class II products. Pinning the
+        // scorer's clock on either side of the boundary must therefore change
+        // the embedded compliance verdict — proving `--as-of` reaches the
+        // checker instead of it silently using the wall clock.
+        use chrono::{TimeZone, Utc};
+        let sbom = NormalizedSbom::default();
+        let score_at = |ts: chrono::DateTime<chrono::Utc>| {
+            QualityScorer::new(ScoringProfile::Cra)
+                .with_cra_product_class(crate::model::CraProductClass::ImportantClass2)
+                .with_as_of(ts)
+                .score(&sbom)
+        };
+        let pre = score_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        let post = score_at(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap());
+        assert!(
+            post.compliance.error_count > pre.compliance.error_count,
+            "post-deadline run must escalate Art. 14 findings: pre={} post={}",
+            pre.compliance.error_count,
+            post.compliance.error_count
+        );
+        // Determinism: the same pinned clock yields the same verdict.
+        let pre2 = score_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        assert_eq!(pre.compliance.error_count, pre2.compliance.error_count);
+        assert_eq!(pre.compliance.is_compliant, pre2.compliance.is_compliant);
+    }
+
+    #[test]
     fn test_scoring_profile_compliance_level() {
         assert_eq!(
             ScoringProfile::Minimal.compliance_level(),
@@ -1459,6 +1601,90 @@ mod tests {
         assert!(metrics.is_not_applicable());
         assert_eq!(metrics.ml_component_count, 0);
         assert!(metrics.checks.is_empty());
+    }
+
+    /// Mistyped models (application/library-typed, but carrying parsed
+    /// ML-model metadata) must be scored, not declared N/A. Regression: the
+    /// type-only filter let `quality --profile ai-readiness` report N/A —
+    /// bypassing `--min-score` — on the very SBOMs `validate --standard
+    /// ai-act` assesses as applicable AI-BOMs.
+    #[test]
+    fn test_ai_readiness_scores_mistyped_model_with_ml_metadata() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut component = Component::new("sentiment-model".to_string(), "ml-1".to_string())
+            .with_version("1.0.0".to_string());
+        component.component_type = ComponentType::Application;
+        component.ml_model = Some(MlModelInfo::default());
+        sbom.add_component(component);
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let metrics = report
+            .ai_readiness_metrics
+            .expect("AI readiness metrics should be present");
+        assert!(
+            !metrics.is_not_applicable(),
+            "ML-model metadata must make the profile applicable regardless of the declared type"
+        );
+        assert_eq!(metrics.ml_component_count, 1);
+        // An empty model card documents nothing: the transparency checks fail
+        // and the score gates instead of vanishing into N/A.
+        assert_eq!(metrics.checks.len(), 11);
+        assert!(metrics.checks.iter().all(|c| !c.passed));
+        assert_eq!(report.grade, QualityGrade::F);
+    }
+
+    /// Untyped ML suspects (pkg:huggingface PURL, no metadata) keep the
+    /// profile applicable and are scored — mirroring SBOM-AIACT-UNTYPED-ML /
+    /// SBOM-BSIAI-UNTYPED-ML keeping `validate` applicable — so untyping a
+    /// model cannot dodge the score gate either.
+    #[test]
+    fn test_ai_readiness_scores_untyped_huggingface_suspect() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let hf = Component::new("bert-base-uncased".to_string(), "hf-1".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:huggingface/google-bert/bert-base-uncased@1.0.0".to_string());
+        sbom.add_component(hf);
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let metrics = report
+            .ai_readiness_metrics
+            .expect("AI readiness metrics should be present");
+        assert!(
+            !metrics.is_not_applicable(),
+            "an ML-looking suspect must keep the AI-readiness profile applicable"
+        );
+        assert_eq!(metrics.ml_component_count, 1);
+        assert_eq!(report.grade, QualityGrade::F);
+    }
+
+    /// A HuggingFace-hosted DATASET (dataset evidence present) is neither an
+    /// ML model nor an evasion suspect: it must not be scored against the
+    /// model-card checks, and a dataset-only SBOM stays N/A for this
+    /// model-card-centric profile.
+    #[test]
+    fn test_ai_readiness_does_not_score_hf_dataset_with_evidence() {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut dataset = Component::new("imdb".to_string(), "ds-1".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:huggingface/datasets/imdb@1.0.0".to_string());
+        dataset.component_type = ComponentType::Data;
+        dataset.dataset = Some(crate::model::DatasetInfo::default());
+        sbom.add_component(dataset);
+        // A plain library must not count either.
+        sbom.add_component(
+            Component::new("express".to_string(), "lib-1".to_string())
+                .with_purl("pkg:npm/express@4.19.2".to_string()),
+        );
+
+        let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
+        let metrics = report
+            .ai_readiness_metrics
+            .expect("AI readiness metrics should be present");
+        assert!(
+            metrics.is_not_applicable(),
+            "a documented dataset must not be scored as an ML model"
+        );
+        assert_eq!(metrics.ml_component_count, 0);
     }
 
     #[test]

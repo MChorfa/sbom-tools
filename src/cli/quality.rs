@@ -4,18 +4,27 @@
 
 use crate::config::EnrichmentConfig;
 use crate::pipeline::{OutputTarget, exit_codes, parse_sbom_with_context, write_output};
-use crate::quality::{
-    QualityGrade, QualityReport, QualityScorer, ScoringProfile, ViolationSeverity,
-};
+use crate::quality::{QualityGrade, QualityReport, QualityScorer, ScoringProfile};
 use crate::reports::ReportFormat;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde_json::json;
 use std::path::PathBuf;
+
+/// Output formats the `quality` command has a real renderer for.
+/// `auto`/`summary` render the plain-text report; JSON and SARIF are
+/// dedicated emitters. All other [`ReportFormat`] values are rejected up
+/// front instead of silently falling back to text.
+pub const QUALITY_OUTPUT_FORMATS: &[ReportFormat] = &[
+    ReportFormat::Auto,
+    ReportFormat::Summary,
+    ReportFormat::Json,
+    ReportFormat::Sarif,
+];
 
 /// Quality command configuration
 pub struct QualityConfig {
     pub sbom_path: PathBuf,
-    pub profile: String,
+    pub profile: ScoringProfile,
     pub output: ReportFormat,
     pub output_file: Option<PathBuf>,
     pub show_recommendations: bool,
@@ -32,6 +41,11 @@ pub struct QualityConfig {
     pub cra_sidecar_path: Option<PathBuf>,
     /// CRA Annex III/IV product class (CLI string form). Sidecar value wins.
     pub cra_product_class: Option<String>,
+    /// Pinned evaluation clock (raw `--as-of` CLI form). Deadline-sensitive
+    /// compliance checks embedded in the report (CRA Art. 14 readiness, SBOM
+    /// age, EUCC certificate expiry) evaluate against this instant instead of
+    /// the wall clock, mirroring `validate --as-of`.
+    pub as_of: Option<String>,
     /// Enrichment configuration (OSV / KEV / EOL / staleness / VEX). When any
     /// source is enabled the SBOM is enriched before scoring so the
     /// Lifecycle / `VulnDocs` categories reflect live data.
@@ -40,12 +54,16 @@ pub struct QualityConfig {
 
 /// Run the quality command, returning the desired exit code.
 ///
+/// Gate codes (below-threshold / non-compliant) only apply to runs that
+/// completed an assessment; usage/configuration errors propagate as `Err`,
+/// which the binary's `main()` maps to process exit code 1.
+///
 /// The caller is responsible for calling `std::process::exit()` with the
 /// returned code when it is non-zero.
 #[allow(clippy::too_many_arguments)]
 pub fn run_quality(
     sbom_path: PathBuf,
-    profile_name: String,
+    profile: ScoringProfile,
     output: ReportFormat,
     output_file: Option<PathBuf>,
     show_recommendations: bool,
@@ -55,11 +73,12 @@ pub fn run_quality(
     no_color: bool,
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
+    as_of: Option<String>,
     enrichment: EnrichmentConfig,
 ) -> Result<i32> {
     let config = QualityConfig {
         sbom_path,
-        profile: profile_name,
+        profile,
         output,
         output_file,
         show_recommendations,
@@ -69,6 +88,7 @@ pub fn run_quality(
         no_color,
         cra_sidecar_path,
         cra_product_class,
+        as_of,
         enrichment,
     };
 
@@ -76,6 +96,17 @@ pub fn run_quality(
 }
 
 fn run_quality_impl(config: QualityConfig) -> Result<i32> {
+    super::ensure_output_format_supported("quality", config.output, QUALITY_OUTPUT_FORMATS)?;
+
+    // Pinned evaluation clock for deadline-sensitive compliance checks
+    // (shared parser with `validate --as-of`). Parsed up front so a bad
+    // value fails before the SBOM is read.
+    let as_of: Option<chrono::DateTime<chrono::Utc>> = config
+        .as_of
+        .as_deref()
+        .map(super::parse_as_of)
+        .transpose()?;
+
     #[cfg_attr(not(feature = "enrichment"), allow(unused_mut))]
     let mut parsed = parse_sbom_with_context(&config.sbom_path, false)?;
 
@@ -99,20 +130,15 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
         }
     }
 
-    // Parse scoring profile
-    let profile = parse_scoring_profile(&config.profile)?;
+    let profile = config.profile;
 
     tracing::info!("Running quality assessment with {:?} profile", profile);
 
-    // Honour explicit --cra-sidecar; otherwise auto-discover.
-    let sidecar = match &config.cra_sidecar_path {
-        Some(p) => crate::model::CraSidecarMetadata::from_file(p).ok(),
-        None => crate::model::CraSidecarMetadata::find_for_sbom(&config.sbom_path),
-    };
-    let cli_class = config
-        .cra_product_class
-        .as_deref()
-        .and_then(crate::model::CraProductClass::parse_cli);
+    // Honour explicit --cra-sidecar (hard error when broken); otherwise
+    // auto-discover next to the SBOM (best-effort).
+    let sidecar = super::load_cra_sidecar(config.cra_sidecar_path.as_deref(), &config.sbom_path)?;
+    // An explicitly passed unrecognized class is a hard error (strict parse).
+    let cli_class = super::parse_cra_product_class(config.cra_product_class.as_deref())?;
     let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
     if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
         && cli != side
@@ -132,6 +158,9 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     if let Some(c) = effective_class {
         scorer = scorer.with_cra_product_class(c);
     }
+    if let Some(t) = as_of {
+        scorer = scorer.with_as_of(t);
+    }
     let report = scorer.score(parsed.sbom());
 
     // Build output based on format
@@ -145,12 +174,15 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     let output_target = OutputTarget::from_option(config.output_file);
     write_output(&output_text, &output_target, false)?;
 
-    // Check minimum score threshold. An N/A AI-readiness report (no ML components)
-    // has no meaningful score, so it must not trip the threshold gate.
+    // An N/A AI-readiness report (no ML components) has no meaningful score
+    // and no rendered compliance verdict (text and SARIF both show "N/A"),
+    // so NEITHER gate below may fire on it.
     let ai_not_applicable = report
         .ai_readiness_metrics
         .as_ref()
         .is_some_and(crate::quality::AiReadinessMetrics::is_not_applicable);
+
+    // Check minimum score threshold.
     if let Some(threshold) = config.min_score
         && !ai_not_applicable
         && report.overall_score < threshold
@@ -166,7 +198,14 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     // Opt-in: fail the command when the compliance verdict is non-compliant,
     // so the printed "NON-COMPLIANT" cannot be paired with a success exit.
     // Off by default, so `quality --min-score` keeps its score-only contract.
-    if config.fail_on_noncompliant && !report.compliance.is_compliant {
+    // Guarded by the same applicability rules as the score gate: an N/A run
+    // (AI-readiness without ML components, or a not-applicable compliance
+    // standard) renders no verdict and must not flip the exit code.
+    if config.fail_on_noncompliant
+        && !ai_not_applicable
+        && report.compliance.is_applicable()
+        && !report.compliance.is_compliant
+    {
         tracing::error!(
             "SBOM is non-compliant with {} ({} error(s))",
             report.compliance.level.name(),
@@ -176,26 +215,6 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     }
 
     Ok(exit_codes::SUCCESS)
-}
-
-/// Parse scoring profile from string
-fn parse_scoring_profile(profile_name: &str) -> Result<ScoringProfile> {
-    match profile_name.to_lowercase().as_str() {
-        "minimal" => Ok(ScoringProfile::Minimal),
-        "standard" => Ok(ScoringProfile::Standard),
-        "security" => Ok(ScoringProfile::Security),
-        "license-compliance" | "license" => Ok(ScoringProfile::LicenseCompliance),
-        "cra" | "cyber-resilience" => Ok(ScoringProfile::Cra),
-        "bsi" | "tr-03183" | "tr03183" | "bsi-tr-03183-2" => Ok(ScoringProfile::BsiTr03183_2),
-        "comprehensive" | "full" => Ok(ScoringProfile::Comprehensive),
-        "cbom" | "cryptographic" => Ok(ScoringProfile::Cbom),
-        "ai-readiness" | "ai_readiness" => Ok(ScoringProfile::AiReadiness),
-        _ => {
-            bail!(
-                "Unknown scoring profile: {profile_name}. Valid options: minimal, standard, security, license-compliance, cra, bsi, comprehensive, cbom, ai-readiness"
-            );
-        }
-    }
 }
 
 /// Format quality report as JSON
@@ -221,7 +240,7 @@ fn format_quality_json(report: &QualityReport, config: &QualityConfig) -> String
         "tool": "sbom-tools",
         "version": env!("CARGO_PKG_VERSION"),
         "sbom": config.sbom_path.file_name().unwrap_or_default().to_string_lossy(),
-        "profile": config.profile,
+        "profile": config.profile.to_string(),
         "applicable": !not_applicable,
         "report": report_value,
     });
@@ -245,7 +264,7 @@ fn format_quality_sarif(report: &QualityReport, config: &QualityConfig) -> Strin
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy(),
-            &config.profile,
+            &config.profile.to_string(),
             score,
             grade,
         )
@@ -254,78 +273,22 @@ fn format_quality_sarif(report: &QualityReport, config: &QualityConfig) -> Strin
         });
     }
 
-    let not_applicable = report
-        .ai_readiness_metrics
-        .as_ref()
-        .is_some_and(crate::quality::AiReadinessMetrics::is_not_applicable);
-    let mut results = Vec::new();
-
-    // Add compliance violations as SARIF results
-    for violation in &report.compliance.violations {
-        let level = match violation.severity {
-            ViolationSeverity::Error => "error",
-            ViolationSeverity::Warning => "warning",
-            ViolationSeverity::Info => "note",
-        };
-        results.push(json!({
-            "ruleId": format!("QUALITY-{}", violation.category.name().to_uppercase().replace(' ', "-")),
-            "level": level,
-            "message": { "text": violation.message },
-            "properties": {
-                "requirement": violation.requirement,
-                "category": violation.category.name(),
-                "remediation": violation.remediation_guidance(),
-                "element": violation.element,
-            }
-        }));
-    }
-
-    // Add recommendations as informational results
-    for rec in &report.recommendations {
-        let level = match rec.priority {
-            1 => "error",
-            2 => "warning",
-            _ => "note",
-        };
-        results.push(json!({
-            "ruleId": format!("QUALITY-REC-{}", rec.category.name().to_uppercase().replace(' ', "-")),
-            "level": level,
-            "message": {
-                "text": format!("{} ({} affected, +{:.1} impact)", rec.message, rec.affected_count, rec.impact)
-            },
-            "properties": {
-                "priority": rec.priority,
-                "category": rec.category.name(),
-                "affected_count": rec.affected_count,
-                "impact": rec.impact,
-            }
-        }));
-    }
-
-    let sarif = json!({
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "sbom-tools",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://github.com/anthropics/sbom-tools",
-                }
-            },
-            "results": results,
-            "properties": {
-                "sbom": config.sbom_path.file_name().unwrap_or_default().to_string_lossy(),
-                "profile": config.profile,
-                "applicable": !not_applicable,
-                "overall_score": if not_applicable { serde_json::Value::Null } else { json!(report.overall_score) },
-                "grade": if not_applicable { "N/A" } else { report.grade.letter() },
-                "compliant": report.compliance.is_compliant,
-            }
-        }]
-    });
-
-    serde_json::to_string_pretty(&sarif).unwrap_or_default()
+    // Everything else routes through the shared registry-driven SARIF layer:
+    // the compliance violations carry the exact same external rule ids as
+    // `validate -o sarif`, and recommendations are merged into the same run
+    // as advisory (never `error`) results.
+    crate::reports::generate_quality_sarif(
+        report,
+        &config
+            .sbom_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
+        &config.profile.to_string(),
+    )
+    .unwrap_or_else(|_| {
+        serde_json::to_string_pretty(&serde_json::json!({ "runs": [] })).unwrap_or_default()
+    })
 }
 
 /// Format quality report for output
@@ -628,75 +591,277 @@ mod tests {
     use super::*;
     use crate::model::{Component, ComponentType, DocumentMetadata, MlModelInfo, NormalizedSbom};
 
+    /// Contract test: every documented `--profile` spelling parses to the
+    /// right profile through the single shared parser (clap uses the same
+    /// name/alias table).
     #[test]
-    fn test_parse_scoring_profile() {
-        assert!(matches!(
-            parse_scoring_profile("minimal").unwrap(),
+    fn every_documented_profile_alias_parses() {
+        let table: &[(&str, ScoringProfile)] = &[
+            ("minimal", ScoringProfile::Minimal),
+            ("standard", ScoringProfile::Standard),
+            ("security", ScoringProfile::Security),
+            ("license-compliance", ScoringProfile::LicenseCompliance),
+            ("license", ScoringProfile::LicenseCompliance),
+            ("cra", ScoringProfile::Cra),
+            ("cyber-resilience", ScoringProfile::Cra),
+            ("bsi", ScoringProfile::BsiTr03183_2),
+            ("tr-03183", ScoringProfile::BsiTr03183_2),
+            ("tr03183", ScoringProfile::BsiTr03183_2),
+            ("bsi-tr-03183-2", ScoringProfile::BsiTr03183_2),
+            ("comprehensive", ScoringProfile::Comprehensive),
+            ("full", ScoringProfile::Comprehensive),
+            ("cbom", ScoringProfile::Cbom),
+            ("cryptographic", ScoringProfile::Cbom),
+            ("ai-readiness", ScoringProfile::AiReadiness),
+            ("ai_readiness", ScoringProfile::AiReadiness),
+        ];
+        for (spelling, expected) in table {
+            let parsed: ScoringProfile = spelling
+                .parse()
+                .unwrap_or_else(|e| panic!("'{spelling}' must parse: {e}"));
+            assert_eq!(parsed, *expected, "'{spelling}' mapped to wrong profile");
+        }
+    }
+
+    #[test]
+    fn profile_parse_is_case_insensitive_and_rejects_unknown() {
+        assert_eq!(
+            "MINIMAL".parse::<ScoringProfile>().unwrap(),
             ScoringProfile::Minimal
-        ));
-        assert!(matches!(
-            parse_scoring_profile("standard").unwrap(),
+        );
+        assert_eq!(
+            "Standard".parse::<ScoringProfile>().unwrap(),
             ScoringProfile::Standard
-        ));
-        assert!(matches!(
-            parse_scoring_profile("security").unwrap(),
-            ScoringProfile::Security
-        ));
-        assert!(matches!(
-            parse_scoring_profile("license-compliance").unwrap(),
-            ScoringProfile::LicenseCompliance
-        ));
-        assert!(matches!(
-            parse_scoring_profile("cra").unwrap(),
-            ScoringProfile::Cra
-        ));
-        assert!(matches!(
-            parse_scoring_profile("comprehensive").unwrap(),
-            ScoringProfile::Comprehensive
-        ));
+        );
+        let err = "invalid".parse::<ScoringProfile>().unwrap_err();
+        assert!(err.contains("Valid values"));
+        assert!(err.contains("license-compliance"));
     }
 
     #[test]
-    fn test_parse_scoring_profile_case_insensitive() {
-        assert!(matches!(
-            parse_scoring_profile("MINIMAL").unwrap(),
-            ScoringProfile::Minimal
-        ));
-        assert!(matches!(
-            parse_scoring_profile("Standard").unwrap(),
-            ScoringProfile::Standard
-        ));
+    fn rejects_unsupported_output_format_before_reading_sbom() {
+        // html/markdown/csv/oscal-json used to fall through to the text
+        // renderer; they must now fail fast (before the SBOM is read — the
+        // path here does not exist).
+        for format in [
+            ReportFormat::Html,
+            ReportFormat::Markdown,
+            ReportFormat::Csv,
+            ReportFormat::OscalJson,
+            ReportFormat::Ndjson,
+            ReportFormat::Table,
+            ReportFormat::SideBySide,
+            ReportFormat::Tui,
+        ] {
+            let err = run_quality(
+                PathBuf::from("/nonexistent/never-read.cdx.json"),
+                ScoringProfile::Standard,
+                format,
+                None,
+                false,
+                false,
+                None,
+                false,
+                true,
+                None,
+                None,
+                None,
+                EnrichmentConfig::default(),
+            )
+            .expect_err("unsupported format must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("not supported by `sbom-tools quality`"),
+                "unexpected error for {format}: {msg}"
+            );
+            assert!(
+                msg.contains("sarif") && msg.contains("json"),
+                "error must list the supported formats: {msg}"
+            );
+        }
     }
 
     #[test]
-    fn test_parse_scoring_profile_invalid() {
-        assert!(parse_scoring_profile("invalid").is_err());
+    fn explicit_missing_sidecar_is_a_hard_error() {
+        // An explicitly passed --cra-sidecar that fails to load used to be
+        // silently ignored (`.ok()`); it must now abort the command.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let err = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            false,
+            true,
+            Some(dir.path().join("missing.cra.json")),
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect_err("broken explicit sidecar must be a hard error");
+        assert!(err.to_string().contains("Failed to load CRA sidecar"));
+    }
+
+    fn write_minimal_sbom(dir: &std::path::Path) -> PathBuf {
+        let sbom_path = dir.join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        sbom_path
     }
 
     #[test]
-    fn test_parse_scoring_profile_aliases() {
-        assert!(matches!(
-            parse_scoring_profile("license").unwrap(),
-            ScoringProfile::LicenseCompliance
-        ));
-        assert!(matches!(
-            parse_scoring_profile("full").unwrap(),
-            ScoringProfile::Comprehensive
-        ));
-        assert!(matches!(
-            parse_scoring_profile("cyber-resilience").unwrap(),
-            ScoringProfile::Cra
-        ));
-        assert!(matches!(
-            parse_scoring_profile("ai-readiness").unwrap(),
-            ScoringProfile::AiReadiness
-        ));
+    fn fail_on_noncompliant_does_not_fire_on_na_ai_readiness_run() {
+        // Regression: an N/A AI-readiness run (no ML components) used to
+        // exit 1 on the hidden Comprehensive-level compliance check that no
+        // renderer ever displays. Both gates are armed here; neither may fire.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = write_minimal_sbom(dir.path());
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::AiReadiness,
+            ReportFormat::Summary,
+            Some(dir.path().join("out.txt")),
+            false,
+            false,
+            Some(70.0), // --min-score: must not fire on N/A either (P0 guard)
+            true,       // --fail-on-noncompliant
+            true,
+            None,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("an N/A AI-readiness run must not error");
+        assert_eq!(
+            code,
+            exit_codes::SUCCESS,
+            "N/A AI-readiness run must exit 0 with --fail-on-noncompliant"
+        );
+    }
+
+    #[test]
+    fn fail_on_noncompliant_still_fires_on_applicable_noncompliant_run() {
+        // The empty SBOM is genuinely non-compliant with the CRA profile's
+        // embedded check, so the opt-in gate must still flip the exit code.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = write_minimal_sbom(dir.path());
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            Some(dir.path().join("out.txt")),
+            false,
+            false,
+            None,
+            true, // --fail-on-noncompliant
+            true,
+            None,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("the run itself must succeed");
+        assert_eq!(code, exit_codes::COMPLIANCE_ERRORS);
+    }
+
+    #[test]
+    fn typod_cra_product_class_is_a_hard_error() {
+        // Regression: a typo'd --cra-product-class was silently dropped,
+        // scoring a critical-class product as Default.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = write_minimal_sbom(dir.path());
+        let err = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            Some("critcal".to_string()),
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect_err("typo'd --cra-product-class must be a hard error");
+        let msg = err.to_string();
+        assert!(msg.contains("critcal"), "must name the bad value: {msg}");
+        assert!(
+            msg.contains("critical"),
+            "must list the valid values: {msg}"
+        );
+    }
+
+    #[test]
+    fn invalid_as_of_is_a_hard_error_before_reading_the_sbom() {
+        let err = run_quality(
+            PathBuf::from("/nonexistent/never-read.cdx.json"),
+            ScoringProfile::Cra,
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            None,
+            Some("not-a-date".to_string()),
+            EnrichmentConfig::default(),
+        )
+        .expect_err("invalid --as-of must be rejected");
+        assert!(err.to_string().contains("invalid --as-of"));
+    }
+
+    #[test]
+    fn auto_discovered_broken_sidecar_soft_fails() {
+        // Without an explicit path, a broken adjacent sidecar must not abort
+        // the command (best-effort discovery logs a warning instead).
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("app.cra.json"), "{ not json").unwrap();
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::Cra,
+            ReportFormat::Json,
+            Some(dir.path().join("out.json")),
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("auto-discovery must soft-fail on a broken sidecar");
+        assert_eq!(code, exit_codes::SUCCESS);
     }
 
     fn ai_config(output: ReportFormat, min_score: Option<f32>) -> QualityConfig {
         QualityConfig {
             sbom_path: PathBuf::from("model.cdx.json"),
-            profile: "ai-readiness".to_string(),
+            profile: ScoringProfile::AiReadiness,
             output,
             output_file: None,
             show_recommendations: true,
@@ -706,6 +871,7 @@ mod tests {
             no_color: true,
             cra_sidecar_path: None,
             cra_product_class: None,
+            as_of: None,
             enrichment: EnrichmentConfig::default(),
         }
     }
@@ -778,6 +944,35 @@ mod tests {
     }
 
     #[test]
+    fn test_format_quality_sarif_routes_compliance_through_registry_rule_ids() {
+        // Non-AI profiles route through the shared SARIF layer: violations
+        // carry registry SARIF rule ids (never invented QUALITY-* ids) and
+        // every emitted ruleId has a reportingDescriptor.
+        let sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let report = QualityScorer::new(ScoringProfile::Cra).score(&sbom);
+        let mut config = ai_config(ReportFormat::Sarif, None);
+        config.profile = ScoringProfile::Cra;
+        let out = format_quality_sarif(&report, &config);
+        let value: serde_json::Value = serde_json::from_str(&out).expect("valid SARIF JSON");
+        let run = &value["runs"][0];
+        let results = run["results"].as_array().expect("results array");
+        assert!(!results.is_empty(), "empty SBOM must fire CRA violations");
+        assert!(
+            results.iter().all(|r| r["ruleId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("SBOM-"))),
+            "quality SARIF must not invent QUALITY-* rule ids"
+        );
+        assert!(
+            run["tool"]["driver"]["rules"]
+                .as_array()
+                .is_some_and(|rules| !rules.is_empty()),
+            "quality SARIF must declare its rule catalogue"
+        );
+        assert_eq!(run["properties"]["compliant"], json!(false));
+    }
+
+    #[test]
     fn test_format_quality_sarif_ai_readiness_na_is_not_misleading() {
         let sbom = NormalizedSbom::new(DocumentMetadata::default());
         let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
@@ -786,7 +981,19 @@ mod tests {
         let run = &value["runs"][0];
         let props = &run["properties"];
         assert_eq!(props["applicable"], json!(false));
-        assert!(props["overall_score"].is_null());
+        // The serialized key is camelCase and *omitted* for the unscored N/A
+        // case — indexing `props["overall_score"]` would return Null for any
+        // absent key, so assert on the real key's absence.
+        assert!(
+            props.get("overallScore").is_none(),
+            "unscored N/A run must omit overallScore entirely"
+        );
+        assert!(
+            props["notApplicableReason"]
+                .as_str()
+                .is_some_and(|r| r.contains("No machine-learning-model components")),
+            "N/A run must carry the metrics' human-readable reason"
+        );
         assert_eq!(props["grade"], json!("N/A"));
         // The dedicated SBOM-AIBOM-* rule family is now emitted (was absent before),
         // and N/A yields no findings.

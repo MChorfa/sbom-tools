@@ -4,7 +4,7 @@ use super::escape::{escape_html, escape_html_opt};
 use super::{ReportConfig, ReportError, ReportFormat, ReportGenerator, ReportType};
 use crate::diff::{DiffResult, SlaStatus, VulnerabilityDetail};
 use crate::model::NormalizedSbom;
-use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult, ViolationSeverity};
+use crate::quality::{ComplianceResult, ViolationSeverity};
 use std::fmt::Write;
 
 /// HTML report generator
@@ -627,14 +627,9 @@ fn format_vex_html(vex_state: Option<&crate::model::VexState>) -> String {
 
 /// Compute compliance score as percentage (0-100)
 fn compliance_score_html(result: &ComplianceResult) -> u8 {
-    let total = result.violations.len() + 1;
-    let issues = result.error_count + result.warning_count;
-    let score = if issues >= total {
-        0
-    } else {
-        ((total - issues) * 100) / total
-    };
-    score.min(100) as u8
+    // Diff/view reports only render CRA results, which are always
+    // applicable; 0 is a defensive fallback, not a rendered state.
+    result.score().unwrap_or(0)
 }
 
 /// Generate an HTML trend badge for numeric delta
@@ -823,8 +818,8 @@ fn write_reporting_channels_html(html: &mut String, result: &ComplianceResult) -
     }
 
     let psirt = channel_status_html(result, "Art. 14: PSIRT");
-    let early = channel_status_html(result, "Art. 14(1)");
-    let incident = channel_status_html(result, "Art. 14(2)");
+    let early = channel_status_html(result, "Art. 14(2)(a)");
+    let incident = channel_status_html(result, "Art. 14(2)(b)");
     let enisa = channel_status_html(result, "Art. 14(7)");
 
     writeln!(html, "    <h3>Reporting Channels (CRA Art. 14)</h3>")?;
@@ -841,12 +836,12 @@ fn write_reporting_channels_html(html: &mut String, result: &ComplianceResult) -
     )?;
     writeln!(
         html,
-        "            <tr><td>24-hour early warning (Art. 14(1))</td><td>{}</td></tr>",
+        "            <tr><td>24-hour early warning (Art. 14(2)(a))</td><td>{}</td></tr>",
         early.html()
     )?;
     writeln!(
         html,
-        "            <tr><td>72-hour incident report (Art. 14(2))</td><td>{}</td></tr>",
+        "            <tr><td>72-hour notification (Art. 14(2)(b))</td><td>{}</td></tr>",
         incident.html()
     )?;
     writeln!(
@@ -1162,12 +1157,8 @@ impl ReportGenerator for HtmlReporter {
 
         // CRA Compliance
         {
-            let old_cra = config.old_cra_compliance.clone().unwrap_or_else(|| {
-                ComplianceChecker::new(ComplianceLevel::CraPhase2).check(old_sbom)
-            });
-            let new_cra = config.new_cra_compliance.clone().unwrap_or_else(|| {
-                ComplianceChecker::new(ComplianceLevel::CraPhase2).check(new_sbom)
-            });
+            let old_cra = config.old_cra_compliance_or_bare(old_sbom);
+            let new_cra = config.new_cra_compliance_or_bare(new_sbom);
             write_cra_compliance_diff_html(&mut html, &old_cra, &new_cra)?;
         }
 
@@ -1279,10 +1270,7 @@ impl ReportGenerator for HtmlReporter {
 
         // CRA Compliance
         {
-            let cra = config
-                .view_cra_compliance
-                .clone()
-                .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(sbom));
+            let cra = config.view_cra_compliance_or_bare(sbom);
             write_cra_compliance_view_html(&mut html, &cra)?;
         }
 

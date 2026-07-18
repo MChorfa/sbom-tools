@@ -1,0 +1,77 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:7f3e9a20-4c1d-4b6e-9f2a-8d5c3b1a0e47",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-05-01T09:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "name": "cbomkit-style-generator",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "legacy-service",
+      "name": "legacy-service",
+      "version": "1.4.2",
+      "purl": "pkg:cargo/legacy-service@1.4.2"
+    }
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rsa-2048",
+      "name": "RSA-2048",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "pke",
+          "parameterSetIdentifier": "2048",
+          "cryptoFunctions": ["keygen", "encrypt", "decrypt", "sign", "verify"]
+        },
+        "oid": "1.2.840.113549.1.1.1"
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-128-cbc",
+      "name": "AES-128-CBC",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "mode": "cbc",
+          "padding": "pkcs5",
+          "cryptoFunctions": ["encrypt", "decrypt"]
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha-1",
+      "name": "SHA-1",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "cryptoFunctions": ["digest"]
+        },
+        "oid": "1.3.14.3.2.26"
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "legacy-service",
+      "dependsOn": [
+        "crypto/algorithm/rsa-2048",
+        "crypto/algorithm/aes-128-cbc",
+        "crypto/algorithm/sha-1"
+      ]
+    }
+  ]
+}

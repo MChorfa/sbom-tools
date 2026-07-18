@@ -360,6 +360,158 @@ fn nist_pqc_weak_crypto_violations() {
     );
 }
 
+/// A realistic CycloneDX 1.6 CBOM (no `algorithmFamily` anywhere — a 1.7-only
+/// field — and no `nistQuantumSecurityLevel`) must fail BOTH standards:
+/// RSA-2048 is identified via its OID, AES-128-CBC via its name, and SHA-1
+/// via its OID. Previously such CBOMs passed with zero violations.
+#[test]
+fn cyclonedx_16_cbom_without_family_fails_both_standards() {
+    let parsed = parse_sbom(&fixture_path("cyclonedx/cbom-1.6-no-family.cdx.json")).unwrap();
+
+    let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&parsed);
+    assert!(!cnsa.is_compliant, "1.6 CBOM must not pass CNSA 2.0");
+    let messages: Vec<_> = cnsa
+        .violations
+        .iter()
+        .filter(|v| v.severity == ViolationSeverity::Error)
+        .map(|v| v.message.as_str())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains("RSA")),
+        "RSA-2048 (via OID) must be flagged: {messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("AES-128")),
+        "AES-128-CBC (via name) must be flagged: {messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("SHA-1")),
+        "SHA-1 (via OID) must be flagged: {messages:?}"
+    );
+
+    let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&parsed);
+    assert!(!pqc.is_compliant, "1.6 CBOM must not pass PQC readiness");
+    assert!(
+        pqc.violations
+            .iter()
+            .any(|v| v.severity == ViolationSeverity::Error
+                && v.message.contains("quantum-vulnerable")
+                && v.message.contains("RSA")),
+        "RSA-2048 must be flagged quantum-vulnerable without a declared level"
+    );
+    assert!(
+        pqc.violations
+            .iter()
+            .any(|v| v.severity == ViolationSeverity::Error && v.message.contains("SHA-1")),
+        "SHA-1 must be flagged broken via OID"
+    );
+}
+
+/// Protocol assets are now evaluated: the weak-crypto fixture's TLS 1.0
+/// endpoint with RC4/3DES/DES suites must produce protocol violations under
+/// both standards (previously protocols satisfied the inventory gate but got
+/// zero checks) — and the weak fixture as a whole must fail CNSA 2.0, which
+/// used to report it fully compliant.
+#[test]
+fn weak_crypto_protocols_and_cnsa2_verdict() {
+    let parsed = parse_sbom(&fixture_path("cyclonedx/cbom-weak-crypto.cdx.json")).unwrap();
+
+    let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&parsed);
+    assert!(
+        !cnsa.is_compliant,
+        "an MD5/SHA-1/DES/RC4 inventory must not be CNSA 2.0 compliant"
+    );
+    assert!(
+        cnsa.violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001" && v.message.contains("1.0")),
+        "TLS 1.0 must fail the CNSA 2.0 TLS-1.3 gate"
+    );
+    assert!(
+        cnsa.violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-002" && v.message.contains("RC4")),
+        "the RC4 cipher suite must be flagged under CNSA 2.0"
+    );
+    assert!(
+        cnsa.violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-CNSA2-ALG-005" && v.message.contains("MD5")),
+        "MD5 (broken) must be flagged under the CNSA 2.0 allowlist"
+    );
+
+    let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&parsed);
+    assert!(
+        pqc.violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-PQC-PROTO-001"),
+        "TLS 1.0 must fail the PQC minimum-version gate"
+    );
+    assert!(
+        pqc.violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-PQC-PROTO-002" && v.message.contains("broken")),
+        "legacy cipher suites must be flagged under PQC"
+    );
+    assert!(
+        pqc.violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-PQC-CERT-001"),
+        "certificates signed with rsa-1024/sha1 must fire the PQC cert rule"
+    );
+}
+
+/// A CBOM whose only assets carry unclassifiable crypto refs (a certificate
+/// with a dangling opaque signatureAlgorithmRef, an IKEv2 protocol with
+/// opaque transform refs) must NOT report a clean 100% pass: every
+/// unverifiable asset produces a "cannot verify" Warning under both
+/// standards. Previously such CBOMs satisfied the inventory gate while
+/// receiving zero effective checks — a vacuous compliance claim.
+#[test]
+fn unclassifiable_refs_warn_instead_of_vacuous_pass() {
+    let parsed = parse_sbom(&fixture_path("cyclonedx/cbom-unclassifiable-refs.cdx.json")).unwrap();
+
+    for (level, cert_rule, proto_rule) in [
+        (
+            ComplianceLevel::Cnsa2,
+            "SBOM-CNSA2-CERT-UNKNOWN",
+            "SBOM-CNSA2-PROTO-UNKNOWN",
+        ),
+        (
+            ComplianceLevel::NistPqc,
+            "SBOM-PQC-CERT-UNKNOWN",
+            "SBOM-PQC-PROTO-UNKNOWN",
+        ),
+    ] {
+        let result = ComplianceChecker::new(level).check(&parsed);
+        assert!(
+            result.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning
+                    && v.rule_id == cert_rule
+                    && v.message.contains("sig-algo-42")
+            }),
+            "{level:?}: opaque cert sig ref must produce {cert_rule}; got {:?}",
+            result
+                .violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            result.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning
+                    && v.rule_id == proto_rule
+                    && v.message.contains("transform-encr-7")
+            }),
+            "{level:?}: opaque IKEv2 transform refs must produce {proto_rule}"
+        );
+        assert!(
+            result.warning_count >= 2,
+            "{level:?}: the unverifiable inventory must surface warnings, not a clean pass"
+        );
+    }
+}
+
 #[test]
 fn nist_pqc_hybrid_transition_info() {
     let parsed = parse_sbom(&fixture_path("cyclonedx/cbom-pqc-transition.cdx.json")).unwrap();
@@ -408,12 +560,14 @@ fn diff_weak_to_quantum_ready() {
 fn parse_all_cbom_fixtures_successfully() {
     let fixtures = [
         "cyclonedx/cbom-1.6.cdx.json",
+        "cyclonedx/cbom-1.6-no-family.cdx.json",
         "cyclonedx/cbom-1.7.cdx.json",
         "cyclonedx/cbom-weak-crypto.cdx.json",
         "cyclonedx/cbom-quantum-ready.cdx.json",
         "cyclonedx/cbom-cnsa2-compliant.cdx.json",
         "cyclonedx/cbom-cnsa2-violations.cdx.json",
         "cyclonedx/cbom-pqc-transition.cdx.json",
+        "cyclonedx/cbom-unclassifiable-refs.cdx.json",
     ];
 
     for fixture in &fixtures {

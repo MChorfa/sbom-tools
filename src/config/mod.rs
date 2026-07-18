@@ -56,11 +56,11 @@ pub use defaults::{
     DEFAULT_ENRICHMENT_MAX_CONCURRENT, DEFAULT_MATCHING_THRESHOLD,
 };
 pub use types::{
-    AppConfig, AppConfigBuilder, BehaviorConfig, DiffConfig, DiffConfigBuilder, DiffPaths,
-    EcosystemRulesConfig, EnrichmentConfig, FilterConfig, FuzzyPreset, GraphAwareDiffConfig,
-    MatchingConfig, MatchingRulesPathConfig, MatrixConfig, MultiDiffConfig, OutputConfig,
-    QueryConfig, StreamingConfig, ThemeName, TimelineConfig, TuiConfig, TuiPreferences, VexConfig,
-    ViewConfig,
+    AppConfig, AppConfigBuilder, BehaviorConfig, ComplianceConfig, DiffConfig, DiffConfigBuilder,
+    DiffPaths, EcosystemRulesConfig, EnrichmentConfig, FilterConfig, FuzzyPreset,
+    GraphAwareDiffConfig, MatchingConfig, MatchingRulesPathConfig, MatrixConfig, MultiDiffConfig,
+    OutputConfig, QueryConfig, StreamingConfig, ThemeName, TimelineConfig, TuiConfig,
+    TuiPreferences, VexConfig, ViewConfig,
 };
 pub use validation::{ConfigError, Validatable};
 

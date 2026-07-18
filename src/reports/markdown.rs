@@ -6,7 +6,7 @@ use super::escape::{
 use super::{ReportConfig, ReportError, ReportFormat, ReportGenerator, ReportType};
 use crate::diff::{DiffResult, SlaStatus, VulnerabilityDetail};
 use crate::model::NormalizedSbom;
-use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult, ViolationSeverity};
+use crate::quality::{ComplianceResult, ViolationSeverity};
 use std::fmt::Write;
 
 /// Markdown report generator
@@ -578,12 +578,8 @@ impl ReportGenerator for MarkdownReporter {
 
         // CRA Compliance section
         {
-            let old_cra = config.old_cra_compliance.clone().unwrap_or_else(|| {
-                ComplianceChecker::new(ComplianceLevel::CraPhase2).check(old_sbom)
-            });
-            let new_cra = config.new_cra_compliance.clone().unwrap_or_else(|| {
-                ComplianceChecker::new(ComplianceLevel::CraPhase2).check(new_sbom)
-            });
+            let old_cra = config.old_cra_compliance_or_bare(old_sbom);
+            let new_cra = config.new_cra_compliance_or_bare(new_sbom);
             write_cra_compliance_diff(&mut md, &old_cra, &new_cra)?;
         }
 
@@ -747,10 +743,7 @@ impl ReportGenerator for MarkdownReporter {
 
         // CRA Compliance section
         {
-            let cra = config
-                .view_cra_compliance
-                .clone()
-                .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(sbom));
+            let cra = config.view_cra_compliance_or_bare(sbom);
             write_cra_compliance_view(&mut md, &cra)?;
         }
 
@@ -775,14 +768,9 @@ fn delta_indicator(old_val: usize, new_val: usize, lower_is_better: bool) -> &'s
 
 /// Compute compliance score as percentage (0-100)
 fn compliance_score(result: &ComplianceResult) -> u8 {
-    let total = result.violations.len() + 1; // +1 avoids div-by-zero, counts "base pass"
-    let issues = result.error_count + result.warning_count;
-    let score = if issues >= total {
-        0
-    } else {
-        ((total - issues) * 100) / total
-    };
-    score.min(100) as u8
+    // Diff/view reports only render CRA results, which are always
+    // applicable; 0 is a defensive fallback, not a rendered state.
+    result.score().unwrap_or(0)
 }
 
 /// Write CRA compliance comparison for diff reports
@@ -936,8 +924,8 @@ fn write_reporting_channels_md(md: &mut String, result: &ComplianceResult) -> st
     }
 
     let psirt = channel_status(result, "Art. 14: PSIRT");
-    let early = channel_status(result, "Art. 14(1)");
-    let incident = channel_status(result, "Art. 14(2)");
+    let early = channel_status(result, "Art. 14(2)(a)");
+    let incident = channel_status(result, "Art. 14(2)(b)");
     let enisa = channel_status(result, "Art. 14(7)");
 
     writeln!(md, "### Reporting Channels (CRA Art. 14)\n")?;
@@ -946,12 +934,12 @@ fn write_reporting_channels_md(md: &mut String, result: &ComplianceResult) -> st
     writeln!(md, "| PSIRT contact | {} |", psirt.label())?;
     writeln!(
         md,
-        "| 24-hour early warning (Art. 14(1)) | {} |",
+        "| 24-hour early warning (Art. 14(2)(a)) | {} |",
         early.label()
     )?;
     writeln!(
         md,
-        "| 72-hour incident report (Art. 14(2)) | {} |",
+        "| 72-hour notification (Art. 14(2)(b)) | {} |",
         incident.label()
     )?;
     writeln!(

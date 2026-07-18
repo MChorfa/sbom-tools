@@ -1,5 +1,6 @@
 ---
 source: src/tui/view/ui/render_snapshot_tests.rs
+assertion_line: 71
 expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
@@ -8,23 +9,23 @@ sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ Compliance Standards (←/→ to switch) ────────────────────────────────────────────────────────────────────────────────┐
-│  ⚠ Min(10)  ✗ Std(13)  ✗ NTIA(20)  ✗ CRA-1(43)  ✗ CRA-2(47)  ✗ FDA(33)  ✗ SSDF(9)  ✗ EO14028(7)  ✗ CNSA2(1) ›        │
+│  ⚠ Min(10)  ✗ Std(13)  ✗ NTIA(21)  ✗ CRA-1(43)  ✗ CRA-2(47)  ✗ FDA(34)  ✗ SSDF(9)  ✗ EO14028(7)  ✗ CNSA2(1) ›        │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ NTIA Minimum Elements ───────────────────────────────────────────────────────────┐┌ Summary ─────────────────────────┐
-│  NON-COMPLIANT — Errors must be fixed                                            ││ Errors:       11                 │
-│  Format    ██████████████████░░░░░░░░░░░░░░░░░░░░░░     9 (45.0%)                ││ Warnings:      0                 │
-│  Supplier  ██████████████████░░░░░░░░░░░░░░░░░░░░░░     9 (45.0%)                ││ Info:          9                 │
-│  Deps      ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░     1 (5.0%)                 ││ ────────────────                 │
-│  Doc Meta  ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░     1 (5.0%)                 ││ Total:        20                 │
+│  NON-COMPLIANT — Errors must be fixed                                            ││ Errors:       12                 │
+│  Format    █████████████████░░░░░░░░░░░░░░░░░░░░░░░     9 (42.9%)                ││ Warnings:      0                 │
+│  Supplier  █████████████████░░░░░░░░░░░░░░░░░░░░░░░     9 (42.9%)                ││ Info:          9                 │
+│  Comp IDs  ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░     1 (4.8%)                 ││ ────────────────                 │
+│  Deps      ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░     1 (4.8%)                 ││ Total:        21                 │
 └──────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────┘
-┌ Violations (grouped: 4 patterns, 20 total) ────────────────────┐┌ Affected (9)───────────────────────────────────────┐
+┌ Violations (grouped: 5 patterns, 21 total) ────────────────────┐┌ Affected (9)───────────────────────────────────────┐
 │Severity Category   Issue Pattern                        Count  ││  Component  missing supplier/manufacturer          │
 │                                                                ││  9 named                                           │
 │ERROR    Supplier   Component  missing supplier/manufact 9      ││  ──────────────────────────────                    │
-│ERROR    Doc Meta   SBOM must have creator/tool informat 1      ││  zod                                               │
-│ERROR    Deps       SBOM with multiple components must i 1      ││  axios                                             │
-│INFO     Format     Component  may be missing bom-ref    9      ││  dayjs                                             │
-│                                                                ││  react                                             │
+│ERROR    Comp IDs   Component  missing unique identifier 1      ││  zod                                               │
+│ERROR    Doc Meta   SBOM must have creator/tool informat 1      ││  axios                                             │
+│ERROR    Deps       SBOM with multiple components must i 1      ││  dayjs                                             │
+│INFO     Format     Component  may be missing bom-ref    9      ││  react                                             │
 │                                                                ││  lodash                                            │
 │                                                                ││  prisma                                            │
 │                                                                ││  express                                           │

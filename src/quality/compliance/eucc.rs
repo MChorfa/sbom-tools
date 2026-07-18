@@ -31,7 +31,9 @@ impl ComplianceChecker {
                 message: "[EUCC] Missing Common Criteria Protection Profile reference — set sidecar `eucc_protection_profile_id`".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: Protection Profile reference".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-PP",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -47,7 +49,9 @@ impl ComplianceChecker {
                 message: "[EUCC] Missing Target of Evaluation reference — set sidecar `eucc_target_of_evaluation`".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: Target of Evaluation reference".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-TOE",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -63,7 +67,9 @@ impl ComplianceChecker {
                 message: "[EUCC] Missing ITSEF (IT Security Evaluation Facility) identifier — set sidecar `eucc_itsef_identifier`".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: ITSEF identifier".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-ITSEF",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -77,11 +83,13 @@ impl ComplianceChecker {
                     message: "[EUCC] Missing certificate valid-until date — set sidecar `eucc_valid_until`".to_string(),
                     element: None,
                     requirement: "EUCC Substantial: certificate valid-until date".to_string(),
-                    rule_id: "SBOM-EUCC",
+                    rule_id: "SBOM-EUCC-VALIDITY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
-            Some(until) if until <= chrono::Utc::now() => {
+            Some(until) if until <= self.now() => {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::DocumentMetadata,
@@ -91,11 +99,13 @@ impl ComplianceChecker {
                     ),
                     element: None,
                     requirement: "EUCC Substantial: certificate validity".to_string(),
-                    rule_id: "SBOM-EUCC",
+                    rule_id: "SBOM-EUCC-VALIDITY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
-            Some(until) if until <= chrono::Utc::now() + chrono::Duration::days(180) => {
+            Some(until) if until <= self.now() + chrono::Duration::days(180) => {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::DocumentMetadata,
@@ -105,7 +115,9 @@ impl ComplianceChecker {
                     ),
                     element: None,
                     requirement: "EUCC Substantial: certificate validity".to_string(),
-                    rule_id: "SBOM-EUCC",
+                    rule_id: "SBOM-EUCC-VALIDITY",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 });
             }
@@ -132,7 +144,9 @@ impl ComplianceChecker {
                 message: "[EUCC] No Certification/Attestation external reference points at an EUCC URL (recommended)".to_string(),
                 element: None,
                 requirement: "EUCC Substantial: Certification external reference".to_string(),
-                rule_id: "SBOM-EUCC",
+                rule_id: "SBOM-EUCC-CERTREF",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }

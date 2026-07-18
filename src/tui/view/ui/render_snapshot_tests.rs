@@ -278,6 +278,76 @@ fn compliance_selector_exposes_every_standard() {
 }
 
 #[test]
+fn compliance_overview_marks_na_standards_muted_not_green() {
+    use crate::quality::{
+        ComplianceLevel, ComplianceResult, Violation, ViolationCategory, ViolationSeverity,
+    };
+
+    // Readiness N/A results keep `is_compliant = true` and warning_count = 0
+    // by contract — indistinguishable from a clean pass unless the renderer
+    // checks `is_applicable()` first. The cross-standard overview must show
+    // them as muted "not applicable", matching the tab strip one panel up.
+    fn na_marker(level: ComplianceLevel, rule_id: &'static str) -> ComplianceResult {
+        ComplianceResult::new(
+            level,
+            vec![Violation {
+                severity: ViolationSeverity::Info,
+                category: ViolationCategory::DocumentMetadata,
+                message: "SBOM contains no AI components".to_string(),
+                element: None,
+                requirement: "Applicability".to_string(),
+                rule_id,
+                component_id: None,
+                counts: None,
+                standard_refs: Vec::new(),
+            }],
+        )
+    }
+
+    let mut app = demo_view_app(ViewTab::Compliance);
+    // Synthetic per-standard results: everything clean except the two AI
+    // readiness profiles, which are N/A. Selecting a clean standard (index 0)
+    // makes the violations pane render the Cross-Standard Overview.
+    let results: Vec<ComplianceResult> = ComplianceLevel::all()
+        .iter()
+        .map(|level| match level {
+            ComplianceLevel::EuAiAct => na_marker(*level, "SBOM-AIACT-NA"),
+            ComplianceLevel::BsiSbomForAi => na_marker(*level, "SBOM-BSIAI-NA"),
+            _ => ComplianceResult::new(*level, Vec::new()),
+        })
+        .collect();
+    let ai_idx = ComplianceLevel::all()
+        .iter()
+        .position(|l| *l == ComplianceLevel::EuAiAct)
+        .expect("EU AI Act must be in ComplianceLevel::all()");
+    assert!(!results[ai_idx].is_applicable(), "fixture must be N/A");
+    app.compliance_results = Some(results);
+    app.compliance_state.selected_standard = 0;
+
+    // Tall enough that the overview lists all 16 standards (the panel clips
+    // at short heights and the AI profiles sit at the end of the list).
+    let text = render_to_text(120, 60, |frame| {
+        render(frame, &mut app);
+    });
+
+    let ai_line = text
+        .lines()
+        .find(|l| l.contains("EU AI Act Annex IV Readiness"))
+        .unwrap_or_else(|| panic!("overview must list the AI Act standard:\n{text}"))
+        .to_string();
+    assert!(
+        ai_line.contains("\u{2014}") && ai_line.contains("not applicable"),
+        "N/A standard must render muted em-dash + 'not applicable': {ai_line}"
+    );
+    assert!(
+        !ai_line.contains('\u{2713}')
+            && !ai_line.contains("passed")
+            && !ai_line.contains("warnings"),
+        "N/A standard must not render as a pass in the overview: {ai_line}"
+    );
+}
+
+#[test]
 fn crypto_list_scrolls_the_selection_into_view() {
     let (sbom, profile) = crate::tui::test_support::cbom_single();
     let mut app = ViewApp::new(sbom, crate::tui::test_support::CBOM, profile);
@@ -1353,6 +1423,8 @@ fn pqc_cnsa_cell_ignores_non_error_violations() {
                     element: Some("ALGO-X".to_string()),
                     requirement: "advisory requirement".to_string(),
                     rule_id: "TEST-CNSA-PROBE",
+                    component_id: None,
+                    counts: None,
                     standard_refs: Vec::new(),
                 }],
             ),

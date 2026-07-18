@@ -80,6 +80,8 @@ impl CycloneDxParser {
                 timestamp: m.timestamp,
                 tools: m.tools.map(|t| t.tool),
                 authors: None,
+                manufacturer: None,
+                manufacture: None,
                 component: m.component.map(Into::into),
                 lifecycles: None,
                 distribution_constraints: None,
@@ -269,6 +271,18 @@ impl CycloneDxParser {
         if let Some(deps) = cdx.dependencies {
             for dep in deps {
                 if let Some(from_id) = id_map.get(&dep.ref_field) {
+                    // CycloneDX: an entry with an empty dependsOn positively
+                    // asserts "this component has no dependencies". Preserve
+                    // that assertion so graph-completeness checks don't
+                    // mistake it for a missing relationship.
+                    let declared_empty = dep.depends_on.as_ref().is_none_or(Vec::is_empty)
+                        && dep.provides.as_ref().is_none_or(Vec::is_empty);
+                    if declared_empty && let Some(comp) = sbom.components.get_mut(from_id) {
+                        comp.extensions.properties.push(crate::model::Property {
+                            name: super::DECLARED_NO_DEPENDENCIES_PROPERTY.to_string(),
+                            value: "true".to_string(),
+                        });
+                    }
                     for depends_on in dep.depends_on.unwrap_or_default() {
                         if let Some(to_id) = id_map.get(&depends_on) {
                             // Infer relationship type from scope when available.
@@ -395,6 +409,40 @@ impl CycloneDxParser {
                         email: author.email.clone(),
                     });
                 }
+            }
+            // metadata.manufacturer (1.5+; deprecated pre-1.6 spelling:
+            // metadata.manufacture) is the organization that created the BOM
+            // — BSI TR-03183-2 v2.1.0 Table 8's canonical CycloneDX mapping
+            // for the required "Creator of the SBOM". Map it to an
+            // Organization creator; previously it was silently dropped, so
+            // documents expressing their creator exactly as the TR
+            // prescribes false-failed the §5.2.1 gate.
+            if let Some(manufacturer) = meta.manufacturer.as_ref().or(meta.manufacture.as_ref()) {
+                let email = manufacturer
+                    .contact
+                    .as_ref()
+                    .and_then(|cs| cs.iter().find_map(|c| c.email.clone()));
+                let mut name = manufacturer
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                // Creators carry no URL field: when no contact email exists,
+                // fold the first URL into the name so the TR's email-or-URL
+                // fallback stays discernible downstream (BSI §5.2.1 contact
+                // detection looks for "://" in the creator name).
+                if email.is_none()
+                    && let Some(url) = manufacturer
+                        .url
+                        .as_ref()
+                        .and_then(|urls| urls.iter().find(|u| !u.is_empty()))
+                {
+                    name = format!("{name} ({url})");
+                }
+                creators.push(Creator {
+                    creator_type: CreatorType::Organization,
+                    name,
+                    email,
+                });
             }
         }
 
@@ -1620,11 +1668,38 @@ struct CdxMetadata {
     tools: Option<Vec<CdxTool>>,
     /// Authors field (1.6+)
     authors: Option<Vec<CdxAuthor>>,
+    /// Organization that created the BOM (1.5+). BSI TR-03183-2 v2.1.0
+    /// Table 8 maps the required "Creator of the SBOM" to this field.
+    manufacturer: Option<CdxOrgEntity>,
+    /// Deprecated pre-1.6 spelling: manufacturer of the described component,
+    /// historically also used for the BOM creator. Accepted as a fallback.
+    manufacture: Option<CdxOrgEntity>,
     component: Option<CdxComponent>,
     /// Lifecycles field (1.5+) - contains phases like end-of-support dates
     lifecycles: Option<Vec<CdxLifecycle>>,
     /// Distribution constraints (1.7+) with TLP classification
     distribution_constraints: Option<CdxDistributionConstraints>,
+}
+
+/// `CycloneDX` organizational entity (`metadata.manufacturer` /
+/// deprecated `metadata.manufacture`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxOrgEntity {
+    name: Option<String>,
+    url: Option<Vec<String>>,
+    contact: Option<Vec<CdxOrgContact>>,
+}
+
+/// Contact entry of a `CycloneDX` organizational entity.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct CdxOrgContact {
+    name: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
 }
 
 /// `CycloneDX` lifecycle entry (1.5+)
@@ -2530,6 +2605,10 @@ struct CdxComponentXml {
     properties: Option<CdxPropertiesXml>,
     /// Package URL Version Range syntax (1.7+)
     version_range: Option<String>,
+    /// Dataset metadata (CycloneDX 1.5+): repeated `<data>` componentData
+    /// elements directly under `<component>` (no wrapper element in XML).
+    #[serde(rename = "data", default)]
+    data: Vec<CdxDataXml>,
     /// Cryptographic properties (1.6+, camelCase in XML)
     #[serde(rename = "cryptoProperties")]
     crypto_properties: Option<CdxCryptoProperties>,
@@ -2611,10 +2690,12 @@ impl From<CdxComponentXml> for CdxComponent {
             properties,
             is_external: false,
             version_range: xml.version_range,
-            // XML deserialization of modelCard/data is not supported yet;
-            // AI/ML BOM metadata is only parsed from JSON documents.
+            // XML deserialization of modelCard is not supported yet; ML-model
+            // metadata is only parsed from JSON documents. Dataset evidence
+            // (`<data>` componentData) IS parsed, so the AI compliance gates
+            // see XML AI-BOM datasets exactly like their JSON equivalents.
             model_card: None,
-            data_components: Vec::new(),
+            data_components: xml.data.into_iter().map(CdxDataComponent::from).collect(),
             crypto_properties: xml.crypto_properties,
             components: xml
                 .components
@@ -2686,6 +2767,91 @@ struct CdxPropertyXml {
     /// Optional: a self-closing `<property name="x"/>` is schema-valid
     #[serde(rename = "$value", default)]
     value: Option<String>,
+}
+
+/// componentData element for XML format (CycloneDX 1.5+ `<data>` child of
+/// `<component>`): `<type>` / repeated `<sensitiveData>` / `<governance>`
+/// child elements instead of JSON object keys.
+#[derive(Debug, Deserialize)]
+struct CdxDataXml {
+    #[serde(rename = "type")]
+    data_type: Option<String>,
+    #[serde(rename = "sensitiveData", default)]
+    sensitive_data: Vec<String>,
+    governance: Option<CdxDataGovernanceXml>,
+}
+
+impl From<CdxDataXml> for CdxDataComponent {
+    fn from(xml: CdxDataXml) -> Self {
+        Self {
+            data_type: xml.data_type,
+            sensitivity_data: xml.sensitive_data,
+            governance: xml.governance.map(CdxDataGovernance::from),
+        }
+    }
+}
+
+/// dataGovernance element for XML format: unlike JSON, each responsible-party
+/// list is wrapped (`<owners><owner>…</owner></owners>` etc.).
+#[derive(Debug, Deserialize)]
+struct CdxDataGovernanceXml {
+    owners: Option<CdxGovOwnersXml>,
+    custodians: Option<CdxGovCustodiansXml>,
+    stewards: Option<CdxGovStewardsXml>,
+}
+
+impl From<CdxDataGovernanceXml> for CdxDataGovernance {
+    fn from(xml: CdxDataGovernanceXml) -> Self {
+        Self {
+            owners: xml
+                .owners
+                .map_or_else(Vec::new, |w| w.owner.into_iter().map(Into::into).collect()),
+            custodians: xml.custodians.map_or_else(Vec::new, |w| {
+                w.custodian.into_iter().map(Into::into).collect()
+            }),
+            stewards: xml.stewards.map_or_else(Vec::new, |w| {
+                w.steward.into_iter().map(Into::into).collect()
+            }),
+        }
+    }
+}
+
+/// Owners wrapper element for XML data governance
+#[derive(Debug, Deserialize)]
+struct CdxGovOwnersXml {
+    #[serde(rename = "owner", default)]
+    owner: Vec<CdxGovPartyXml>,
+}
+
+/// Custodians wrapper element for XML data governance
+#[derive(Debug, Deserialize)]
+struct CdxGovCustodiansXml {
+    #[serde(rename = "custodian", default)]
+    custodian: Vec<CdxGovPartyXml>,
+}
+
+/// Stewards wrapper element for XML data governance
+#[derive(Debug, Deserialize)]
+struct CdxGovStewardsXml {
+    #[serde(rename = "steward", default)]
+    steward: Vec<CdxGovPartyXml>,
+}
+
+/// Responsible-party element for XML data governance: a choice of
+/// `<organization>` or `<contact>` (spec `dataGovernanceResponsiblePartyType`).
+#[derive(Debug, Deserialize)]
+struct CdxGovPartyXml {
+    organization: Option<CdxGovOrganization>,
+    contact: Option<CdxGovContact>,
+}
+
+impl From<CdxGovPartyXml> for CdxGovParty {
+    fn from(xml: CdxGovPartyXml) -> Self {
+        Self::Structured(CdxGovPartyObj {
+            organization: xml.organization,
+            contact: xml.contact,
+        })
+    }
 }
 
 /// Dependencies wrapper element for XML format
@@ -3222,6 +3388,91 @@ mod tests {
         );
     }
 
+    /// XML `<data>` componentData must populate `Component::dataset` exactly
+    /// like the JSON `component.data` path, so the AI compliance dataset gates
+    /// (`dataset.is_some()`) see XML AI-BOMs. Regression: the XML converter
+    /// previously hardcoded `data_components: Vec::new()`, silently dropping
+    /// spec-valid `<data>` evidence and the entire BSI-AI Datasets cluster.
+    #[test]
+    fn test_xml_component_data_populates_dataset() {
+        let sbom = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="data" bom-ref="dataset-1">
+      <name>training-corpus</name>
+      <version>1.0.0</version>
+      <data>
+        <type>dataset</type>
+        <sensitiveData>pii</sensitiveData>
+        <sensitiveData>phi</sensitiveData>
+        <governance>
+          <custodians>
+            <custodian>
+              <organization>
+                <name>ML Ops</name>
+              </organization>
+            </custodian>
+          </custodians>
+          <stewards>
+            <steward>
+              <contact>
+                <email>steward@example.com</email>
+              </contact>
+            </steward>
+          </stewards>
+          <owners>
+            <owner>
+              <organization>
+                <name>Data Platform Team</name>
+              </organization>
+            </owner>
+            <owner>
+              <contact>
+                <name>Jane Doe</name>
+                <email>jane@example.com</email>
+              </contact>
+            </owner>
+          </owners>
+        </governance>
+      </data>
+    </component>
+    <component type="data" bom-ref="config-1">
+      <name>app-config</name>
+      <version>1.0.0</version>
+    </component>
+  </components>
+</bom>"#,
+        );
+
+        let dataset = component(&sbom, "training-corpus")
+            .dataset
+            .as_ref()
+            .expect("XML <data> element must populate Component::dataset");
+        assert_eq!(dataset.dataset_type.as_deref(), Some("dataset"));
+        assert_eq!(
+            dataset.sensitivity_classifications,
+            vec!["pii".to_string(), "phi".to_string()]
+        );
+        // Owners, custodians and stewards all contribute governance names,
+        // matching the JSON conversion.
+        assert_eq!(
+            dataset.governance_owners,
+            vec![
+                "Data Platform Team".to_string(),
+                "Jane Doe".to_string(),
+                "ML Ops".to_string(),
+                "steward@example.com".to_string(),
+            ]
+        );
+
+        // A bare `type: data` component without a <data> element stays out of
+        // the AI dataset scope, exactly like the JSON de-scoping.
+        assert!(
+            component(&sbom, "app-config").dataset.is_none(),
+            "no <data> evidence must mean no DatasetInfo"
+        );
+    }
+
     #[test]
     fn test_xml_spec_version_helper_fallbacks() {
         assert_eq!(
@@ -3428,6 +3679,114 @@ mod tests {
         assert_eq!(
             ml.fairness[0].group_at_risk.as_deref(),
             Some("assessed for demographic parity")
+        );
+    }
+
+    /// BSI TR-03183-2 v2.1.0 Table 8 maps the required "Creator of the SBOM"
+    /// to CycloneDX metadata.manufacturer — it must become an Organization
+    /// creator with its contact email (previously it was silently dropped
+    /// and manufacturer-only SBOMs false-failed the §5.2.1 gate).
+    #[test]
+    fn metadata_manufacturer_maps_to_organization_creator() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.6",
+              "version": 1,
+              "metadata": {
+                "manufacturer": {
+                  "name": "Demo Corp",
+                  "url": ["https://demo.example"],
+                  "contact": [{"name": "SBOM desk", "email": "sbom@demo.example"}]
+                }
+              },
+              "components": []
+            }"#,
+        );
+        let org = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.creator_type == CreatorType::Organization)
+            .expect("manufacturer must map to an Organization creator");
+        assert_eq!(org.name, "Demo Corp");
+        assert_eq!(org.email.as_deref(), Some("sbom@demo.example"));
+    }
+
+    /// When the manufacturer has no contact email, the first URL is folded
+    /// into the creator name so the BSI §5.2.1 email-or-URL fallback stays
+    /// discernible ("://" heuristic).
+    #[test]
+    fn metadata_manufacturer_url_fallback_folds_into_name() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.6",
+              "version": 1,
+              "metadata": {
+                "manufacturer": {"name": "Demo Corp", "url": ["https://demo.example"]}
+              },
+              "components": []
+            }"#,
+        );
+        let org = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.creator_type == CreatorType::Organization)
+            .expect("manufacturer must map to an Organization creator");
+        assert_eq!(org.name, "Demo Corp (https://demo.example)");
+        assert_eq!(org.email, None);
+    }
+
+    /// The deprecated pre-1.6 `metadata.manufacture` spelling is accepted as
+    /// a fallback.
+    #[test]
+    fn deprecated_metadata_manufacture_spelling_accepted() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.5",
+              "version": 1,
+              "metadata": {
+                "manufacture": {
+                  "name": "Legacy Corp",
+                  "contact": [{"email": "sbom@legacy.example"}]
+                }
+              },
+              "components": []
+            }"#,
+        );
+        let org = sbom
+            .document
+            .creators
+            .iter()
+            .find(|c| c.creator_type == CreatorType::Organization)
+            .expect("deprecated manufacture must map to an Organization creator");
+        assert_eq!(org.name, "Legacy Corp");
+        assert_eq!(org.email.as_deref(), Some("sbom@legacy.example"));
+    }
+
+    /// Silent side: a tools-only metadata block yields Tool creators only —
+    /// no Organization creator is fabricated.
+    #[test]
+    fn no_manufacturer_yields_no_organization_creator() {
+        let sbom = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.5",
+              "version": 1,
+              "metadata": {"tools": [{"name": "sbom-gen", "version": "1.0"}]},
+              "components": []
+            }"#,
+        );
+        assert!(
+            sbom.document
+                .creators
+                .iter()
+                .all(|c| c.creator_type == CreatorType::Tool),
+            "tools-only metadata must produce only Tool creators, got {:?}",
+            sbom.document.creators
         );
     }
 

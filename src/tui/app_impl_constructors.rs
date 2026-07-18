@@ -37,7 +37,8 @@ impl App {
                 new_cra_compliance: None,
                 old_compliance_results: None,
                 new_compliance_results: None,
-                cra_sidecar: None,
+                old_cra_sidecar: None,
+                new_cra_sidecar: None,
                 matching_threshold: 0.85,
                 #[cfg(feature = "enrichment")]
                 enrichment_stats_old: None,
@@ -128,15 +129,38 @@ impl App {
         app
     }
 
-    /// Attach CRA sidecar metadata so the compliance tab renders sidecar-driven
-    /// verdicts (EU AI Act high-risk escalation, OSS-Steward, EUCC, Article 14)
-    /// identically to the CLI. Invalidates any cached compliance results so the
-    /// sidecar takes effect on the next `ensure_compliance_results`.
+    /// Attach per-SBOM CRA sidecar metadata so the compliance tab renders
+    /// sidecar-driven verdicts (EU AI Act high-risk escalation, OSS-Steward,
+    /// EUCC, Article 14) identically to the CLI reports. Each side of the diff
+    /// is judged against its own sidecar. Invalidates any cached compliance
+    /// results so the sidecars take effect on the next
+    /// `ensure_compliance_results`, and recomputes the summary-card CRA
+    /// Phase 2 results (pre-computed bare in `new_diff`) so the summary tab
+    /// agrees with the compliance tab.
     #[must_use]
-    pub fn with_cra_sidecar(mut self, sidecar: crate::model::CraSidecarMetadata) -> Self {
+    pub fn with_cra_sidecars(
+        mut self,
+        old_sidecar: Option<crate::model::CraSidecarMetadata>,
+        new_sidecar: Option<crate::model::CraSidecarMetadata>,
+    ) -> Self {
         self.data.old_compliance_results = None;
         self.data.new_compliance_results = None;
-        self.data.cra_sidecar = Some(sidecar);
+        if let (Some(sidecar), Some(old_sbom)) = (&old_sidecar, &self.data.old_sbom) {
+            self.data.old_cra_compliance = Some(
+                ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                    .with_sidecar(sidecar.clone())
+                    .check(old_sbom),
+            );
+        }
+        if let (Some(sidecar), Some(new_sbom)) = (&new_sidecar, &self.data.new_sbom) {
+            self.data.new_cra_compliance = Some(
+                ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                    .with_sidecar(sidecar.clone())
+                    .check(new_sbom),
+            );
+        }
+        self.data.old_cra_sidecar = old_sidecar;
+        self.data.new_cra_sidecar = new_sidecar;
         self
     }
 

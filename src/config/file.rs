@@ -269,6 +269,37 @@ impl AppConfig {
             self.tui.theme = other.tui.theme.clone();
         }
 
+        // Compliance config
+        if !other.compliance.standards.is_empty() {
+            self.compliance
+                .standards
+                .clone_from(&other.compliance.standards);
+        }
+        if other.compliance.profile.is_some() {
+            self.compliance
+                .profile
+                .clone_from(&other.compliance.profile);
+        }
+        if other.compliance.min_score.is_some() {
+            self.compliance.min_score = other.compliance.min_score;
+        }
+        if other.compliance.fail_on_warning {
+            self.compliance.fail_on_warning = true;
+        }
+        if other.compliance.fail_on_noncompliant {
+            self.compliance.fail_on_noncompliant = true;
+        }
+        if other.compliance.cra_sidecar.is_some() {
+            self.compliance
+                .cra_sidecar
+                .clone_from(&other.compliance.cra_sidecar);
+        }
+        if other.compliance.cra_product_class.is_some() {
+            self.compliance
+                .cra_product_class
+                .clone_from(&other.compliance.cra_product_class);
+        }
+
         // Enrichment config
         if other.enrichment.is_some() {
             self.enrichment.clone_from(&other.enrichment);
@@ -328,7 +359,8 @@ matching:
 
 # Output configuration
 output:
-  # Format: auto, json, text, sarif, markdown, html
+  # Format: auto, tui, side-by-side, json, sarif, oscal-json, markdown,
+  # html, summary, table, csv, ndjson
   format: auto
   # Output file path (omit for stdout)
   # file: report.json
@@ -382,6 +414,27 @@ tui:
   mouse_enabled: true
   initial_threshold: 0.8
 
+# Compliance defaults for `validate` / `quality` (CLI flags override)
+compliance:
+  # Default standard(s) for `validate --standard`. Canonical values:
+  # ntia, fda, cra, cra-phase1, ssdf, eo14028, cnsa2, pqc, bsi,
+  # oss-steward, eucc, ai-act, bsi-ai (aliases accepted)
+  # standards: [ntia, cra]
+  # Default scoring profile for `quality --profile`: minimal, standard,
+  # security, license-compliance, cra, bsi, comprehensive, cbom, ai-readiness
+  # profile: standard
+  # Fail `quality` when the overall score is below this (0-100)
+  # min_score: 70
+  # Exit non-zero when `validate` finds warnings
+  fail_on_warning: false
+  # Exit non-zero when `quality` reports NON-COMPLIANT
+  fail_on_noncompliant: false
+  # CRA sidecar metadata file (JSON or YAML); a configured path that fails
+  # to load is a hard error
+  # cra_sidecar: ./app.cra.json
+  # CRA product class: default, important-class-1, important-class-2, critical
+  # cra_product_class: default
+
 # Enrichment configuration (optional)
 # enrichment:
 #   enabled: true
@@ -401,6 +454,24 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::TempDir;
+
+    #[test]
+    fn generated_full_example_config_loads_and_validates() {
+        // Regression: `config init` used to write `format: auto`, which the
+        // PascalCase-only ReportFormat deserializer rejected — the tool's own
+        // scaffold bricked every subsequent command until hand-edited.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join(".sbom-tools.yaml");
+        std::fs::write(&path, generate_full_example_config()).unwrap();
+        let config =
+            load_config_file(&path).expect("the generated example config must parse cleanly");
+        use crate::config::Validatable;
+        let errors = config.validate();
+        assert!(
+            errors.is_empty(),
+            "the generated example config must validate: {errors:?}"
+        );
+    }
 
     #[test]
     fn test_find_config_in_dir() {

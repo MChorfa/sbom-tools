@@ -4,7 +4,7 @@
 //! exercised by the unit tests landed in P1/P2:
 //! - sidecar auto-discovery preference vs. explicit flag
 //! - invalid sidecar YAML must not panic
-//! - Annex I Part III transitive=Warning under CraPhase1
+//! - Annex I Part II transitive=Warning under CraPhase1
 //! - SBOM-side ExternalRefType::RiskAssessment satisfies Art. 13(2)
 //! - multi-standard `--standard bsi,cra,ntia` produces independent results
 
@@ -321,7 +321,9 @@ fn bsi_fixture_with_sidecar_passes() {
         "BSI-compliant fixture should produce no Errors at BsiTr03183_2 level; got {errors:?}"
     );
 
-    // CRA level + sidecar: should not produce Warning-level Art. 13(15)/13(12)/13(7) findings
+    // CRA level + sidecar: should not produce Warning-level manufacturer
+    // (Art. 13(16)), product (Art. 13(15)), or CVD-policy (Annex I Part
+    // II (5)) findings
     let cra_with_sc = ComplianceChecker::new(ComplianceLevel::CraPhase2)
         .with_sidecar(sidecar)
         .check(&parsed);
@@ -330,13 +332,13 @@ fn bsi_fixture_with_sidecar_passes() {
         .iter()
         .filter(|v| v.severity == ViolationSeverity::Warning)
         .filter(|v| {
-            v.requirement.contains("Art. 13(15)")
-                || v.requirement.contains("Art. 13(12)")
-                || v.requirement.contains("Art. 13(7)")
+            v.requirement.contains("Art. 13(16)")
+                || v.requirement.contains("Art. 13(15)")
+                || v.requirement.contains("Annex I Part II (5)")
         })
         .collect();
     assert!(
         warnings_for.is_empty(),
-        "CRA + sidecar should suppress Art. 13(15)/13(12)/13(7) Warnings; got {warnings_for:?}"
+        "CRA + sidecar should suppress Art. 13(16)/13(15)/Annex I Part II (5) Warnings; got {warnings_for:?}"
     );
 }

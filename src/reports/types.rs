@@ -5,36 +5,54 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Output format for reports
+///
+/// Serde names are kebab-case, matching the CLI spellings (`-o oscal-json`)
+/// so a hand-written config file can use the same values the CLI documents.
+/// The historical PascalCase variant names are kept as aliases so existing
+/// config files (`format: Json`) keep loading.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize, JsonSchema,
 )]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum ReportFormat {
     /// Auto-detect: TUI if TTY, summary otherwise
     #[default]
+    #[serde(alias = "Auto")]
     Auto,
     /// Interactive TUI display
+    #[serde(alias = "Tui")]
     Tui,
     /// Side-by-side terminal diff (like difftastic)
     #[value(alias = "side-by-side")]
+    #[serde(alias = "SideBySide")]
     SideBySide,
     /// Structured JSON output
+    #[serde(alias = "Json")]
     Json,
     /// SARIF 2.1.0 for CI/CD
+    #[serde(alias = "Sarif")]
     Sarif,
     /// OSCAL 1.1.2 assessment-results JSON
+    #[serde(alias = "OscalJson")]
     OscalJson,
     /// Human-readable Markdown
+    #[serde(alias = "Markdown")]
     Markdown,
     /// Interactive HTML report
+    #[serde(alias = "Html")]
     Html,
     /// Brief summary output
+    #[serde(alias = "Summary")]
     Summary,
     /// Compact table for terminal (colored)
+    #[serde(alias = "Table")]
     Table,
     /// CSV for spreadsheet import
+    #[serde(alias = "Csv")]
     Csv,
     /// Newline-delimited JSON (one record per line, streaming-friendly)
+    #[serde(alias = "Ndjson")]
     Ndjson,
 }
 
@@ -163,6 +181,51 @@ impl ReportConfig {
         Self::default()
     }
 
+    /// CRA Phase 2 compliance for the old SBOM of a diff report.
+    ///
+    /// Returns the pre-computed [`Self::old_cra_compliance`] when populated —
+    /// every first-party pipeline (the diff report stage and the TUI export)
+    /// populates it with a sidecar-aware result so all output formats agree
+    /// with the TUI. The bare (sidecar-less) computation only exists as a
+    /// last resort for direct library callers that hand a reporter a default
+    /// `ReportConfig`; it lives here, in one place, so the individual
+    /// reporters cannot re-grow divergent fallback checkers.
+    #[must_use]
+    pub fn old_cra_compliance_or_bare(
+        &self,
+        old_sbom: &crate::model::NormalizedSbom,
+    ) -> crate::quality::ComplianceResult {
+        self.old_cra_compliance
+            .clone()
+            .unwrap_or_else(|| bare_cra_phase2_check(old_sbom))
+    }
+
+    /// CRA Phase 2 compliance for the new SBOM of a diff report.
+    ///
+    /// See [`Self::old_cra_compliance_or_bare`] for the fallback contract.
+    #[must_use]
+    pub fn new_cra_compliance_or_bare(
+        &self,
+        new_sbom: &crate::model::NormalizedSbom,
+    ) -> crate::quality::ComplianceResult {
+        self.new_cra_compliance
+            .clone()
+            .unwrap_or_else(|| bare_cra_phase2_check(new_sbom))
+    }
+
+    /// CRA Phase 2 compliance for the SBOM of a view report.
+    ///
+    /// See [`Self::old_cra_compliance_or_bare`] for the fallback contract.
+    #[must_use]
+    pub fn view_cra_compliance_or_bare(
+        &self,
+        sbom: &crate::model::NormalizedSbom,
+    ) -> crate::quality::ComplianceResult {
+        self.view_cra_compliance
+            .clone()
+            .unwrap_or_else(|| bare_cra_phase2_check(sbom))
+    }
+
     /// Create a config for specific report types
     #[must_use]
     pub fn with_types(types: Vec<ReportType>) -> Self {
@@ -177,6 +240,17 @@ impl ReportConfig {
     pub fn includes(&self, report_type: ReportType) -> bool {
         self.report_types.contains(&ReportType::All) || self.report_types.contains(&report_type)
     }
+}
+
+/// Last-resort CRA Phase 2 check with no sidecar or product class attached.
+///
+/// Only reachable through the `*_or_bare` accessors on [`ReportConfig`] when a
+/// caller did not pre-compute compliance. First-party pipelines never hit this:
+/// they resolve the CRA sidecar (explicit flag or `<sbom>.cra.{json,yaml}`
+/// auto-discovery) and populate the config fields so every output format
+/// renders the same verdicts as the TUI.
+fn bare_cra_phase2_check(sbom: &crate::model::NormalizedSbom) -> crate::quality::ComplianceResult {
+    crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2).check(sbom)
 }
 
 /// Metadata included in reports
@@ -200,6 +274,57 @@ impl ReportMetadata {
         Self {
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             ..Default::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_format_deserializes_kebab_case_and_legacy_pascal_case() {
+        // kebab-case is the canonical (CLI-matching) spelling; the historical
+        // PascalCase names must keep loading so existing configs don't break.
+        for (raw, expected) in [
+            ("auto", ReportFormat::Auto),
+            ("tui", ReportFormat::Tui),
+            ("side-by-side", ReportFormat::SideBySide),
+            ("oscal-json", ReportFormat::OscalJson),
+            ("Auto", ReportFormat::Auto),
+            ("Json", ReportFormat::Json),
+            ("SideBySide", ReportFormat::SideBySide),
+            ("OscalJson", ReportFormat::OscalJson),
+            ("Ndjson", ReportFormat::Ndjson),
+        ] {
+            let parsed: ReportFormat = serde_json::from_str(&format!("\"{raw}\""))
+                .unwrap_or_else(|e| panic!("'{raw}' must deserialize: {e}"));
+            assert_eq!(parsed, expected, "'{raw}' mapped to the wrong variant");
+        }
+    }
+
+    #[test]
+    fn report_format_serializes_to_the_cli_spelling() {
+        // Serialization, Display (CLI), and deserialization agree, so a
+        // `config show`/`config check` round-trip is loss-free.
+        for format in [
+            ReportFormat::Auto,
+            ReportFormat::Tui,
+            ReportFormat::SideBySide,
+            ReportFormat::Json,
+            ReportFormat::Sarif,
+            ReportFormat::OscalJson,
+            ReportFormat::Markdown,
+            ReportFormat::Html,
+            ReportFormat::Summary,
+            ReportFormat::Table,
+            ReportFormat::Csv,
+            ReportFormat::Ndjson,
+        ] {
+            let serialized = serde_json::to_string(&format).unwrap();
+            assert_eq!(serialized, format!("\"{format}\""));
+            let round: ReportFormat = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(round, format);
         }
     }
 }

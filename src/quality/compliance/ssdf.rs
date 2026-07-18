@@ -18,6 +18,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PS.1: Provenance — creator identification".to_string(),
                 rule_id: "SBOM-SSDF-PS1",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -36,6 +38,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PS.1: Provenance — tool identification".to_string(),
                 rule_id: "SBOM-SSDF-PS1",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -62,6 +66,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PS.2: Build integrity — component hashes".to_string(),
                 rule_id: "SBOM-SSDF-PS2",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_hash,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -81,6 +90,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PO.1: Source code provenance — VCS references".to_string(),
                 rule_id: "SBOM-SSDF-PO1",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -103,6 +114,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PO.3: Build provenance — build metadata".to_string(),
                 rule_id: "SBOM-SSDF-PO3",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -117,6 +130,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PW.4: Dependency management — relationships".to_string(),
                 rule_id: "SBOM-SSDF-PW4",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -146,40 +161,46 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PW.6: Vulnerability information".to_string(),
                 rule_id: "SBOM-SSDF-PW6",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
 
-        // RV.1 — Component identification: unique identifiers (PURL/CPE)
+        // RV.1 — Component identification: unique identifiers
+        // (PURL/CPE/SWHID/SWID via `has_cra_identifier`, so SWHID-only SPDX
+        // components are not flagged)
         let without_id = sbom
             .components
             .values()
-            .filter(|c| {
-                c.identifiers.purl.is_none()
-                    && c.identifiers.cpe.is_empty()
-                    && c.identifiers.swid.is_none()
-            })
+            .filter(|c| !c.identifiers.has_cra_identifier())
             .count();
         if without_id > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::ComponentIdentification,
                 message: format!(
-                    "{without_id}/{total} components missing unique identifier (PURL/CPE/SWID)"
+                    "{without_id}/{total} components missing unique identifier (PURL/CPE/SWHID/SWID)"
                 ),
                 element: None,
                 requirement: "NIST SSDF RV.1: Component identification — unique identifiers"
                     .to_string(),
                 rule_id: "SBOM-SSDF-RV1",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_id,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
 
-        // PS.3 — Supplier identification
+        // PS.3 — Supplier identification (placeholder values such as
+        // NOASSERTION do not satisfy the element)
         let without_supplier = sbom
             .components
             .values()
-            .filter(|c| c.supplier.is_none() && c.author.is_none())
+            .filter(|c| !has_known_supplier(&c.supplier, &c.author))
             .count();
         if without_supplier > 0 {
             violations.push(Violation {
@@ -191,6 +212,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "NIST SSDF PS.3: Supplier identification".to_string(),
                 rule_id: "SBOM-SSDF-PS3",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_supplier,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }

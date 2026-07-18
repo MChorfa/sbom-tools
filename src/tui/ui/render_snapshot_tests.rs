@@ -528,10 +528,11 @@ mod diff_alignment {
         let new = high_risk_ml_sbom();
         let old = high_risk_ml_sbom();
         let mut app = App::new_diff(DiffResult::new(), old, new, "{}", "{}");
-        app = app.with_cra_sidecar(CraSidecarMetadata {
+        let sidecar = CraSidecarMetadata {
             is_high_risk_ai: true,
             ..Default::default()
-        });
+        };
+        app = app.with_cra_sidecars(Some(sidecar.clone()), Some(sidecar));
 
         app.ensure_compliance_results();
 
@@ -995,6 +996,150 @@ mod diff_alignment {
             "single ecosystem must render the labelled tally row:\n{text}"
         );
     }
+}
+
+// ============================================================================
+// Applicability (N/A) rendering: the diff compliance tab and the policy
+// widget must never render an unevaluated standard as a pass. Readiness
+// profiles keep `is_compliant = true` for out-of-scope SBOMs by contract,
+// so every surface has to gate on `is_applicable()` first.
+// ============================================================================
+
+#[test]
+fn diff_compliance_na_standard_renders_na_not_pass() {
+    use crate::quality::ComplianceLevel;
+
+    // The demo fixtures are ordinary (non-AI) SBOMs: the EU AI Act
+    // readiness profile does not evaluate them.
+    let mut app = demo_app(TabKind::Compliance);
+    let ai_idx = ComplianceLevel::all()
+        .iter()
+        .position(|l| *l == ComplianceLevel::EuAiAct)
+        .expect("EU AI Act must be in ComplianceLevel::all()");
+    app.compliance_view.inner_mut().selected_standard = ai_idx;
+
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+
+    assert!(
+        text.contains("N/A \u{2192} N/A"),
+        "header must render N/A for both unevaluated sides:\n{text}"
+    );
+    assert!(
+        text.contains("not applicable"),
+        "delta label must read 'not applicable', not a trend:\n{text}"
+    );
+    assert!(
+        !text.contains("PASS 100%"),
+        "an unevaluated standard must never render as a pass:\n{text}"
+    );
+    assert!(
+        !text.contains("PASS") && !text.contains("FAIL"),
+        "no verdict text may render for an unevaluated standard:\n{text}"
+    );
+}
+
+#[test]
+fn diff_compliance_header_uses_shared_score_formula() {
+    // The header percentage must come from ComplianceResult::score()
+    // (100/(errors+warnings+1), Info-neutral) — the same formula the
+    // exports and markdown/HTML reports render — not a bespoke weighting.
+    let mut app = demo_app(TabKind::Compliance);
+    let idx = app.diff_compliance_state().selected_standard;
+    app.ensure_compliance_results();
+    let expected: Vec<Option<u8>> = [
+        &app.data.old_compliance_results,
+        &app.data.new_compliance_results,
+    ]
+    .iter()
+    .map(|results| results.as_ref().expect("computed")[idx].score())
+    .collect();
+
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+
+    let old_pct = expected[0].expect("demo standard is applicable");
+    let new_pct = expected[1].expect("demo standard is applicable");
+    assert!(
+        text.contains(&format!("{old_pct}% \u{2192}")) && text.contains(&format!("{new_pct}%")),
+        "header must render the shared score ({old_pct}% -> {new_pct}%):\n{text}"
+    );
+}
+
+#[test]
+fn policy_preset_na_standard_is_not_rendered_as_pass() {
+    use crate::tui::app_states::PolicyPreset;
+
+    let mut app = demo_app(TabKind::Summary);
+    app.compliance_state.policy_preset = PolicyPreset::EuAiAct;
+    app.run_compliance_check();
+
+    let result = app
+        .compliance_state
+        .result
+        .as_ref()
+        .expect("compliance check ran");
+    assert!(
+        result.not_applicable.is_some(),
+        "EU AI Act must be not-applicable for the non-AI demo SBOM"
+    );
+
+    // Status line: NOT APPLICABLE, never "COMPLIANT (score: 99)".
+    let msg = app.status_message.clone().expect("status message set");
+    assert!(
+        msg.contains("NOT APPLICABLE"),
+        "status must report N/A: {msg}"
+    );
+    assert!(
+        !msg.contains("score"),
+        "an unevaluated standard has no score: {msg}"
+    );
+
+    // Summary-tab policy widget: N/A badge, no PASS badge, no score.
+    // Scope the assertions to the widget's own line — the quality card and
+    // the footer legitimately render "Score:" elsewhere on this tab.
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    let policy_line = text
+        .lines()
+        .find(|l| l.contains("Policy:"))
+        .unwrap_or_else(|| panic!("policy widget must render on the summary tab:\n{text}"))
+        .to_string();
+    assert!(
+        policy_line.contains("N/A"),
+        "policy widget must show an N/A badge: {policy_line}"
+    );
+    assert!(
+        !policy_line.contains("PASS") && !policy_line.contains("Score:"),
+        "policy widget must not render a PASS badge or score for N/A: {policy_line}"
+    );
+}
+
+#[test]
+fn policy_preset_uses_shared_score_formula() {
+    use crate::quality::{ComplianceChecker, ComplianceLevel};
+    use crate::tui::app_states::PolicyPreset;
+
+    let mut app = demo_app(TabKind::Summary);
+    app.compliance_state.policy_preset = PolicyPreset::Cra;
+    app.run_compliance_check();
+
+    let expected = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+        .check(app.data.new_sbom.as_ref().expect("demo new SBOM"))
+        .score()
+        .expect("CRA applies to the demo SBOM");
+
+    let result = app.compliance_state.result.as_ref().expect("check ran");
+    assert_eq!(
+        result.score, expected,
+        "policy widget score must be ComplianceResult::score(), not an ad-hoc 10/5/1 penalty"
+    );
 }
 
 #[test]

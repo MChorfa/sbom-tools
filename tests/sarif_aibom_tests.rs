@@ -92,7 +92,21 @@ fn aibom_not_applicable_emits_table_no_results() {
     let value = render_sarif(&NormalizedSbom::new(DocumentMetadata::default()));
     let run = &value["runs"][0];
     assert_eq!(run["properties"]["applicable"], serde_json::json!(false));
-    assert!(run["properties"]["overall_score"].is_null());
+    // The camelCase key is omitted (not null) when the run is unscored.
+    assert!(
+        run["properties"]
+            .as_object()
+            .expect("properties object")
+            .get("overallScore")
+            .is_none(),
+        "unscored N/A run must omit overallScore entirely"
+    );
+    assert!(
+        run["properties"]["notApplicableReason"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty()),
+        "N/A run must carry the metrics' human-readable reason"
+    );
     assert_eq!(run["properties"]["grade"], serde_json::json!("N/A"));
     assert!(run["results"].as_array().unwrap().is_empty());
     assert!(!rule_ids(&value).is_empty());

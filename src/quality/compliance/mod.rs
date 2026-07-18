@@ -10,6 +10,10 @@
 use crate::model::{NormalizedSbom, SbomFormat};
 use serde::{Deserialize, Serialize};
 
+// `pub(crate)` so the AI-readiness scorer (quality/scorer.rs) shares the exact
+// ML-component applicability semantics of the AI compliance profiles instead
+// of re-deriving them (and drifting, as the type-only filter once did).
+pub(crate) mod ai_shared;
 mod bsi;
 mod bsi_sbom_for_ai;
 mod context;
@@ -20,37 +24,48 @@ mod eu_ai_act;
 mod eucc;
 mod generic;
 mod registry;
+mod selector;
 mod shared;
 mod ssdf;
 
 use context::{ComplianceContext, checker_for};
-use registry::REMEDIATION_GENERIC;
-pub use registry::{RuleMeta, rule_meta};
-use shared::{is_valid_email_format, truncate_list};
+pub use registry::{
+    CNSA2_SARIF_RULE_IDS, COMPLIANCE_SARIF_RULE_IDS, EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS,
+    NTIA_SARIF_RULE_IDS, PQC_SARIF_RULE_IDS, RuleMeta, SSDF_SARIF_RULE_IDS, all_rule_ids,
+    rule_meta,
+};
+use registry::{REMEDIATION_GENERIC, lookup_static_rule_id};
+pub use selector::StandardSelector;
+use shared::{
+    has_known_supplier, has_known_value, is_valid_email_format, known_component_name, known_value,
+    manufacturer_scope_components, truncate_list,
+};
 
 /// CRA enforcement phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CraPhase {
-    /// Phase 1: Reporting obligations — deadline 11 December 2027
-    /// Basic SBOM requirements: product/component identification, manufacturer, version, format
+    /// Phase 1: Article 14 reporting obligations — apply from 11 September 2026
+    /// (Reg. (EU) 2024/2847 Art. 71(2)). Basic SBOM requirements:
+    /// product/component identification, manufacturer, version, format
     Phase1,
-    /// Phase 2: Full compliance — deadline 11 December 2029
-    /// Adds: vulnerability metadata, lifecycle/end-of-support, disclosure policy, EU `DoC`
+    /// Phase 2: full application of the regulation — from 11 December 2027
+    /// (Art. 71(2)). Adds: vulnerability metadata, lifecycle/end-of-support,
+    /// disclosure policy, EU `DoC`
     Phase2,
 }
 
 impl CraPhase {
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Phase1 => "Phase 1 (2027)",
-            Self::Phase2 => "Phase 2 (2029)",
+            Self::Phase1 => "Phase 1 (2026)",
+            Self::Phase2 => "Phase 2 (2027)",
         }
     }
 
     pub const fn deadline(self) -> &'static str {
         match self {
-            Self::Phase1 => "11 December 2027",
-            Self::Phase2 => "11 December 2029",
+            Self::Phase1 => "11 September 2026",
+            Self::Phase2 => "11 December 2027",
         }
     }
 }
@@ -65,9 +80,9 @@ pub enum ComplianceLevel {
     Standard,
     /// NTIA Minimum Elements compliance
     NtiaMinimum,
-    /// EU CRA Phase 1 — Reporting obligations (deadline: 11 Dec 2027)
+    /// EU CRA Phase 1 — Art. 14 reporting obligations (apply from 11 Sep 2026)
     CraPhase1,
-    /// EU CRA Phase 2 — Full compliance (deadline: 11 Dec 2029)
+    /// EU CRA Phase 2 — full application of the regulation (from 11 Dec 2027)
     CraPhase2,
     /// FDA Medical Device SBOM requirements
     FdaMedicalDevice,
@@ -79,8 +94,9 @@ pub enum ComplianceLevel {
     Cnsa2,
     /// NIST PQC Readiness — Post-Quantum Cryptography migration (IR 8547 + FIPS 203/204/205)
     NistPqc,
-    /// BSI TR-03183-2 (German national CRA-aligned SBOM technical guideline).
-    /// Free, ENISA-cited; stricter than NTIA on hashes and identifiers.
+    /// BSI TR-03183-2 v2.1.0 (German national CRA-aligned SBOM technical
+    /// guideline, 2025-08-20). Free, ENISA-cited; stricter than NTIA on
+    /// eligible formats (CycloneDX 1.6+ / SPDX 3.0.1+) and hashes (SHA-512).
     BsiTr03183_2,
     /// CRA Article 24 — Open-source software steward profile (lighter
     /// obligations than CraPhase1/2). SBOM, vulnerability handling process,
@@ -101,7 +117,8 @@ pub enum ComplianceLevel {
     /// legal-conformity guarantee, and does not classify a system as high-risk.
     /// Returns N/A for SBOMs with no ML-model or dataset metadata.
     EuAiAct,
-    /// BSI/G7 "SBOM for AI — Minimum Elements" (Feb 2026) READINESS. Scores an
+    /// BSI/G7 "SBOM for AI — Minimum Elements" (final joint G7 guidance, May 2026)
+    /// READINESS. Scores an
     /// AI-BOM element-by-element against the seven clusters (Metadata,
     /// System-Level, Models, Datasets, Infrastructure, Security, plus the
     /// document-author elements) of the BSI/G7 minimum-elements guidance, using
@@ -123,8 +140,8 @@ impl ComplianceLevel {
             Self::Minimum => "Minimum",
             Self::Standard => "Standard",
             Self::NtiaMinimum => "NTIA Minimum Elements",
-            Self::CraPhase1 => "EU CRA Phase 1 (2027)",
-            Self::CraPhase2 => "EU CRA Phase 2 (2029)",
+            Self::CraPhase1 => "EU CRA Phase 1 (2026)",
+            Self::CraPhase2 => "EU CRA Phase 2 (2027)",
             Self::FdaMedicalDevice => "FDA Medical Device",
             Self::NistSsdf => "NIST SSDF (SP 800-218)",
             Self::Eo14028 => "EO 14028 Section 4",
@@ -170,10 +187,10 @@ impl ComplianceLevel {
             Self::Standard => "Recommended fields for general use",
             Self::NtiaMinimum => "NTIA minimum elements for software transparency",
             Self::CraPhase1 => {
-                "CRA reporting obligations — product ID, SBOM format, manufacturer (deadline: 11 Dec 2027)"
+                "CRA reporting obligations — product ID, SBOM format, manufacturer (Art. 14 applies from 11 Sep 2026)"
             }
             Self::CraPhase2 => {
-                "Full CRA compliance — adds vulnerability metadata, lifecycle, disclosure (deadline: 11 Dec 2029)"
+                "Full CRA compliance — adds vulnerability metadata, lifecycle, disclosure (regulation fully applies from 11 Dec 2027)"
             }
             Self::FdaMedicalDevice => "FDA premarket submission requirements for medical devices",
             Self::NistSsdf => {
@@ -189,7 +206,7 @@ impl ComplianceLevel {
                 "NIST PQC — quantum-vulnerable algorithm detection, FIPS 203/204/205, SP 800-131A"
             }
             Self::BsiTr03183_2 => {
-                "BSI TR-03183-2 — German national SBOM guideline (free, ENISA-cited): mandatory hashes, identifiers, ISO-8601 timestamps"
+                "BSI TR-03183-2 v2.1.0 — German national SBOM guideline (free, ENISA-cited): CycloneDX 1.6+/SPDX 3.0.1+ formats, required creator/timestamp, per-component version/licences/SHA-512 hash"
             }
             Self::CraOssSteward => {
                 "CRA Article 24 — Open-source software steward (lighter than full manufacturer obligations): SBOM + CVD policy + vuln-handling required, no DoC/module/manufacturer-email enforcement"
@@ -201,7 +218,7 @@ impl ComplianceLevel {
                 "EU AI Act (Reg. (EU) 2024/1689) Annex IV technical-documentation READINESS — model description, training-data characteristics, validation/testing metrics, limitations (readiness only, not a legal-conformity guarantee; N/A for non-AI SBOMs)"
             }
             Self::BsiSbomForAi => {
-                "BSI/G7 SBOM-for-AI Minimum Elements (Feb 2026) READINESS — scores an AI-BOM element-by-element across the Metadata, System-Level, Models, Datasets, Infrastructure, and Security clusters (readiness only, not a legal-conformity guarantee; N/A for non-AI SBOMs)"
+                "BSI/G7 SBOM-for-AI Minimum Elements (joint G7 final, May 2026) READINESS — scores an AI-BOM element-by-element across the Metadata, System-Level, Models, Datasets, Infrastructure, and Security clusters (readiness only, not a legal-conformity guarantee; N/A for non-AI SBOMs)"
             }
             Self::Comprehensive => "All recommended fields and best practices",
         }
@@ -262,7 +279,7 @@ impl ComplianceLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StandardKind {
-    /// EU CRA regulation article (e.g., "Art. 13(4)")
+    /// EU CRA regulation article (e.g., "Art. 13(8)")
     CraArticle,
     /// EU CRA regulation annex (e.g., "Annex I Part II 1")
     CraAnnex,
@@ -286,8 +303,11 @@ pub enum StandardKind {
     NistPqc,
     /// EU AI Act (Regulation (EU) 2024/1689) — Annex IV technical documentation
     EuAiAct,
-    /// BSI/G7 "SBOM for AI — Minimum Elements" (Feb 2026)
+    /// BSI/G7 "SBOM for AI — Minimum Elements" (joint G7 final, May 2026)
     BsiSbomForAi,
+    /// EUCC — European cybersecurity certification scheme on Common Criteria,
+    /// Implementing Regulation (EU) 2024/482
+    Eucc,
     /// Other / unrecognised standard
     Other,
 }
@@ -310,6 +330,7 @@ impl StandardKind {
             Self::NistPqc => "NIST PQC",
             Self::EuAiAct => "EU AI Act",
             Self::BsiSbomForAi => "BSI/G7 AI-SBOM",
+            Self::Eucc => "EUCC",
             Self::Other => "Other",
         }
     }
@@ -363,7 +384,7 @@ impl StandardKind {
     /// The returned URL is the *standard's* root, not a per-clause anchor —
     /// EUR-Lex and most national standards bodies do not publish stable
     /// per-article fragments. Per-article precision lives in the
-    /// `StandardRef::id` (e.g., "Art. 13(4)") rather than the URL.
+    /// `StandardRef::id` (e.g., "Art. 13(8)") rather than the URL.
     #[must_use]
     pub fn canonical_help_uri(self, _id: &str) -> Option<String> {
         let url = match self {
@@ -373,21 +394,22 @@ impl StandardKind {
             }
             // prEN 40000-1-3 is in development; no stable public URL yet.
             Self::Pren40000_1_3 => return None,
-            // BSI TR-03183-2 (English landing page).
-            Self::BsiTr03183_2 => {
-                "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html"
-            }
+            // BSI TR-03183 (BSI's stable English shortlink, printed in the
+            // v2.1.0 document imprint).
+            Self::BsiTr03183_2 => "https://bsi.bund.de/dok/TR-03183-en",
             // NIST SP 800-218 SSDF — DOI is the most stable handle.
             Self::NistSsdf => "https://doi.org/10.6028/NIST.SP.800-218",
             // EO 14028 — Federal Register short-form.
             Self::Eo14028 => "https://www.federalregister.gov/d/2021-10460",
-            // FDA premarket cybersecurity guidance.
-            Self::FdaPremarket => {
-                "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions"
-            }
-            // NTIA SBOM Minimum Elements report.
+            // FDA premarket cybersecurity guidance — current edition is
+            // "Cybersecurity in Medical Devices: Quality Management System
+            // Considerations and Content of Premarket Submissions" (final,
+            // 2026-02-03); FDA's media id is the stable handle.
+            Self::FdaPremarket => "https://www.fda.gov/media/119933/download",
+            // NTIA SBOM Minimum Elements report (canonical host is ntia.gov;
+            // the old ntia.doc.gov URLs only survive via redirect).
             Self::NtiaMinimum => {
-                "https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf"
+                "https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom"
             }
             // CSAF v2.0 OASIS standard.
             Self::Csaf2 => "https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html",
@@ -399,8 +421,14 @@ impl StandardKind {
             Self::NistPqc => "https://csrc.nist.gov/projects/post-quantum-cryptography",
             // EU AI Act Regulation (EU) 2024/1689 — EUR-Lex ELI is the canonical home.
             Self::EuAiAct => "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng",
-            // BSI/G7 "SBOM for AI — Minimum Elements" — BSI is the publishing body.
-            Self::BsiSbomForAi => "https://www.bsi.bund.de",
+            // BSI/G7 "SBOM for AI — Minimum Elements" — final joint G7
+            // guidance (2026-05-12); CISA hosts the stable resource page.
+            Self::BsiSbomForAi => {
+                "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements"
+            }
+            // EUCC Implementing Regulation (EU) 2024/482 — EUR-Lex ELI is the
+            // canonical home.
+            Self::Eucc => "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng",
             Self::Other => return None,
         };
         Some(url.to_string())
@@ -408,7 +436,7 @@ impl StandardKind {
 }
 
 /// A compliance violation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Violation {
     /// Severity: error, warning, info
     pub severity: ViolationSeverity,
@@ -416,8 +444,31 @@ pub struct Violation {
     pub category: ViolationCategory,
     /// Human-readable message
     pub message: String,
-    /// Component or element that violated (if applicable)
+    /// Component or element that violated (if applicable).
+    ///
+    /// This is a human-readable *label* (usually the component name, sometimes
+    /// a format id) and is not unique across versions or duplicate names — use
+    /// [`Violation::component_id`] as the machine-readable join key.
     pub element: Option<String>,
+    /// Canonical id of the offending component, when component-scoped.
+    ///
+    /// Unlike [`Violation::element`], this is a stable join key back to the
+    /// SBOM component (the component's `CanonicalId`), so machine consumers
+    /// can reliably correlate findings with components. `None` for
+    /// document-level and aggregate findings.
+    ///
+    /// Serialized as `component_id`, omitted when `None`; old payloads
+    /// without the field deserialize to `None`.
+    pub component_id: Option<String>,
+    /// Affected/total component counts for aggregate findings.
+    ///
+    /// Mirrors the numbers embedded in the human-readable `message`
+    /// (e.g. "7/10 components (70%)…") in structured form. `None` for
+    /// non-aggregate findings.
+    ///
+    /// Serialized as `counts`, omitted when `None`; old payloads without the
+    /// field deserialize to `None`.
+    pub counts: Option<ViolationCounts>,
     /// Standard/requirement being violated
     pub requirement: String,
     /// Stable internal rule key, set at the check site, indexing into
@@ -426,23 +477,135 @@ pub struct Violation {
     /// and the remediation text. Defaults to `"SBOM-CRA-GENERAL"` for
     /// violations built outside the checker (e.g., from external config).
     ///
-    /// Skipped during (de)serialization: it is a `&'static str` runtime index,
-    /// not part of the JSON contract. Round-tripped payloads resolve back to
-    /// the default; `standard_refs` already carries the serialized references.
-    #[serde(skip, default = "default_rule_id")]
+    /// Serialized as `rule_id` (alongside a derived `sarif_rule_id`; see the
+    /// manual [`Serialize`] impl) so machine consumers get a stable rule key
+    /// instead of regexing the message. Deserialization maps a known id back
+    /// to its registry `&'static str` key and falls back to the generic
+    /// default for unknown ids or old payloads without the field.
     pub rule_id: &'static str,
     /// Structured references to harmonised-standard / regulation clauses.
     ///
     /// Populated by `ComplianceChecker::check()` from [`Violation::rule_id`]
     /// via [`rule_meta`]. Empty when a violation's rule maps to no references.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub standard_refs: Vec<StandardRef>,
+}
+
+/// Affected/total component counts carried by aggregate findings.
+///
+/// Structured mirror of the coverage numbers that aggregate checks embed in
+/// the human-readable message (e.g. "7/10 components (70%)…"), so machine
+/// consumers can extract them without regexing the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViolationCounts {
+    /// Numerator as printed in the message — usually the number of offending
+    /// components; for coverage-style findings ("only X/Y carry …") it is the
+    /// covered count, exactly as the message states it.
+    pub affected: usize,
+    /// Total number of components considered (the message's denominator).
+    pub total: usize,
 }
 
 /// Serde default for [`Violation::rule_id`] when deserializing payloads that
 /// predate the field.
 fn default_rule_id() -> &'static str {
     "SBOM-CRA-GENERAL"
+}
+
+/// Owned mirror of [`Violation`] used for deserialization: `rule_id` arrives
+/// as an owned string (or is absent in old payloads) and is mapped back to
+/// its registry `&'static str` key. A derived `Deserialize` directly on
+/// [`Violation`] would implicitly borrow the `&'static str` field from the
+/// input (`'de: 'static`), which does not hold for streamed payloads.
+#[derive(Deserialize)]
+struct ViolationPayload {
+    severity: ViolationSeverity,
+    category: ViolationCategory,
+    message: String,
+    element: Option<String>,
+    #[serde(default)]
+    component_id: Option<String>,
+    #[serde(default)]
+    counts: Option<ViolationCounts>,
+    requirement: String,
+    #[serde(default)]
+    rule_id: Option<String>,
+    #[serde(default)]
+    standard_refs: Vec<StandardRef>,
+}
+
+impl<'de> Deserialize<'de> for Violation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let payload = ViolationPayload::deserialize(deserializer)?;
+        Ok(Self {
+            severity: payload.severity,
+            category: payload.category,
+            message: payload.message,
+            element: payload.element,
+            component_id: payload.component_id,
+            counts: payload.counts,
+            requirement: payload.requirement,
+            // Unknown ids (from newer/older registries) collapse to the
+            // generic default rather than failing deserialization; the
+            // serialized `sarif_rule_id` companion field is derived, so it
+            // is ignored here.
+            rule_id: payload
+                .rule_id
+                .as_deref()
+                .and_then(lookup_static_rule_id)
+                .unwrap_or_else(default_rule_id),
+            standard_refs: payload.standard_refs,
+        })
+    }
+}
+
+impl Serialize for Violation {
+    /// Manual impl so the JSON carries both the stable internal `rule_id` and
+    /// the externally-visible `sarif_rule_id` derived from the rule registry
+    /// (never stored, so it cannot drift). Field order mirrors declaration
+    /// order; `standard_refs` is skipped when empty, and `component_id` /
+    /// `counts` are skipped when `None`, as their serde-derive
+    /// `skip_serializing_if = "Option::is_none"` equivalents would be.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let has_refs = !self.standard_refs.is_empty();
+        let has_component_id = self.component_id.is_some();
+        let has_counts = self.counts.is_some();
+        let mut state = serializer.serialize_struct(
+            "Violation",
+            7 + usize::from(has_refs) + usize::from(has_component_id) + usize::from(has_counts),
+        )?;
+        state.serialize_field("severity", &self.severity)?;
+        state.serialize_field("category", &self.category)?;
+        state.serialize_field("message", &self.message)?;
+        state.serialize_field("element", &self.element)?;
+        if has_component_id {
+            state.serialize_field("component_id", &self.component_id)?;
+        } else {
+            state.skip_field("component_id")?;
+        }
+        if has_counts {
+            state.serialize_field("counts", &self.counts)?;
+        } else {
+            state.skip_field("counts")?;
+        }
+        state.serialize_field("requirement", &self.requirement)?;
+        state.serialize_field("rule_id", self.rule_id)?;
+        // Same registry lookup + fallback as the SARIF renderer, so the same
+        // violation carries the same external rule id on every surface.
+        state.serialize_field("sarif_rule_id", self.sarif_rule_id())?;
+        if has_refs {
+            state.serialize_field("standard_refs", &self.standard_refs)?;
+        } else {
+            state.skip_field("standard_refs")?;
+        }
+        state.end()
+    }
 }
 
 impl Violation {
@@ -476,6 +639,15 @@ impl Violation {
     pub fn remediation_guidance(&self) -> &'static str {
         rule_meta(self.rule_id).map_or(REMEDIATION_GENERIC, |m| m.remediation)
     }
+
+    /// Externally-visible SARIF rule id for this violation, looked up from
+    /// the rule registry by [`Violation::rule_id`]. Unregistered keys fall
+    /// back to the generic CRA rule — the exact fallback the SARIF renderer
+    /// uses, so JSON and SARIF always agree.
+    #[must_use]
+    pub fn sarif_rule_id(&self) -> &'static str {
+        rule_meta(self.rule_id).map_or("SBOM-CRA-GENERAL", |m| m.sarif_id)
+    }
 }
 
 /// Severity of a compliance violation
@@ -487,6 +659,20 @@ pub enum ViolationSeverity {
     Warning,
     /// Informational recommendation
     Info,
+}
+
+impl ViolationSeverity {
+    /// Canonical display label, matching the strings the reports layer
+    /// (markdown/HTML violation tables) emits. Renderers should use this
+    /// rather than the `Debug` form so the label can't silently drift.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Error => "Error",
+            Self::Warning => "Warning",
+            Self::Info => "Info",
+        }
+    }
 }
 
 /// Category of compliance violation
@@ -561,6 +747,27 @@ impl ViolationCategory {
     }
 }
 
+/// Whether the checked standard actually evaluated this SBOM.
+///
+/// Readiness profiles (EU AI Act, BSI/G7 SBOM-for-AI) return a single Info
+/// violation and `is_compliant = true` for SBOMs outside their scope; that
+/// contract is kept for compatibility, but consumers must render such runs
+/// as N/A — never as a pass. Old payloads without the field deserialize as
+/// `Applicable`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", tag = "status", content = "reason")]
+pub enum Applicability {
+    /// The standard evaluated the SBOM; `is_compliant` is meaningful.
+    #[default]
+    Applicable,
+    /// The standard did not apply (the string is the human-readable reason).
+    NotApplicable(String),
+}
+
+/// Rule ids whose presence marks a result as not applicable (the readiness
+/// profiles emit exactly one of these, as an Info, for out-of-scope SBOMs).
+const NOT_APPLICABLE_RULES: &[&str] = &["SBOM-AIACT-NA", "SBOM-BSIAI-NA"];
+
 /// Result of compliance checking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplianceResult {
@@ -581,6 +788,11 @@ pub struct ComplianceResult {
     /// pinned (explicitly or via sidecar). `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conformity_summary: Option<ConformityAssessmentSummary>,
+    /// Whether the standard actually evaluated this SBOM (see
+    /// [`Applicability`]). `is_compliant` stays `true` for not-applicable
+    /// runs by contract; renderers must show N/A instead of a pass.
+    #[serde(default)]
+    pub applicability: Applicability,
 }
 
 /// Per-route checklist of evidence the CRA Annex VIII conformity-assessment
@@ -627,15 +839,46 @@ impl ComplianceResult {
             .filter(|v| v.severity == ViolationSeverity::Info)
             .count();
 
+        let applicability = violations
+            .iter()
+            .find(|v| NOT_APPLICABLE_RULES.contains(&v.rule_id))
+            .map_or(Applicability::Applicable, |v| {
+                Applicability::NotApplicable(v.message.clone())
+            });
+
         Self {
             is_compliant: error_count == 0,
             level,
             violations,
             conformity_summary: None,
+            applicability,
             error_count,
             warning_count,
             info_count,
         }
+    }
+
+    /// Whether the standard actually evaluated this SBOM.
+    #[must_use]
+    pub fn is_applicable(&self) -> bool {
+        self.applicability == Applicability::Applicable
+    }
+
+    /// Badge/summary compliance score (0–100).
+    ///
+    /// Errors and warnings count against the score; Info findings are
+    /// neutral. (The formula this replaces used `violations.len()` as the
+    /// denominator, so adding Info findings *raised* the score — 5 errors
+    /// alone scored 16 while 5 errors + 20 infos scored 80.) `None` when
+    /// the standard was not applicable — an unevaluated SBOM has no score.
+    #[must_use]
+    pub fn score(&self) -> Option<u8> {
+        if !self.is_applicable() {
+            return None;
+        }
+        let actionable = self.error_count + self.warning_count;
+        #[allow(clippy::cast_possible_truncation)]
+        Some((100 / (actionable + 1)) as u8)
     }
 
     /// Get violations filtered by severity
@@ -673,7 +916,7 @@ pub enum ClassCheck {
     EolComponents,
     /// Dependency cycles detected.
     Cycles,
-    /// Annex VII Declaration-of-Conformity reference missing.
+    /// Annex V Declaration-of-Conformity reference missing.
     DocReference,
     /// EUCC (Common Criteria) reference missing.
     EuccReference,
@@ -698,6 +941,10 @@ pub struct ComplianceChecker {
     /// for `class_severity()` (vendor-hash, EOL, cycles, DoC, EUCC, PSIRT,
     /// attestation). When `None`, behaves as `CraProductClass::Default`.
     product_class: Option<crate::model::CraProductClass>,
+    /// Evaluation clock. `None` means wall clock; pin it (CLI `--as-of`,
+    /// tests) so deadline-sensitive checks (Art. 14 readiness, SBOM age,
+    /// EUCC certificate expiry) are reproducible across runs.
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ComplianceChecker {
@@ -708,7 +955,23 @@ impl ComplianceChecker {
             level,
             sidecar: None,
             product_class: None,
+            as_of: None,
         }
+    }
+
+    /// Pin the evaluation clock. Deadline-sensitive checks (Art. 14
+    /// readiness, SBOM age, EUCC certificate expiry) evaluate against this
+    /// instant instead of the wall clock — reproducible CI runs, testable
+    /// boundary dates.
+    #[must_use]
+    pub const fn with_as_of(mut self, as_of: chrono::DateTime<chrono::Utc>) -> Self {
+        self.as_of = Some(as_of);
+        self
+    }
+
+    /// The evaluation instant: the pinned `as_of` clock, or the wall clock.
+    pub(crate) fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.as_of.unwrap_or_else(chrono::Utc::now)
     }
 
     /// Attach CRA sidecar metadata to supplement SBOM-level fields.
@@ -942,8 +1205,9 @@ mod tests {
         );
     }
 
-    /// BSI TR-03183-2 §5.3 makes component name mandatory; the dedicated BSI
-    /// checker must enforce it (it does not run the generic component check).
+    /// BSI TR-03183-2 §5.2.2 makes component name mandatory; the dedicated
+    /// BSI checker must enforce it (it does not run the generic component
+    /// check).
     #[test]
     fn bsi_gates_on_nameless_component() {
         use crate::model::{Component, DocumentMetadata, NormalizedSbom};
@@ -957,7 +1221,7 @@ mod tests {
             r.violations
                 .iter()
                 .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-3"),
-            "a nameless component must fail BSI §5.3"
+            "a nameless component must fail BSI §5.2.2"
         );
     }
 
@@ -981,12 +1245,1018 @@ mod tests {
         );
     }
 
+    /// "Other Unique Identifiers" is one of the seven NTIA minimum data
+    /// fields; a component without PURL/CPE/SWHID/SWID must fail NtiaMinimum.
+    #[test]
+    fn ntia_gates_on_missing_identifier() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Organization};
+        let mut without_id = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c =
+            Component::new("lib".to_string(), "lib@1".to_string()).with_version("1.0".to_string());
+        c.supplier = Some(Organization::new("LibCorp".to_string()));
+        without_id.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&without_id);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-IDENTIFIER"
+                    && v.severity == ViolationSeverity::Error),
+            "missing unique identifier must fail NTIA"
+        );
+
+        let mut with_id = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/lib@1.0".to_string());
+        c.supplier = Some(Organization::new("LibCorp".to_string()));
+        with_id.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&with_id);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-IDENTIFIER"),
+            "PURL satisfies the NTIA identifier element"
+        );
+    }
+
+    /// Asserted-as-unknown sentinels (NOASSERTION) must not satisfy the NTIA
+    /// version and supplier gates — SPDX copies versionInfo verbatim.
+    #[test]
+    fn placeholder_values_do_not_satisfy_required_elements() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Organization};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+            .with_version("NOASSERTION".to_string())
+            .with_purl("pkg:cargo/lib@1.0".to_string());
+        c.supplier = Some(Organization::new("NOASSERTION".to_string()));
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-VERSION"),
+            "NOASSERTION version must not satisfy the NTIA version element"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-SUPPLIER"),
+            "NOASSERTION supplier must not satisfy the NTIA supplier element"
+        );
+    }
+
+    /// FDA premarket guidance incorporates the NTIA baseline, so a
+    /// timestamp-less SBOM must fail FdaMedicalDevice like it fails NTIA.
+    #[test]
+    fn fda_gates_on_missing_timestamp() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.created = chrono::DateTime::UNIX_EPOCH;
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-TIMESTAMP"
+                    && v.severity == ViolationSeverity::Error),
+            "missing timestamp must fail FDA (NTIA baseline)"
+        );
+    }
+
+    /// FDA §524B requires level-of-support / end-of-support information;
+    /// its absence must at least warn, and lifecycle properties satisfy it.
+    #[test]
+    fn fda_warns_without_support_lifecycle() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Property};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "missing support-lifecycle info must warn under FDA"
+        );
+
+        let mut with_eol = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/lib@1.0".to_string());
+        c.extensions.properties.push(Property {
+            name: "end-of-support".to_string(),
+            value: "2030-01-01".to_string(),
+        });
+        with_eol.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&with_eol);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "component end-of-support property satisfies the FDA support check"
+        );
+    }
+
+    /// EO 14028 §4(e) mandates the NTIA minimum elements, which include the
+    /// creation timestamp.
+    #[test]
+    fn eo14028_gates_on_missing_timestamp() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.created = chrono::DateTime::UNIX_EPOCH;
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-TIMESTAMP"
+                    && v.severity == ViolationSeverity::Error),
+            "missing timestamp must fail EO 14028"
+        );
+
+        let mut with_ts = NormalizedSbom::new(DocumentMetadata::default());
+        with_ts.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&with_ts);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-TIMESTAMP")
+        );
+    }
+
+    /// SPDX 2.2 is an NTIA-accepted format; the EO 14028 machine-readable
+    /// gate must not error on it (SPDX 2.1 and older still fail).
+    #[test]
+    fn eo14028_accepts_spdx_2_2() {
+        use crate::model::{DocumentMetadata, NormalizedSbom, SbomFormat};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.format = SbomFormat::Spdx;
+        sbom.document.spec_version = "2.2".to_string();
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-FORMAT"),
+            "SPDX 2.2 is machine-readable under EO 14028"
+        );
+
+        sbom.document.spec_version = "2.1".to_string();
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-FORMAT"),
+            "SPDX 2.1 still fails the machine-readable gate"
+        );
+    }
+
+    /// SWHID-only components carry a valid unique identifier; EO 14028 and
+    /// SSDF identifier checks must not flag them.
+    #[test]
+    fn eo14028_and_ssdf_accept_swhid_identifiers() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, SwhidObject};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c =
+            Component::new("lib".to_string(), "lib@1".to_string()).with_version("1.0".to_string());
+        c.identifiers.swhid.push(
+            SwhidObject::parse("swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2").unwrap(),
+        );
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::Eo14028).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-EO14028-IDENTIFIER"),
+            "SWHID satisfies the EO 14028 identifier element"
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::NistSsdf).check(&sbom);
+        assert!(
+            !r.violations.iter().any(|v| v.rule_id == "SBOM-SSDF-RV1"),
+            "SWHID satisfies the SSDF RV.1 identifier check"
+        );
+    }
+
+    /// A single token edge among many components must not satisfy the NTIA
+    /// dependency-relationship element; declared-incomplete SBOMs are exempt.
+    #[test]
+    fn dependency_graph_orphans_warn() {
+        use crate::model::{
+            CompletenessDeclaration, Component, DependencyEdge, DependencyType, DocumentMetadata,
+            NormalizedSbom,
+        };
+        let build = || {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut ids = Vec::new();
+            for i in 0..5 {
+                let c = Component::new(format!("lib{i}"), format!("lib{i}@1"))
+                    .with_version("1.0".to_string())
+                    .with_purl(format!("pkg:cargo/lib{i}@1.0"));
+                ids.push(c.canonical_id.clone());
+                sbom.add_component(c);
+            }
+            // One edge between two leaves; the other three stay orphaned.
+            sbom.edges.push(DependencyEdge::new(
+                ids[0].clone(),
+                ids[1].clone(),
+                DependencyType::DependsOn,
+            ));
+            sbom
+        };
+
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&build());
+        assert!(
+            r.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
+            "3/5 orphaned components must produce a dependency-coverage warning"
+        );
+
+        let mut declared = build();
+        declared.document.completeness_declaration = CompletenessDeclaration::Incomplete;
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&declared);
+        assert!(
+            !r.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
+            "declared-incomplete SBOMs are exempt from the orphan warning"
+        );
+    }
+
+    /// The primary product component must participate in the dependency
+    /// graph — a root with zero relationships does not describe the product.
+    #[test]
+    fn primary_component_must_participate_in_graph() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, NormalizedSbom,
+        };
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let app = Component::new("app".to_string(), "app".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/app@1.0".to_string());
+        let lib_a = Component::new("liba".to_string(), "liba".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/liba@1.0".to_string());
+        let lib_b = Component::new("libb".to_string(), "libb".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/libb@1.0".to_string());
+        let app_id = app.canonical_id.clone();
+        let a_id = lib_a.canonical_id.clone();
+        let b_id = lib_b.canonical_id.clone();
+        sbom.primary_component_id = Some(app_id.clone());
+        sbom.add_component(app);
+        sbom.add_component(lib_a);
+        sbom.add_component(lib_b);
+        // Edge between the two libs only; the primary is disconnected.
+        sbom.edges.push(DependencyEdge::new(
+            a_id.clone(),
+            b_id,
+            DependencyType::DependsOn,
+        ));
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.message.contains("Primary component")
+                    && v.message.contains("no dependency relationship")),
+            "disconnected primary component must warn"
+        );
+
+        // Connect the primary → warning disappears.
+        sbom.edges
+            .push(DependencyEdge::new(app_id, a_id, DependencyType::DependsOn));
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.message.contains("Primary component")
+                    && v.message.contains("no dependency relationship"))
+        );
+    }
+
+    /// CRA Art. 24 steward SBOMs still need versioned, identified components
+    /// and dependency relationships — the per-component gates used to skip
+    /// the CraOssSteward level entirely (vacuous "SBOM completeness").
+    #[test]
+    fn oss_steward_enforces_component_completeness() {
+        use crate::model::{Component, DocumentMetadata, ExternalRefType, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        // Steward vuln-handling satisfied so only completeness is under test.
+        sbom.document.vulnerability_disclosure_url =
+            Some("https://example.org/security".to_string());
+        for n in ["a", "b", "c"] {
+            let mut c = Component::new(n.to_string(), n.to_string());
+            c.external_refs.push(crate::model::ExternalReference {
+                ref_type: ExternalRefType::Advisories,
+                url: "https://example.org/advisories".to_string(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+            sbom.add_component(c);
+        }
+        let r = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-COMPONENT-VERSION"
+                    && v.severity == ViolationSeverity::Error),
+            "steward components without versions must error"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-I-IDENTIFIER"
+                    && v.severity == ViolationSeverity::Error),
+            "steward components without identifiers must error"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-I-DEPENDENCY"
+                    && v.severity == ViolationSeverity::Error),
+            "steward SBOM without dependency edges must error"
+        );
+        assert!(!r.is_compliant, "incomplete steward SBOM must not pass");
+    }
+
+    /// A third-party dependency's upstream advisories/support refs must not
+    /// satisfy the manufacturer's Art. 13(17) contact / Annex I Part II (5)
+    /// CVD-policy obligations.
+    #[test]
+    fn third_party_refs_do_not_satisfy_manufacturer_obligations() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, ExternalRefType,
+            ExternalReference, NormalizedSbom,
+        };
+        let build = |primary_has_contact: bool| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut app = Component::new("app".to_string(), "app".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/app@1.0".to_string());
+            if primary_has_contact {
+                app.external_refs.push(ExternalReference {
+                    ref_type: ExternalRefType::SecurityContact,
+                    url: "https://acme.example/security".to_string(),
+                    comment: None,
+                    hashes: Vec::new(),
+                });
+                app.external_refs.push(ExternalReference {
+                    ref_type: ExternalRefType::Advisories,
+                    url: "https://acme.example/advisories".to_string(),
+                    comment: None,
+                    hashes: Vec::new(),
+                });
+            }
+            // Third-party dep carrying its own upstream refs.
+            let mut lodash = Component::new("lodash".to_string(), "lodash".to_string())
+                .with_version("4.17.21".to_string())
+                .with_purl("pkg:npm/lodash@4.17.21".to_string());
+            lodash.external_refs.push(ExternalReference {
+                ref_type: ExternalRefType::Advisories,
+                url: "https://github.com/lodash/lodash/security/advisories".to_string(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+            lodash.external_refs.push(ExternalReference {
+                ref_type: ExternalRefType::Support,
+                url: "https://lodash.com/docs".to_string(),
+                comment: None,
+                hashes: Vec::new(),
+            });
+            let app_id = app.canonical_id.clone();
+            let lodash_id = lodash.canonical_id.clone();
+            sbom.primary_component_id = Some(app_id.clone());
+            sbom.add_component(app);
+            sbom.add_component(lodash);
+            sbom.edges.push(DependencyEdge::new(
+                app_id,
+                lodash_id,
+                DependencyType::DependsOn,
+            ));
+            sbom
+        };
+
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(false));
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-17-CONTACT"),
+            "dep-level advisories/support refs must not satisfy Art. 13(17)"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-CVD-POLICY"),
+            "dep-level advisories ref must not satisfy Annex I Part II (5)"
+        );
+
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(true));
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-17-CONTACT"),
+            "primary-component security contact satisfies Art. 13(17)"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-CVD-POLICY"),
+            "primary-component advisories ref satisfies Annex I Part II (5)"
+        );
+    }
+
+    /// Pinning an explicit product class must never weaken the phase-based
+    /// vendor-hash gate: 40% coverage is an Error under CraPhase2 regardless
+    /// of a pinned Important-1 class (whose own threshold severity is softer).
+    #[test]
+    fn explicit_product_class_never_weakens_vendor_hash_gate() {
+        use crate::model::CraProductClass;
+        let mut sbom = NormalizedSbom::default();
+        for n in ["a", "b", "c", "d"] {
+            let c = vendor_component(n, true);
+            sbom.components.insert(c.canonical_id.clone(), c);
+        }
+        for n in ["e", "f", "g", "h", "i", "j"] {
+            let c = vendor_component(n, false);
+            sbom.components.insert(c.canonical_id.clone(), c);
+        }
+        let result = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::ImportantClass1)
+            .check(&sbom);
+        let v = result.violations.iter().find(|v| {
+            v.requirement.contains("PRE-7-RQ-07-RE") && v.severity == ViolationSeverity::Error
+        });
+        assert!(
+            v.is_some(),
+            "40% coverage must stay an Error under CraPhase2 even with an explicit class"
+        );
+    }
+
+    /// The sidecar's dedicated EUCC evidence fields must satisfy the
+    /// Critical-class EUCC reference check (not just URL substrings).
+    #[test]
+    fn eucc_sidecar_fields_satisfy_critical_class_check() {
+        use crate::model::{Component, CraProductClass, CraSidecarMetadata, DocumentMetadata};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("fw".to_string(), "fw".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:generic/fw@1.0".to_string()),
+        );
+
+        let bare = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::Critical)
+            .check(&sbom);
+        assert!(
+            bare.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-IV"),
+            "Critical class without EUCC evidence must flag Annex IV"
+        );
+
+        let sidecar = CraSidecarMetadata {
+            eucc_protection_profile_id: Some("PP-CC-MFR-2024-01".to_string()),
+            eucc_target_of_evaluation: Some("TOE-fw-1.0".to_string()),
+            ..Default::default()
+        };
+        let with_sidecar = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::Critical)
+            .with_sidecar(sidecar)
+            .check(&sbom);
+        assert!(
+            !with_sidecar
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-IV"),
+            "sidecar EUCC evidence fields must satisfy the Critical-class check"
+        );
+    }
+
+    /// Genuine packages named "none"/"unknown" (corroborated by PURL) must
+    /// not fail the name gate; NOASSERTION always fails it.
+    #[test]
+    fn genuine_none_named_package_passes_name_gate() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Organization};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut c = Component::new("none".to_string(), "none@1".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:npm/none@1.0.0".to_string());
+        c.supplier = Some(Organization::new("Acme".to_string()));
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !r.violations.iter().any(|v| v.rule_id == "SBOM-NTIA-NAME"),
+            "npm package genuinely named 'none' must not fail the name gate"
+        );
+
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("NOASSERTION".to_string(), "x@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:npm/realname@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            r.violations.iter().any(|v| v.rule_id == "SBOM-NTIA-NAME"),
+            "NOASSERTION never satisfies the name gate"
+        );
+    }
+
+    /// Lifecycle-evidence property matching is token-based with a real
+    /// value — "geolocation" must not satisfy the FDA support element.
+    #[test]
+    fn fda_support_not_satisfied_by_incidental_eol_substring() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom, Property};
+        let build = |name: &str, value: &str| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let mut c = Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string());
+            c.extensions.properties.push(Property {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
+            sbom.add_component(c);
+            ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom)
+        };
+        assert!(
+            build("geolocation", "enabled")
+                .violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "'geolocation' must not satisfy the support-lifecycle element"
+        );
+        assert!(
+            build("acme:eol", "2030-01-01")
+                .violations
+                .iter()
+                .all(|v| !v.requirement.contains("Level of support")),
+            "a real eol property with a value satisfies the element"
+        );
+        assert!(
+            build("end-of-support", "NOASSERTION")
+                .violations
+                .iter()
+                .any(|v| v.requirement.contains("Level of support")),
+            "a placeholder value must not satisfy the element"
+        );
+    }
+
+    /// A primary component that positively declares "no dependencies"
+    /// (CycloneDX empty dependsOn, preserved as a synthetic property) is
+    /// documented — the participation warning must not fire.
+    #[test]
+    fn primary_with_declared_empty_deps_does_not_warn() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, NormalizedSbom, Property,
+        };
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut app = Component::new("app".to_string(), "app".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/app@1.0".to_string());
+        app.extensions.properties.push(Property {
+            name: crate::parsers::DECLARED_NO_DEPENDENCIES_PROPERTY.to_string(),
+            value: "true".to_string(),
+        });
+        let lib_a = Component::new("liba".to_string(), "liba".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/liba@1.0".to_string());
+        let lib_b = Component::new("libb".to_string(), "libb".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/libb@1.0".to_string());
+        let app_id = app.canonical_id.clone();
+        let a_id = lib_a.canonical_id.clone();
+        let b_id = lib_b.canonical_id.clone();
+        sbom.primary_component_id = Some(app_id);
+        sbom.add_component(app);
+        sbom.add_component(lib_a);
+        sbom.add_component(lib_b);
+        sbom.edges
+            .push(DependencyEdge::new(a_id, b_id, DependencyType::DependsOn));
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.message.contains("Primary component")),
+            "declared-no-dependencies primary must not warn"
+        );
+    }
+
+    /// FDA keeps the retired fast-path's any-orphan sensitivity; other
+    /// standards only warn on a majority of orphans.
+    #[test]
+    fn fda_warns_on_minority_orphans() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, NormalizedSbom,
+        };
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let c = Component::new(format!("lib{i}"), format!("lib{i}@1"))
+                .with_version("1.0".to_string())
+                .with_purl(format!("pkg:cargo/lib{i}@1.0"));
+            ids.push(c.canonical_id.clone());
+            sbom.add_component(c);
+        }
+        // 3 of 4 connected, 1 orphan (minority).
+        sbom.edges.push(DependencyEdge::new(
+            ids[0].clone(),
+            ids[1].clone(),
+            DependencyType::DependsOn,
+        ));
+        sbom.edges.push(DependencyEdge::new(
+            ids[1].clone(),
+            ids[2].clone(),
+            DependencyType::DependsOn,
+        ));
+        let fda = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            fda.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
+            "FDA warns on any orphaned component"
+        );
+        let ntia = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(
+            !ntia.violations.iter().any(|v| v
+                .message
+                .contains("participate in no dependency relationship")),
+            "NTIA only warns when orphans form a majority"
+        );
+    }
+
+    /// FDA rule identity: dependency, creator, and serial findings must
+    /// carry FDA rule ids, not NTIA/CRA ones.
+    #[test]
+    fn fda_findings_carry_fda_rule_ids() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.creators.clear();
+        for i in 0..2 {
+            sbom.add_component(
+                Component::new(format!("lib{i}"), format!("lib{i}@1"))
+                    .with_version("1.0".to_string())
+                    .with_purl(format!("pkg:cargo/lib{i}@1.0")),
+            );
+        }
+        let r = ComplianceChecker::new(ComplianceLevel::FdaMedicalDevice).check(&sbom);
+        assert!(
+            r.violations.iter().any(|v| v.rule_id == "SBOM-FDA-CREATOR"),
+            "creators-empty must carry SBOM-FDA-CREATOR under FDA"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-FDA-DEPENDENCY"),
+            "dependency findings must carry SBOM-FDA-DEPENDENCY under FDA"
+        );
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-FDA-NAMESPACE"),
+            "serial-number finding must carry SBOM-FDA-NAMESPACE under FDA"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-NTIA-DEPENDENCY"),
+            "FDA runs must not emit NTIA dependency rule identity"
+        );
+    }
+
+    /// Sidecar EUCC evidence must be live: empty strings and expired
+    /// validity dates must not satisfy the Critical-class Annex IV gate.
+    #[test]
+    fn eucc_sidecar_empty_or_expired_evidence_does_not_satisfy() {
+        use crate::model::{Component, CraProductClass, CraSidecarMetadata, DocumentMetadata};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("fw".to_string(), "fw".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:generic/fw@1.0".to_string()),
+        );
+        let check = |sidecar: CraSidecarMetadata| {
+            ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                .with_product_class(CraProductClass::Critical)
+                .with_sidecar(sidecar)
+                .check(&sbom)
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ANNEX-IV")
+        };
+        assert!(
+            check(CraSidecarMetadata {
+                eucc_protection_profile_id: Some("  ".to_string()),
+                ..Default::default()
+            }),
+            "an empty-string EUCC field must not satisfy the Annex IV gate"
+        );
+        assert!(
+            check(CraSidecarMetadata {
+                eucc_valid_until: Some(chrono::Utc::now() - chrono::Duration::days(365)),
+                ..Default::default()
+            }),
+            "an expired EUCC validity date must not satisfy the Annex IV gate"
+        );
+        assert!(
+            !check(CraSidecarMetadata {
+                eucc_valid_until: Some(chrono::Utc::now() + chrono::Duration::days(365)),
+                ..Default::default()
+            }),
+            "a live EUCC validity date satisfies the Annex IV gate"
+        );
+    }
+
+    /// Steward supplier findings cite Art. 24 in their structured refs, not
+    /// the exempted Art. 13(16) manufacturer-identification obligation.
+    #[test]
+    fn steward_supplier_refs_cite_art_24() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.document.vulnerability_disclosure_url =
+            Some("https://example.org/security".to_string());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
+        let v = r
+            .violations
+            .iter()
+            .find(|v| v.rule_id == "SBOM-CRA-ART-24-SUPPLIER")
+            .expect("steward supplier warning fires");
+        assert!(
+            v.standard_refs
+                .iter()
+                .all(|sr| sr.id != "Art. 13(15)" && sr.id != "Art. 13(16)"),
+            "steward supplier refs must not cite Art. 13(15)/13(16)"
+        );
+        assert!(
+            v.standard_refs.iter().any(|sr| sr.id == "Art. 24"),
+            "steward supplier refs must cite Art. 24"
+        );
+    }
+
+    /// Manufacturer scope: cyclic graphs fall back to all components, and a
+    /// primary does not exclude sibling root products.
+    #[test]
+    fn manufacturer_scope_handles_cycles_and_sibling_roots() {
+        use crate::model::{
+            Component, DependencyEdge, DependencyType, DocumentMetadata, ExternalRefType,
+            ExternalReference, NormalizedSbom,
+        };
+        // Cyclic: a <-> b, no primary; evidence on a must still count.
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        let mut a = Component::new("liba".to_string(), "liba".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/liba@1.0".to_string());
+        a.external_refs.push(ExternalReference {
+            ref_type: ExternalRefType::SecurityContact,
+            url: "https://acme.example/security".to_string(),
+            comment: None,
+            hashes: Vec::new(),
+        });
+        let b = Component::new("libb".to_string(), "libb".to_string())
+            .with_version("1.0".to_string())
+            .with_purl("pkg:cargo/libb@1.0".to_string());
+        let a_id = a.canonical_id.clone();
+        let b_id = b.canonical_id.clone();
+        sbom.add_component(a);
+        sbom.add_component(b);
+        sbom.edges.push(DependencyEdge::new(
+            a_id.clone(),
+            b_id.clone(),
+            DependencyType::DependsOn,
+        ));
+        sbom.edges
+            .push(DependencyEdge::new(b_id, a_id, DependencyType::DependsOn));
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CRA-ART-13-17-CONTACT"),
+            "evidence in a fully-cyclic graph must still count (fallback to all components)"
+        );
+    }
+
+    /// Dependency cycles fire the ClassCheck::Cycles calibration: Warning at
+    /// Default class, Error at Important-2/Critical; acyclic graphs are silent.
+    #[test]
+    fn cra_dependency_cycles_scale_with_product_class() {
+        use crate::model::{
+            Component, CraProductClass, DependencyEdge, DependencyType, DocumentMetadata,
+            NormalizedSbom,
+        };
+        let build = |cyclic: bool| {
+            let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+            let a = Component::new("liba".to_string(), "liba".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/liba@1.0".to_string());
+            let b = Component::new("libb".to_string(), "libb".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/libb@1.0".to_string());
+            let a_id = a.canonical_id.clone();
+            let b_id = b.canonical_id.clone();
+            sbom.add_component(a);
+            sbom.add_component(b);
+            sbom.edges.push(DependencyEdge::new(
+                a_id.clone(),
+                b_id.clone(),
+                DependencyType::DependsOn,
+            ));
+            if cyclic {
+                sbom.edges
+                    .push(DependencyEdge::new(b_id, a_id, DependencyType::DependsOn));
+            }
+            sbom
+        };
+
+        let cycles = |r: &ComplianceResult| {
+            r.violations
+                .iter()
+                .find(|v| v.rule_id == "SBOM-CRA-CYCLES")
+                .map(|v| v.severity)
+        };
+
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(true));
+        assert_eq!(
+            cycles(&r),
+            Some(ViolationSeverity::Warning),
+            "cycles warn at the default class"
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+            .with_product_class(CraProductClass::Critical)
+            .check(&build(true));
+        assert_eq!(
+            cycles(&r),
+            Some(ViolationSeverity::Error),
+            "cycles error at Critical class"
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&build(false));
+        assert_eq!(cycles(&r), None, "acyclic graphs are silent");
+    }
+
+    /// A readiness standard that never evaluated the SBOM must expose
+    /// NotApplicable and no score — is_compliant stays true by contract.
+    #[test]
+    fn not_applicable_result_has_no_score() {
+        use crate::model::{Component, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let r = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        assert!(!r.is_applicable(), "non-AI SBOM must be NotApplicable");
+        assert!(
+            matches!(r.applicability, Applicability::NotApplicable(_)),
+            "applicability must carry the reason"
+        );
+        assert_eq!(r.score(), None, "unevaluated SBOMs have no score");
+        assert!(r.is_compliant, "the N/A is_compliant contract is preserved");
+
+        // An applicable run keeps a real score.
+        let r = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(&sbom);
+        assert!(r.is_applicable());
+        assert!(r.score().is_some());
+    }
+
+    /// Info findings must not move the score: 5 errors alone and 5 errors +
+    /// 20 infos used to score 16 vs 80 because infos inflated the
+    /// denominator.
+    #[test]
+    fn score_is_neutral_to_info_findings() {
+        let violation = |severity| Violation {
+            severity,
+            category: ViolationCategory::DocumentMetadata,
+            message: "x".to_string(),
+            element: None,
+            requirement: "x".to_string(),
+            rule_id: "SBOM-CRA-GENERAL",
+            component_id: None,
+            counts: None,
+            standard_refs: Vec::new(),
+        };
+        let errors_only = ComplianceResult::new(
+            ComplianceLevel::NtiaMinimum,
+            (0..5)
+                .map(|_| violation(ViolationSeverity::Error))
+                .collect(),
+        );
+        let with_infos = ComplianceResult::new(
+            ComplianceLevel::NtiaMinimum,
+            (0..5)
+                .map(|_| violation(ViolationSeverity::Error))
+                .chain((0..20).map(|_| violation(ViolationSeverity::Info)))
+                .collect(),
+        );
+        assert_eq!(errors_only.score(), with_infos.score());
+        assert_eq!(errors_only.score(), Some(16));
+        let clean = ComplianceResult::new(ComplianceLevel::NtiaMinimum, Vec::new());
+        assert_eq!(clean.score(), Some(100));
+    }
+
+    /// Payloads that predate the applicability field deserialize as
+    /// Applicable.
+    #[test]
+    fn applicability_defaults_on_old_payloads() {
+        let r = ComplianceResult::new(ComplianceLevel::NtiaMinimum, Vec::new());
+        let mut json: serde_json::Value = serde_json::to_value(&r).unwrap();
+        json.as_object_mut().unwrap().remove("applicability");
+        let back: ComplianceResult = serde_json::from_value(json).unwrap();
+        assert_eq!(back.applicability, Applicability::Applicable);
+    }
+
+    /// A pinned evaluation clock makes deadline-sensitive checks
+    /// deterministic: Art. 14 severity flips across 2026-09-11, and EUCC
+    /// certificate expiry evaluates against the pinned instant.
+    #[test]
+    fn as_of_clock_pins_deadline_checks() {
+        use crate::model::{Component, CraSidecarMetadata, DocumentMetadata, NormalizedSbom};
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        sbom.add_component(
+            Component::new("lib".to_string(), "lib@1".to_string())
+                .with_version("1.0".to_string())
+                .with_purl("pkg:cargo/lib@1.0".to_string()),
+        );
+        let ts = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+
+        // Art. 14: Info before the 2026-09-11 application date, stronger after.
+        let art14_severity = |as_of: &str| {
+            ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                .with_as_of(ts(as_of))
+                .check(&sbom)
+                .violations
+                .iter()
+                .find(|v| v.requirement.contains("Art. 14(2)(a)"))
+                .map(|v| v.severity)
+        };
+        assert_eq!(
+            art14_severity("2026-01-01T00:00:00Z"),
+            Some(ViolationSeverity::Info),
+            "pre-deadline Art. 14 findings are informational"
+        );
+        assert_eq!(
+            art14_severity("2027-01-01T00:00:00Z"),
+            Some(ViolationSeverity::Warning),
+            "post-deadline Art. 14 findings escalate"
+        );
+
+        // EUCC certificate expiry against the pinned clock.
+        let sidecar = CraSidecarMetadata {
+            eucc_protection_profile_id: Some("PP-1".to_string()),
+            eucc_target_of_evaluation: Some("TOE-1".to_string()),
+            eucc_itsef_identifier: Some("ITSEF-1".to_string()),
+            eucc_valid_until: Some(ts("2027-06-01T00:00:00Z")),
+            ..Default::default()
+        };
+        let eucc_expired = |as_of: &str| {
+            ComplianceChecker::new(ComplianceLevel::EuccSubstantial)
+                .with_sidecar(sidecar.clone())
+                .with_as_of(ts(as_of))
+                .check(&sbom)
+                .violations
+                .iter()
+                .any(|v| {
+                    v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-EUCC-VALIDITY"
+                })
+        };
+        assert!(
+            !eucc_expired("2027-01-01T00:00:00Z"),
+            "certificate valid at the pinned instant"
+        );
+        assert!(
+            eucc_expired("2028-01-01T00:00:00Z"),
+            "certificate expired at the pinned instant"
+        );
+    }
+
     #[test]
     fn test_compliance_level_names() {
         assert_eq!(ComplianceLevel::Minimum.name(), "Minimum");
         assert_eq!(ComplianceLevel::NtiaMinimum.name(), "NTIA Minimum Elements");
-        assert_eq!(ComplianceLevel::CraPhase1.name(), "EU CRA Phase 1 (2027)");
-        assert_eq!(ComplianceLevel::CraPhase2.name(), "EU CRA Phase 2 (2029)");
+        assert_eq!(ComplianceLevel::CraPhase1.name(), "EU CRA Phase 1 (2026)");
+        assert_eq!(ComplianceLevel::CraPhase2.name(), "EU CRA Phase 2 (2027)");
         assert_eq!(ComplianceLevel::NistSsdf.name(), "NIST SSDF (SP 800-218)");
         assert_eq!(ComplianceLevel::Eo14028.name(), "EO 14028 Section 4");
     }
@@ -1028,6 +2298,8 @@ mod tests {
                 element: None,
                 requirement: "Test".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             },
             Violation {
@@ -1037,6 +2309,8 @@ mod tests {
                 element: None,
                 requirement: "Test".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             },
             Violation {
@@ -1046,6 +2320,8 @@ mod tests {
                 element: None,
                 requirement: "Test".to_string(),
                 rule_id: "SBOM-CRA-GENERAL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             },
         ];
@@ -1222,6 +2498,877 @@ mod tests {
         );
     }
 
+    /// CNSA 2.0 is an exclusive allowlist: everything recognized but not on
+    /// it must Error — broken hashes, classical PK (including the families the
+    /// old blocklist missed: Ed25519/ECIES), non-CNSA symmetric ciphers,
+    /// sub-1024 or parameterless ML-KEM, and round-3 PQC names.
+    #[test]
+    fn cnsa2_allowlist_rejects_non_cnsa_algorithms() {
+        for (family, param, expected_rule) in [
+            ("SHA-1", None, "SBOM-CNSA2-ALG-005"),
+            ("DES", None, "SBOM-CNSA2-ALG-005"),
+            ("ChaCha20", None, "SBOM-CNSA2-ALG-008"),
+            ("Ed25519", None, "SBOM-CNSA2-ALG-006"),
+            ("ECIES", None, "SBOM-CNSA2-ALG-006"),
+            ("EC", None, "SBOM-CNSA2-ALG-006"),
+            ("Kyber", Some("768"), "SBOM-CNSA2-ALG-003"),
+            ("ML-KEM-768", None, "SBOM-CNSA2-ALG-003"),
+            ("ML-KEM", None, "SBOM-CNSA2-ALG-003"), // absent parameter set
+            ("ML-DSA", Some("65"), "SBOM-CNSA2-ALG-004"),
+            ("SLH-DSA", None, "SBOM-CNSA2-ALG-008"),
+            ("SHA-3", Some("256"), "SBOM-CNSA2-ALG-008"),
+            ("AES-128", None, "SBOM-CNSA2-ALG-001"), // size in family string
+        ] {
+            let sbom = make_crypto_sbom(&[("asset", family, param, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                result.violations.iter().any(|v| {
+                    v.severity == ViolationSeverity::Error && v.rule_id == expected_rule
+                }),
+                "{family}/{param:?} must fail CNSA 2.0 with {expected_rule}; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+            assert!(!result.is_compliant, "{family} must not be CNSA compliant");
+        }
+    }
+
+    /// The full CNSA 2.0 suite passes the allowlist with zero errors:
+    /// AES-256, SHA-384, ML-KEM-1024, ML-DSA-87, and SP 800-208 LMS.
+    #[test]
+    fn cnsa2_allowlist_accepts_full_cnsa_suite() {
+        let sbom = make_crypto_sbom(&[
+            ("AES-256-GCM", "AES", Some("256"), Some(1)),
+            ("SHA-384", "SHA-2", Some("384"), Some(2)),
+            ("ML-KEM-1024", "ML-KEM", Some("1024"), Some(5)),
+            ("ML-DSA-87", "ML-DSA", Some("87"), Some(5)),
+            ("LMS", "LMS", None, Some(5)),
+        ]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        let errors: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.severity == ViolationSeverity::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "full CNSA 2.0 suite must have zero errors, got {:?}",
+            errors
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(result.is_compliant);
+    }
+
+    /// Unrecognizable algorithms must not silently pass CNSA 2.0: they get a
+    /// "cannot verify" Warning (not an Error, not a pass).
+    #[test]
+    fn cnsa2_unknown_algorithm_warns() {
+        let sbom = make_crypto_sbom(&[("mystery", "proprietary-frobnicator", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning && v.rule_id == "SBOM-CNSA2-ALG-UNKNOWN"
+            }),
+            "unknown algorithm must produce the cannot-verify warning"
+        );
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Error
+                    && v.rule_id.starts_with("SBOM-CNSA2-ALG")),
+            "unknown algorithm must not produce an algorithm Error"
+        );
+    }
+
+    /// A CycloneDX 1.6-style asset (no algorithmFamily) must still be
+    /// classified — via OID, or via the component name when both family and
+    /// OID are absent.
+    #[test]
+    fn cnsa2_classifies_without_algorithm_family() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+        };
+        let mut sbom = NormalizedSbom::default();
+        // RSA via OID only.
+        let mut rsa = crate::model::Component::new("RSA-2048".into(), "algo-1".into());
+        rsa.component_type = ComponentType::Cryptographic;
+        rsa.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm)
+                .with_oid("1.2.840.113549.1.1.1".into())
+                .with_algorithm_properties(AlgorithmProperties::new(CryptoPrimitive::Pke)),
+        );
+        sbom.add_component(rsa);
+        // AES-128 via name only.
+        let mut aes = crate::model::Component::new("AES-128-CBC".into(), "algo-2".into());
+        aes.component_type = ComponentType::Cryptographic;
+        aes.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm)
+                .with_algorithm_properties(AlgorithmProperties::new(CryptoPrimitive::BlockCipher)),
+        );
+        sbom.add_component(aes);
+
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-006" && v.message.contains("RSA")),
+            "RSA must be flagged via OID without algorithmFamily"
+        );
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-001" && v.message.contains("AES-128")),
+            "AES-128 must be flagged via name without algorithmFamily/OID"
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-001" && v.message.contains("RSA")),
+            "PQC must flag OID-only RSA as quantum-vulnerable"
+        );
+    }
+
+    /// Spelling variants of broken algorithms must not escape SP 800-131A
+    /// detection under PQC.
+    #[test]
+    fn pqc_flags_broken_spelling_variants() {
+        for family in ["SHA1", "TDES", "ARC4"] {
+            let sbom = make_crypto_sbom(&[("legacy", family, None, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-PQC-005"),
+                "{family} must fail SP 800-131A broken-algorithm detection"
+            );
+        }
+        // Silent case: a healthy modern hash raises no broken-algorithm error.
+        let ok = make_crypto_sbom(&[("hash", "SHA-384", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-005"),
+            "SHA-384 must not be reported broken"
+        );
+    }
+
+    fn make_protocol_sbom(version: &str, suite_name: &str, suite_algos: &[&str]) -> NormalizedSbom {
+        use crate::model::{
+            CipherSuite, ComponentType, CryptoAssetType, CryptoProperties, ProtocolProperties,
+            ProtocolType,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = crate::model::Component::new("tls-endpoint".into(), "proto-1".into());
+        c.component_type = ComponentType::Cryptographic;
+        c.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Protocol).with_protocol_properties(
+                ProtocolProperties::new(ProtocolType::Tls)
+                    .with_version(version.to_string())
+                    .with_cipher_suites(vec![CipherSuite {
+                        name: Some(suite_name.to_string()),
+                        algorithms: suite_algos.iter().map(ToString::to_string).collect(),
+                        identifiers: Vec::new(),
+                    }]),
+            ),
+        );
+        sbom.add_component(c);
+        sbom
+    }
+
+    /// A TLS 1.0 protocol asset with a legacy cipher suite must fail BOTH
+    /// standards — previously protocols satisfied the inventory gate but
+    /// received zero evaluation.
+    #[test]
+    fn protocol_tls10_rc4_fails_both_standards() {
+        let sbom = make_protocol_sbom("1.0", "TLS_RSA_WITH_RC4_128_SHA", &[]);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(!cnsa.is_compliant, "TLS 1.0 must fail CNSA 2.0");
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "TLS 1.0 must trip the CNSA TLS-1.3 version gate"
+        );
+        assert!(
+            cnsa.violations.iter().any(|v| {
+                v.rule_id == "SBOM-CNSA2-PROTO-002"
+                    && v.message.contains("RC4")
+                    && v.message.contains("RSA")
+            }),
+            "cipher-suite scan must flag RC4 and RSA; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| v.message.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(!pqc.is_compliant, "TLS 1.0 must fail PQC readiness");
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-001"),
+            "TLS 1.0 must trip the PQC minimum-version gate"
+        );
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-002" && v.message.contains("broken")),
+            "cipher-suite scan must flag broken algorithms under PQC"
+        );
+    }
+
+    /// Silent case: TLS 1.3 with a CNSA 2.0 cipher suite passes both
+    /// standards' protocol checks.
+    #[test]
+    fn protocol_tls13_cnsa_suite_passes() {
+        let sbom = make_protocol_sbom("1.3", "TLS_AES_256_GCM_SHA384", &[]);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            !cnsa
+                .violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-CNSA2-PROTO")),
+            "TLS 1.3 + CNSA suite must raise no CNSA protocol violations; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| v.message.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(cnsa.is_compliant);
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            !pqc.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-PQC-PROTO")),
+            "TLS 1.3 + CNSA suite must raise no PQC protocol violations"
+        );
+    }
+
+    /// TLS 1.2 fails the CNSA 2.0 TLS-1.3 gate but passes the PQC
+    /// minimum-version gate (>= 1.2).
+    #[test]
+    fn protocol_tls12_fails_cnsa_only() {
+        let sbom = make_protocol_sbom("1.2", "TLS_AES_256_GCM_SHA384", &[]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "TLS 1.2 must fail the CNSA 2.0 version gate"
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            !pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-001"),
+            "TLS 1.2 must pass the PQC minimum-version gate"
+        );
+    }
+
+    /// Cipher-suite algorithm bom-refs are resolved through the SBOM index
+    /// and classified — even when the ref string itself is opaque.
+    #[test]
+    fn protocol_resolves_cipher_suite_algorithm_refs() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+        };
+        let mut sbom = make_protocol_sbom("1.3", "OPAQUE_SUITE_1", &["suite-algo-7"]);
+        let mut rsa = crate::model::Component::new("legacy-kx".into(), "suite-algo-7".into());
+        rsa.component_type = ComponentType::Cryptographic;
+        rsa.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                AlgorithmProperties::new(CryptoPrimitive::Pke).with_algorithm_family("RSA".into()),
+            ),
+        );
+        sbom.add_component(rsa);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| { v.rule_id == "SBOM-CNSA2-PROTO-002" && v.message.contains("RSA") }),
+            "resolved suite algorithm ref must be classified; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| v.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    fn make_cert_sbom(sig_ref: &str, algo_family: Option<&str>) -> NormalizedSbom {
+        use crate::model::{
+            AlgorithmProperties, CertificateProperties, ComponentType, CryptoAssetType,
+            CryptoPrimitive, CryptoProperties,
+        };
+        let mut sbom = NormalizedSbom::default();
+        if let Some(family) = algo_family {
+            let mut algo = crate::model::Component::new("sig-algorithm".into(), sig_ref.into());
+            algo.component_type = ComponentType::Cryptographic;
+            algo.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                    AlgorithmProperties::new(CryptoPrimitive::Signature)
+                        .with_algorithm_family(family.to_string()),
+                ),
+            );
+            sbom.add_component(algo);
+        }
+        let mut cert = crate::model::Component::new("server-cert".into(), "cert-1".into());
+        cert.component_type = ComponentType::Cryptographic;
+        cert.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Certificate).with_certificate_properties(
+                CertificateProperties::new().with_signature_algorithm_ref(sig_ref.to_string()),
+            ),
+        );
+        sbom.add_component(cert);
+        sbom
+    }
+
+    /// CERT-001 must resolve an OPAQUE signature-algorithm bom-ref through
+    /// the index to the referenced algorithm — the old substring heuristic
+    /// ("rsa" in the ref string) gave opaque refs zero checks.
+    #[test]
+    fn cnsa2_cert_resolves_opaque_signature_ref() {
+        let sbom = make_cert_sbom("sig-algo-42", Some("RSA"));
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "opaque ref resolving to RSA must fire CERT-001; got {:?}",
+            result
+                .violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-CERT-001"),
+            "opaque ref resolving to RSA must fire the PQC certificate rule"
+        );
+    }
+
+    /// Silent case: a certificate signed with ML-DSA-87 passes CERT-001, and
+    /// an unresolvable ref still gets the word-boundary fallback on the raw
+    /// ref string.
+    #[test]
+    fn cnsa2_cert_approved_and_fallback_cases() {
+        let ok = make_cert_sbom("sig-algo-42", Some("ML-DSA-87"));
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "ML-DSA-87-signed certificate must pass CERT-001"
+        );
+
+        // Unresolvable ref: fall back to token-matching the ref string.
+        let dangling = make_cert_sbom("crypto/algorithm/ecdsa-p256", None);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&dangling);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "unresolvable ECDSA-named ref must still fire CERT-001 via token fallback"
+        );
+    }
+
+    /// Key material alone must not satisfy the crypto-inventory gate — it
+    /// receives no CNSA 2.0 evaluation.
+    #[test]
+    fn cnsa2_key_material_alone_does_not_satisfy_inventory_gate() {
+        use crate::model::{
+            ComponentType, CryptoAssetType, CryptoMaterialType, CryptoProperties,
+            RelatedCryptoMaterialProperties,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut key = crate::model::Component::new("some-key".into(), "key-1".into());
+        key.component_type = ComponentType::Cryptographic;
+        key.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+                .with_related_crypto_material_properties(
+                    RelatedCryptoMaterialProperties::new(CryptoMaterialType::PublicKey)
+                        .with_size(2048),
+                ),
+        );
+        sbom.add_component(key);
+
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-000"),
+            "unevaluable key material must not satisfy the CNSA2-000 inventory gate"
+        );
+        assert!(!result.is_compliant);
+    }
+
+    /// Compound algorithmFamily spellings ("DES-CBC", "AES-128-CBC") must
+    /// fail both standards by their base algorithm — previously they
+    /// classified Unknown and produced only a Warning (false pass).
+    #[test]
+    fn compound_family_spellings_fail_both_standards() {
+        let sbom = make_crypto_sbom(&[("legacy-cipher", "DES-CBC", None, None)]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(!cnsa.is_compliant, "DES-CBC must not be CNSA 2.0 compliant");
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-005" && v.message.contains("DES")),
+            "DES-CBC must fire the broken-algorithm rule; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations.iter().any(|v| v.rule_id == "SBOM-PQC-005"),
+            "DES-CBC must fire SP 800-131A under PQC"
+        );
+
+        let sbom = make_crypto_sbom(&[("aes-cbc", "AES-128-CBC", None, None)]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-001" && v.message.contains("AES-128")),
+            "AES-128-CBC must fire the AES-256-only rule"
+        );
+
+        // Silent case: a compound spelling of an approved algorithm passes.
+        let ok = make_crypto_sbom(&[("aead", "AES-256-GCM", None, None)]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !cnsa
+                .violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Error),
+            "AES-256-GCM must pass the CNSA 2.0 allowlist; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Truncated SHA-2 (SHA-512/256, SHA-512/224) must fail the CNSA 2.0
+    /// hash gate by its truncated output size — previously it classified
+    /// as full SHA-512 and was falsely Approved.
+    #[test]
+    fn cnsa2_flags_truncated_sha2_variants() {
+        for family in ["SHA-512/256", "SHA-512/224"] {
+            let sbom = make_crypto_sbom(&[("hash", family, None, None)]);
+            let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+                "{family} must fail the CNSA 2.0 hash gate; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Silent case: full SHA-512 stays approved.
+        let ok = make_crypto_sbom(&[("hash", "SHA-512", None, None)]);
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&ok);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-ALG-002"),
+            "SHA-512 must not trip the hash gate"
+        );
+    }
+
+    /// The name-only fallback must report the most severe token: a
+    /// hash-first name like "sha384-rsa-signature" is quantum-vulnerable
+    /// RSA, not CNSA-approved SHA-384 (previously the first token won and
+    /// both standards passed).
+    #[test]
+    fn name_fallback_reports_most_severe_token() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+        };
+        for name in ["sha384-rsa-signature", "rsa-sha384-signature"] {
+            let mut sbom = NormalizedSbom::default();
+            let mut c = crate::model::Component::new(name.into(), "algo-1".into());
+            c.component_type = ComponentType::Cryptographic;
+            c.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                    AlgorithmProperties::new(CryptoPrimitive::Signature),
+                ),
+            );
+            sbom.add_component(c);
+
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                cnsa.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-006" && v.message.contains("RSA")),
+                "'{name}' must be flagged quantum-vulnerable under CNSA 2.0; got {:?}",
+                cnsa.violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+            let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                pqc.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-PQC-001" && v.message.contains("RSA")),
+                "'{name}' must be flagged quantum-vulnerable under PQC"
+            );
+        }
+    }
+
+    /// A certificate whose signature-algorithm ref cannot be resolved or
+    /// classified must produce a "cannot verify" Warning under both
+    /// standards — previously it counted as evaluated and passed silently
+    /// (certificate-only CBOMs reported 100% compliant).
+    #[test]
+    fn cert_unknown_signature_ref_warns_both_standards() {
+        let sbom = make_cert_sbom("sig-algo-42", None);
+
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning && v.rule_id == "SBOM-CNSA2-CERT-UNKNOWN"
+            }),
+            "opaque dangling sig ref must warn under CNSA 2.0; got {:?}",
+            cnsa.violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !cnsa
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-CERT-001"),
+            "an unverifiable ref is a Warning, not a CERT-001 Error"
+        );
+
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations.iter().any(|v| {
+                v.severity == ViolationSeverity::Warning && v.rule_id == "SBOM-PQC-CERT-UNKNOWN"
+            }),
+            "opaque dangling sig ref must warn under PQC"
+        );
+
+        // Silent case: a resolvable ML-DSA-87 signature produces neither
+        // the Warning nor an Error.
+        let ok = make_cert_sbom("sig-algo-42", Some("ML-DSA-87"));
+        for level in [ComplianceLevel::Cnsa2, ComplianceLevel::NistPqc] {
+            let result = ComplianceChecker::new(level).check(&ok);
+            assert!(
+                !result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id.ends_with("CERT-UNKNOWN")),
+                "{level:?}: resolvable approved sig ref must not warn"
+            );
+        }
+    }
+
+    /// A protocol asset with nothing evaluable (SSH, no version, no cipher
+    /// suites, no refs) must warn instead of silently counting as evaluated
+    /// and suppressing the no-inventory gate.
+    #[test]
+    fn protocol_without_evidence_warns_both_standards() {
+        use crate::model::{
+            ComponentType, CryptoAssetType, CryptoProperties, ProtocolProperties, ProtocolType,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = crate::model::Component::new("ssh-endpoint".into(), "proto-1".into());
+        c.component_type = ComponentType::Cryptographic;
+        c.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Protocol)
+                .with_protocol_properties(ProtocolProperties::new(ProtocolType::Ssh)),
+        );
+        sbom.add_component(c);
+
+        for (level, rule) in [
+            (ComplianceLevel::Cnsa2, "SBOM-CNSA2-PROTO-UNKNOWN"),
+            (ComplianceLevel::NistPqc, "SBOM-PQC-PROTO-UNKNOWN"),
+        ] {
+            let result = ComplianceChecker::new(level).check(&sbom);
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Warning && v.rule_id == rule),
+                "{level:?}: evidence-free protocol must warn with {rule}; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // Silent case: a TLS 1.3 protocol with a classifiable suite raises
+        // no PROTO-UNKNOWN warning.
+        let ok = make_protocol_sbom("1.3", "TLS_AES_256_GCM_SHA384", &[]);
+        for level in [ComplianceLevel::Cnsa2, ComplianceLevel::NistPqc] {
+            let result = ComplianceChecker::new(level).check(&ok);
+            assert!(
+                !result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id.ends_with("PROTO-UNKNOWN")),
+                "{level:?}: evaluable protocol must not warn"
+            );
+        }
+    }
+
+    /// An IKEv2 protocol whose transform refs are all opaque and
+    /// unresolvable must warn under both standards — previously it counted
+    /// as evaluated while receiving zero effective checks (vacuous 100%
+    /// compliant CBOMs).
+    #[test]
+    fn ikev2_opaque_transform_refs_warn_both_standards() {
+        use crate::model::{
+            ComponentType, CryptoAssetType, CryptoProperties, Ikev2TransformTypes,
+            ProtocolProperties, ProtocolType,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = crate::model::Component::new("ipsec-tunnel".into(), "proto-1".into());
+        c.component_type = ComponentType::Cryptographic;
+        c.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Protocol).with_protocol_properties(
+                ProtocolProperties::new(ProtocolType::Ikev2).with_ikev2_transform_types(
+                    Ikev2TransformTypes {
+                        encr: vec!["transform-encr-7".into()],
+                        prf: vec!["transform-prf-3".into()],
+                        integ: vec!["transform-integ-2".into()],
+                        ke: vec!["transform-ke-9".into()],
+                    },
+                ),
+            ),
+        );
+        sbom.add_component(c);
+
+        for (level, rule) in [
+            (ComplianceLevel::Cnsa2, "SBOM-CNSA2-PROTO-UNKNOWN"),
+            (ComplianceLevel::NistPqc, "SBOM-PQC-PROTO-UNKNOWN"),
+        ] {
+            let result = ComplianceChecker::new(level).check(&sbom);
+            assert!(
+                result.violations.iter().any(|v| {
+                    v.severity == ViolationSeverity::Warning
+                        && v.rule_id == rule
+                        && v.message.contains("transform-encr-7")
+                }),
+                "{level:?}: opaque IKEv2 transforms must warn with {rule}; got {:?}",
+                result
+                    .violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The CNSA 2.0 TLS gate must accept legitimate spellings of TLS 1.3
+    /// and share version parsing with the PQC gate, so the two standards
+    /// agree on the same input (previously "TLSv1.3" was a false Error and
+    /// "TLSv1.0" silently passed the PQC gate).
+    #[test]
+    fn tls_version_spellings_parse_tolerantly() {
+        for version in ["TLSv1.3", "tls1.3", "1.3.0", " 1.3", "v1.3"] {
+            let sbom = make_protocol_sbom(version, "TLS_AES_256_GCM_SHA384", &[]);
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                !cnsa
+                    .violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+                "'{version}' must count as TLS 1.3; got {:?}",
+                cnsa.violations
+                    .iter()
+                    .map(|v| v.message.clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Spelled-out old versions now fail BOTH gates.
+        let sbom = make_protocol_sbom("TLSv1.0", "TLS_AES_256_GCM_SHA384", &[]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "TLSv1.0 must fail the CNSA 2.0 version gate"
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-PQC-PROTO-001"),
+            "TLSv1.0 must fail the PQC minimum-version gate (previously silent)"
+        );
+        // Unparseable versions: strict Error under the CNSA 2.0 allowlist,
+        // cannot-verify Warning under PQC.
+        let sbom = make_protocol_sbom("quantum-safe", "TLS_AES_256_GCM_SHA384", &[]);
+        let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+        assert!(
+            cnsa.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-001"),
+            "an unparseable version cannot affirm TLS 1.3"
+        );
+        let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+        assert!(
+            pqc.violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Warning
+                    && v.rule_id == "SBOM-PQC-PROTO-UNKNOWN"
+                    && v.message.contains("quantum-safe")),
+            "an unparseable version must be a cannot-verify Warning under PQC"
+        );
+    }
+
+    /// Reference resolution must carry the referenced asset's declared
+    /// classicalSecurityLevel: an AES asset whose key size is declared only
+    /// via classicalSecurityLevel=256 is Approved when evaluated directly,
+    /// so it must also be Approved when reached through a protocol's
+    /// cryptoRefArray (previously a false PROTO-002).
+    #[test]
+    fn protocol_ref_resolution_keeps_declared_security_level() {
+        use crate::model::{
+            AlgorithmProperties, ComponentType, CryptoAssetType, CryptoPrimitive, CryptoProperties,
+            ProtocolProperties, ProtocolType,
+        };
+        let make = |classical_level: u32| {
+            let mut sbom = NormalizedSbom::default();
+            let mut aes = crate::model::Component::new("aes-gcm-cipher".into(), "algo-aes".into());
+            aes.component_type = ComponentType::Cryptographic;
+            aes.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                    AlgorithmProperties::new(CryptoPrimitive::Ae)
+                        .with_algorithm_family("AES".into())
+                        .with_classical_security_level(classical_level)
+                        .with_nist_quantum_security_level(5),
+                ),
+            );
+            sbom.add_component(aes);
+            let mut proto = crate::model::Component::new("tls-endpoint".into(), "proto-1".into());
+            proto.component_type = ComponentType::Cryptographic;
+            proto.crypto_properties = Some(
+                CryptoProperties::new(CryptoAssetType::Protocol).with_protocol_properties(
+                    ProtocolProperties::new(ProtocolType::Tls)
+                        .with_version("1.3".into())
+                        .with_crypto_ref_array(vec!["algo-aes".into()]),
+                ),
+            );
+            sbom.add_component(proto);
+            sbom
+        };
+
+        // AES-256 via classicalSecurityLevel only: both the direct and the
+        // referenced evaluation must agree (zero errors).
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&make(256));
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.severity == ViolationSeverity::Error),
+            "AES with classicalSecurityLevel=256 must pass via ref too; got {:?}",
+            result
+                .violations
+                .iter()
+                .map(|v| (v.rule_id, v.message.clone()))
+                .collect::<Vec<_>>()
+        );
+
+        // Firing counterpart: a declared 128-bit level fails through the
+        // ref path exactly as it does directly.
+        let result = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&make(128));
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-CNSA2-PROTO-002" && v.message.contains("AES")),
+            "AES-128 referenced from a protocol must still fire PROTO-002"
+        );
+    }
+
+    /// National quantum-vulnerable algorithms (SM2 / GOST R 34.10 /
+    /// brainpool) must fail PQC and CNSA 2.0 as classical crypto instead of
+    /// producing only an unclassifiable Warning.
+    #[test]
+    fn national_algorithms_fail_both_standards() {
+        for family in ["SM2", "GOST R 34.10", "brainpoolP256r1"] {
+            let sbom = make_crypto_sbom(&[("national-sig", family, None, None)]);
+            let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                pqc.violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::Error && v.rule_id == "SBOM-PQC-001"),
+                "{family} must fire the quantum-vulnerable rule; got {:?}",
+                pqc.violations
+                    .iter()
+                    .map(|v| (v.rule_id, v.message.clone()))
+                    .collect::<Vec<_>>()
+            );
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                cnsa.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-006"),
+                "{family} must fail the CNSA 2.0 allowlist as quantum-vulnerable"
+            );
+        }
+        // SM4 (symmetric) and GOST hashes are recognized-but-not-approved
+        // under CNSA 2.0, and not quantum-vulnerable under PQC.
+        for family in ["SM4", "Streebog"] {
+            let sbom = make_crypto_sbom(&[("national-prim", family, None, None)]);
+            let cnsa = ComplianceChecker::new(ComplianceLevel::Cnsa2).check(&sbom);
+            assert!(
+                cnsa.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-CNSA2-ALG-008"),
+                "{family} must be recognized as not CNSA 2.0-approved"
+            );
+            let pqc = ComplianceChecker::new(ComplianceLevel::NistPqc).check(&sbom);
+            assert!(
+                !pqc.violations
+                    .iter()
+                    .any(|v| v.rule_id == "SBOM-PQC-001" || v.rule_id == "SBOM-PQC-005"),
+                "{family} must not be reported broken or quantum-vulnerable"
+            );
+        }
+    }
+
     fn refs_for(rule_id: &'static str) -> Vec<StandardRef> {
         let v = Violation {
             severity: ViolationSeverity::Warning,
@@ -1230,18 +3377,20 @@ mod tests {
             element: None,
             requirement: String::new(),
             rule_id,
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         };
         v.registry_standard_refs()
     }
 
     #[test]
-    fn registry_refs_for_art_13_4_include_article_and_pren() {
-        let refs = refs_for("SBOM-CRA-ART-13-4");
+    fn registry_refs_for_machine_readable_include_annex_and_pren() {
+        let refs = refs_for("SBOM-CRA-MACHINE-READABLE");
         assert!(
             refs.iter()
-                .any(|r| r.standard == StandardKind::CraArticle && r.id == "Art. 13(4)"),
-            "expected CRA Art. 13(4); got {refs:?}"
+                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part II (1)"),
+            "expected CRA Annex I Part II (1); got {refs:?}"
         );
         assert!(
             refs.iter()
@@ -1270,8 +3419,8 @@ mod tests {
         let refs = refs_for("SBOM-CRA-ANNEX-I-SUPPLY-CHAIN");
         assert!(
             refs.iter()
-                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part III"),
-            "expected Annex I Part III; got {refs:?}"
+                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part II"),
+            "expected Annex I Part II; got {refs:?}"
         );
         assert!(
             refs.iter()
@@ -1286,8 +3435,13 @@ mod tests {
     }
 
     #[test]
-    fn registry_refs_for_art_13_7_include_pren_rls() {
-        let refs = refs_for("SBOM-CRA-ART-13-7");
+    fn registry_refs_for_cvd_policy_include_annex_and_pren_rls() {
+        let refs = refs_for("SBOM-CRA-CVD-POLICY");
+        assert!(
+            refs.iter()
+                .any(|r| r.standard == StandardKind::CraAnnex && r.id == "Annex I Part II (5)"),
+            "expected CRA Annex I Part II (5); got {refs:?}"
+        );
         assert!(
             refs.iter()
                 .any(|r| r.standard == StandardKind::Pren40000_1_3 && r.id == "RLS-2-RQ-03-RE"),
@@ -1348,18 +3502,18 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_supplies_security_contact_downgrades_art_13_6() {
+    fn sidecar_supplies_security_contact_downgrades_art_13_17() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default();
 
-        // Without sidecar: Art. 13(6) is a Warning
+        // Without sidecar: Art. 13(17) is a Warning
         let bare = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
-        let art_13_6_warning = bare.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(6)") && v.severity == ViolationSeverity::Warning
+        let art_13_17_warning = bare.violations.iter().find(|v| {
+            v.requirement.contains("Art. 13(17)") && v.severity == ViolationSeverity::Warning
         });
         assert!(
-            art_13_6_warning.is_some(),
-            "Without sidecar, Art. 13(6) should be a Warning"
+            art_13_17_warning.is_some(),
+            "Without sidecar, Art. 13(17) should be a Warning"
         );
 
         // With sidecar that supplies security_contact: same finding becomes Info
@@ -1370,25 +3524,25 @@ mod tests {
         let withsc = ComplianceChecker::new(ComplianceLevel::CraPhase2)
             .with_sidecar(sidecar)
             .check(&sbom);
-        let art_13_6_info = withsc.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(6)") && v.severity == ViolationSeverity::Info
+        let art_13_17_info = withsc.violations.iter().find(|v| {
+            v.requirement.contains("Art. 13(17)") && v.severity == ViolationSeverity::Info
         });
         assert!(
-            art_13_6_info.is_some(),
-            "With sidecar, Art. 13(6) should be downgraded to Info"
+            art_13_17_info.is_some(),
+            "With sidecar, Art. 13(17) should be downgraded to Info"
         );
         assert!(
             !withsc
                 .violations
                 .iter()
-                .any(|v| v.requirement.contains("Art. 13(6)")
+                .any(|v| v.requirement.contains("Art. 13(17)")
                     && v.severity == ViolationSeverity::Warning),
-            "With sidecar, no Warning-level Art. 13(6) violation should remain"
+            "With sidecar, no Warning-level Art. 13(17) violation should remain"
         );
     }
 
     #[test]
-    fn sidecar_supplies_product_name_downgrades_art_13_12() {
+    fn sidecar_supplies_product_name_downgrades_art_13_15() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default(); // no document name
 
@@ -1400,16 +3554,16 @@ mod tests {
             .with_sidecar(sidecar)
             .check(&sbom);
         let downgraded = result.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(12)") && v.severity == ViolationSeverity::Info
+            v.requirement.contains("Art. 13(15)") && v.severity == ViolationSeverity::Info
         });
         assert!(
             downgraded.is_some(),
-            "Sidecar product_name should downgrade Art. 13(12) to Info"
+            "Sidecar product_name should downgrade Art. 13(15) to Info"
         );
     }
 
     #[test]
-    fn sidecar_supplies_manufacturer_downgrades_art_13_15() {
+    fn sidecar_supplies_manufacturer_downgrades_art_13_16() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default();
         let sidecar = CraSidecarMetadata {
@@ -1420,16 +3574,16 @@ mod tests {
             .with_sidecar(sidecar)
             .check(&sbom);
         let downgraded = result.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(15)") && v.severity == ViolationSeverity::Info
+            v.requirement.contains("Art. 13(16)") && v.severity == ViolationSeverity::Info
         });
         assert!(
             downgraded.is_some(),
-            "Sidecar manufacturer_name should downgrade Art. 13(15) to Info"
+            "Sidecar manufacturer_name should downgrade Art. 13(16) to Info"
         );
     }
 
     #[test]
-    fn sidecar_supplies_cvd_url_downgrades_art_13_7() {
+    fn sidecar_supplies_cvd_url_downgrades_cvd_policy() {
         use crate::model::CraSidecarMetadata;
         let sbom = NormalizedSbom::default();
         let sidecar = CraSidecarMetadata {
@@ -1440,11 +3594,11 @@ mod tests {
             .with_sidecar(sidecar)
             .check(&sbom);
         let downgraded = result.violations.iter().find(|v| {
-            v.requirement.contains("Art. 13(7)") && v.severity == ViolationSeverity::Info
+            v.requirement.contains("Annex I Part II (5)") && v.severity == ViolationSeverity::Info
         });
         assert!(
             downgraded.is_some(),
-            "Sidecar CVD URL should downgrade Art. 13(7) to Info"
+            "Sidecar CVD URL should downgrade the Annex I Part II (5) CVD-policy finding to Info"
         );
     }
 
@@ -1918,6 +4072,21 @@ mod tests {
         );
     }
 
+    /// Build a component that satisfies every gating BSI v2.1.0 rule:
+    /// name, version, purl, SPDX licence, supplier, SHA-512 hash.
+    fn bsi_ok_component(name: &str) -> crate::model::Component {
+        use crate::model::{Component, Hash, HashAlgorithm, LicenseExpression, Organization};
+        let mut c = Component::new(name.to_string(), name.to_string())
+            .with_purl(format!("pkg:cargo/{name}@1.0"))
+            .with_version("1.0".to_string());
+        c.hashes
+            .push(Hash::new(HashAlgorithm::Sha512, "f".repeat(128)));
+        c.supplier = Some(Organization::new(format!("{name}-vendor")));
+        c.licenses
+            .add_declared(LicenseExpression::new("MIT".to_string()));
+        c
+    }
+
     #[test]
     fn bsi_tr_03183_2_empty_sbom_emits_errors() {
         let sbom = NormalizedSbom::default();
@@ -1926,59 +4095,541 @@ mod tests {
             result
                 .violations
                 .iter()
-                .any(|v| v.requirement.contains("BSI TR-03183-2 §5.1")
+                .any(|v| v.requirement.contains("BSI TR-03183-2 §5.2.1")
                     && v.severity == ViolationSeverity::Error),
-            "Empty SBOM should fail BSI §5.1"
+            "Empty SBOM should fail BSI §5.2.1 (creator missing)"
         );
     }
 
+    /// §5.2.2 names SHA-512 in the normative hash clause: MD5-only and
+    /// SHA-256-only components must fail (expectation flip: SHA-256 used to
+    /// satisfy the old "SHA-256+" reading), SHA-512 must pass, and a
+    /// hash-less component is a §3.2.1-aware Warning instead of an Error.
     #[test]
-    fn bsi_tr_03183_2_flags_missing_strong_hash() {
-        use crate::model::{Component, Hash, HashAlgorithm};
-        let mut sbom = NormalizedSbom::default();
-        let mut c = Component::new("lib".to_string(), "lib".to_string())
-            .with_purl("pkg:cargo/lib@1.0".to_string());
-        // Add only a weak hash
-        c.hashes.push(Hash::new(HashAlgorithm::Md5, "0".repeat(32)));
-        sbom.add_component(c);
-        let result = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+    fn bsi_tr_03183_2_requires_sha512_hash() {
+        use crate::model::{Hash, HashAlgorithm};
+        let check = |alg: Option<HashAlgorithm>, hexlen: usize| {
+            let mut sbom = NormalizedSbom::default();
+            let mut c = bsi_ok_component("lib");
+            c.hashes.clear();
+            if let Some(alg) = alg {
+                c.hashes.push(Hash::new(alg, "0".repeat(hexlen)));
+            }
+            sbom.add_component(c);
+            ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom)
+        };
+
+        let md5 = check(Some(HashAlgorithm::Md5), 32);
         assert!(
-            result.violations.iter().any(|v| {
-                v.requirement.contains("BSI TR-03183-2 §5.4")
-                    && v.severity == ViolationSeverity::Error
-            }),
-            "Component without SHA-256+ hash should fail BSI §5.4"
+            md5.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4"
+                    && v.severity == ViolationSeverity::Error),
+            "MD5-only component must fail the §5.2.2 SHA-512 requirement"
+        );
+
+        let sha256 = check(Some(HashAlgorithm::Sha256), 64);
+        assert!(
+            sha256
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4"
+                    && v.severity == ViolationSeverity::Error),
+            "SHA-256-only component must now FAIL the hash rule (§5.2.2 names SHA-512)"
+        );
+
+        let sha512 = check(Some(HashAlgorithm::Sha512), 128);
+        assert!(
+            !sha512
+                .violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-5-4")),
+            "SHA-512 component must satisfy the hash rule"
+        );
+
+        let none = check(None, 0);
+        assert!(
+            none.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4-MISSING"
+                    && v.severity == ViolationSeverity::Warning),
+            "hash-less component must warn (§3.2.1 legitimate-omission escape)"
+        );
+        assert!(
+            !none
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4"),
+            "hash-less component must not also fire the wrong-algorithm Error"
+        );
+    }
+
+    /// §4 format gate: CycloneDX < 1.6 and SPDX < 3.0.1 fail; the minimums
+    /// pass; versions are compared numerically, and a synthetic document
+    /// with no spec_version skips the gate.
+    #[test]
+    fn bsi_tr_03183_2_format_gate() {
+        use crate::model::SbomFormat;
+        let check = |format: SbomFormat, version: &str| {
+            let mut sbom = NormalizedSbom::default();
+            sbom.document.format = format;
+            sbom.document.spec_version = version.to_string();
+            sbom.add_component(bsi_ok_component("lib"));
+            let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+            r.violations.iter().any(|v| {
+                v.rule_id == "SBOM-BSI-TR-03183-2-4" && v.severity == ViolationSeverity::Error
+            })
+        };
+
+        assert!(
+            check(SbomFormat::CycloneDx, "1.5"),
+            "CycloneDX 1.5 must fail the §4 format gate"
+        );
+        assert!(
+            !check(SbomFormat::CycloneDx, "1.6"),
+            "CycloneDX 1.6 must pass the §4 format gate"
+        );
+        assert!(
+            !check(SbomFormat::CycloneDx, "1.7"),
+            "CycloneDX 1.7 must pass the §4 format gate"
+        );
+        assert!(
+            check(SbomFormat::Spdx, "2.3"),
+            "SPDX 2.3 must fail the §4 format gate"
+        );
+        assert!(
+            check(SbomFormat::Spdx, "3.0"),
+            "SPDX 3.0 is below the 3.0.1 minimum and must fail the §4 gate"
+        );
+        assert!(
+            !check(SbomFormat::Spdx, "3.0.1"),
+            "SPDX 3.0.1 must pass the §4 format gate"
+        );
+        assert!(
+            !check(SbomFormat::CycloneDx, ""),
+            "a document with no spec_version must skip the §4 gate"
+        );
+    }
+
+    /// The TR mandates no generation-tool field in any tier: a Person
+    /// creator with an email must satisfy §5.2.1 with no tool-related
+    /// Error (expectation flip: tool absence used to be a gating Error).
+    #[test]
+    fn bsi_tr_03183_2_does_not_require_tool_creator() {
+        use crate::model::{Creator, CreatorType};
+        let mut sbom = NormalizedSbom::default();
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Person,
+            name: "Jane Doe".to_string(),
+            email: Some("jane@example.org".to_string()),
+        });
+        sbom.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            !r.violations.iter().any(|v| v.message.contains("tool")),
+            "no violation may demand a generation tool (not mandated in any TR tier)"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-5-1")),
+            "a Person creator with an email satisfies §5.2.1 entirely"
+        );
+    }
+
+    /// §5.2.1 creator granularity: absent entirely → Error; present without
+    /// email/URL → Warning; present with email → silent.
+    #[test]
+    fn bsi_tr_03183_2_creator_contact_granularity() {
+        use crate::model::{Creator, CreatorType};
+        let base = || {
+            let mut sbom = NormalizedSbom::default();
+            sbom.add_component(bsi_ok_component("lib"));
+            sbom
+        };
+
+        let empty = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&base());
+        assert!(
+            empty
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1"
+                    && v.severity == ViolationSeverity::Error),
+            "no creator at all must be a §5.2.1 Error"
+        );
+
+        let mut contactless = base();
+        contactless.document.creators.push(Creator {
+            creator_type: CreatorType::Organization,
+            name: "Acme".to_string(),
+            email: None,
+        });
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&contactless);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1-CONTACT"
+                    && v.severity == ViolationSeverity::Warning),
+            "a creator without email/URL must be a §5.2.1 Warning"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1"),
+            "a contactless creator is present — the absence Error must not fire"
+        );
+
+        let mut with_url = base();
+        with_url.document.creators.push(Creator {
+            creator_type: CreatorType::Organization,
+            name: "https://acme.example".to_string(),
+            email: None,
+        });
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&with_url);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-5-1")),
+            "a creator URL satisfies §5.2.1 (URL fallback when no email exists)"
+        );
+    }
+
+    /// §5.2.1 maps "Creator of the SBOM" to Person/Organization (CycloneDX
+    /// metadata.authors/manufacturer), explicitly NOT metadata.tools: a
+    /// tools-only SBOM (the default output of common generators) must fail
+    /// the creator gate (expectation flip: Tool creators used to satisfy the
+    /// presence test).
+    #[test]
+    fn bsi_tr_03183_2_tools_only_creators_fail_creator_gate() {
+        use crate::model::{Creator, CreatorType};
+        let mut sbom = NormalizedSbom::default();
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Tool,
+            name: "syft 1.18.0".to_string(),
+            email: None,
+        });
+        sbom.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1"
+                    && v.severity == ViolationSeverity::Error),
+            "a tools-only creators list must fail the §5.2.1 creator gate"
+        );
+
+        // Silent side: adding an Organization creator with an email (the
+        // metadata.manufacturer mapping) alongside the tool satisfies §5.2.1.
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Organization,
+            name: "Demo Corp".to_string(),
+            email: Some("sbom@demo.example".to_string()),
+        });
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-5-1")),
+            "an Organization creator with email satisfies §5.2.1 entirely"
+        );
+    }
+
+    /// The §5.2.1 -CONTACT Warning must inspect only non-Tool creators: a
+    /// tool whose name happens to carry contact-looking characters cannot
+    /// stand in for the creator's email/URL.
+    #[test]
+    fn bsi_tr_03183_2_contact_warning_ignores_tool_contacts() {
+        use crate::model::{Creator, CreatorType};
+        let mut sbom = NormalizedSbom::default();
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Tool,
+            name: "sbom-gen (https://sbom-gen.example)".to_string(),
+            email: None,
+        });
+        sbom.document.creators.push(Creator {
+            creator_type: CreatorType::Organization,
+            name: "Acme".to_string(),
+            email: None,
+        });
+        sbom.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1-CONTACT"
+                    && v.severity == ViolationSeverity::Warning),
+            "a tool's URL must not satisfy the creator contact requirement"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-1"),
+            "the Organization creator is present — only the contact Warning may fire"
+        );
+    }
+
+    /// §5.2.2 SHA-512: only author-attested hashes count. An
+    /// enrichment-fetched SHA-512 is not part of the document under
+    /// assessment and must not mask a missing authored SHA-512
+    /// (HashProvenance::Authored exclusion).
+    #[test]
+    fn bsi_tr_03183_2_sha512_counts_only_authored_hashes() {
+        use crate::model::{Hash, HashAlgorithm};
+        let check = |hashes: Vec<Hash>| {
+            let mut sbom = NormalizedSbom::default();
+            let mut c = bsi_ok_component("lib");
+            c.hashes = hashes;
+            sbom.add_component(c);
+            ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom)
+        };
+
+        // Authored SHA-256 + ENRICHED SHA-512: the SHA-512 Error must still
+        // fire — the enriched hash is not author-attested.
+        let r = check(vec![
+            Hash::new(HashAlgorithm::Sha256, "0".repeat(64)),
+            Hash::enriched(HashAlgorithm::Sha512, "0".repeat(128)),
+        ]);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4"
+                    && v.severity == ViolationSeverity::Error),
+            "an enriched SHA-512 must not mask a missing authored SHA-512"
+        );
+
+        // Authored SHA-512: silent.
+        let r = check(vec![Hash::new(HashAlgorithm::Sha512, "f".repeat(128))]);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-5-4")),
+            "an authored SHA-512 satisfies §5.2.2"
+        );
+
+        // Enriched hashes only: the component counts as hash-less
+        // (§3.2.1-aware Warning), not as carrying the wrong algorithm.
+        let r = check(vec![Hash::enriched(HashAlgorithm::Sha512, "0".repeat(128))]);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4-MISSING"
+                    && v.severity == ViolationSeverity::Warning),
+            "enriched-only hashes must count as no authored hash at all"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-4"),
+            "enriched-only hashes must not fire the wrong-algorithm Error"
+        );
+    }
+
+    /// §5.2.2 component version is a required field: absence gates.
+    #[test]
+    fn bsi_tr_03183_2_gates_on_missing_version() {
+        let mut sbom = NormalizedSbom::default();
+        let mut c = bsi_ok_component("lib");
+        c.version = None;
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-VERSION"
+                    && v.severity == ViolationSeverity::Error),
+            "a version-less component must fail BSI §5.2.2"
+        );
+
+        let mut ok = NormalizedSbom::default();
+        ok.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&ok);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-VERSION"),
+            "a versioned component must not fire the version rule"
+        );
+    }
+
+    /// §5.2.2 distribution licences are required (Error when absent);
+    /// §6.1 requires SPDX naming (Warning when the expression is not SPDX).
+    #[test]
+    fn bsi_tr_03183_2_licence_rules() {
+        use crate::model::LicenseExpression;
+        let mut unlicensed = NormalizedSbom::default();
+        let mut c = bsi_ok_component("lib");
+        c.licenses.declared.clear();
+        c.licenses.concluded = None;
+        unlicensed.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&unlicensed);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-LICENSE"
+                    && v.severity == ViolationSeverity::Error),
+            "a component without distribution licences must fail §5.2.2"
+        );
+
+        let mut non_spdx = NormalizedSbom::default();
+        let mut c = bsi_ok_component("lib");
+        c.licenses.declared.clear();
+        c.licenses.add_declared(LicenseExpression::new(
+            "Standard Commercial Terms, see LICENSE.txt".to_string(),
+        ));
+        non_spdx.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&non_spdx);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-LICENSE-SPDX"
+                    && v.severity == ViolationSeverity::Warning),
+            "a non-SPDX licence expression must warn under §6.1"
+        );
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-LICENSE"),
+            "a declared (non-SPDX) licence still counts as present"
+        );
+
+        let mut spdx_ok = NormalizedSbom::default();
+        spdx_ok.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&spdx_ok);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id.starts_with("SBOM-BSI-TR-03183-2-LICENSE")),
+            "an SPDX-named licence satisfies both §5.2.2 and §6.1"
+        );
+    }
+
+    /// §5.2.2 component creator: presence-level Warning when both supplier
+    /// and author are absent.
+    #[test]
+    fn bsi_tr_03183_2_warns_on_missing_component_creator() {
+        let mut sbom = NormalizedSbom::default();
+        let mut c = bsi_ok_component("lib");
+        c.supplier = None;
+        c.author = None;
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-CREATOR"
+                    && v.severity == ViolationSeverity::Warning),
+            "a component without supplier/author must warn under §5.2.2"
+        );
+
+        let mut ok = NormalizedSbom::default();
+        ok.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&ok);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-CREATOR"),
+            "a supplied component must not fire the creator rule"
+        );
+    }
+
+    /// §5.2.4 puts purl/CPE in the ADDITIONAL tier ("MUST additionally …
+    /// if it exists"): absence is a Warning, no longer a gating Error
+    /// (expectation flip).
+    #[test]
+    fn bsi_tr_03183_2_identifier_is_warning_not_error() {
+        let mut sbom = NormalizedSbom::default();
+        let mut c = bsi_ok_component("lib");
+        c.identifiers.purl = None;
+        c.canonical_id = c.identifiers.canonical_id();
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        let id_violations: Vec<_> = r
+            .violations
+            .iter()
+            .filter(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-2-4")
+            .collect();
+        assert!(
+            !id_violations.is_empty(),
+            "a purl-less component must fire the §5.2.4 identifier rule"
+        );
+        assert!(
+            id_violations
+                .iter()
+                .all(|v| v.severity == ViolationSeverity::Warning),
+            "the §5.2.4 identifier rule is additional-tier: Warning, not Error"
+        );
+    }
+
+    /// §5.2.2 requires the completeness of the dependency enumeration to be
+    /// clearly indicated (CycloneDX compositions).
+    #[test]
+    fn bsi_tr_03183_2_warns_on_undeclared_completeness() {
+        use crate::model::CompletenessDeclaration;
+        let mut sbom = NormalizedSbom::default();
+        sbom.add_component(bsi_ok_component("lib"));
+        // Default is Unknown → warn.
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-5-COMPLETENESS"
+                    && v.severity == ViolationSeverity::Warning),
+            "an SBOM without a completeness declaration must warn under §5.2.2"
+        );
+
+        sbom.document.completeness_declaration = CompletenessDeclaration::Complete;
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-5-5-COMPLETENESS"),
+            "a declared completeness must not warn"
+        );
+    }
+
+    /// §3.1: an SBOM MUST NOT contain vulnerability information — a combined
+    /// document does not conform (Warning; enrichment may attach findings).
+    #[test]
+    fn bsi_tr_03183_2_warns_on_embedded_vulnerabilities() {
+        use crate::model::{VulnerabilityRef, VulnerabilitySource};
+        let mut sbom = NormalizedSbom::default();
+        let mut c = bsi_ok_component("lib");
+        c.vulnerabilities.push(VulnerabilityRef::new(
+            "CVE-2026-0001".to_string(),
+            VulnerabilitySource::Cve,
+        ));
+        sbom.add_component(c);
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+        assert!(
+            r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-3-1"
+                    && v.severity == ViolationSeverity::Warning),
+            "embedded vulnerability information must warn under §3.1"
+        );
+
+        let mut clean = NormalizedSbom::default();
+        clean.add_component(bsi_ok_component("lib"));
+        let r = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&clean);
+        assert!(
+            !r.violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSI-TR-03183-2-3-1"),
+            "a vulnerability-free SBOM must not fire §3.1"
         );
     }
 
     #[test]
     fn bsi_tr_03183_2_passes_for_complete_component() {
-        use crate::model::{
-            Component, Creator, CreatorType, DependencyEdge, DependencyType, Hash, HashAlgorithm,
-            LicenseExpression, Organization,
-        };
+        use crate::model::{Creator, CreatorType, DependencyEdge, DependencyType};
         let mut sbom = NormalizedSbom::default();
         sbom.document.creators.push(Creator {
-            creator_type: CreatorType::Tool,
-            name: "sbom-tools".to_string(),
-            email: None,
+            creator_type: CreatorType::Person,
+            name: "Release Engineering".to_string(),
+            email: Some("sbom@example.org".to_string()),
         });
-        let mut a = Component::new("a".to_string(), "a".to_string())
-            .with_purl("pkg:cargo/a@1.0".to_string())
-            .with_version("1.0".to_string());
-        a.hashes
-            .push(Hash::new(HashAlgorithm::Sha256, "f".repeat(64)));
-        a.supplier = Some(Organization::new("SupplierA".to_string()));
-        a.licenses
-            .add_declared(LicenseExpression::new("MIT".to_string()));
-        let mut b = Component::new("b".to_string(), "b".to_string())
-            .with_purl("pkg:cargo/b@1.0".to_string())
-            .with_version("1.0".to_string());
-        b.hashes
-            .push(Hash::new(HashAlgorithm::Sha256, "0".repeat(64)));
-        b.supplier = Some(Organization::new("SupplierB".to_string()));
-        b.licenses
-            .add_declared(LicenseExpression::new("MIT".to_string()));
+        let a = bsi_ok_component("a");
+        let b = bsi_ok_component("b");
         let a_id = a.canonical_id.clone();
         let b_id = b.canonical_id.clone();
         sbom.components.insert(a_id.clone(), a);
@@ -2024,12 +4675,12 @@ mod tests {
         let result = ComplianceChecker::new(ComplianceLevel::CraPhase2)
             .with_sidecar(sidecar)
             .check(&sbom);
-        // No Art. 13(15) violation at all because SBOM provides org
+        // No Art. 13(16) violation at all because SBOM provides org
         assert!(
             !result.violations.iter().any(|v| v
                 .requirement
-                .contains("Art. 13(15): Manufacturer identification")),
-            "When SBOM provides manufacturer, no Art. 13(15) violation should be emitted"
+                .contains("Art. 13(16): Manufacturer identification")),
+            "When SBOM provides manufacturer, no Art. 13(16) violation should be emitted"
         );
     }
 }

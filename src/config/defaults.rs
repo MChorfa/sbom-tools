@@ -131,6 +131,7 @@ impl AppConfig {
                 detect_typosquats: true,
             },
             tui: TuiConfig::default(),
+            compliance: super::types::ComplianceConfig::default(),
             enrichment: Some(EnrichmentConfig::default()),
         }
     }
@@ -177,6 +178,7 @@ impl AppConfig {
             rules: MatchingRulesPathConfig::default(),
             ecosystem_rules: EcosystemRulesConfig::default(),
             tui: TuiConfig::default(),
+            compliance: super::types::ComplianceConfig::default(),
             enrichment: Some(EnrichmentConfig::default()),
         }
     }
@@ -201,6 +203,7 @@ impl AppConfig {
             rules: MatchingRulesPathConfig::default(),
             ecosystem_rules: EcosystemRulesConfig::default(),
             tui: TuiConfig::default(),
+            compliance: super::types::ComplianceConfig::default(),
             enrichment: None,
         }
     }
@@ -232,6 +235,7 @@ impl AppConfig {
             rules: MatchingRulesPathConfig::default(),
             ecosystem_rules: EcosystemRulesConfig::default(),
             tui: TuiConfig::default(),
+            compliance: super::types::ComplianceConfig::default(),
             enrichment: None,
         }
     }

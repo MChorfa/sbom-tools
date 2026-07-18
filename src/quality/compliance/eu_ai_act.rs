@@ -21,8 +21,8 @@
 //!   findings escalate from Info/Warning to Error: Annex IV is mandatory for
 //!   high-risk systems, so gaps are blocking rather than advisory.
 
+use super::ai_shared::{ai_bom_scope, has_model_card_ref, push_untyped_ml_warning};
 use super::*;
-use crate::model::ComponentType;
 
 impl ComplianceChecker {
     // ════════════════════════════════════════════════════════════════════
@@ -32,36 +32,53 @@ impl ComplianceChecker {
     pub(crate) fn check_eu_ai_act(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
         let high_risk = self.sidecar.as_ref().is_some_and(|s| s.is_high_risk_ai);
 
-        // ML-model and dataset components drive the readiness checks.
-        let ml_components: Vec<_> = sbom
-            .components
-            .values()
-            .filter(|c| c.component_type == ComponentType::MachineLearningModel)
-            .collect();
-        let dataset_components: Vec<_> = sbom
-            .components
-            .values()
-            .filter(|c| c.dataset.is_some() || c.component_type == ComponentType::Data)
-            .collect();
+        // ML-model and dataset components drive the readiness checks. The
+        // classification and the N/A gate are shared with the BSI/G7
+        // SBOM-for-AI profile (compliance/ai_shared.rs) so the two profiles
+        // scope identically by construction: ML components are recognised by
+        // type OR parsed modelCard/AI-profile metadata, and datasets require
+        // real dataset evidence (a bare `type: data` config bundle is not an
+        // AI dataset).
+        let scope = ai_bom_scope(sbom);
 
         // N/A gate: no AI/ML content at all → single informational finding,
         // never a failure (a non-AI SBOM is simply out of scope here).
-        if ml_components.is_empty() && dataset_components.is_empty() {
+        if !scope.is_applicable() {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[AI-Act] Not applicable: SBOM contains no machine-learning-model or \
-                          dataset components, so EU AI Act Annex IV technical-documentation \
-                          readiness cannot be assessed (readiness profile, not a legal-conformity \
-                          guarantee)"
+                message: "[AI-Act] Not applicable: SBOM contains no machine-learning-model \
+                          components, ML-model metadata, or AI-dataset evidence, so EU AI Act \
+                          Annex IV technical-documentation readiness cannot be assessed \
+                          (readiness profile, not a legal-conformity guarantee)"
                     .to_string(),
                 element: None,
                 requirement: "EU AI Act Annex IV: applicability".to_string(),
                 rule_id: "SBOM-AIACT-NA",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
             return;
         }
+
+        // Evasion guard: ML-looking components (pkg:huggingface PURL or
+        // model-card reference) that are neither typed machine-learning-model
+        // nor carry ML metadata keep the profile applicable and are surfaced,
+        // so untyping a model cannot dodge the assessment.
+        push_untyped_ml_warning(
+            &scope,
+            "AI-Act",
+            "EU AI Act Annex IV: applicability (mistyped ML content)",
+            "SBOM-AIACT-UNTYPED-ML",
+            violations,
+        );
+
+        let super::ai_shared::AiBomScope {
+            ml_components,
+            dataset_components,
+            ..
+        } = scope;
 
         // The severity a missing-documentation finding takes. For declared
         // high-risk systems every Annex IV gap is blocking (Error); otherwise
@@ -97,12 +114,19 @@ impl ComplianceChecker {
         let mut without_use_cases = Vec::new();
         for c in ml_components {
             let ml = c.ml_model.as_ref();
-            let has_general = ml.is_some_and(|m| {
-                m.architecture_family.is_some()
-                    || m.architecture_name.is_some()
-                    || m.model_card_url.is_some()
-                    || c.description.is_some()
-            });
+            // A component-level description or a model-card external
+            // reference satisfies §1 on its own — independently of whether a
+            // structured modelCard block was parsed into `ml_model` (the
+            // parser only sets `model_card_url` when a modelCard object
+            // exists, so `externalReferences[{type:"model-card"}]` must be
+            // credited here directly).
+            let has_general = c.description.is_some()
+                || has_model_card_ref(c)
+                || ml.is_some_and(|m| {
+                    m.architecture_family.is_some()
+                        || m.architecture_name.is_some()
+                        || m.model_card_url.is_some()
+                });
             if !has_general {
                 without_description.push(c.name.clone());
             }
@@ -126,6 +150,11 @@ impl ComplianceChecker {
                 requirement: "EU AI Act Annex IV §1: general description of the AI system"
                     .to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-1-DESCRIPTION",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_description.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -143,6 +172,11 @@ impl ComplianceChecker {
                 element: without_use_cases.first().cloned(),
                 requirement: "EU AI Act Annex IV §1: intended purpose / use-cases".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-1-PURPOSE",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_use_cases.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -181,6 +215,11 @@ impl ComplianceChecker {
                 element: without_datasets.first().cloned(),
                 requirement: "EU AI Act Annex IV §2(d): training-data provenance".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2D-DATASETS",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_datasets.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -215,6 +254,11 @@ impl ComplianceChecker {
                 requirement: "EU AI Act Annex IV §2(d): training-data sensitivity classification"
                     .to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2D-SENSITIVITY",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: undeclared_sensitivity.len(),
+                    total: dataset_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -269,6 +313,11 @@ impl ComplianceChecker {
                 element: without_metrics.first().cloned(),
                 requirement: "EU AI Act Annex IV §2(g): validation/testing metrics".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2G-METRICS",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_metrics.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -314,6 +363,11 @@ impl ComplianceChecker {
                 element: without_limitations.first().cloned(),
                 requirement: "EU AI Act Annex IV §3: foreseeable limitations and risks".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-3-LIMITATIONS",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_limitations.len(),
+                    total: ml_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -375,14 +429,25 @@ impl ComplianceChecker {
                 element: personal_data.first().cloned(),
                 requirement: "EU AI Act Annex IV §2(d): personal-data disclosure".to_string(),
                 rule_id: "SBOM-AIACT-ANNEX-IV-2D-PERSONAL-DATA",
+                component_id: None,
+                // Counts only apply when per-dataset classifications drove
+                // the note (the sidecar flag has no component cohort).
+                counts: (!personal_data.is_empty()).then_some(ViolationCounts {
+                    affected: personal_data.len(),
+                    total: dataset_components.len(),
+                }),
                 standard_refs: Vec::new(),
             });
         }
     }
 
-    /// Energy / environmental disclosure (Annex IV §2(g) computational
-    /// resources). Informational: surfaced only when no training energy is
-    /// modeled on any ML component.
+    /// Energy / environmental disclosure (Annex IV §2(c): the computational
+    /// resources used to develop, train, test and validate the AI system;
+    /// explicit energy-consumption reporting is the GPAI technical
+    /// documentation, Annex XI). Informational: surfaced only when the SBOM
+    /// actually contains ML-model components and none of them models training
+    /// energy — a recommendation about models is meaningless on dataset-only
+    /// SBOMs.
     fn check_ai_act_energy(
         &self,
         ml_components: &[&crate::model::Component],
@@ -393,17 +458,19 @@ impl ComplianceChecker {
                 .as_ref()
                 .is_some_and(|m| m.energy_kwh_training.is_some())
         });
-        if !any_energy {
+        if !ml_components.is_empty() && !any_energy {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[AI-Act] Annex IV §2(g) readiness: no training energy consumption is \
+                message: "[AI-Act] Annex IV §2(c) readiness: no training energy consumption is \
                           modeled (computational-resources disclosure recommended)"
                     .to_string(),
                 element: None,
-                requirement: "EU AI Act Annex IV §2(g): computational resources / energy"
+                requirement: "EU AI Act Annex IV §2(c): computational resources / energy"
                     .to_string(),
-                rule_id: "SBOM-AIACT-ANNEX-IV-2G-ENERGY",
+                rule_id: "SBOM-AIACT-ANNEX-IV-2C-ENERGY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -414,7 +481,8 @@ impl ComplianceChecker {
 mod tests {
     use super::*;
     use crate::model::{
-        Component, CraSidecarMetadata, DatasetInfo, DatasetRef, MetricEntry, MlModelInfo,
+        Component, ComponentType, CraSidecarMetadata, DatasetInfo, DatasetRef, MetricEntry,
+        MlModelInfo,
     };
 
     fn full_ml_component(name: &str) -> Component {
@@ -588,6 +656,131 @@ mod tests {
                 .iter()
                 .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-2G-METRICS"),
             "raw-pointer quantitativeAnalysis should satisfy the metrics check"
+        );
+    }
+
+    #[test]
+    fn data_component_without_dataset_evidence_is_not_applicable() {
+        // A `type: data` config bundle with no dataset struct must not make
+        // the profile applicable (previously every Data component counted).
+        let mut sbom = NormalizedSbom::default();
+        let mut lib =
+            Component::new("lib".to_string(), "lib".to_string()).with_version("1.0.0".to_string());
+        lib.component_type = ComponentType::Library;
+        add(&mut sbom, lib);
+        let mut cfg = Component::new("app-config".to_string(), "app-config".to_string());
+        cfg.component_type = ComponentType::Data;
+        add(&mut sbom, cfg);
+
+        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        assert!(result.is_compliant);
+        assert_eq!(result.error_count, 0);
+        assert_eq!(result.violations.len(), 1, "single N/A finding expected");
+        assert_eq!(result.violations[0].rule_id, "SBOM-AIACT-NA");
+    }
+
+    #[test]
+    fn mistyped_component_with_ml_metadata_is_applicable() {
+        // application-typed component carrying parsed modelCard metadata must
+        // be visible to the profile (previously "Not applicable").
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("sentiment-model".to_string(), "sentiment-model".to_string())
+            .with_version("1.0.0".to_string());
+        c.component_type = ComponentType::Application;
+        c.ml_model = Some(MlModelInfo {
+            architecture_family: Some("transformer".to_string()),
+            ..MlModelInfo::default()
+        });
+        add(&mut sbom, c);
+
+        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+            "SBOM with ML metadata must not be N/A; got {:?}",
+            result.violations
+        );
+        // The model checks actually ran (no use-cases declared).
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-1-PURPOSE"),
+            "model checks should run on the mistyped model"
+        );
+    }
+
+    #[test]
+    fn component_description_counts_without_ml_model_struct() {
+        // A MachineLearningModel component with a textual description but no
+        // MlModelInfo must satisfy the §1 general-description element.
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("model-a".to_string(), "model-a".to_string())
+            .with_version("1.0.0".to_string());
+        c.component_type = ComponentType::MachineLearningModel;
+        c.description = Some("Transformer encoder for English text classification".to_string());
+        add(&mut sbom, c);
+
+        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-1-DESCRIPTION"),
+            "component description must satisfy §1 without an ml_model struct; got {:?}",
+            result.violations
+        );
+    }
+
+    #[test]
+    fn untyped_huggingface_component_is_applicable_with_warning() {
+        let mut sbom = NormalizedSbom::default();
+        let c = Component::new("bert-base-uncased".to_string(), "bert".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:huggingface/google-bert/bert-base-uncased@1.0.0".to_string());
+        add(&mut sbom, c);
+
+        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+            "huggingface PURL must keep the profile applicable"
+        );
+        assert!(
+            result.violations.iter().any(|v| {
+                v.rule_id == "SBOM-AIACT-UNTYPED-ML" && v.severity == ViolationSeverity::Warning
+            }),
+            "mistyped-ML warning should fire; got {:?}",
+            result.violations
+        );
+    }
+
+    #[test]
+    fn energy_info_absent_when_sbom_has_no_ml_models() {
+        // Dataset-only SBOM: applicable, but the model-energy recommendation
+        // is about models that do not exist here and must not fire.
+        let mut sbom = NormalizedSbom::default();
+        add(&mut sbom, dataset_component("data-1", &["none"]));
+
+        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-2C-ENERGY"),
+            "energy Info must not fire with zero ML models; got {:?}",
+            result.violations
+        );
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+            "dataset evidence keeps the profile applicable"
         );
     }
 

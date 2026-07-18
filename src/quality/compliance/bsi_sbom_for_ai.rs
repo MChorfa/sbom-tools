@@ -24,6 +24,7 @@
 //! Errors, SHOULD elements are Warnings, and discretionary / not-yet-modeled
 //! elements are informational.
 
+use super::ai_shared::{ai_bom_scope, has_model_card_ref, push_untyped_ml_warning};
 use super::*;
 use crate::model::{ComponentType, CreatorType, HashAlgorithm};
 
@@ -37,36 +38,54 @@ impl ComplianceChecker {
         sbom: &NormalizedSbom,
         violations: &mut Vec<Violation>,
     ) {
-        // ML-model and dataset components drive the readiness checks.
-        let ml_components: Vec<_> = sbom
-            .components
-            .values()
-            .filter(|c| c.component_type == ComponentType::MachineLearningModel)
-            .collect();
-        let dataset_components: Vec<_> = sbom
-            .components
-            .values()
-            .filter(|c| c.dataset.is_some() || c.component_type == ComponentType::Data)
-            .collect();
+        // ML-model and dataset components drive the readiness checks. The
+        // classification and the N/A gate are shared with the EU-AI-Act
+        // profile (compliance/ai_shared.rs) so the two profiles scope
+        // identically by construction: ML components are recognised by type
+        // OR parsed modelCard/AI-profile metadata, and datasets require real
+        // dataset evidence (a bare `type: data` config bundle is not an AI
+        // dataset and must not fail the MUST dataset elements).
+        let scope = ai_bom_scope(sbom);
 
         // N/A gate: no AI/ML content at all → single informational finding,
         // never a failure (a non-AI SBOM is simply out of scope here). Mirrors
         // the EU-AI-Act non-AI guard exactly.
-        if ml_components.is_empty() && dataset_components.is_empty() {
+        if !scope.is_applicable() {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[BSI-AI] Not applicable: SBOM contains no machine-learning-model or \
-                          dataset components, so BSI/G7 SBOM-for-AI minimum-elements readiness \
-                          cannot be assessed (readiness profile, not a legal-conformity guarantee)"
+                message: "[BSI-AI] Not applicable: SBOM contains no machine-learning-model \
+                          components, ML-model metadata, or AI-dataset evidence, so BSI/G7 \
+                          SBOM-for-AI minimum-elements readiness cannot be assessed (readiness \
+                          profile, not a legal-conformity guarantee)"
                     .to_string(),
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI: applicability".to_string(),
                 rule_id: "SBOM-BSIAI-NA",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
             return;
         }
+
+        // Evasion guard: ML-looking components (pkg:huggingface PURL or
+        // model-card reference) that are neither typed machine-learning-model
+        // nor carry ML metadata keep the profile applicable and are surfaced,
+        // so untyping a model cannot dodge the assessment.
+        push_untyped_ml_warning(
+            &scope,
+            "BSI-AI",
+            "BSI/G7 SBOM-for-AI: applicability (mistyped ML content)",
+            "SBOM-BSIAI-UNTYPED-ML",
+            violations,
+        );
+
+        let super::ai_shared::AiBomScope {
+            ml_components,
+            dataset_components,
+            ..
+        } = scope;
 
         self.check_bsiai_metadata_cluster(sbom, violations);
         self.check_bsiai_system_level_cluster(sbom, &ml_components, violations);
@@ -91,6 +110,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Author".to_string(),
                 rule_id: "SBOM-BSIAI-META-AUTHOR",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -110,6 +131,8 @@ impl ComplianceChecker {
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Data format name + version"
                     .to_string(),
                 rule_id: "SBOM-BSIAI-META-FORMAT",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -127,6 +150,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Timestamp".to_string(),
                 rule_id: "SBOM-BSIAI-META-TIMESTAMP",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -145,6 +170,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Generation tool".to_string(),
                 rule_id: "SBOM-BSIAI-META-TOOL",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -160,6 +187,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — Metadata / Signature".to_string(),
                 rule_id: "SBOM-BSIAI-META-SIGNATURE",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -195,6 +224,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — System-Level / Primary AI system".to_string(),
                 rule_id: "SBOM-BSIAI-SYS-PRIMARY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -223,6 +254,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "BSI/G7 SBOM-for-AI — System-Level / Producer".to_string(),
                 rule_id: "SBOM-BSIAI-SYS-PRODUCER",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -238,6 +271,8 @@ impl ComplianceChecker {
             element: None,
             requirement: "BSI/G7 SBOM-for-AI — System-Level / Data flow & usage".to_string(),
             rule_id: "SBOM-BSIAI-SYS-DATAFLOW",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         });
     }
@@ -278,12 +313,16 @@ impl ComplianceChecker {
                 without_hash.push(c.name.clone());
             } else if !c.hashes.iter().any(|h| nist_approved_hash(&h.algorithm)) {
                 // Hash present but none use a NIST-approved algorithm
-                // (reuses the bsi.rs SHA-256+ gate).
+                // (NIST-approved SHA-256+ — intentionally NOT the TR-03183-2 §5.2.2
+                // SHA-512 rule; the AI guidance asks for NIST-approved algorithms).
                 weak_hash.push(c.name.clone());
             }
 
-            // Model card URL (AI-001).
-            if ml.and_then(|m| m.model_card_url.as_ref()).is_none() {
+            // Model card (AI-001): a modelCard-derived URL, or a spec-valid
+            // `model-card` external reference on the component (the parser
+            // only copies the URL into `ml_model.model_card_url` when a
+            // modelCard object exists, so the raw reference must count too).
+            if ml.and_then(|m| m.model_card_url.as_ref()).is_none() && !has_model_card_ref(c) {
                 without_model_card.push(c.name.clone());
             }
             // Architecture declared (AI-002).
@@ -312,6 +351,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_name,
+            ml_components.len(),
             "declare no name",
             "BSI/G7 SBOM-for-AI — Models / Model name",
             "SBOM-BSIAI-MODEL-NAME",
@@ -321,6 +361,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_version,
+            ml_components.len(),
             "declare no version",
             "BSI/G7 SBOM-for-AI — Models / Model version",
             "SBOM-BSIAI-MODEL-VERSION",
@@ -330,6 +371,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_identifier,
+            ml_components.len(),
             "carry no unique identifier (PURL/CPE/SWHID/SWID)",
             "BSI/G7 SBOM-for-AI — Models / Model identifier",
             "SBOM-BSIAI-MODEL-IDENTIFIER",
@@ -339,6 +381,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::IntegrityInfo,
             &without_hash,
+            ml_components.len(),
             "carry no model-weight hash value",
             "BSI/G7 SBOM-for-AI — Models / Model hash value",
             "SBOM-BSIAI-MODEL-HASH",
@@ -348,6 +391,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::IntegrityInfo,
             &weak_hash,
+            ml_components.len(),
             "use no NIST-approved hash algorithm (SHA-256+) for their weights",
             "BSI/G7 SBOM-for-AI — Models / Hash algorithm",
             "SBOM-BSIAI-MODEL-HASH-ALGO",
@@ -359,6 +403,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_model_card,
+            ml_components.len(),
             "reference no model card",
             "BSI/G7 SBOM-for-AI — Models / Model card",
             "SBOM-BSIAI-MODEL-CARD",
@@ -368,6 +413,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_architecture,
+            ml_components.len(),
             "declare no architecture",
             "BSI/G7 SBOM-for-AI — Models / Architecture",
             "SBOM-BSIAI-MODEL-ARCHITECTURE",
@@ -377,6 +423,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DependencyInfo,
             &without_datasets,
+            ml_components.len(),
             "reference no training datasets",
             "BSI/G7 SBOM-for-AI — Models / Training datasets",
             "SBOM-BSIAI-MODEL-DATASETS",
@@ -386,6 +433,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_limitations,
+            ml_components.len(),
             "state no limitations",
             "BSI/G7 SBOM-for-AI — Models / Limitations",
             "SBOM-BSIAI-MODEL-LIMITATIONS",
@@ -395,6 +443,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::LicenseInfo,
             &without_license,
+            ml_components.len(),
             "declare no license",
             "BSI/G7 SBOM-for-AI — Models / Model license",
             "SBOM-BSIAI-MODEL-LICENSE",
@@ -457,6 +506,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_name,
+            dataset_components.len(),
             "declare no name",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset name",
             "SBOM-BSIAI-DATASET-NAME",
@@ -466,6 +516,7 @@ impl ComplianceChecker {
             ViolationSeverity::Error,
             ViolationCategory::ComponentIdentification,
             &without_identifier,
+            dataset_components.len(),
             "carry no unique identifier (PURL/CPE/SWHID/SWID)",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset identifier",
             "SBOM-BSIAI-DATASET-IDENTIFIER",
@@ -477,6 +528,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::IntegrityInfo,
             &without_hash,
+            dataset_components.len(),
             "carry no hash value",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset hash value",
             "SBOM-BSIAI-DATASET-HASH",
@@ -486,6 +538,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::LicenseInfo,
             &without_license,
+            dataset_components.len(),
             "declare no license",
             "BSI/G7 SBOM-for-AI — Datasets / Dataset license",
             "SBOM-BSIAI-DATASET-LICENSE",
@@ -495,6 +548,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_sensitivity,
+            dataset_components.len(),
             "declare no sensitivity classification",
             "BSI/G7 SBOM-for-AI — Datasets / Sensitivity classification",
             "SBOM-BSIAI-DATASET-SENSITIVITY",
@@ -504,6 +558,7 @@ impl ComplianceChecker {
             ViolationSeverity::Warning,
             ViolationCategory::DocumentMetadata,
             &without_provenance,
+            dataset_components.len(),
             "declare no provenance / intended-use",
             "BSI/G7 SBOM-for-AI — Datasets / Provenance & intended use",
             "SBOM-BSIAI-DATASET-PROVENANCE",
@@ -512,7 +567,9 @@ impl ComplianceChecker {
 
     /// Infrastructure cluster — an ML component should link to its runtime /
     /// framework dependencies (a BOM / HBOM link, or any dependency edge).
-    /// Informational when no such link exists.
+    /// Informational when no such link exists; silent when the SBOM has no
+    /// ML-model components at all (a recommendation about models that do not
+    /// exist — e.g. dataset-only SBOMs — is meaningless).
     fn check_bsiai_infrastructure_cluster(
         &self,
         sbom: &NormalizedSbom,
@@ -535,7 +592,7 @@ impl ComplianceChecker {
             in_edges || has_bom_ref
         });
 
-        if !has_infra_link {
+        if !ml_components.is_empty() && !has_infra_link {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::DependencyInfo,
@@ -546,6 +603,8 @@ impl ComplianceChecker {
                 requirement: "BSI/G7 SBOM-for-AI — Infrastructure / Runtime & framework"
                     .to_string(),
                 rule_id: "SBOM-BSIAI-INFRA-RUNTIME",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -564,6 +623,8 @@ impl ComplianceChecker {
             element: None,
             requirement: "BSI/G7 SBOM-for-AI — Security / AI security controls".to_string(),
             rule_id: "SBOM-BSIAI-SEC-CONTROLS",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         });
         violations.push(Violation {
@@ -575,13 +636,16 @@ impl ComplianceChecker {
             element: None,
             requirement: "BSI/G7 SBOM-for-AI — Security / Exploitability reference".to_string(),
             rule_id: "SBOM-BSIAI-SEC-EXPLOITABILITY",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         });
     }
 }
 
 /// NIST-approved cryptographic hash gate (SHA-256 or stronger). Reuses the
-/// same allowlist as the BSI TR-03183-2 §5.4 check in [`super::bsi`].
+/// NIST-approved hash allowlist (SHA-256 and stronger). Deliberately
+/// independent of the TR-03183-2 §5.2.2 SHA-512-only rule in [`super::bsi`].
 fn nist_approved_hash(a: &HashAlgorithm) -> bool {
     matches!(
         a,
@@ -599,12 +663,16 @@ fn nist_approved_hash(a: &HashAlgorithm) -> bool {
 }
 
 /// Push a per-component readiness finding when `failing` is non-empty. `verb`
-/// completes the sentence "N component(s) <verb>: <list>".
+/// completes the sentence "N component(s) <verb>: <list>". `total` is the
+/// size of the cluster cohort the failing components were drawn from (ML
+/// models or datasets), carried as structured [`ViolationCounts`].
+#[allow(clippy::too_many_arguments)]
 fn push_model_finding(
     violations: &mut Vec<Violation>,
     severity: ViolationSeverity,
     category: ViolationCategory,
     failing: &[String],
+    total: usize,
     verb: &str,
     requirement: &str,
     rule_id: &'static str,
@@ -625,6 +693,11 @@ fn push_model_finding(
         element: failing.first().cloned(),
         requirement: requirement.to_string(),
         rule_id,
+        component_id: None,
+        counts: Some(ViolationCounts {
+            affected: failing.len(),
+            total,
+        }),
         standard_refs: Vec::new(),
     });
 }
@@ -831,6 +904,112 @@ mod tests {
                 .iter()
                 .any(|v| v.rule_id == "SBOM-BSIAI-DATASET-PROVENANCE"),
             "preprocessing should satisfy the dataset provenance element"
+        );
+    }
+
+    #[test]
+    fn data_component_without_dataset_evidence_is_not_applicable() {
+        // Flagship over-match fix: a web-app SBOM with a `type: data` config
+        // bundle (no dataset struct) must be N/A — previously it failed with
+        // a blocking SBOM-BSIAI-DATASET-IDENTIFIER Error.
+        let mut sbom = NormalizedSbom::default();
+        let mut lib =
+            Component::new("lib".to_string(), "lib".to_string()).with_version("1.0.0".to_string());
+        lib.component_type = ComponentType::Library;
+        add(&mut sbom, lib);
+        let mut cfg = Component::new("app-config".to_string(), "app-config".to_string());
+        cfg.component_type = ComponentType::Data;
+        add(&mut sbom, cfg);
+
+        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        assert!(
+            result.is_compliant,
+            "web app with config data component must not fail BSI-AI; got {:?}",
+            result.violations
+        );
+        assert_eq!(result.error_count, 0);
+        assert_eq!(result.violations.len(), 1, "single N/A finding expected");
+        assert_eq!(result.violations[0].rule_id, "SBOM-BSIAI-NA");
+    }
+
+    #[test]
+    fn mistyped_component_with_ml_metadata_is_applicable() {
+        // application-typed component carrying parsed modelCard metadata must
+        // be visible to the Models cluster (previously "Not applicable").
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("sentiment-model".to_string(), "sentiment-model".to_string())
+            .with_version("1.0.0".to_string());
+        c.component_type = ComponentType::Application;
+        c.ml_model = Some(MlModelInfo {
+            architecture_family: Some("transformer".to_string()),
+            ..MlModelInfo::default()
+        });
+        add(&mut sbom, c);
+
+        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
+        assert!(
+            !ids.contains(&"SBOM-BSIAI-NA"),
+            "SBOM with ML metadata must not be N/A; got {ids:?}"
+        );
+        // The Models element checks ran on the mistyped model (no identifier).
+        assert!(
+            ids.contains(&"SBOM-BSIAI-MODEL-IDENTIFIER"),
+            "Models cluster should run on the mistyped model; got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn model_card_external_ref_satisfies_model_card_element() {
+        use crate::model::{ExternalRefType, ExternalReference};
+        // A machine-learning-model documented via a `model-card` external
+        // reference alone (no modelCard object → ml_model is None) must not
+        // be flagged as lacking a model card.
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("model-a".to_string(), "model-a".to_string())
+            .with_version("1.0.0".to_string());
+        c.component_type = ComponentType::MachineLearningModel;
+        c.external_refs.push(ExternalReference {
+            ref_type: ExternalRefType::ModelCard,
+            url: "https://huggingface.co/example/model-a".to_string(),
+            comment: None,
+            hashes: Vec::new(),
+        });
+        add(&mut sbom, c);
+
+        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSIAI-MODEL-CARD"),
+            "model-card external reference must satisfy the model-card element; got {:?}",
+            result.violations
+        );
+    }
+
+    #[test]
+    fn untyped_huggingface_component_is_applicable_with_warning() {
+        let mut sbom = NormalizedSbom::default();
+        let c = Component::new("bert-base-uncased".to_string(), "bert".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:huggingface/google-bert/bert-base-uncased@1.0.0".to_string());
+        add(&mut sbom, c);
+
+        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SBOM-BSIAI-NA"),
+            "huggingface PURL must keep the profile applicable"
+        );
+        assert!(
+            result.violations.iter().any(|v| {
+                v.rule_id == "SBOM-BSIAI-UNTYPED-ML" && v.severity == ViolationSeverity::Warning
+            }),
+            "mistyped-ML warning should fire; got {:?}",
+            result.violations
         );
     }
 

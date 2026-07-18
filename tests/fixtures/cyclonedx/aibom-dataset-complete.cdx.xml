@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" serialNumber="urn:uuid:7b8c9d0e-1f2a-43b4-85c6-d7e8f9a0b1c2" version="1">
+  <metadata>
+    <timestamp>2026-03-27T00:00:00Z</timestamp>
+    <component type="application" bom-ref="root">
+      <name>nlp-pipeline</name>
+      <version>1.0.0</version>
+    </component>
+  </metadata>
+  <components>
+    <component type="data" bom-ref="dataset-1">
+      <name>training-corpus</name>
+      <version>2026.01</version>
+      <purl>pkg:generic/training-corpus@2026.01</purl>
+      <licenses>
+        <license>
+          <id>CC-BY-4.0</id>
+        </license>
+      </licenses>
+      <hashes>
+        <hash alg="SHA-256">c4b1f9a2d3e5061728394a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9</hash>
+      </hashes>
+      <data>
+        <type>dataset</type>
+        <sensitiveData>none</sensitiveData>
+        <governance>
+          <owners>
+            <owner>
+              <organization>
+                <name>Data Platform Team</name>
+              </organization>
+            </owner>
+          </owners>
+        </governance>
+      </data>
+    </component>
+  </components>
+</bom>

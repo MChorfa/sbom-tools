@@ -23,6 +23,16 @@ use anyhow::{Result, bail};
 pub fn run_diff(config: DiffConfig) -> Result<i32> {
     let quiet = config.behavior.quiet;
 
+    // `diff` renders every format except OSCAL (which is compliance-
+    // assessment output produced by `validate`); reject it up front instead
+    // of silently emitting plain JSON.
+    if config.output.format == ReportFormat::OscalJson {
+        bail!(
+            "output format 'oscal-json' is not supported by `sbom-tools diff`; \
+             use `sbom-tools validate -o oscal-json` for OSCAL assessment results"
+        );
+    }
+
     // Stdin can only be consumed once, so a diff can read at most one side from "-".
     if is_stdin_path(&config.paths.old) && is_stdin_path(&config.paths.new) {
         bail!("Cannot read both SBOMs from stdin ('-'); only one '-' is allowed per diff");
@@ -172,15 +182,14 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
     let effective_output = auto_detect_format(config.output.format, &output_target);
 
     if effective_output == ReportFormat::Tui {
-        // Resolve the CRA sidecar (auto-discovered next to the new/"current"
-        // SBOM unless it reads from stdin) so the compliance tab applies the
-        // same sidecar-driven verdicts as the CLI — most importantly EU AI Act
-        // high-risk escalation, which otherwise renders COMPLIANT in the TUI.
-        let tui_sidecar = if is_stdin_path(&config.paths.new) {
-            None
-        } else {
-            crate::model::CraSidecarMetadata::find_for_sbom(&config.paths.new)
-        };
+        // Resolve the CRA sidecars (auto-discovered next to each SBOM unless
+        // it reads from stdin) so the compliance tab applies the same
+        // sidecar-driven verdicts as the non-TUI reports — most importantly
+        // EU AI Act high-risk escalation, which otherwise renders COMPLIANT
+        // in the TUI. Resolution is per-SBOM: each side of the diff is judged
+        // against its own adjacent metadata, identically to the report stage.
+        let old_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.old);
+        let new_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.new);
 
         let (old_sbom, old_raw) = old_parsed.into_parts();
         let (new_sbom, new_raw) = new_parsed.into_parts();
@@ -198,9 +207,7 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
         #[cfg(not(feature = "enrichment"))]
         let mut app = App::new_diff(result, old_sbom, new_sbom, &old_raw, &new_raw);
 
-        if let Some(sc) = tui_sidecar {
-            app = app.with_cra_sidecar(sc);
-        }
+        app = app.with_cra_sidecars(old_sidecar, new_sidecar);
 
         // Set export template if configured
         app.export_template = config.output.export_template.clone();

@@ -138,20 +138,27 @@ fn sarif_rule_ids_are_stable_for_cra_noncompliant_fixture() {
     let ids = sarif_rule_ids(&fx, ComplianceLevel::CraPhase2);
 
     // Every emitted ID must be one of the known, stable CRA external rule IDs.
+    // NOTE: the CRA rule IDs were deliberately re-anchored in 2026-07 — the
+    // old identifiers (SBOM-CRA-ART-13-3/-4/-6/-7/-11/-12/-15, ANNEX-III)
+    // encoded citations to the wrong Article 13 paragraphs.
     let allowed: BTreeSet<&str> = [
-        "SBOM-CRA-ART-13-3",
-        "SBOM-CRA-ART-13-4",
+        "SBOM-CRA-SBOM-FRESHNESS",
+        "SBOM-CRA-MACHINE-READABLE",
         "SBOM-CRA-ART-13-5",
-        "SBOM-CRA-ART-13-6",
-        "SBOM-CRA-ART-13-7",
+        "SBOM-CRA-ART-13-17-CONTACT",
+        "SBOM-CRA-VULN-METADATA",
+        "SBOM-CRA-CVD-POLICY",
         "SBOM-CRA-ART-13-8",
-        "SBOM-CRA-ART-13-9",
-        "SBOM-CRA-ART-13-11",
-        "SBOM-CRA-ART-13-12",
-        "SBOM-CRA-ART-13-15",
+        "SBOM-CRA-VULN-STATEMENT",
+        "SBOM-CRA-LIFECYCLE",
+        "SBOM-CRA-ART-13-15-PRODUCT",
+        "SBOM-CRA-COMPONENT-VERSION",
+        "SBOM-CRA-ART-13-16",
+        "SBOM-CRA-ART-13-16-EMAIL",
+        "SBOM-CRA-COMPONENT-SUPPLIER",
         "SBOM-CRA-ANNEX-I",
-        "SBOM-CRA-ANNEX-III",
-        "SBOM-CRA-ANNEX-VII",
+        "SBOM-CRA-DOC-INTEGRITY",
+        "SBOM-CRA-ANNEX-V",
         "SBOM-CRA-PRE-7-RQ-07-RE",
         "SBOM-CRA-GENERAL",
     ]
@@ -167,8 +174,8 @@ fn sarif_rule_ids_are_stable_for_cra_noncompliant_fixture() {
     }
     // Sanity: the manufacturer/identification gaps must surface their pinned IDs.
     assert!(
-        ids.contains("SBOM-CRA-ART-13-15"),
-        "expected the manufacturer-identification rule SBOM-CRA-ART-13-15; got {ids:?}"
+        ids.contains("SBOM-CRA-ART-13-16"),
+        "expected the manufacturer-identification rule SBOM-CRA-ART-13-16; got {ids:?}"
     );
 }
 

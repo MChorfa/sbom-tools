@@ -330,44 +330,43 @@ pub fn export_compliance(
     }
 }
 
+/// Serialize the canonical serde [`crate::quality::ComplianceResult`] —
+/// the exact same shape `validate -o json` emits (single result → object,
+/// all standards → array). No hand-rolled mirror: field additions to the
+/// result contract (applicability, conformity summary, standard refs)
+/// flow through automatically.
 fn compliance_to_json(results: &[crate::quality::ComplianceResult], selected: usize) -> String {
-    use serde_json::{Value, json};
+    results.get(selected).map_or_else(
+        || serde_json::to_string_pretty(results).unwrap_or_default(),
+        |r| serde_json::to_string_pretty(r).unwrap_or_default(),
+    )
+}
 
-    let to_value = |r: &crate::quality::ComplianceResult| -> Value {
-        let violations: Vec<Value> = r
-            .violations
-            .iter()
-            .map(|v| {
-                json!({
-                    "severity": format!("{:?}", v.severity),
-                    "category": v.category.name(),
-                    "message": v.message,
-                    "element": v.element,
-                    "requirement": v.requirement,
-                    "remediation": v.remediation_guidance(),
-                })
-            })
-            .collect();
+/// Canonical status label for a compliance result. N/A results must never
+/// render as a pass (`is_compliant` stays `true` for them by contract).
+fn compliance_status_label(r: &crate::quality::ComplianceResult) -> &'static str {
+    if !r.is_applicable() {
+        "NOT APPLICABLE"
+    } else if r.is_compliant {
+        "COMPLIANT"
+    } else {
+        "NON-COMPLIANT"
+    }
+}
 
-        json!({
-            "standard": r.level.name(),
-            "is_compliant": r.is_compliant,
-            "error_count": r.error_count,
-            "warning_count": r.warning_count,
-            "info_count": r.info_count,
-            "violations": violations,
-        })
-    };
+/// Shared badge score via [`crate::quality::ComplianceResult::score`];
+/// "N/A" when the standard did not evaluate the SBOM.
+fn compliance_score_label(r: &crate::quality::ComplianceResult) -> String {
+    r.score()
+        .map_or_else(|| "N/A".to_string(), |s| format!("{s}%"))
+}
 
-    let output = results.get(selected).map_or_else(
-        || {
-            let all: Vec<Value> = results.iter().map(to_value).collect();
-            json!({ "standards": all })
-        },
-        to_value,
-    );
-
-    serde_json::to_string_pretty(&output).unwrap_or_default()
+/// Human-readable reason when a standard did not evaluate the SBOM.
+fn not_applicable_reason(r: &crate::quality::ComplianceResult) -> Option<&str> {
+    match &r.applicability {
+        crate::quality::Applicability::NotApplicable(reason) => Some(reason),
+        crate::quality::Applicability::Applicable => None,
+    }
 }
 
 /// Delegate to the proper SARIF generator in `reports::sarif`.
@@ -380,6 +379,14 @@ fn compliance_to_sarif(result: Option<&crate::quality::ComplianceResult>) -> Str
         .unwrap_or_else(|e| format!(r#"{{"error": "{e}"}}"#))
 }
 
+/// Escape `|` in markdown table cell content so untrusted SBOM values
+/// (component names in `element`, requirement text) cannot shift every
+/// subsequent column of the row. The sibling HTML/CSV exports already
+/// escape via `escape_html`/`csv_escape`.
+fn md_escape_cell(s: &str) -> String {
+    s.replace('|', "\\|")
+}
+
 fn compliance_to_markdown(results: &[crate::quality::ComplianceResult], selected: usize) -> String {
     let mut md = String::new();
 
@@ -388,12 +395,16 @@ fn compliance_to_markdown(results: &[crate::quality::ComplianceResult], selected
         .map_or_else(|| results.iter().collect(), |r| vec![r]);
 
     for r in items {
-        let status = if r.is_compliant {
-            "COMPLIANT"
-        } else {
-            "NON-COMPLIANT"
-        };
-        md.push_str(&format!("# {} - {status}\n\n", r.level.name()));
+        md.push_str(&format!(
+            "# {} - {}\n\n",
+            r.level.name(),
+            compliance_status_label(r)
+        ));
+        if let Some(reason) = not_applicable_reason(r) {
+            md.push_str(&format!("Not applicable: {reason}\n\n"));
+            continue;
+        }
+        md.push_str(&format!("Score: {}\n\n", compliance_score_label(r)));
         md.push_str(&format!(
             "Errors: {} | Warnings: {} | Info: {}\n\n",
             r.error_count, r.warning_count, r.info_count
@@ -404,17 +415,18 @@ fn compliance_to_markdown(results: &[crate::quality::ComplianceResult], selected
             continue;
         }
 
-        md.push_str("| Severity | Category | Requirement | Element | Remediation |\n");
-        md.push_str("|----------|----------|-------------|---------|-------------|\n");
+        md.push_str("| Severity | Rule ID | Category | Requirement | Element | Remediation |\n");
+        md.push_str("|----------|---------|----------|-------------|---------|-------------|\n");
         for v in &r.violations {
             let element = v.element.as_deref().unwrap_or("-");
             md.push_str(&format!(
-                "| {:?} | {} | {} | {} | {} |\n",
-                v.severity,
+                "| {} | {} | {} | {} | {} | {} |\n",
+                v.severity.name(),
+                v.rule_id,
                 v.category.name(),
-                v.requirement,
-                element,
-                v.remediation_guidance(),
+                md_escape_cell(&v.requirement),
+                md_escape_cell(element),
+                md_escape_cell(v.remediation_guidance()),
             ));
         }
         md.push('\n');
@@ -424,8 +436,10 @@ fn compliance_to_markdown(results: &[crate::quality::ComplianceResult], selected
 }
 
 fn compliance_to_csv(results: &[crate::quality::ComplianceResult], selected: usize) -> String {
-    let mut lines =
-        vec!["Standard,Severity,Category,Requirement,Element,Message,Remediation".to_string()];
+    let mut lines = vec![
+        "Standard,Status,Severity,RuleId,Category,Requirement,Element,Message,Remediation"
+            .to_string(),
+    ];
 
     let items: Vec<&crate::quality::ComplianceResult> = results
         .get(selected)
@@ -433,12 +447,26 @@ fn compliance_to_csv(results: &[crate::quality::ComplianceResult], selected: usi
 
     for r in &items {
         let std_name = r.level.name();
+        let status = compliance_status_label(r);
+        if !r.is_applicable() {
+            // One status row: an unevaluated standard has no actionable
+            // violations, and its N/A placeholder finding must not be
+            // mistaken for one.
+            let reason = not_applicable_reason(r).unwrap_or("");
+            lines.push(format!(
+                "\"{std_name}\",\"{status}\",\"\",\"\",\"\",\"\",\"\",\"{}\",\"\"",
+                csv_escape(reason),
+            ));
+            continue;
+        }
         for v in &r.violations {
             let element = v.element.as_deref().unwrap_or("");
             lines.push(format!(
-                "\"{}\",\"{:?}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"",
+                "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"",
                 std_name,
-                v.severity,
+                status,
+                v.severity.name(),
+                v.rule_id,
                 csv_escape(v.category.name()),
                 csv_escape(&v.requirement),
                 csv_escape(element),
@@ -472,6 +500,7 @@ th { background: #313244; color: #89b4fa; font-weight: 600; }
 .info { color: #89b4fa; }
 .pass { color: #a6e3a1; font-weight: bold; }
 .fail { color: #f38ba8; font-weight: bold; }
+.na { color: #a6adc8; font-weight: bold; }
 .summary { margin: 1rem 0; color: #a6adc8; }
 </style></head><body>
 <h1>SBOM Compliance Report</h1>
@@ -480,19 +509,28 @@ th { background: #313244; color: #89b4fa; font-weight: 600; }
     );
 
     for r in &items {
-        let status_class = if r.is_compliant { "pass" } else { "fail" };
-        let status_label = if r.is_compliant {
-            "COMPLIANT"
+        let status_class = if !r.is_applicable() {
+            "na"
+        } else if r.is_compliant {
+            "pass"
         } else {
-            "NON-COMPLIANT"
+            "fail"
         };
+        let status_label = compliance_status_label(r);
         html.push_str(&format!(
             "<h2>{} - <span class=\"{status_class}\">{status_label}</span></h2>\n",
             escape_html(r.level.name()),
         ));
+        if let Some(reason) = not_applicable_reason(r) {
+            html.push_str(&format!("<p>Not applicable: {}</p>\n", escape_html(reason)));
+            continue;
+        }
         html.push_str(&format!(
-            "<p>Errors: {} | Warnings: {} | Info: {}</p>\n",
-            r.error_count, r.warning_count, r.info_count
+            "<p>Score: {} | Errors: {} | Warnings: {} | Info: {}</p>\n",
+            compliance_score_label(r),
+            r.error_count,
+            r.warning_count,
+            r.info_count
         ));
 
         if r.violations.is_empty() {
@@ -500,7 +538,7 @@ th { background: #313244; color: #89b4fa; font-weight: 600; }
             continue;
         }
 
-        html.push_str("<table><tr><th>Severity</th><th>Category</th><th>Requirement</th><th>Element</th><th>Message</th><th>Remediation</th></tr>\n");
+        html.push_str("<table><tr><th>Severity</th><th>Rule ID</th><th>Category</th><th>Requirement</th><th>Element</th><th>Message</th><th>Remediation</th></tr>\n");
         for v in &r.violations {
             let sev_class = match v.severity {
                 crate::quality::ViolationSeverity::Error => "error",
@@ -509,8 +547,9 @@ th { background: #313244; color: #89b4fa; font-weight: 600; }
             };
             let element = v.element.as_deref().unwrap_or("-");
             html.push_str(&format!(
-                "<tr><td class=\"{sev_class}\">{:?}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
-                v.severity,
+                "<tr><td class=\"{sev_class}\">{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                v.severity.name(),
+                escape_html(v.rule_id),
                 escape_html(v.category.name()),
                 escape_html(&v.requirement),
                 escape_html(element),
@@ -763,6 +802,186 @@ fn display_path(path: &PathBuf) -> String {
             .unwrap_or_else(|_| path.to_path_buf())
             .display()
             .to_string()
+    }
+}
+
+#[cfg(test)]
+mod compliance_export_tests {
+    use super::{
+        compliance_to_csv, compliance_to_html, compliance_to_json, compliance_to_markdown,
+    };
+    use crate::quality::{
+        Applicability, ComplianceLevel, ComplianceResult, Violation, ViolationCategory,
+        ViolationSeverity,
+    };
+
+    const RULE_ID: &str = "SBOM-BSI-TR-03183-2-VERSION";
+
+    fn violation(rule_id: &'static str, severity: ViolationSeverity) -> Violation {
+        Violation {
+            severity,
+            category: ViolationCategory::DocumentMetadata,
+            message: "test finding message".to_string(),
+            element: Some("comp-a".to_string()),
+            requirement: "Test requirement".to_string(),
+            rule_id,
+            component_id: None,
+            counts: None,
+            standard_refs: Vec::new(),
+        }
+    }
+
+    /// One applicable NON-COMPLIANT result + one N/A readiness result.
+    fn fixture() -> Vec<ComplianceResult> {
+        let applicable = ComplianceResult::new(
+            ComplianceLevel::BsiTr03183_2,
+            vec![violation(RULE_ID, ViolationSeverity::Error)],
+        );
+        // "SBOM-AIACT-NA" is the readiness profiles' N/A marker rule;
+        // ComplianceResult::new derives Applicability::NotApplicable from it.
+        let not_applicable = ComplianceResult::new(
+            ComplianceLevel::EuAiAct,
+            vec![violation("SBOM-AIACT-NA", ViolationSeverity::Info)],
+        );
+        assert!(!not_applicable.is_applicable(), "fixture must be N/A");
+        vec![applicable, not_applicable]
+    }
+
+    #[test]
+    fn json_export_roundtrips_canonical_serde_result() {
+        let results = fixture();
+        let json = compliance_to_json(&results, 0);
+
+        // Must parse back through the canonical serde contract — same shape
+        // as `validate -o json` — not a hand-rolled mirror.
+        let parsed: ComplianceResult =
+            serde_json::from_str(&json).expect("canonical ComplianceResult JSON");
+        assert_eq!(parsed.level, ComplianceLevel::BsiTr03183_2);
+        assert!(!parsed.is_compliant);
+        assert_eq!(parsed.error_count, 1);
+        assert_eq!(parsed.violations.len(), 1);
+        assert_eq!(parsed.violations[0].severity, ViolationSeverity::Error);
+
+        // Severity must be the serde form ("Error"), not a Debug artifact
+        // of a hand-rolled object.
+        assert!(json.contains("\"severity\": \"Error\""));
+    }
+
+    #[test]
+    fn json_export_all_standards_is_canonical_serde_array() {
+        let results = fixture();
+        // Out-of-range selection = "all standards" → serde array, matching
+        // the multi-standard `validate -o json` shape.
+        let json = compliance_to_json(&results, results.len());
+        let parsed: Vec<ComplianceResult> =
+            serde_json::from_str(&json).expect("canonical ComplianceResult array");
+        assert_eq!(parsed.len(), 2);
+        assert!(matches!(
+            parsed[1].applicability,
+            Applicability::NotApplicable(_)
+        ));
+    }
+
+    #[test]
+    fn markdown_includes_rule_id_shared_score_and_severity_label() {
+        let results = fixture();
+        let md = compliance_to_markdown(&results, 0);
+
+        assert!(md.contains(RULE_ID), "markdown must carry stable rule ids");
+        assert!(md.contains("NON-COMPLIANT"));
+        assert!(md.contains("| Error |"), "severity via canonical label");
+        // Shared ComplianceResult::score(): 1 error → 100/(1+1) = 50.
+        let expected = format!("Score: {}%", results[0].score().expect("applicable score"));
+        assert!(md.contains(&expected), "score must come from score()");
+    }
+
+    #[test]
+    fn markdown_escapes_pipes_in_table_cells() {
+        // Component names are untrusted SBOM input and may legally contain
+        // '|' (CycloneDX name fields); unescaped they shift every following
+        // column of the table row.
+        let mut v = violation(RULE_ID, ViolationSeverity::Error);
+        v.element = Some("lib|4.x".to_string());
+        v.requirement = "Field a | field b".to_string();
+        let results = vec![ComplianceResult::new(
+            ComplianceLevel::BsiTr03183_2,
+            vec![v],
+        )];
+
+        let md = compliance_to_markdown(&results, 0);
+
+        assert!(
+            md.contains("lib\\|4.x"),
+            "element cell must escape '|': {md}"
+        );
+        assert!(
+            md.contains("Field a \\| field b"),
+            "requirement cell must escape '|': {md}"
+        );
+        assert!(
+            !md.contains("| lib|4.x |"),
+            "raw pipe must not survive inside a cell: {md}"
+        );
+    }
+
+    #[test]
+    fn markdown_renders_not_applicable_instead_of_compliant() {
+        let results = fixture();
+        let md = compliance_to_markdown(&results, 1);
+
+        assert!(md.contains("NOT APPLICABLE"));
+        // "NOT APPLICABLE" carries no COMPLIANT substring, so the whole
+        // document must be free of both COMPLIANT and NON-COMPLIANT.
+        assert!(
+            !md.contains("COMPLIANT"),
+            "an unevaluated standard must not render as a pass: {md}"
+        );
+        assert!(md.contains("test finding message"), "reason surfaced");
+    }
+
+    #[test]
+    fn csv_includes_rule_id_and_not_applicable_status() {
+        let results = fixture();
+
+        let selected = compliance_to_csv(&results, 0);
+        let mut lines = selected.lines();
+        assert_eq!(
+            lines.next(),
+            Some(
+                "Standard,Status,Severity,RuleId,Category,Requirement,Element,Message,Remediation"
+            )
+        );
+        let row = lines.next().expect("one violation row");
+        assert!(row.contains(&format!("\"{RULE_ID}\"")));
+        assert!(row.contains("\"NON-COMPLIANT\""));
+        assert!(row.contains("\"Error\""));
+
+        let all = compliance_to_csv(&results, results.len());
+        assert!(all.contains("\"NOT APPLICABLE\""));
+        assert!(
+            !all.contains("\"COMPLIANT\""),
+            "N/A standard must not emit a COMPLIANT row: {all}"
+        );
+    }
+
+    #[test]
+    fn html_includes_rule_id_and_not_applicable_status() {
+        let results = fixture();
+
+        let selected = compliance_to_html(&results, 0);
+        assert!(selected.contains(RULE_ID), "html must carry rule ids");
+        assert!(selected.contains("NON-COMPLIANT"));
+        assert!(selected.contains(">Error<"), "severity via canonical label");
+        let expected = format!("Score: {}%", results[0].score().expect("applicable score"));
+        assert!(selected.contains(&expected));
+
+        let na = compliance_to_html(&results, 1);
+        assert!(na.contains("NOT APPLICABLE"));
+        assert!(na.contains("class=\"na\""));
+        assert!(
+            !na.contains(">COMPLIANT<"),
+            "N/A standard must not render as a pass: {na}"
+        );
     }
 }
 

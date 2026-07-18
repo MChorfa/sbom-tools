@@ -1028,8 +1028,13 @@ impl SpdxParser {
         sbom.set_primary_component(primary_id.clone());
         if let Some(comp) = sbom.components.get(primary_id) {
             for ext_ref in &comp.external_refs {
+                // Only URL-shaped locators qualify — a bare CPE string or
+                // other identifier must never become the disclosure URL.
                 if matches!(ext_ref.ref_type, ExternalRefType::Advisories)
                     && sbom.document.vulnerability_disclosure_url.is_none()
+                    && (ext_ref.url.starts_with("http://")
+                        || ext_ref.url.starts_with("https://")
+                        || ext_ref.url.starts_with("mailto:"))
                 {
                     sbom.document.vulnerability_disclosure_url = Some(ext_ref.url.clone());
                 }
@@ -1218,10 +1223,13 @@ impl SpdxParser {
         // Set external references
         if let Some(ext_refs) = &pkg.external_refs {
             for ext_ref in ext_refs {
+                // The SPDX 2.2 JSON schema spells the category with an
+                // underscore (PERSISTENT_ID); 2.3 uses a hyphen. Normalize
+                // so both promote identically.
+                let category = ext_ref.reference_category.replace('_', "-");
                 // Promote PERSISTENT-ID/swh refs to first-class SWHID identifiers
                 // (CRA prEN 40000-1-3 [PRE-7-RQ-07] recognises SWHIDs)
-                if ext_ref.reference_category == "PERSISTENT-ID"
-                    && ext_ref.reference_type.eq_ignore_ascii_case("swh")
+                if category == "PERSISTENT-ID" && ext_ref.reference_type.eq_ignore_ascii_case("swh")
                 {
                     comp = comp.with_swhid(ext_ref.reference_locator.clone());
                     continue;
@@ -1232,21 +1240,23 @@ impl SpdxParser {
                 // strings into the document's vulnerability-disclosure URL
                 // (falsely passing EO 14028/CRA disclosure checks) and left
                 // Component.identifiers.cpe permanently empty for SPDX.
-                if ext_ref.reference_category == "SECURITY" {
-                    match ext_ref.reference_type.as_str() {
-                        "cpe22Type" | "cpe23Type" => {
-                            comp.identifiers.cpe.push(ext_ref.reference_locator.clone());
-                            continue;
-                        }
-                        "swid" => {
-                            comp.identifiers.swid = Some(ext_ref.reference_locator.clone());
-                            continue;
-                        }
-                        _ => {}
-                    }
+                if ext_ref.reference_type.eq_ignore_ascii_case("cpe23Type")
+                    || ext_ref.reference_type.eq_ignore_ascii_case("cpe22Type")
+                    || ext_ref.reference_locator.starts_with("cpe:")
+                {
+                    comp.identifiers.cpe.push(ext_ref.reference_locator.clone());
+                    continue;
                 }
-                let ref_type = match ext_ref.reference_category.as_str() {
-                    "SECURITY" => match ext_ref.reference_type.as_str() {
+                if ext_ref.reference_type.eq_ignore_ascii_case("swid")
+                    && comp.identifiers.swid.is_none()
+                {
+                    comp.identifiers.swid = Some(ext_ref.reference_locator.clone());
+                    continue;
+                }
+                let ref_type = match category.as_str() {
+                    // Only advisory-shaped SECURITY refs are advisories; CPE
+                    // and SWID identifiers were promoted above.
+                    "SECURITY" => match ext_ref.reference_type.to_ascii_lowercase().as_str() {
                         "advisory" | "fix" | "url" => ExternalRefType::Advisories,
                         other => ExternalRefType::Other(other.to_string()),
                     },
@@ -1727,6 +1737,123 @@ mod tests {
             .values()
             .find(|c| c.name == name)
             .unwrap_or_else(|| panic!("component {name} not found"))
+    }
+
+    /// cpe22Type/cpe23Type SECURITY refs are component identifiers, not
+    /// advisisory references: they must land in identifiers.cpe and must NOT
+    /// become Advisories external refs (which satisfy security-contact and
+    /// CVD compliance gates).
+    #[test]
+    fn json_cpe_refs_promote_to_identifiers_not_advisories() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+                "spdxVersion": "SPDX-2.3",
+                "SPDXID": "SPDXRef-DOCUMENT",
+                "name": "doc",
+                "dataLicense": "CC0-1.0",
+                "creationInfo": {"created": "2026-01-01T00:00:00Z", "creators": ["Tool: gen"]},
+                "packages": [{
+                    "name": "fw",
+                    "SPDXID": "SPDXRef-fw",
+                    "versionInfo": "1.0",
+                    "externalRefs": [
+                        {"referenceCategory": "SECURITY",
+                         "referenceType": "cpe23Type",
+                         "referenceLocator": "cpe:2.3:a:acme:fw:1.0:*:*:*:*:*:*:*"},
+                        {"referenceCategory": "SECURITY",
+                         "referenceType": "advisory",
+                         "referenceLocator": "https://acme.example/advisories"}
+                    ]
+                }]
+            }"#,
+            )
+            .expect("json should parse");
+        let comp = component(&sbom, "fw");
+        assert_eq!(
+            comp.identifiers.cpe,
+            vec!["cpe:2.3:a:acme:fw:1.0:*:*:*:*:*:*:*".to_string()],
+            "cpe23Type must be promoted to a first-class CPE identifier"
+        );
+        let advisories: Vec<_> = comp
+            .external_refs
+            .iter()
+            .filter(|r| matches!(r.ref_type, crate::model::ExternalRefType::Advisories))
+            .collect();
+        assert_eq!(
+            advisories.len(),
+            1,
+            "only the advisory-shaped SECURITY ref is an Advisories ref"
+        );
+        assert_eq!(advisories[0].url, "https://acme.example/advisories");
+    }
+
+    /// SPDX 2.2's JSON schema spells the persistent-id category with an
+    /// underscore; both spellings must promote swh refs to SWHIDs.
+    #[test]
+    fn json_persistent_id_underscore_promotes_swhid() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+                "spdxVersion": "SPDX-2.2",
+                "SPDXID": "SPDXRef-DOCUMENT",
+                "name": "doc",
+                "dataLicense": "CC0-1.0",
+                "creationInfo": {"created": "2026-01-01T00:00:00Z", "creators": ["Tool: gen"]},
+                "packages": [{
+                    "name": "src",
+                    "SPDXID": "SPDXRef-src",
+                    "versionInfo": "1.0",
+                    "externalRefs": [
+                        {"referenceCategory": "PERSISTENT_ID",
+                         "referenceType": "swh",
+                         "referenceLocator": "swh:1:cnt:94a9ed024d3859793618152ea559a168bbcbb5e2"}
+                    ]
+                }]
+            }"#,
+            )
+            .expect("json should parse");
+        let comp = component(&sbom, "src");
+        assert!(
+            !comp.identifiers.swhid.is_empty(),
+            "PERSISTENT_ID (underscore spelling) must promote swh refs to SWHIDs"
+        );
+    }
+
+    /// A bare CPE locator must never become the document-level vulnerability
+    /// disclosure URL; only URL-shaped advisory locators qualify.
+    #[test]
+    fn json_disclosure_url_requires_url_shape() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+                "spdxVersion": "SPDX-2.3",
+                "SPDXID": "SPDXRef-DOCUMENT",
+                "name": "doc",
+                "dataLicense": "CC0-1.0",
+                "creationInfo": {"created": "2026-01-01T00:00:00Z", "creators": ["Tool: gen"]},
+                "packages": [{
+                    "name": "fw",
+                    "SPDXID": "SPDXRef-fw",
+                    "versionInfo": "1.0",
+                    "externalRefs": [
+                        {"referenceCategory": "SECURITY",
+                         "referenceType": "cpe23Type",
+                         "referenceLocator": "cpe:2.3:a:acme:fw:1.0:*:*:*:*:*:*:*"}
+                    ]
+                }],
+                "relationships": [
+                    {"spdxElementId": "SPDXRef-DOCUMENT",
+                     "relationshipType": "DESCRIBES",
+                     "relatedSpdxElement": "SPDXRef-fw"}
+                ]
+            }"#,
+            )
+            .expect("json should parse");
+        assert_eq!(
+            sbom.document.vulnerability_disclosure_url, None,
+            "a CPE identifier must not become the disclosure URL"
+        );
     }
 
     /// A File section's SPDXID must not overwrite the enclosing package's

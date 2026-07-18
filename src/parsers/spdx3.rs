@@ -314,7 +314,11 @@ impl Spdx3Parser {
         }
 
         // Build document metadata
-        let document = self.convert_metadata(&doc, &agent_map, &creation_info_map);
+        let mut document = self.convert_metadata(&doc, &agent_map, &creation_info_map);
+        // BSI TR-03183-2 §5.2.2 requires the completeness of the dependency
+        // enumeration to be clearly indicated; SPDX 3 carries it per
+        // relationship.
+        document.completeness_declaration = derive_completeness_declaration(&relationships);
         let mut sbom = NormalizedSbom::new(document);
 
         // Convert packages to components
@@ -1522,6 +1526,58 @@ fn is_inverse_dependency(normalized: &str) -> bool {
             | "TEST_TOOL_OF"
             | "GENERATED_FROM"
     )
+}
+
+/// Fold per-relationship `completeness` assertions (SPDX 3) into the
+/// document-level [`CompletenessDeclaration`]. Only dependency-family
+/// relationships count; any `incomplete` wins, then `complete`, then
+/// `noAssertion` (NotSpecified), else Unknown.
+fn derive_completeness_declaration(
+    relationships: &[Spdx3Relationship],
+) -> crate::model::CompletenessDeclaration {
+    use crate::model::CompletenessDeclaration;
+
+    let mut any_complete = false;
+    let mut any_no_assertion = false;
+    for rel in relationships {
+        let Some(completeness) = rel.completeness.as_deref() else {
+            continue;
+        };
+        let normalized =
+            normalize_relationship_type(rel.relationship_type.as_deref().unwrap_or(""));
+        let is_dependency = matches!(
+            normalized.as_str(),
+            "DEPENDS_ON"
+                | "DEV_DEPENDS_ON"
+                | "BUILD_DEPENDS_ON"
+                | "TEST_DEPENDS_ON"
+                | "RUNTIME_DEPENDS_ON"
+                | "OPTIONAL_DEPENDS_ON"
+                | "DEPENDENCY_OF"
+                | "DEV_DEPENDENCY_OF"
+                | "BUILD_DEPENDENCY_OF"
+                | "TEST_DEPENDENCY_OF"
+                | "RUNTIME_DEPENDENCY_OF"
+                | "OPTIONAL_DEPENDENCY_OF"
+                | "PROVIDED_DEPENDENCY_OF"
+        );
+        if !is_dependency {
+            continue;
+        }
+        match completeness.trim().to_ascii_lowercase().as_str() {
+            "incomplete" => return CompletenessDeclaration::Incomplete,
+            "complete" => any_complete = true,
+            "noassertion" => any_no_assertion = true,
+            _ => {}
+        }
+    }
+    if any_complete {
+        CompletenessDeclaration::Complete
+    } else if any_no_assertion {
+        CompletenessDeclaration::NotSpecified
+    } else {
+        CompletenessDeclaration::Unknown
+    }
 }
 
 /// Map SPDX 3.0 hash algorithm names to our enum

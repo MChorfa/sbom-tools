@@ -52,6 +52,34 @@ impl fmt::Display for HashVerifyResult {
     }
 }
 
+/// Compute the SHA-256 of a file, streaming in fixed-size chunks.
+///
+/// Weight files reach tens of gigabytes, so this never buffers the whole file:
+/// it reads through a 1 MiB buffer and feeds the digest incrementally.
+///
+/// # Errors
+///
+/// Returns [`HashError::Io`] if the file cannot be opened or read.
+pub fn compute_file_sha256(path: &Path) -> Result<String, HashError> {
+    use std::io::Read;
+
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
 /// Verify a file's hash against an expected value.
 ///
 /// Supports formats:

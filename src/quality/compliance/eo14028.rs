@@ -17,8 +17,15 @@ impl ComplianceChecker {
                     || v.starts_with("1.3"))
             }
             crate::model::SbomFormat::Spdx => {
+                // The NTIA minimum-elements report that EO 14028 §4(e)
+                // defers to names SPDX (then at 2.2) as an accepted format,
+                // so SPDX 2.2 documents are machine-readable under the EO.
+                // An empty spec_version means the document declared no
+                // version (parsers never fabricate one): skip rather than
+                // false-fail, matching the CycloneDX arm where an empty
+                // version also passes.
                 let v = &sbom.document.spec_version;
-                v.starts_with("2.3") || v.starts_with("3.")
+                v.is_empty() || v.starts_with("2.2") || v.starts_with("2.3") || v.starts_with("3.")
             }
         };
         if !format_ok {
@@ -27,12 +34,33 @@ impl ComplianceChecker {
                 category: ViolationCategory::FormatSpecific,
                 message: format!(
                     "SBOM format {} {} does not meet EO 14028 machine-readable requirements; \
-                    use CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+",
+                    use CycloneDX 1.4+, SPDX 2.2+, or SPDX 3.0+",
                     sbom.document.format, sbom.document.spec_version
                 ),
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Machine-readable SBOM format".to_string(),
                 rule_id: "SBOM-EO14028-FORMAT",
+                component_id: None,
+                counts: None,
+                standard_refs: Vec::new(),
+            });
+        }
+
+        // Sec 4(e) — NTIA baseline: creation timestamp. EO 14028 §4(e)
+        // incorporates the NTIA minimum elements, which include Timestamp;
+        // a missing/invalid source timestamp is stored as the UNIX_EPOCH
+        // sentinel (see `has_known_timestamp`).
+        if !sbom.document.has_known_timestamp() {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::DocumentMetadata,
+                message: "SBOM is missing a creation timestamp (NTIA required data field)"
+                    .to_string(),
+                element: None,
+                requirement: "EO 14028 Sec 4(e): Timestamp (NTIA baseline)".to_string(),
+                rule_id: "SBOM-EO14028-TIMESTAMP",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -52,6 +80,8 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Automated SBOM generation".to_string(),
                 rule_id: "SBOM-EO14028-AUTOGEN",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
@@ -65,31 +95,59 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): SBOM creator identification".to_string(),
                 rule_id: "SBOM-EO14028-CREATOR",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
 
         // Sec 4(e) — Component identification with unique identifiers
+        // (PURL/CPE/SWHID/SWID via `has_cra_identifier`, so SWHID-only SPDX
+        // components are not flagged)
         let total = sbom.components.len();
         let without_id = sbom
             .components
             .values()
-            .filter(|c| {
-                c.identifiers.purl.is_none()
-                    && c.identifiers.cpe.is_empty()
-                    && c.identifiers.swid.is_none()
-            })
+            .filter(|c| !c.identifiers.has_cra_identifier())
             .count();
         if without_id > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::ComponentIdentification,
                 message: format!(
-                    "{without_id}/{total} components missing unique identifier (PURL/CPE/SWID)"
+                    "{without_id}/{total} components missing unique identifier (PURL/CPE/SWHID/SWID)"
                 ),
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component unique identification".to_string(),
                 rule_id: "SBOM-EO14028-IDENTIFIER",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_id,
+                    total,
+                }),
+                standard_refs: Vec::new(),
+            });
+        }
+
+        // Sec 4(e) — NTIA baseline: component names
+        let without_name = sbom
+            .components
+            .values()
+            .filter(|c| !known_component_name(c))
+            .count();
+        if without_name > 0 {
+            violations.push(Violation {
+                severity: ViolationSeverity::Error,
+                category: ViolationCategory::ComponentIdentification,
+                message: format!("{without_name}/{total} components missing a component name"),
+                element: None,
+                requirement: "EO 14028 Sec 4(e): Component name (NTIA baseline)".to_string(),
+                rule_id: "SBOM-EO14028-NAME",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_name,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -104,15 +162,18 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Dependency relationships".to_string(),
                 rule_id: "SBOM-EO14028-DEPENDENCY",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
 
-        // Sec 4(e) — Version information
+        // Sec 4(e) — Version information (placeholder values such as
+        // NOASSERTION do not satisfy the element)
         let without_version = sbom
             .components
             .values()
-            .filter(|c| c.version.is_none())
+            .filter(|c| !has_known_value(&c.version))
             .count();
         if without_version > 0 {
             violations.push(Violation {
@@ -124,6 +185,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component version".to_string(),
                 rule_id: "SBOM-EO14028-VERSION",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_version,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
@@ -142,14 +208,21 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Component integrity verification".to_string(),
                 rule_id: "SBOM-EO14028-INTEGRITY",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_hash,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }
 
-        // Sec 4(g) — Vulnerability disclosure
+        // Sec 4(g) — Vulnerability disclosure. Component-level refs count
+        // only on the primary/root components — a dependency's upstream
+        // advisories URL is not the vendor's disclosure process.
         let has_security_ref = sbom.document.security_contact.is_some()
             || sbom.document.vulnerability_disclosure_url.is_some()
-            || sbom.components.values().any(|comp| {
+            || manufacturer_scope_components(sbom).iter().any(|comp| {
                 comp.external_refs.iter().any(|r| {
                     matches!(
                         r.ref_type,
@@ -166,15 +239,18 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(g): Vulnerability disclosure process".to_string(),
                 rule_id: "SBOM-EO14028-DISCLOSURE",
+                component_id: None,
+                counts: None,
                 standard_refs: Vec::new(),
             });
         }
 
-        // Sec 4(e) — Supplier identification
+        // Sec 4(e) — Supplier identification (placeholder values such as
+        // NOASSERTION do not satisfy the element)
         let without_supplier = sbom
             .components
             .values()
-            .filter(|c| c.supplier.is_none() && c.author.is_none())
+            .filter(|c| !has_known_supplier(&c.supplier, &c.author))
             .count();
         if without_supplier > 0 {
             // Supplier Name is a REQUIRED NTIA minimum element, and EO 14028
@@ -191,6 +267,11 @@ impl ComplianceChecker {
                 element: None,
                 requirement: "EO 14028 Sec 4(e): Supplier identification".to_string(),
                 rule_id: "SBOM-EO14028-SUPPLIER",
+                component_id: None,
+                counts: Some(ViolationCounts {
+                    affected: without_supplier,
+                    total,
+                }),
                 standard_refs: Vec::new(),
             });
         }

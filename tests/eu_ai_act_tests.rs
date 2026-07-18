@@ -62,6 +62,175 @@ fn non_ai_sbom_is_not_applicable_and_does_not_fail() {
 }
 
 #[test]
+fn web_app_with_config_data_component_is_not_applicable() {
+    // A `type: data` config bundle carries no dataset evidence and must not
+    // make the profile applicable (previously every Data component counted
+    // as an AI training dataset).
+    let sbom = parse_sbom(&fixture("cyclonedx/webapp-data-config.cdx.json"))
+        .expect("parse webapp-data-config fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(result.is_compliant, "web-app SBOM must not fail AI-Act");
+    assert_eq!(result.error_count, 0);
+    assert_eq!(
+        result.violations.len(),
+        1,
+        "exactly one informational N/A finding expected; got {:?}",
+        result.violations
+    );
+    assert_eq!(result.violations[0].rule_id, "SBOM-AIACT-NA");
+    assert_eq!(result.violations[0].severity, ViolationSeverity::Info);
+}
+
+#[test]
+fn application_typed_component_with_model_card_is_applicable() {
+    // The parser sets ml_model from the modelCard regardless of the declared
+    // component type; the profile must see it (previously "Not applicable").
+    let sbom = parse_sbom(&fixture("cyclonedx/mistyped-mlbom.cdx.json"))
+        .expect("parse mistyped-mlbom fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        "SBOM with modelCard metadata must not be N/A; got {:?}",
+        result.violations
+    );
+    // The Annex IV model checks actually ran (no training datasets declared).
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-2D-DATASETS"),
+        "Annex IV checks should run against the mistyped model; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn model_card_external_ref_and_description_satisfy_general_description() {
+    // A machine-learning-model documented via description + a `model-card`
+    // external reference (no modelCard object) must not be flagged as
+    // lacking a general description.
+    let sbom = parse_sbom(&fixture("cyclonedx/mlbom-extref-card.cdx.json"))
+        .expect("parse mlbom-extref-card fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-1-DESCRIPTION"),
+        "description + model-card reference must satisfy Annex IV §1; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn untyped_huggingface_model_is_applicable_with_mistyped_ml_warning() {
+    // Evasion guard: a pkg:huggingface component typed `library` (no
+    // modelCard) keeps the profile applicable and is surfaced.
+    let sbom = parse_sbom(&fixture("cyclonedx/untyped-hf-model.cdx.json"))
+        .expect("parse untyped-hf-model fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        "huggingface PURL must keep the profile applicable; got {:?}",
+        result.violations
+    );
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-UNTYPED-ML"
+                && v.severity == ViolationSeverity::Warning),
+        "mistyped-ML warning should fire; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn dataset_only_sbom_is_applicable_without_model_energy_info() {
+    // Data components WITH dataset evidence still count (no regression), and
+    // the model-energy recommendation must not fire with zero ML models.
+    let sbom = parse_sbom(&fixture("cyclonedx/minimal-dataset.cdx.json"))
+        .expect("parse minimal-dataset fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        "dataset evidence keeps the profile applicable; got {:?}",
+        result.violations
+    );
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-2C-ENERGY"),
+        "energy Info must not fire on an SBOM with no ML models; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn xml_dataset_evidence_reaches_annex_iv_dataset_checks() {
+    // Regression: the CycloneDX XML converter dropped `<data>` componentData,
+    // so the Annex IV §2(d) dataset checks were silently skipped for XML
+    // AI-BOMs. The XML dataset (no sensitivity classification declared) must
+    // now be assessed like its JSON twin.
+    let sbom = parse_sbom(&fixture("cyclonedx/aibom-dataset-gap.cdx.xml"))
+        .expect("parse aibom-dataset-gap XML fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-ANNEX-IV-2D-SENSITIVITY"
+                && v.message.contains("training-corpus")),
+        "the XML dataset without sensitivity classification must be flagged; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn huggingface_dataset_with_evidence_is_not_flagged_as_untyped_ml() {
+    // A HuggingFace-hosted DATASET with full componentData evidence is
+    // correctly classified; the untyped-ML heuristic (which also matches
+    // pkg:huggingface) must stay silent instead of prescribing that a correct
+    // dataset be retyped as machine-learning-model.
+    let sbom = parse_sbom(&fixture("cyclonedx/hf-dataset-aibom.cdx.json"))
+        .expect("parse hf-dataset-aibom fixture");
+    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-UNTYPED-ML"),
+        "dataset evidence must exempt the HF dataset from the untyped-ML warning; got {:?}",
+        result.violations
+    );
+    assert!(
+        !result
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        "the HF dataset must keep the profile applicable; got {:?}",
+        result.violations
+    );
+}
+
+#[test]
 fn high_risk_flag_escalates_to_errors() {
     // minimal-mlbom has model components but is missing several Annex IV items,
     // so it produces readiness gaps to escalate.

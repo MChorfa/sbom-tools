@@ -15,23 +15,22 @@ ENISA / industry guidance. Use it to:
 > Generated and maintained alongside the sbom-tools source tree.
 > If a check or article moves, send a PR — the reverse map is the
 > single source of truth for both human readers and the
-> `Violation::derive_standard_refs()` lookup table.
+> `rule_meta()` registry (surfaced via `Violation::registry_standard_refs()`).
 
 ## CRA timeline anchors
 
 | Date          | Event                                                         |
 |---------------|---------------------------------------------------------------|
-| 2024-12-10    | CRA enters into force (Regulation (EU) 2024/2847)             |
-| 2026-09-11    | Article 14 reporting obligations apply                        |
-| 2027-12-11    | Phase 1 deadline (`ComplianceLevel::CraPhase1`)               |
-| 2029-12-11    | Phase 2 deadline (`ComplianceLevel::CraPhase2`)               |
+| 2024-12-10    | CRA enters into force (Regulation (EU) 2024/2847)                                  |
+| 2026-09-11    | Article 14 reporting obligations apply (`ComplianceLevel::CraPhase1`) — Art. 71(2) |
+| 2027-12-11    | Regulation applies in full (`ComplianceLevel::CraPhase2`) — Art. 71(2)             |
 
 ## Compliance levels
 
 | `ComplianceLevel`           | sbom-tools `--standard` alias                                                                       | Scope                                                                                                            |
 |-----------------------------|-----------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
-| `CraPhase1`                 | `cra` (defaults to Phase 2; pin Phase 1 via the `Cra` profile)                                      | CRA Phase 1 reporting obligations (deadline 2027-12-11)                                                          |
-| `CraPhase2`                 | `cra`                                                                                               | Full CRA compliance (deadline 2029-12-11)                                                                        |
+| `CraPhase1`                 | `cra-phase1`, `cra-2026`                                                                            | CRA Phase 1 — Art. 14 reporting obligations (apply from 2026-09-11)                                                          |
+| `CraPhase2`                 | `cra` (default CRA meaning), `cra-phase2`                                                           | Full CRA compliance (regulation fully applies from 2027-12-11)                                                                        |
 | `CraOssSteward`             | `oss-steward`, `cra-oss-steward`, `cra-oss`, `cra-art24`, `art24`                                   | Article 24 lighter profile for open-source software stewards                                                     |
 | `BsiTr03183_2`              | `bsi`, `tr-03183`, `tr03183`, `bsi-tr-03183-2`                                                      | BSI TR-03183-2 (German national CRA-aligned baseline)                                                            |
 | `Cnsa2`                     | `cnsa2`, `cnsa-2`, `cnsa_2`, `cnsa2.0`                                                              | NSA CNSA 2.0 (post-quantum mandate for US national-security systems)                                             |
@@ -51,27 +50,38 @@ that ends up in SARIF `properties.standardHelpUris`.
 
 ### CRA Article 13 (essential requirements & SBOM-related obligations)
 
-| Requirement string                                              | CRA Article    | prEN 40000-1-3      | BSI TR-03183-2 § | sidecar field that clears it                              |
-|-----------------------------------------------------------------|----------------|---------------------|------------------|-----------------------------------------------------------|
-| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)     | —                   | §4.1             | `riskAssessmentUrl` + `riskAssessmentMethodology`         |
-| `CRA Art. 13(3): SBOM freshness`                                | Art. 13(3)     | PRE-7-RQ-04         | §5.1             | regenerate SBOM on each release                           |
-| `CRA Art. 13(4): SBOM machine-readable format`                  | Art. 13(4)     | PRE-7-RQ-04         | §5.2             | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
-| `CRA Art. 13(5): Licensed component tracking`                   | Art. 13(5)     | PRE-7-RQ-05         | §5.4 (reco.)     | populate component `license` fields                       |
-| `CRA Art. 13(6): Vulnerability disclosure contact`              | Art. 13(6)     | RLS-2-RQ-01         | §5.5 (reco.)     | `securityContact` / `vulnerabilityDisclosureUrl`          |
-| `CRA Art. 13(7): Coordinated vulnerability disclosure policy`   | Art. 13(7)     | RLS-2-RQ-02         | —                | `coordinatedDisclosurePolicyUrl`                          |
-| `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)     | PRE-7-RQ-06         | §5.5             | `supportEndDate` + EOL enrichment                         |
-| `CRA Art. 13(9): Known vulnerabilities statement`               | Art. 13(9)     | RLS-2-RQ-04         | §5.5             | OSV / KEV / VEX enrichment                                |
-| `CRA Art. 13(11): Component lifecycle monitoring`               | Art. 13(11)    | PRE-7-RQ-06         | §5.5             | EOL enrichment + transitive supplier coverage             |
-| `CRA Art. 13(12): Product name and version identification`      | Art. 13(12)    | PRE-7-RQ-06         | §5.3             | SBOM `metadata.component.name` + `version` + sidecar      |
-| `CRA Art. 13(15): Manufacturer identification`                  | Art. 13(15)    | —                   | §5.3             | `manufacturerName` + `manufacturerEmail`                  |
+> Rule citations were re-anchored in 2026-07: the SBOM-facing checks now
+> cite the paragraphs and Annex points that actually carry each
+> obligation in Reg. (EU) 2024/2847 (e.g., the machine-readable SBOM
+> mandate lives in Annex I Part II (1), the vulnerability-reporting
+> contact in Art. 13(17), and manufacturer identification in
+> Art. 13(16)). The BSI column uses TR-03183-2 v2.1.0 numbering.
+
+| Requirement string                                              | CRA anchor                        | prEN 40000-1-3      | BSI TR-03183-2 § | sidecar field that clears it                              |
+|-----------------------------------------------------------------|-----------------------------------|---------------------|------------------|-----------------------------------------------------------|
+| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)                        | —                   | —                | `riskAssessmentUrl` + `riskAssessmentMethodology`         |
+| `CRA Art. 13(7) / Annex I Part II (1): SBOM freshness`          | Art. 13(7); Annex I Part II (1)   | PRE-7-RQ-04         | §3.1             | regenerate SBOM on each release                           |
+| `CRA Annex I Part II (1): Machine-readable SBOM format`         | Annex I Part II (1)               | PRE-7-RQ-04         | §4               | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
+| `CRA Art. 13(5): Third-party due diligence (license tracking)`  | Art. 13(5)                        | PRE-7-RQ-05         | §5.2.2           | populate component `license` fields                       |
+| `CRA Art. 13(17): Vulnerability disclosure contact`             | Art. 13(17); Annex I Part II (6); Annex II (2) | RLS-2-RQ-01 | §5.2.5 (opt.) | `securityContact` / `vulnerabilityDisclosureUrl`          |
+| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` | Annex I Part II (5); Art. 13(8) | RLS-2-RQ-02      | —                | `coordinatedDisclosurePolicyUrl`                          |
+| `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)                        | PRE-7-RQ-06         | —                | `supportEndDate` + EOL enrichment                         |
+| `CRA Art. 13(8) / 13(19): Support period disclosure`            | Art. 13(8); Art. 13(19); Annex II (7) | PRE-7-RQ-06     | —                | `supportEndDate`                                          |
+| `CRA Annex I Part II (1): Documented vulnerability information` | Annex I Part II (1)               | RLS-2-RQ-04         | —                | OSV / KEV / VEX enrichment                                |
+| `CRA Annex II (7): Component lifecycle monitoring/status`       | Art. 13(8); Annex II (7)          | PRE-7-RQ-06         | —                | EOL enrichment + transitive supplier coverage             |
+| `CRA Art. 13(15): Product identification`                       | Art. 13(15); Annex II (3)         | PRE-7-RQ-06         | §5.2.2           | SBOM `metadata.component.name` + sidecar `productName`    |
+| `CRA Annex I Part II (1): Component version`                    | Annex I Part II (1)               | PRE-7-RQ-06         | §5.2.2           | component `version` fields                                |
+| `CRA Annex I Part II (1): Component supplier information`       | Annex I Part II (1)               | PRE-7-RQ-03         | §5.2.2           | component `supplier` fields                               |
+| `CRA Annex I Part II (4): Vulnerability metadata completeness`  | Annex I Part II (4)               | —                   | —                | vulnerability severity/CVSS + remediation detail          |
+| `CRA Art. 13(16): Manufacturer identification`                  | Art. 13(16); Annex II (1)         | —                   | §5.2.1           | `manufacturerName` + `manufacturerEmail`                  |
 
 ### CRA Article 14 (reporting obligations, applicable from 2026-09-11)
 
 | Requirement string                                          | CRA Article    | prEN 40000-1-3      | sidecar field                         |
 |-------------------------------------------------------------|----------------|---------------------|---------------------------------------|
 | `CRA Art. 14: PSIRT contact for external vulnerability reports` | Art. 14    | RLS-2-RQ-03         | `psirtUrl`                            |
-| `CRA Art. 14(1): 24-hour early-warning channel`             | Art. 14(1)     | RLS-2-RQ-03         | `earlyWarningContact`                 |
-| `CRA Art. 14(2): 72-hour incident-report channel`           | Art. 14(2)     | RLS-2-RQ-03         | `incidentReportContact`               |
+| `CRA Art. 14(2)(a): 24-hour early-warning channel`          | Art. 14(2)(a) / 14(4)(a) | RLS-2-RQ-03 | `earlyWarningContact`                 |
+| `CRA Art. 14(2)(b): 72-hour notification channel`           | Art. 14(2)(b) / 14(4)(b) | RLS-2-RQ-03 | `incidentReportContact`               |
 | `CRA Art. 14(7): ENISA single reporting platform`           | Art. 14(7)     | RLS-2-RQ-03-RE      | `enisaReportingPlatformId`            |
 
 Pre-deadline (`Utc::now() < 2026-09-11`) findings are emitted as `Info`;
@@ -84,12 +94,13 @@ post-deadline they become `Warning` (or `Error` at
 | Requirement string                                          | CRA Annex                | prEN 40000-1-3      | What clears it                                          |
 |-------------------------------------------------------------|--------------------------|---------------------|---------------------------------------------------------|
 | `CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through` | Annex I Part II | PRE-7-RQ-07-RE | strong (SHA-256+) hash on vendor-supplied components |
-| `CRA Annex I Part II 1: Component identifier`               | Annex I Part II 1        | PRE-7-RQ-07         | PURL / CPE / SWID / SWHID on each component             |
-| `CRA Annex I Part III: Supply chain transparency`           | Annex I Part III         | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
-| `CRA Annex III: Document signature/integrity`               | Annex III                | —                   | serial number / digital signature / attestation hash    |
+| `CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier` | Annex I         | PRE-7-RQ-07         | PURL / CPE / SWID / SWHID on each component             |
+| `CRA Annex I Part II: Supply chain transparency`            | Annex I Part II          | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
+| `CRA Annex I Part I (2)(f): Document signature/integrity`   | Annex I Part I (2)(f)    | —                   | serial number / digital signature / attestation hash    |
+| `CRA Annex I Part I (2)(f): Component integrity information (hash)` | Annex I Part I (2)(f) | —                | cryptographic hash (SHA-256+) per component             |
 | `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | `Certification` external ref with `eucc`/`common-criteria` URL |
-| `CRA Annex V: Technical documentation`                      | Annex V                  | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
-| `CRA Annex VII: EU Declaration of Conformity reference`     | Annex VII                | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
+| `CRA Annex VII: Technical documentation`                    | Annex VII                | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
+| `CRA Annex V: EU Declaration of Conformity reference`       | Annex V                  | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
 | `CRA Annex VIII: <Module> attestation reference`            | Annex VIII (Module B+C/H/EUCC) | —             | Module-specific `Attestation`/`Certification` external ref |
 | `CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware component inventory` | Annex I Part II   | PRE-8-RQ-02         | producer + identifier + firmware version on hardware    |
 
@@ -98,10 +109,10 @@ post-deadline they become `Warning` (or `Error` at
 | Requirement string                                          | CRA reference  | Cleared by                                            |
 |-------------------------------------------------------------|----------------|-------------------------------------------------------|
 | `CRA Art. 24: Vulnerability-handling process (steward floor)` | Art. 24      | `SecurityContact` / `Advisories` / `VulnerabilityAssertion` external ref OR `psirtUrl` / `vulnerabilityDisclosureUrl` |
-| `CRA Art. 13(7): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Art. 13(7) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` |
+| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Annex I Part II (5) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` |
 
-Article 24 *suppresses* manufacturer-only checks (Art. 13(15) email,
-Annex VII DoC, Annex VIII attestation, Article 14 channels, hardware
+Article 24 *suppresses* manufacturer-only checks (Art. 13(16) email,
+Annex V DoC, Annex VIII attestation, Article 14 channels, hardware
 [PRE-8-RQ-02], vendor-hash carry-through).
 
 ## CRA-P3.2 product-class severity calibration
@@ -117,7 +128,7 @@ overridable via sidecar `conformityAssessmentRoute`.
 | Vendor-hash severity           | Warning | Warning     | Error       | Error    |
 | EOL components                 | Warning | Warning     | Error       | Error    |
 | Cycles                         | Warning | Warning     | Error       | Error    |
-| Annex VII DoC reference        | Info    | Warning     | Error       | Error    |
+| Annex V DoC reference          | Info    | Warning     | Error       | Error    |
 | EUCC reference                 | n/a     | n/a         | Info        | Error    |
 | PSIRT documented               | Warning | Warning     | Error       | Error    |
 | Module attestation reference   | n/a     | Warning (B+C) | Error (B+C/H) | Error (EUCC) |
@@ -133,18 +144,30 @@ Default conformity routes per class:
 
 ## BSI TR-03183-2 — quick mapping
 
-`ComplianceLevel::BsiTr03183_2` runs the §5 mandatory rules plus §6
-recommendations. SARIF rule prefix: `SBOM-BSI-TR-03183-2-*`. Canonical URL:
-[bsi.bund.de TR-03183](https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html).
+`ComplianceLevel::BsiTr03183_2` implements **v2.1.0 (2025-08-20)**: the §4
+format gate, the §5.2.1/§5.2.2 required fields, the §5.2.4 additional tier,
+§6.1 licence naming, and the §3.1 vulnerability-information prohibition.
+SARIF rule prefix: `SBOM-BSI-TR-03183-2-*`. Canonical URL:
+[bsi.bund.de/dok/TR-03183-en](https://bsi.bund.de/dok/TR-03183-en).
 
-| BSI section | Required signal                                                | Cleared by                                                  |
-|-------------|----------------------------------------------------------------|-------------------------------------------------------------|
-| §5.1        | Mandatory ISO 8601 timestamp on document metadata              | parse-time validation                                        |
-| §5.2        | Mandatory creator + tool identification                        | SBOM `metadata.tools` / SPDX `creator`                      |
-| §5.3        | Mandatory PURL or other unique identifier per component        | one of `purl` / `cpe` / `swid` / `swhid` per component       |
-| §5.4        | Mandatory SHA-256+ hash per component                          | strong hash on every component                              |
-| §5.5        | Mandatory dependency relationships                             | populated `dependencies` graph                              |
-| §6 (reco.)  | License, supplier, lifecycle phase                             | `license` / `supplier` / lifecycle properties               |
+| BSI section    | Signal (severity)                                                        | Cleared by                                                    |
+|----------------|---------------------------------------------------------------------------|---------------------------------------------------------------|
+| §4 (+§7)       | CycloneDX ≥ 1.6 or SPDX ≥ 3.0.1 for newly generated/updated SBOMs (Error) | regenerate in an eligible format (v2.0.0 grace ended 2026-02-20) |
+| §5.2.1         | Creator of the SBOM with email, or URL if no email (Error / Warning)      | `metadata.authors[].email` / SPDX `creator`                    |
+| §5.2.1         | Timestamp of the SBOM data compilation (Error)                            | `metadata.timestamp` / SPDX `created`                          |
+| §5.2.2         | Component name (Error) and version (Error)                                | `name` + `version` (filename / RFC 3339 date fallbacks)        |
+| §5.2.2         | Distribution licence(s) per component (Error)                             | `licenses[]` with SPDX identifiers                             |
+| §5.2.2         | Hash of the deployable component **as SHA-512** (Error when only other algorithms; Warning when absent, §3.2.1) | SHA-512 hash per component |
+| §5.2.2         | Component creator (Warning, presence-level)                               | `supplier` / `author` per component                            |
+| §5.2.2         | Dependencies (Error) + completeness clearly indicated (Warning)           | `dependencies` graph + `compositions[].aggregate`              |
+| §5.2.4 (add.)  | Other unique identifiers — purl/CPE (Warning)                             | one of `purl` / `cpe` / `swid` / `swhid` per component         |
+| §6.1           | Licences named by SPDX identifier/expression (Warning)                    | valid SPDX expressions (text is not a substitute)              |
+| §3.1           | No vulnerability information inside the SBOM (Warning)                    | publish advisories separately (e.g. CSAF)                      |
+
+Not modeled (no rule emitted): filename of the component, and the
+executable / archive / structured properties (`bsi:component:*`
+CycloneDX taxonomy). The TR mandates **no generation-tool field and no
+signature** in any tier.
 
 ## CSAF v2.0 (ISO/IEC 20153:2025)
 
@@ -182,7 +205,7 @@ sbom-tools validate sbom.json --standard oss-steward
 # SARIF output for CI (with helpUri populated)
 sbom-tools validate sbom.json --standard cra -o sarif -O compliance.sarif
 
-# Generate CRA technical-documentation dossier (Annex V)
+# Generate CRA conformity dossier (Annex V DoC + Annex VII technical documentation)
 sbom-tools cra-docs sbom.json --output dossier/ --cra-sidecar sbom.cra.yaml
 
 # Apply CSAF advisories to enrich SBOM with VEX data
@@ -225,29 +248,29 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
 |------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
 | CRA — Regulation (EU) 2024/2847    | https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng                                                                                                 |
 | prEN 40000-1-3 (in development)    | (CEN-CENELEC JTC 13 — paywalled draft; URLs unstable)                                                                                              |
-| BSI TR-03183-2                     | https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html |
+| BSI TR-03183-2 (v2.1.0)            | https://bsi.bund.de/dok/TR-03183-en                                                                                                                |
 | ENISA SBOM Implementation Guidance | https://www.enisa.europa.eu/publications/sbom-implementation-guidance                                                                              |
 | NIST SP 800-218 SSDF               | https://doi.org/10.6028/NIST.SP.800-218                                                                                                            |
 | EO 14028                           | https://www.federalregister.gov/d/2021-10460                                                                                                       |
-| FDA premarket cybersecurity        | https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions |
-| NTIA SBOM minimum elements         | https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf                                                                  |
+| FDA premarket cybersecurity (final, 2026-02-03) | https://www.fda.gov/media/119933/download                                                                                          |
+| NTIA SBOM minimum elements         | https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom                                                                     |
 | CSAF v2.0 (ISO/IEC 20153:2025)     | https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html                                                                                          |
 | OpenVEX                            | https://github.com/openvex/spec                                                                                                                    |
 | CISA KEV                           | https://www.cisa.gov/known-exploited-vulnerabilities-catalog                                                                                       |
 | OSV.dev                            | https://osv.dev                                                                                                                                    |
-| EUCC (Reg. (EU) 2024/482)          | https://eur-lex.europa.eu/eli/reg/2024/482/oj/eng                                                                                                  |
+| EUCC (Reg. (EU) 2024/482)          | https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng                                                                                             |
 
 ## Where this map lives in the code
 
-- `Violation::derive_standard_refs()` in `src/quality/compliance.rs` —
+- `rule_meta()` in `src/quality/compliance/registry.rs` (via `Violation::registry_standard_refs()`) —
   string → `(StandardKind, id)` mapping. Drives SARIF
   `properties.standardIds`.
-- `StandardKind::canonical_help_uri()` in `src/quality/compliance.rs` —
+- `StandardKind::canonical_help_uri()` in `src/quality/compliance/mod.rs` —
   `(StandardKind, id)` → URL. Drives SARIF `helpUri` and
   `properties.standardHelpUris`.
 - `rule_help_uri()` in `src/reports/sarif.rs` — rule-ID prefix → URL
   for `runs[].tool.driver.rules[].helpUri`.
-- `ComplianceChecker::class_severity()` in `src/quality/compliance.rs` —
+- `ComplianceChecker::class_severity()` in `src/quality/compliance/mod.rs` —
   P3.2 calibration table.
-- `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V dossier
+- `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V DoC + Annex VII tech-doc dossier
   generator.

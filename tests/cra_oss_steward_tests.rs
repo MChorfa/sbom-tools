@@ -69,10 +69,10 @@ fn oss_steward_does_not_require_manufacturer_email() {
     let res_steward = ComplianceChecker::new(ComplianceLevel::CraOssSteward).check(&sbom);
     let res_phase2 = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
 
-    // Steward profile: should not fire manufacturer-email Art. 13(15)
+    // Steward profile: should not fire manufacturer-identification Art. 13(16)
     assert!(
         !res_steward.violations.iter().any(
-            |v| v.requirement.contains("Art. 13(15)") || v.requirement.contains("Manufacturer")
+            |v| v.requirement.contains("Art. 13(16)") || v.requirement.contains("Manufacturer")
         ),
         "OSS steward must not fire manufacturer-email checks"
     );
@@ -86,12 +86,12 @@ fn oss_steward_does_not_require_manufacturer_email() {
         "OSS steward must not fire Article 14 reporting checks"
     );
 
-    // Steward profile: should not fire EU DoC (Annex VII) check
+    // Steward profile: should not fire EU DoC (Annex V) check
     assert!(
         !res_steward
             .violations
             .iter()
-            .any(|v| v.requirement.contains("Annex VII")
+            .any(|v| v.requirement.contains("Annex V:")
                 || v.requirement.contains("Declaration of Conformity")),
         "OSS steward must not fire EU DoC checks"
     );
@@ -109,7 +109,7 @@ fn oss_steward_does_not_require_manufacturer_email() {
     // manufacturer-only checks the steward profile relaxes.
     let phase2_has_manufacturer_only = res_phase2.violations.iter().any(|v| {
         v.requirement.contains("Art. 14")
-            || v.requirement.contains("Annex VII")
+            || v.requirement.contains("Annex V:")
             || v.requirement.contains("PRE-7-RQ-07-RE")
     });
     assert!(
@@ -170,7 +170,7 @@ fn oss_steward_recommends_cvd_policy_as_warning() {
     let v = res
         .violations
         .iter()
-        .find(|v| v.requirement.contains("Art. 13(7)"))
+        .find(|v| v.requirement.contains("Annex I Part II (5)"))
         .expect("Steward should warn on missing CVD policy");
     assert_eq!(v.severity, ViolationSeverity::Warning);
 }
@@ -182,7 +182,7 @@ fn oss_steward_cvd_satisfied_by_advisories_ref() {
     assert!(
         !res.violations
             .iter()
-            .any(|v| v.requirement.contains("Art. 13(7)")),
+            .any(|v| v.requirement.contains("Annex I Part II (5)")),
         "Advisories external ref satisfies CVD policy requirement"
     );
 }
@@ -202,7 +202,7 @@ fn oss_steward_cvd_satisfied_by_sidecar_policy_url() {
     assert!(
         !res.violations
             .iter()
-            .any(|v| v.requirement.contains("Art. 13(7)")),
+            .any(|v| v.requirement.contains("Annex I Part II (5)")),
         "Sidecar coordinated_disclosure_policy_url satisfies CVD requirement"
     );
 }

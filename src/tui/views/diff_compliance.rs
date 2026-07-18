@@ -203,14 +203,25 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
         .iter()
         .enumerate()
         .map(|(i, level)| {
+            // N/A results keep `is_compliant = true` by contract, so
+            // applicability must be checked first: an unevaluated standard
+            // renders a neutral muted marker, never a green pass — and a
+            // mixed applicability transition is neither improved nor
+            // regressed.
+            let old_na = old_results.get(i).is_some_and(|r| !r.is_applicable());
+            let new_na = new_results.get(i).is_some_and(|r| !r.is_applicable());
             let old_ok = old_results.get(i).is_some_and(|r| r.is_compliant);
             let new_ok = new_results.get(i).is_some_and(|r| r.is_compliant);
 
-            let indicator = match (old_ok, new_ok) {
-                (true, true) => ("\u{2713}", colors().success),
-                (false, true) => ("\u{2191}", colors().success),
-                (true, false) => ("\u{2193}", colors().error),
-                (false, false) => ("\u{2717}", colors().error),
+            let indicator = if old_na || new_na {
+                ("\u{2014}", colors().text_muted)
+            } else {
+                match (old_ok, new_ok) {
+                    (true, true) => ("\u{2713}", colors().success),
+                    (false, true) => ("\u{2191}", colors().success),
+                    (true, false) => ("\u{2193}", colors().error),
+                    (false, false) => ("\u{2717}", colors().error),
+                }
             };
 
             let style = if i == selected {
@@ -254,16 +265,32 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
 // Compact compliance header (Change 1)
 // ============================================================================
 
-/// Compute a compliance percentage from a `ComplianceResult`.
-fn compliance_pct(result: &ComplianceResult) -> u16 {
-    let actionable = result.error_count + result.warning_count;
-    if actionable == 0 {
-        100
+/// Per-side status label for the header card.
+///
+/// Applicability is checked before `is_compliant` (which stays `true` for
+/// N/A runs by contract): an unevaluated standard renders "N/A" with no
+/// percentage. Applicable sides carry the shared badge score from
+/// [`ComplianceResult::score`] — the single formula every other surface
+/// (TUI exports, markdown/HTML reports, `validate --summary`) renders.
+fn side_status(result: &ComplianceResult) -> String {
+    if !result.is_applicable() {
+        return "N/A".to_string();
+    }
+    let status = if result.is_compliant { "PASS" } else { "FAIL" };
+    result
+        .score()
+        .map_or_else(|| status.to_string(), |pct| format!("{status} {pct}%"))
+}
+
+/// Three-way status for a single result: N/A results must never render as
+/// a pass (`is_compliant` stays `true` for them by contract).
+fn status_of(result: &ComplianceResult) -> (&'static str, ratatui::style::Color) {
+    if !result.is_applicable() {
+        ("N/A", colors().text_muted)
+    } else if result.is_compliant {
+        ("PASS", colors().success)
     } else {
-        let error_w = result.error_count * 3;
-        let warning_w = result.warning_count;
-        let max_w = actionable * 3;
-        ((max_w.saturating_sub(error_w + warning_w)) * 100 / max_w) as u16
+        ("FAIL", colors().error)
     }
 }
 
@@ -280,30 +307,32 @@ fn render_compliance_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
     let levels = ComplianceLevel::all();
     let standard_name = levels.get(idx).map_or("Unknown", ComplianceLevel::name);
 
-    let old_status = if old_result.is_compliant {
-        "PASS"
-    } else {
-        "FAIL"
-    };
-    let new_status = if new_result.is_compliant {
-        "PASS"
-    } else {
-        "FAIL"
-    };
-    let old_pct = compliance_pct(old_result);
-    let new_pct = compliance_pct(new_result);
+    let old_na = !old_result.is_applicable();
+    let new_na = !new_result.is_applicable();
+    let old_label = side_status(old_result);
+    let new_label = side_status(new_result);
 
-    let delta_label = if new_pct > old_pct || (!old_result.is_compliant && new_result.is_compliant)
-    {
-        "improved"
-    } else if new_pct < old_pct || (old_result.is_compliant && !new_result.is_compliant) {
-        "regressed"
+    // The delta is derived from the shared score; when either side is N/A
+    // there is no trend to report.
+    let delta_label = if old_na || new_na {
+        "not applicable"
     } else {
-        "unchanged"
+        let old_score = old_result.score();
+        let new_score = new_result.score();
+        if new_score > old_score || (!old_result.is_compliant && new_result.is_compliant) {
+            "improved"
+        } else if new_score < old_score || (old_result.is_compliant && !new_result.is_compliant) {
+            "regressed"
+        } else {
+            "unchanged"
+        }
     };
 
-    // Border color: green if both pass, red if either fails, yellow if status changed
-    let border_color = if old_result.is_compliant && new_result.is_compliant {
+    // Border color: muted when a side is N/A, green if both pass, yellow if
+    // the verdict changed, red if both fail.
+    let border_color = if old_na || new_na {
+        colors().text_muted
+    } else if old_result.is_compliant && new_result.is_compliant {
         colors().success
     } else if old_result.is_compliant != new_result.is_compliant {
         colors().warning
@@ -311,9 +340,7 @@ fn render_compliance_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
         colors().error
     };
 
-    let title = format!(
-        " {standard_name}: {old_status} {old_pct}% \u{2192} {new_status} {new_pct}%  {delta_label} "
-    );
+    let title = format!(" {standard_name}: {old_label} \u{2192} {new_label}  {delta_label} ");
 
     // Compute new/resolved counts
     let new_count = compute_new_violations(old_result, new_result).len();
@@ -358,82 +385,6 @@ fn render_compliance_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
 
     let paragraph = Paragraph::new(content).block(block);
     frame.render_widget(paragraph, area);
-}
-
-/// Old side-by-side summary — retained for potential future use.
-#[allow(dead_code)]
-fn render_sidebyside_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
-    let idx = ctx.compliance.selected_standard;
-    let old = ctx.old_compliance_results.and_then(|r| r.get(idx));
-    let new = ctx.new_compliance_results.and_then(|r| r.get(idx));
-
-    let halves = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-
-    // Old SBOM panel
-    if let Some(result) = old {
-        render_compliance_gauge(frame, halves[0], result, "Old SBOM");
-    }
-    // New SBOM panel
-    if let Some(result) = new {
-        render_compliance_gauge(frame, halves[1], result, "New SBOM");
-    }
-}
-
-#[allow(dead_code)]
-fn render_compliance_gauge(frame: &mut Frame, area: Rect, result: &ComplianceResult, label: &str) {
-    use ratatui::widgets::Gauge;
-
-    let pct = compliance_pct(result);
-
-    let status_color = if result.is_compliant && result.warning_count == 0 {
-        colors().success
-    } else if result.is_compliant {
-        colors().warning
-    } else {
-        colors().error
-    };
-
-    let status_text = if result.is_compliant { "PASS" } else { "FAIL" };
-
-    let inner = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(3)])
-        .split(area);
-
-    let gauge = Gauge::default()
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(status_color))
-                .title(Span::styled(
-                    format!(" {label} [{status_text}] "),
-                    Style::default().fg(status_color),
-                )),
-        )
-        .gauge_style(Style::default().fg(status_color))
-        .percent(pct)
-        .label(format!("{pct}%"));
-    frame.render_widget(gauge, inner[0]);
-
-    let counts = Line::from(vec![
-        Span::styled(
-            format!(" Errors: {} ", result.error_count),
-            Style::default().fg(colors().error),
-        ),
-        Span::styled(
-            format!("Warnings: {} ", result.warning_count),
-            Style::default().fg(colors().warning),
-        ),
-        Span::styled(
-            format!("Info: {}", result.info_count),
-            Style::default().fg(colors().info),
-        ),
-    ]);
-    let counts_para = Paragraph::new(counts);
-    frame.render_widget(counts_para, inner[1]);
 }
 
 // ============================================================================
@@ -615,12 +566,7 @@ fn render_rich_empty_state(
 
             // Show current status from the new SBOM result
             if let Some(result) = new_result {
-                let status = if result.is_compliant { "PASS" } else { "FAIL" };
-                let status_color = if result.is_compliant {
-                    scheme.success
-                } else {
-                    scheme.error
-                };
+                let (status, status_color) = status_of(result);
                 lines.push(Line::from(vec![
                     Span::styled("  Current status: ", Style::default().fg(scheme.muted)),
                     Span::styled(
@@ -714,12 +660,7 @@ fn render_rich_empty_state(
             // Show existing issue summary from the new SBOM result
             if let Some(result) = new_result {
                 if result.error_count + result.warning_count > 0 {
-                    let status = if result.is_compliant { "PASS" } else { "FAIL" };
-                    let status_color = if result.is_compliant {
-                        scheme.success
-                    } else {
-                        scheme.error
-                    };
+                    let (status, status_color) = status_of(result);
                     lines.push(Line::from(vec![
                         Span::styled("  Current status: ", Style::default().fg(scheme.muted)),
                         Span::styled(
@@ -774,10 +715,15 @@ fn render_rich_empty_state(
                             Span::styled(parts.join(" "), Style::default().fg(scheme.muted)),
                         ]));
                     }
-                } else {
+                } else if result.is_applicable() {
                     lines.push(Line::from(Span::styled(
                         "  All compliance checks passing.",
                         Style::default().fg(scheme.success),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "  Not applicable \u{2014} standard did not evaluate this SBOM.",
+                        Style::default().fg(scheme.text_muted),
                     )));
                 }
             }
@@ -1494,6 +1440,8 @@ mod tests {
             element: element.map(str::to_string),
             requirement: requirement.to_string(),
             rule_id: "SBOM-CRA-GENERAL",
+            component_id: None,
+            counts: None,
             standard_refs: Vec::new(),
         }
     }
@@ -1519,6 +1467,7 @@ mod tests {
             warning_count,
             info_count,
             conformity_summary: None,
+            applicability: crate::quality::Applicability::Applicable,
         }
     }
 

@@ -3,9 +3,7 @@
 use super::{ReportConfig, ReportError, ReportFormat, ReportGenerator, ReportType};
 use crate::diff::{DiffResult, SlaStatus, VulnerabilityDetail};
 use crate::model::NormalizedSbom;
-use crate::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, ViolationSeverity, rule_meta,
-};
+use crate::quality::{ComplianceLevel, ComplianceResult, ViolationSeverity, rule_meta};
 use serde::Serialize;
 
 /// SARIF report generator
@@ -254,16 +252,14 @@ impl ReportGenerator for SarifReporter {
         }
 
         // Add CRA compliance results for old and new SBOMs (use pre-computed if available)
-        let cra_old = config
-            .old_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(old_sbom));
-        let cra_new = config
-            .new_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(new_sbom));
+        let cra_old = config.old_cra_compliance_or_bare(old_sbom);
+        let cra_new = config.new_cra_compliance_or_bare(new_sbom);
         results.extend(compliance_results_to_sarif(&cra_old, Some("Old SBOM")));
         results.extend(compliance_results_to_sarif(&cra_new, Some("New SBOM")));
+
+        // Guarantee every emitted ruleId has a descriptor (the static table
+        // predates rules like SBOM-CRA-CYCLES) and descriptor ids are unique.
+        let rules = complete_rule_catalogue(get_sarif_rules(), &results);
 
         let sarif = SarifReport {
             schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
@@ -274,7 +270,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: SarifRuleWithUri::wrap_all(get_sarif_rules()),
+                        rules: SarifRuleWithUri::wrap_all(rules),
                     },
                 },
                 results,
@@ -324,11 +320,11 @@ impl ReportGenerator for SarifReporter {
         }
 
         // Add CRA compliance results (use pre-computed if available)
-        let cra_result = config
-            .view_cra_compliance
-            .clone()
-            .unwrap_or_else(|| ComplianceChecker::new(ComplianceLevel::CraPhase2).check(sbom));
+        let cra_result = config.view_cra_compliance_or_bare(sbom);
         results.extend(compliance_results_to_sarif(&cra_result, None));
+
+        // Same descriptor guarantee as the diff path (see above).
+        let rules = complete_rule_catalogue(get_sarif_view_rules(), &results);
 
         let sarif = SarifReport {
             schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
@@ -339,7 +335,7 @@ impl ReportGenerator for SarifReporter {
                         name: "sbom-tools".to_string(),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
-                        rules: SarifRuleWithUri::wrap_all(get_sarif_view_rules()),
+                        rules: SarifRuleWithUri::wrap_all(rules),
                     },
                 },
                 results,
@@ -526,6 +522,7 @@ pub fn generate_ai_readiness_sarif(
                     standard_help_uris: rule_help_uri(rule_id)
                         .map(|u| vec![u.to_string()])
                         .unwrap_or_default(),
+                    ..SarifResultProperties::default()
                 }),
             }
         })
@@ -546,10 +543,16 @@ pub fn generate_ai_readiness_sarif(
             results,
             properties: Some(SarifRunProperties {
                 applicable: !metrics.is_not_applicable(),
+                // Same contract as the compliance N/A surfaces: an N/A run
+                // carries its human-readable reason (`AiReadinessMetrics`
+                // populates `na_reason` exactly when `not_applicable`).
+                not_applicable_reason: metrics.na_reason.clone(),
                 overall_score,
-                grade: grade.to_string(),
-                sbom: sbom_name.to_string(),
-                profile: profile.to_string(),
+                grade: Some(grade.to_string()),
+                sbom: Some(sbom_name.to_string()),
+                profile: Some(profile.to_string()),
+                compliant: None,
+                standards: Vec::new(),
             }),
         }],
     };
@@ -557,8 +560,74 @@ pub fn generate_ai_readiness_sarif(
     serde_json::to_string_pretty(&sarif).map_err(|e| ReportError::SerializationError(e.to_string()))
 }
 
+/// Dedup the rule catalogue by id and synthesize a reportingDescriptor for
+/// any result ruleId the hand-maintained per-standard tables don't declare.
+/// SARIF 2.1.0 requires descriptor ids to be unique, and GitHub code
+/// scanning drops rule metadata for results whose ruleId has no descriptor —
+/// this guarantees both invariants no matter which checks fired.
+fn complete_rule_catalogue(mut rules: Vec<SarifRule>, results: &[SarifResult]) -> Vec<SarifRule> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    rules.retain(|r| seen.insert(r.id.clone()));
+    for res in results {
+        if seen.contains(&res.rule_id) {
+            continue;
+        }
+        seen.insert(res.rule_id.clone());
+        // Prefer the registry's descriptor identity when the emitted ruleId
+        // is a registered self-descriptor (e.g. the CNSA/PQC rule families,
+        // which have no curated per-standard slice).
+        if let Some(meta) = rule_meta(&res.rule_id)
+            && meta.sarif_id == res.rule_id
+        {
+            rules.push(registry_sarif_rule(res.rule_id.clone(), meta));
+            continue;
+        }
+        // CamelCase-ish name derived from the id (SBOM-EO14028-NAME → SbomEo14028Name)
+        let name: String = res
+            .rule_id
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|seg| !seg.is_empty())
+            .map(|seg| {
+                let mut cs = seg.chars();
+                cs.next()
+                    .map(|f| f.to_ascii_uppercase().to_string() + &cs.as_str().to_ascii_lowercase())
+                    .unwrap_or_default()
+            })
+            .collect();
+        rules.push(SarifRule {
+            id: res.rule_id.clone(),
+            name,
+            short_description: SarifMessage {
+                text: format!("Compliance rule {}", res.rule_id),
+            },
+            default_configuration: SarifConfiguration { level: res.level },
+        });
+    }
+    rules
+}
+
 pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, ReportError> {
-    let rules = SarifRuleWithUri::wrap_all(get_sarif_rules_for_standard(result.level));
+    let results = compliance_results_to_sarif(result, None);
+    // Surface applicability at run level: a readiness standard that never
+    // evaluated the SBOM must be machine-distinguishable from a pass.
+    let not_applicable_reason = match &result.applicability {
+        crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+        crate::quality::Applicability::Applicable => None,
+    };
+    let run_properties = Some(SarifRunProperties {
+        applicable: result.is_applicable(),
+        not_applicable_reason,
+        overall_score: result.score().map(f32::from),
+        grade: None,
+        sbom: None,
+        profile: Some(result.level.name().to_string()),
+        compliant: None,
+        standards: Vec::new(),
+    });
+    let rules = SarifRuleWithUri::wrap_all(complete_rule_catalogue(
+        get_sarif_rules_for_standard(result.level),
+        &results,
+    ));
     let sarif = SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
         version: "2.1.0".to_string(),
@@ -571,8 +640,8 @@ pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, Re
                     rules,
                 },
             },
-            results: compliance_results_to_sarif(result, None),
-            properties: None,
+            results,
+            properties: run_properties,
         }],
     };
 
@@ -583,15 +652,37 @@ pub fn generate_compliance_sarif(result: &ComplianceResult) -> Result<String, Re
 pub fn generate_multi_compliance_sarif(
     results: &[ComplianceResult],
 ) -> Result<String, ReportError> {
-    // Merge rules from all standards
+    // Merge rules from all standards; `complete_rule_catalogue` dedups the
+    // descriptors (two standards sharing the generic table used to emit
+    // every descriptor twice, which SARIF validators reject) and covers any
+    // emitted ruleId the static tables miss.
     let mut all_rules = Vec::new();
     let mut all_results = Vec::new();
 
     for result in results {
-        let rules = get_sarif_rules_for_standard(result.level);
-        all_rules.extend(rules);
+        all_rules.extend(get_sarif_rules_for_standard(result.level));
         all_results.extend(compliance_results_to_sarif(result, None));
     }
+    let all_rules = complete_rule_catalogue(all_rules, &all_results);
+
+    // Per-standard applicability/score/verdict ride on `properties.standards`
+    // — without them a not-applicable standard in a merged run is
+    // machine-indistinguishable from a pass (the single-standard run's flat
+    // properties don't fit N standards). The flat per-standard fields stay
+    // unset; `applicable` reports whether any standard evaluated the SBOM.
+    let run_properties = Some(SarifRunProperties {
+        applicable: results.iter().any(ComplianceResult::is_applicable),
+        not_applicable_reason: None,
+        overall_score: None,
+        grade: None,
+        sbom: None,
+        profile: None,
+        compliant: None,
+        standards: results
+            .iter()
+            .map(StandardRunSummary::from_result)
+            .collect(),
+    });
 
     let sarif = SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
@@ -606,11 +697,113 @@ pub fn generate_multi_compliance_sarif(
                 },
             },
             results: all_results,
-            properties: None,
+            properties: run_properties,
         }],
     };
 
     serde_json::to_string_pretty(&sarif).map_err(|e| ReportError::SerializationError(e.to_string()))
+}
+
+/// Generate SARIF 2.1.0 output for the `quality` command (non-AI-readiness
+/// profiles): a single run whose compliance violations flow through the same
+/// registry-driven renderer as `validate -o sarif` — the same violation
+/// carries the same external ruleId on both surfaces — plus the quality
+/// recommendations as advisory results (never `error`; priority 1-2 map to
+/// `warning`, lower priorities to `note`) under stable
+/// `SBOM-QUALITY-REC-<CATEGORY>` rule ids. Score/grade/verdict ride on the
+/// run-level properties.
+pub fn generate_quality_sarif(
+    report: &crate::quality::QualityReport,
+    sbom_name: &str,
+    profile: &str,
+) -> Result<String, ReportError> {
+    let mut results = compliance_results_to_sarif(&report.compliance, None);
+    let mut rules = get_sarif_rules_for_standard(report.compliance.level);
+
+    // Quality recommendations: one advisory result each, plus a descriptor
+    // per emitted recommendation category.
+    let mut rec_rule_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for rec in &report.recommendations {
+        let rule_id = format!(
+            "SBOM-QUALITY-REC-{}",
+            rec.category.name().to_uppercase().replace(' ', "-")
+        );
+        if rec_rule_ids.insert(rule_id.clone()) {
+            rules.push(SarifRule {
+                id: rule_id.clone(),
+                name: format!(
+                    "QualityRecommendation{}",
+                    rec.category.name().replace(' ', "")
+                ),
+                short_description: SarifMessage {
+                    text: format!("Quality recommendation: {}", rec.category.name()),
+                },
+                default_configuration: SarifConfiguration {
+                    level: SarifLevel::Note,
+                },
+            });
+        }
+        results.push(SarifResult {
+            rule_id,
+            level: recommendation_level(rec.priority),
+            message: SarifMessage {
+                text: format!(
+                    "{} ({} affected, +{:.1} impact)",
+                    rec.message, rec.affected_count, rec.impact
+                ),
+            },
+            locations: vec![],
+            properties: Some(SarifResultProperties {
+                priority: Some(rec.priority),
+                affected_count: Some(rec.affected_count),
+                impact: Some(rec.impact),
+                ..SarifResultProperties::default()
+            }),
+        });
+    }
+
+    let rules = SarifRuleWithUri::wrap_all(complete_rule_catalogue(rules, &results));
+    let not_applicable_reason = match &report.compliance.applicability {
+        crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+        crate::quality::Applicability::Applicable => None,
+    };
+    let sarif = SarifReport {
+        schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
+        version: "2.1.0".to_string(),
+        runs: vec![SarifRun {
+            tool: SarifTool {
+                driver: SarifDriver {
+                    name: "sbom-tools".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    information_uri: "https://github.com/binarly-io/sbom-tools".to_string(),
+                    rules,
+                },
+            },
+            results,
+            properties: Some(SarifRunProperties {
+                applicable: report.compliance.is_applicable(),
+                not_applicable_reason,
+                overall_score: Some(report.overall_score),
+                grade: Some(report.grade.letter().to_string()),
+                sbom: Some(sbom_name.to_string()),
+                profile: Some(profile.to_string()),
+                compliant: Some(report.compliance.is_compliant),
+                standards: Vec::new(),
+            }),
+        }],
+    };
+
+    serde_json::to_string_pretty(&sarif).map_err(|e| ReportError::SerializationError(e.to_string()))
+}
+
+/// SARIF level for a quality recommendation. Recommendations are advisory —
+/// they must never be `error` (a P1 recommendation is not a compliance
+/// failure): priority 1-2 render as `warning`, everything else as `note`.
+const fn recommendation_level(priority: u8) -> SarifLevel {
+    match priority {
+        1 | 2 => SarifLevel::Warning,
+        _ => SarifLevel::Note,
+    }
 }
 
 fn severity_to_level(severity: &str) -> SarifLevel {
@@ -670,21 +863,28 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
                 .iter()
                 .filter_map(|sr| sr.help_uri.clone())
                 .collect();
-            let properties = if standard_ids.is_empty() && standard_help_uris.is_empty() {
+            let properties = if standard_ids.is_empty()
+                && standard_help_uris.is_empty()
+                && v.component_id.is_none()
+                && v.counts.is_none()
+            {
                 None
             } else {
                 Some(SarifResultProperties {
                     standard_ids,
                     standard_help_uris,
+                    component_id: v.component_id.clone(),
+                    affected: v.counts.map(|c| c.affected),
+                    total: v.counts.map(|c| c.total),
+                    ..SarifResultProperties::default()
                 })
             };
             // The externally-visible SARIF rule ID comes from the rule
             // registry keyed by the violation's stable `rule_id` — never from
             // re-parsing the human-readable requirement string. Unregistered
-            // keys fall back to the generic CRA rule.
-            let sarif_rule_id = rule_meta(v.rule_id)
-                .map_or("SBOM-CRA-GENERAL", |m| m.sarif_id)
-                .to_string();
+            // keys fall back to the generic CRA rule (the same lookup the
+            // serde `sarif_rule_id` field uses, so JSON and SARIF agree).
+            let sarif_rule_id = v.sarif_rule_id().to_string();
             SarifResult {
                 rule_id: sarif_rule_id,
                 level: violation_severity_to_level(v.severity),
@@ -709,22 +909,26 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
 /// `None` for rule families that do not map to a single regulation /
 /// specification (e.g., `SBOM-TOOLS-*` change-tracking rules).
 fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
-    if rule_id.starts_with("SBOM-CRA-") {
+    // EUCC before any more-generic prefix: these rules cite Implementing
+    // Regulation (EU) 2024/482, not the CRA regulation.
+    if rule_id.starts_with("SBOM-EUCC") {
+        Some("https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng")
+    } else if rule_id.starts_with("SBOM-CRA-") {
         Some("https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng")
     } else if rule_id.starts_with("SBOM-BSI-") {
-        Some(
-            "https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03183/TR-03183_node.html",
-        )
+        // BSI's stable English shortlink for TR-03183 (printed in the
+        // v2.1.0 document imprint).
+        Some("https://bsi.bund.de/dok/TR-03183-en")
     } else if rule_id.starts_with("SBOM-NIST-SSDF-") || rule_id.starts_with("SBOM-SSDF-") {
         Some("https://doi.org/10.6028/NIST.SP.800-218")
     } else if rule_id.starts_with("SBOM-EO14028-") || rule_id.starts_with("SBOM-EO-14028-") {
         Some("https://www.federalregister.gov/d/2021-10460")
     } else if rule_id.starts_with("SBOM-FDA-") {
-        Some(
-            "https://www.fda.gov/regulatory-information/search-fda-guidance-documents/cybersecurity-medical-devices-quality-system-considerations-and-content-premarket-submissions",
-        )
+        // Current edition: "Quality Management System Considerations…"
+        // (final, 2026-02-03); FDA's media id is the stable handle.
+        Some("https://www.fda.gov/media/119933/download")
     } else if rule_id.starts_with("SBOM-NTIA-") {
-        Some("https://www.ntia.doc.gov/files/ntia/publications/sbom_minimum_elements_report.pdf")
+        Some("https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom")
     } else if rule_id.starts_with("SBOM-PQC-") || rule_id.starts_with("SBOM-NIST-PQC-") {
         Some("https://csrc.nist.gov/projects/post-quantum-cryptography")
     } else if rule_id.starts_with("SBOM-CNSA-") {
@@ -738,7 +942,9 @@ fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
     } else if rule_id.starts_with("SBOM-AIACT-") {
         Some("https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng")
     } else if rule_id.starts_with("SBOM-BSIAI-") {
-        Some("https://www.bsi.bund.de")
+        Some(
+            "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements",
+        )
     } else {
         None
     }
@@ -762,6 +968,7 @@ fn sarif_standard_label(kind: crate::quality::StandardKind) -> &'static str {
         StandardKind::NistPqc => "NIST-PQC",
         StandardKind::EuAiAct => "EU-AI-Act",
         StandardKind::BsiSbomForAi => "BSI-G7-SBOM-for-AI",
+        StandardKind::Eucc => "EUCC",
         StandardKind::Other => "Other",
     }
 }
@@ -895,689 +1102,77 @@ fn get_sarif_rules_for_standard(level: ComplianceLevel) -> Vec<SarifRule> {
         ComplianceLevel::FdaMedicalDevice => get_sarif_fda_rules(),
         ComplianceLevel::NistSsdf => get_sarif_ssdf_rules(),
         ComplianceLevel::Eo14028 => get_sarif_eo14028_rules(),
+        ComplianceLevel::Cnsa2 => get_sarif_cnsa2_rules(),
+        ComplianceLevel::NistPqc => get_sarif_pqc_rules(),
+        // The remaining levels (Minimum/Standard/Comprehensive, the CRA
+        // profiles, BSI TR-03183-2, EUCC, and the AI readiness profiles)
+        // genuinely emit rules from the shared CRA-family catalogue.
         _ => get_sarif_compliance_rules(),
     }
 }
 
 fn get_sarif_ntia_rules() -> Vec<SarifRule> {
-    vec![
-        SarifRule {
-            id: "SBOM-NTIA-AUTHOR".to_string(),
-            name: "NtiaAuthor".to_string(),
-            short_description: SarifMessage {
-                text: "NTIA Minimum Elements: Author/creator information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-NTIA-NAME".to_string(),
-            name: "NtiaComponentName".to_string(),
-            short_description: SarifMessage {
-                text: "NTIA Minimum Elements: Component name".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-NTIA-VERSION".to_string(),
-            name: "NtiaVersion".to_string(),
-            short_description: SarifMessage {
-                text: "NTIA Minimum Elements: Component version string".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-NTIA-SUPPLIER".to_string(),
-            name: "NtiaSupplier".to_string(),
-            short_description: SarifMessage {
-                text: "NTIA Minimum Elements: Supplier name".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-NTIA-IDENTIFIER".to_string(),
-            name: "NtiaUniqueIdentifier".to_string(),
-            short_description: SarifMessage {
-                text: "NTIA Minimum Elements: Unique identifier (PURL/CPE/SWID)".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-NTIA-DEPENDENCY".to_string(),
-            name: "NtiaDependency".to_string(),
-            short_description: SarifMessage {
-                text: "NTIA Minimum Elements: Dependency relationship".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-NTIA-GENERAL".to_string(),
-            name: "NtiaGeneralRequirement".to_string(),
-            short_description: SarifMessage {
-                text: "NTIA Minimum Elements: General requirement".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-    ]
+    registry_sarif_rules(crate::quality::NTIA_SARIF_RULE_IDS)
 }
 
 fn get_sarif_fda_rules() -> Vec<SarifRule> {
-    vec![
-        SarifRule {
-            id: "SBOM-FDA-CREATOR".to_string(),
-            name: "FdaCreator".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: SBOM creator/manufacturer information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-NAMESPACE".to_string(),
-            name: "FdaNamespace".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: SBOM serial number or document namespace".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-NAME".to_string(),
-            name: "FdaDocumentName".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: SBOM document name/title".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-SUPPLIER".to_string(),
-            name: "FdaSupplier".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: Component supplier/manufacturer information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-HASH".to_string(),
-            name: "FdaHash".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: Component cryptographic hash".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-IDENTIFIER".to_string(),
-            name: "FdaIdentifier".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: Component unique identifier (PURL/CPE/SWID)".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-VERSION".to_string(),
-            name: "FdaVersion".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: Component version information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-DEPENDENCY".to_string(),
-            name: "FdaDependency".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: Dependency relationships".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-SUPPORT".to_string(),
-            name: "FdaSupport".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: Component support/contact information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Note,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-SECURITY".to_string(),
-            name: "FdaSecurity".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: Security vulnerability information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-FDA-GENERAL".to_string(),
-            name: "FdaGeneralRequirement".to_string(),
-            short_description: SarifMessage {
-                text: "FDA Medical Device: General SBOM requirement".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-    ]
+    registry_sarif_rules(crate::quality::FDA_SARIF_RULE_IDS)
 }
 
 fn get_sarif_ssdf_rules() -> Vec<SarifRule> {
-    vec![
-        SarifRule {
-            id: "SBOM-SSDF-PS1".to_string(),
-            name: "SsdfProvenance".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF PS.1: Provenance and creator identification".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-PS2".to_string(),
-            name: "SsdfBuildIntegrity".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF PS.2: Build integrity — component cryptographic hashes"
-                    .to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-PS3".to_string(),
-            name: "SsdfSupplierIdentification".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF PS.3: Supplier identification for components".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-PO1".to_string(),
-            name: "SsdfSourceProvenance".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF PO.1: Source code provenance — VCS references".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-PO3".to_string(),
-            name: "SsdfBuildMetadata".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF PO.3: Build provenance — build system metadata".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Note,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-PW4".to_string(),
-            name: "SsdfDependencyManagement".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF PW.4: Dependency management — relationships".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-PW6".to_string(),
-            name: "SsdfVulnerabilityInfo".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF PW.6: Vulnerability information and security references"
-                    .to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Note,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-RV1".to_string(),
-            name: "SsdfComponentIdentification".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF RV.1: Component identification — unique identifiers".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-SSDF-GENERAL".to_string(),
-            name: "SsdfGeneralRequirement".to_string(),
-            short_description: SarifMessage {
-                text: "NIST SSDF: General secure development requirement".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-    ]
+    registry_sarif_rules(crate::quality::SSDF_SARIF_RULE_IDS)
 }
 
 fn get_sarif_eo14028_rules() -> Vec<SarifRule> {
-    vec![
-        SarifRule {
-            id: "SBOM-EO14028-FORMAT".to_string(),
-            name: "Eo14028MachineReadable".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): Machine-readable SBOM format requirement".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-AUTOGEN".to_string(),
-            name: "Eo14028AutoGeneration".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): Automated SBOM generation".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-CREATOR".to_string(),
-            name: "Eo14028Creator".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): SBOM creator identification".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-IDENTIFIER".to_string(),
-            name: "Eo14028Identifier".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): Component unique identification".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-DEPENDENCY".to_string(),
-            name: "Eo14028Dependency".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): Dependency relationship information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-VERSION".to_string(),
-            name: "Eo14028Version".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): Component version information".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Error,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-INTEGRITY".to_string(),
-            name: "Eo14028Integrity".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): Component integrity verification (hashes)".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-DISCLOSURE".to_string(),
-            name: "Eo14028Disclosure".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(g): Vulnerability disclosure process".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-SUPPLIER".to_string(),
-            name: "Eo14028Supplier".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028 Sec 4(e): Supplier identification".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-        SarifRule {
-            id: "SBOM-EO14028-GENERAL".to_string(),
-            name: "Eo14028GeneralRequirement".to_string(),
-            short_description: SarifMessage {
-                text: "EO 14028: General SBOM requirement".to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: SarifLevel::Warning,
-            },
-        },
-    ]
+    registry_sarif_rules(crate::quality::EO14028_SARIF_RULE_IDS)
+}
+
+fn get_sarif_cnsa2_rules() -> Vec<SarifRule> {
+    registry_sarif_rules(crate::quality::CNSA2_SARIF_RULE_IDS)
+}
+
+fn get_sarif_pqc_rules() -> Vec<SarifRule> {
+    registry_sarif_rules(crate::quality::PQC_SARIF_RULE_IDS)
 }
 
 fn get_sarif_compliance_rules() -> Vec<SarifRule> {
-    vec![
-        SarifRule {
-            id: "SBOM-CRA-ART-13-3".to_string(),
-            name: "CraUpdateFrequency".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(3): SBOM update frequency — timely regeneration after changes".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+    registry_sarif_rules(crate::quality::COMPLIANCE_SARIF_RULE_IDS)
+}
+
+/// Render SARIF reportingDescriptors for a curated slice of registry rule
+/// ids. The registry — not a hand-maintained table — is the single source of
+/// truth for descriptor id, name, shortDescription, and default level, so
+/// the catalogue can no longer drift from `rule_meta`. Slice ids must be
+/// self-descriptors (`rule_meta(id).sarif_id == id`); this is enforced by
+/// `sarif_rule_slices_are_self_descriptors` in the registry tests.
+fn registry_sarif_rules(ids: &[&str]) -> Vec<SarifRule> {
+    ids.iter()
+        .filter_map(|id| {
+            let Some(meta) = rule_meta(id) else {
+                debug_assert!(false, "SARIF rule slice id {id} missing from registry");
+                return None;
+            };
+            debug_assert_eq!(
+                meta.sarif_id, *id,
+                "SARIF rule slices must list self-descriptor ids"
+            );
+            Some(registry_sarif_rule((*id).to_string(), meta))
+        })
+        .collect()
+}
+
+/// Build one SARIF reportingDescriptor from its registry metadata.
+fn registry_sarif_rule(id: String, meta: crate::quality::RuleMeta) -> SarifRule {
+    SarifRule {
+        id,
+        name: meta.name.to_string(),
+        short_description: SarifMessage {
+            text: meta.short_description.to_string(),
         },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-4".to_string(),
-            name: "CraMachineReadableFormat".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(4): SBOM must be in a machine-readable format (CycloneDX 1.4+, SPDX 2.3+, or SPDX 3.0+)".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
+        default_configuration: SarifConfiguration {
+            level: violation_severity_to_level(meta.default_severity),
         },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-6".to_string(),
-            name: "CraVulnerabilityDisclosure".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(6): Vulnerability disclosure contact and metadata completeness".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-5".to_string(),
-            name: "CraLicensedComponentTracking".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(5): Licensed component tracking — license information for all components".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-7".to_string(),
-            name: "CraCoordinatedDisclosure".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(7): Coordinated vulnerability disclosure policy reference".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-8".to_string(),
-            name: "CraSupportPeriod".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(8): Support period and security update end date".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-11".to_string(),
-            name: "CraComponentLifecycle".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(11): Component lifecycle and end-of-support status".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-12".to_string(),
-            name: "CraProductIdentification".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(12): Product name and version identification".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-15".to_string(),
-            name: "CraManufacturerIdentification".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(15): Manufacturer identification and contact information".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ART-13-9".to_string(),
-            name: "CraKnownVulnerabilities".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Art. 13(9): Known vulnerabilities statement — vulnerability data or assertion".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ANNEX-I".to_string(),
-            name: "CraTechnicalDocumentation".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Annex I: Technical documentation (unique identifiers, dependencies, primary component)".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ANNEX-III".to_string(),
-            name: "CraDocumentIntegrity".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Annex III: Document signature/integrity — serial number, hash, or digital signature".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-CRA-ANNEX-VII".to_string(),
-            name: "CraDeclarationOfConformity".to_string(),
-            short_description: SarifMessage {
-                text: "CRA Annex VII: EU Declaration of Conformity reference".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-CRA-GENERAL".to_string(),
-            name: "CraGeneralRequirement".to_string(),
-            short_description: SarifMessage {
-                text: "CRA general SBOM readiness requirement".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-CRA-PRE-8-RQ-02".to_string(),
-            name: "CraHardwareInventory".to_string(),
-            short_description: SarifMessage {
-                text: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware components must be inventoried with producer, name, identifier, and firmware version"
-                    .to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-CRA-PRE-7-RQ-07-RE".to_string(),
-            name: "CraVendorHashCarryThrough".to_string(),
-            short_description: SarifMessage {
-                text: "CRA prEN 40000-1-3 [PRE-7-RQ-07-RE]: Upstream vendor-supplied component hashes must be carried through into the SBOM"
-                    .to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-BSI-TR-03183-2-5-1".to_string(),
-            name: "BsiTr03183AuthorTool".to_string(),
-            short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.1: SBOM author/tool identification".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSI-TR-03183-2-5-2".to_string(),
-            name: "BsiTr03183Timestamp".to_string(),
-            short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.2: ISO-8601 timestamp".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSI-TR-03183-2-5-3".to_string(),
-            name: "BsiTr03183ComponentIdentifier".to_string(),
-            short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.3: Component name and unique identifier".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSI-TR-03183-2-5-4".to_string(),
-            name: "BsiTr03183ComponentHash".to_string(),
-            short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.4: Component cryptographic hash (SHA-256+)".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSI-TR-03183-2-5-5".to_string(),
-            name: "BsiTr03183Dependencies".to_string(),
-            short_description: SarifMessage {
-                text: "BSI TR-03183-2 §5.5: Dependency relationships".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSI-TR-03183-2-6".to_string(),
-            name: "BsiTr03183Recommended".to_string(),
-            short_description: SarifMessage {
-                text: "BSI TR-03183-2 §6: Recommended fields (license, supplier, lifecycle)".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-BSI-TR-03183-2-GENERAL".to_string(),
-            name: "BsiTr03183General".to_string(),
-            short_description: SarifMessage {
-                text: "BSI TR-03183-2 general SBOM requirement".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        // EU AI Act Annex IV technical-documentation readiness (AI3).
-        SarifRule {
-            id: "SBOM-AIACT-NA".to_string(),
-            name: "AiActNotApplicable".to_string(),
-            short_description: SarifMessage {
-                text: "EU AI Act Annex IV readiness not applicable — SBOM has no ML-model or dataset components".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-AIACT-ANNEX-IV-1".to_string(),
-            name: "AiActGeneralDescription".to_string(),
-            short_description: SarifMessage {
-                text: "EU AI Act Annex IV §1: general description of the AI system (architecture, intended purpose)".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-AIACT-ANNEX-IV-2D".to_string(),
-            name: "AiActTrainingData".to_string(),
-            short_description: SarifMessage {
-                text: "EU AI Act Annex IV §2(d): training-data characteristics, provenance, and sensitivity classification".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-AIACT-ANNEX-IV-2G".to_string(),
-            name: "AiActValidationMetrics".to_string(),
-            short_description: SarifMessage {
-                text: "EU AI Act Annex IV §2(g): validation/testing metrics and computational-resources disclosure".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-AIACT-ANNEX-IV-3".to_string(),
-            name: "AiActLimitations".to_string(),
-            short_description: SarifMessage {
-                text: "EU AI Act Annex IV §3: foreseeable limitations and risks".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        // BSI/G7 SBOM-for-AI Minimum Elements readiness (7 clusters).
-        SarifRule {
-            id: "SBOM-BSIAI-NA".to_string(),
-            name: "BsiSbomForAiNotApplicable".to_string(),
-            short_description: SarifMessage {
-                text: "BSI/G7 SBOM-for-AI minimum-elements readiness not applicable — SBOM has no ML-model or dataset components".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-BSIAI-META".to_string(),
-            name: "BsiSbomForAiMetadata".to_string(),
-            short_description: SarifMessage {
-                text: "BSI/G7 SBOM-for-AI Metadata cluster: author, data-format name + version, timestamp, generation tool, signature".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSIAI-SYS".to_string(),
-            name: "BsiSbomForAiSystemLevel".to_string(),
-            short_description: SarifMessage {
-                text: "BSI/G7 SBOM-for-AI System-Level cluster: primary AI system, producer, data flow & usage".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Warning },
-        },
-        SarifRule {
-            id: "SBOM-BSIAI-MODEL".to_string(),
-            name: "BsiSbomForAiModels".to_string(),
-            short_description: SarifMessage {
-                text: "BSI/G7 SBOM-for-AI Models cluster: name, version, identifier, weight hash (NIST-approved algorithm), model card, architecture, datasets, limitations, license".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSIAI-DATASET".to_string(),
-            name: "BsiSbomForAiDatasets".to_string(),
-            short_description: SarifMessage {
-                text: "BSI/G7 SBOM-for-AI Datasets cluster: name, identifier, hash, license, sensitivity classification, provenance & intended use".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Error },
-        },
-        SarifRule {
-            id: "SBOM-BSIAI-INFRA".to_string(),
-            name: "BsiSbomForAiInfrastructure".to_string(),
-            short_description: SarifMessage {
-                text: "BSI/G7 SBOM-for-AI Infrastructure cluster: runtime / framework dependency links".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-        SarifRule {
-            id: "SBOM-BSIAI-SEC".to_string(),
-            name: "BsiSbomForAiSecurity".to_string(),
-            short_description: SarifMessage {
-                text: "BSI/G7 SBOM-for-AI Security cluster: AI-specific security controls, exploitability references".to_string(),
-            },
-            default_configuration: SarifConfiguration { level: SarifLevel::Note },
-        },
-    ]
+    }
 }
 
 // SARIF structures
@@ -1600,19 +1195,86 @@ struct SarifRun {
     properties: Option<SarifRunProperties>,
 }
 
-/// Run-level properties for an AI-readiness SARIF report. Mirrors the run
-/// properties the hand-rolled quality SARIF emitted (minus `compliant`, which
-/// is not meaningful for an AI-only report). `overall_score` is always emitted
-/// (as `null` for the not-applicable case) so machine consumers can distinguish
-/// "score 0" from "not applicable".
+/// Run-level properties shared by every sbom-tools SARIF surface (`validate`
+/// single- and multi-standard, `quality`, and AI-readiness runs).
+///
+/// Every `Option`/`Vec` field is *omitted* when absent (`skip_serializing_if`)
+/// — never emitted as `null`/`[]` — so machine consumers must treat a missing
+/// key as "no value" and check `applicable` before reading any verdict field.
+/// In particular, a run without an `overallScore` key is an unscored
+/// (not-applicable) run, not a score of 0.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SarifRunProperties {
+    /// Whether the evaluated standard/profile actually applied to the SBOM.
+    /// For multi-standard runs: whether at least one standard applied (the
+    /// per-standard verdicts live in `standards`).
     applicable: bool,
+    /// Human-readable reason when `applicable` is false; omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_applicable_reason: Option<String>,
+    /// Omitted when the run was not scored. Surface-dependent semantics: on
+    /// `quality` runs this is the weighted 0-100 quality score, while on
+    /// `validate` compliance runs it is the standard's compliance score
+    /// (`ComplianceResult::score`) — the two are not comparable.
+    #[serde(skip_serializing_if = "Option::is_none")]
     overall_score: Option<f32>,
-    grade: String,
-    sbom: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grade: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sbom: Option<String>,
+    /// CLI profile name on `quality` runs; standard display name on
+    /// `validate` runs. Omitted on multi-standard runs (see `standards`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+    /// Compliance verdict for the embedded standard (quality reports only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compliant: Option<bool>,
+    /// Per-standard summaries for multi-standard compliance runs — one entry
+    /// per checked standard, so a not-applicable standard stays
+    /// machine-distinguishable from a pass when several standards share one
+    /// run. Omitted on single-standard and quality runs, whose verdict rides
+    /// on the flat fields above.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    standards: Vec<StandardRunSummary>,
+}
+
+/// One `properties.standards` entry of a multi-standard compliance run.
+/// Field semantics mirror the flat fields a single-standard run carries.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StandardRunSummary {
+    /// Standard display name (the value the single-standard run's `profile`
+    /// property carries).
     profile: String,
+    /// Whether the standard actually evaluated the SBOM.
+    applicable: bool,
+    /// Human-readable N/A reason; omitted for applicable standards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_applicable_reason: Option<String>,
+    /// Compliance score (0-100); omitted when the standard did not evaluate
+    /// the SBOM.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overall_score: Option<f32>,
+    /// Raw verdict. Stays `true` for not-applicable standards by the
+    /// documented `ComplianceResult` contract — check `applicable` first.
+    compliant: bool,
+}
+
+impl StandardRunSummary {
+    fn from_result(result: &ComplianceResult) -> Self {
+        let not_applicable_reason = match &result.applicability {
+            crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+            crate::quality::Applicability::Applicable => None,
+        };
+        Self {
+            profile: result.level.name().to_string(),
+            applicable: result.is_applicable(),
+            not_applicable_reason,
+            overall_score: result.score().map(f32::from),
+            compliant: result.is_compliant,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1683,11 +1345,11 @@ struct SarifResult {
     properties: Option<SarifResultProperties>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct SarifResultProperties {
     /// Standard reference IDs in the form `<standard>:<id>`
-    /// (e.g., `prEN-40000-1-3:PRE-7-RQ-07`, `CRA:Art. 13(4)`).
+    /// (e.g., `prEN-40000-1-3:PRE-7-RQ-07`, `CRA:Art. 13(8)`).
     /// Plural to match SARIF `properties` extensibility convention.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     standard_ids: Vec<String>,
@@ -1696,6 +1358,28 @@ struct SarifResultProperties {
     /// when none of the references have a canonical home.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     standard_help_uris: Vec<String>,
+    /// Recommendation priority (1 = highest) — quality recommendations only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<u8>,
+    /// Number of affected components — quality recommendations only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    affected_count: Option<usize>,
+    /// Estimated score impact — quality recommendations only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    impact: Option<f32>,
+    /// Canonical id of the offending component (compliance results only) —
+    /// mirrors `Violation::component_id`, the machine-readable join key back
+    /// to the SBOM component. Absent for document-level/aggregate findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component_id: Option<String>,
+    /// Affected-component count for aggregate compliance findings — mirrors
+    /// `Violation::counts.affected` (the numerator printed in the message).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    affected: Option<usize>,
+    /// Total-component count for aggregate compliance findings — mirrors
+    /// `Violation::counts.total` (the message's denominator).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -1722,7 +1406,7 @@ struct SarifArtifactLocation {
     uri: String,
 }
 
-#[derive(Serialize, Clone, Copy)]
+#[derive(Serialize, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 enum SarifLevel {
     #[allow(dead_code)]
@@ -1730,4 +1414,69 @@ enum SarifLevel {
     Note,
     Warning,
     Error,
+}
+
+#[cfg(test)]
+mod registry_consistency_tests {
+    use super::*;
+    use crate::quality::rule_meta;
+
+    fn expected_level(sev: crate::quality::ViolationSeverity) -> SarifLevel {
+        use crate::quality::ViolationSeverity as V;
+        match sev {
+            V::Error => SarifLevel::Error,
+            V::Warning => SarifLevel::Warning,
+            V::Info => SarifLevel::Note,
+        }
+    }
+
+    /// The registry's `default_severity` and the hand-maintained SARIF rule
+    /// catalogues must agree — the registry is documentation, the catalogue
+    /// is what GitHub code scanning displays, and they had already drifted
+    /// apart once (audit finding: registry.rs default_severity dead + wrong).
+    /// Rules whose id is not a registry key (e.g. SBOM-TOOLS-* change
+    /// tracking) are exempt, as are registry keys whose sarif_id differs
+    /// from the key (aliased identities).
+    #[test]
+    fn registry_severity_matches_sarif_catalogue() {
+        let mut tables: Vec<(&str, Vec<SarifRule>)> = vec![
+            ("ntia", get_sarif_ntia_rules()),
+            ("fda", get_sarif_fda_rules()),
+            ("ssdf", get_sarif_ssdf_rules()),
+            ("eo14028", get_sarif_eo14028_rules()),
+            ("cnsa2", get_sarif_cnsa2_rules()),
+            ("pqc", get_sarif_pqc_rules()),
+            ("compliance", get_sarif_compliance_rules()),
+        ];
+        let mut mismatches = Vec::new();
+        for (table_name, rules) in &mut tables {
+            for rule in rules.iter() {
+                let Some(meta) = rule_meta(&rule.id) else {
+                    continue;
+                };
+                if meta.sarif_id != rule.id {
+                    continue;
+                }
+                let expected = expected_level(meta.default_severity);
+                let actual = rule.default_configuration.level;
+                if !matches!(
+                    (&expected, &actual),
+                    (SarifLevel::Error, SarifLevel::Error)
+                        | (SarifLevel::Warning, SarifLevel::Warning)
+                        | (SarifLevel::Note, SarifLevel::Note)
+                        | (SarifLevel::None, SarifLevel::None)
+                ) {
+                    mismatches.push(format!(
+                        "{table_name}: {} registry={expected:?} catalogue={actual:?}",
+                        rule.id
+                    ));
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "registry default_severity and SARIF catalogue drifted:\n{}",
+            mismatches.join("\n")
+        );
+    }
 }

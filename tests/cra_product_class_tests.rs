@@ -5,7 +5,7 @@
 //! - Vendor-hash severity scaling (Default/Important-1 Warning, Important-2/Critical Error)
 //! - EOL severity escalation (Warning → Error at Important-2/Critical)
 //! - Article 14 PSIRT severity escalation (Warning → Error at Important-2/Critical)
-//! - Annex VII Declaration-of-Conformity severity scaling (Info → Warning → Error)
+//! - Annex V Declaration-of-Conformity severity scaling (Info → Warning → Error)
 //! - EUCC reference check fires only at ImportantClass2/Critical
 //! - Module-attestation check fires only on B+C / H / EUCC routes
 //! - Sidecar productClass overrides explicit `with_product_class`
@@ -49,9 +49,23 @@ fn vendor_hash_violation(
 // --- vendor-hash threshold + severity ---------------------------------------
 
 #[test]
-fn vendor_hash_default_class_warns_below_50pct() {
-    // 4/10 = 40% coverage → below 50% threshold
+fn vendor_hash_default_class_errors_below_50pct() {
+    // 4/10 = 40% coverage → below the 50% threshold. The Phase 2 gate
+    // (Error below 50%) is the floor; pinning an explicit product class
+    // must never weaken it, so this stays an Error (not the class table's
+    // Warning) — same verdict as running Phase 2 with no class at all.
     let sbom = vendor_sbom(10, 4);
+    let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+        .with_product_class(CraProductClass::Default)
+        .check(&sbom);
+    assert_eq!(vendor_hash_violation(&res), Some(ViolationSeverity::Error));
+}
+
+#[test]
+fn vendor_hash_default_class_keeps_phase2_warning_above_50pct() {
+    // 6/10 = 60% — clears Default's 50% class bar, but the Phase 2 gate
+    // still warns below 80%; the class must not suppress the phase floor.
+    let sbom = vendor_sbom(10, 6);
     let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
         .with_product_class(CraProductClass::Default)
         .check(&sbom);
@@ -59,16 +73,6 @@ fn vendor_hash_default_class_warns_below_50pct() {
         vendor_hash_violation(&res),
         Some(ViolationSeverity::Warning)
     );
-}
-
-#[test]
-fn vendor_hash_default_class_clean_above_50pct() {
-    // 6/10 = 60% — clears Default's 50% bar
-    let sbom = vendor_sbom(10, 6);
-    let res = ComplianceChecker::new(ComplianceLevel::CraPhase2)
-        .with_product_class(CraProductClass::Default)
-        .check(&sbom);
-    assert_eq!(vendor_hash_violation(&res), None);
 }
 
 #[test]
@@ -179,7 +183,7 @@ fn eol_severity_remains_warning_at_default_class() {
     assert_eq!(v.severity, ViolationSeverity::Warning);
 }
 
-// --- Annex VII DoC severity scaling -----------------------------------------
+// --- Annex V DoC severity scaling -------------------------------------------
 
 #[test]
 fn doc_reference_severity_scales_with_class() {
@@ -191,8 +195,8 @@ fn doc_reference_severity_scales_with_class() {
     let v = res_default
         .violations
         .iter()
-        .find(|v| v.requirement.contains("Annex VII"))
-        .expect("Annex VII DoC violation expected");
+        .find(|v| v.requirement.contains("Annex V:"))
+        .expect("Annex V DoC violation expected");
     assert_eq!(v.severity, ViolationSeverity::Info);
 
     let res_imp1 = ComplianceChecker::new(ComplianceLevel::CraPhase2)
@@ -201,8 +205,8 @@ fn doc_reference_severity_scales_with_class() {
     let v = res_imp1
         .violations
         .iter()
-        .find(|v| v.requirement.contains("Annex VII"))
-        .expect("Annex VII DoC violation expected");
+        .find(|v| v.requirement.contains("Annex V:"))
+        .expect("Annex V DoC violation expected");
     assert_eq!(v.severity, ViolationSeverity::Warning);
 
     let res_critical = ComplianceChecker::new(ComplianceLevel::CraPhase2)
@@ -211,8 +215,8 @@ fn doc_reference_severity_scales_with_class() {
     let v = res_critical
         .violations
         .iter()
-        .find(|v| v.requirement.contains("Annex VII"))
-        .expect("Annex VII DoC violation expected");
+        .find(|v| v.requirement.contains("Annex V:"))
+        .expect("Annex V DoC violation expected");
     assert_eq!(v.severity, ViolationSeverity::Error);
 }
 

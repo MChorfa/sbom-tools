@@ -171,6 +171,8 @@ mod tests {
             category: ViolationCategory::DocumentMetadata,
             message: "Missing AI documentation".to_string(),
             element: Some("model-1".to_string()),
+            component_id: None,
+            counts: None,
             requirement: "EU AI Act Annex IV".to_string(),
             rule_id: "SBOM-AIACT-ANNEX-IV-2D",
             standard_refs: vec![StandardRef::new(StandardKind::EuAiAct, "Annex IV §2(d)")],

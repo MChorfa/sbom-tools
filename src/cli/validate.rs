@@ -2,16 +2,26 @@
 //!
 //! Implements the `validate` subcommand for validating SBOMs against compliance standards.
 
-use crate::model::{CreatorType, ExternalRefType, HashAlgorithm, NormalizedSbom, Severity};
+use crate::model::NormalizedSbom;
 use crate::pipeline::{OutputTarget, exit_codes, parse_sbom_with_context, write_output};
 use crate::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, Violation, ViolationCategory,
-    ViolationSeverity,
+    ComplianceChecker, ComplianceLevel, ComplianceResult, StandardSelector, ViolationSeverity,
 };
 use crate::reports::{ReportFormat, generate_compliance_sarif};
-use anyhow::{Result, bail};
-use std::collections::HashSet;
+use anyhow::Result;
 use std::path::PathBuf;
+
+/// Output formats the `validate` command has a real renderer for.
+/// `auto`/`summary` render the plain-text report; everything else here is a
+/// dedicated machine-readable emitter. All other [`ReportFormat`] values are
+/// rejected up front instead of silently falling back to text.
+pub const VALIDATE_OUTPUT_FORMATS: &[ReportFormat] = &[
+    ReportFormat::Auto,
+    ReportFormat::Summary,
+    ReportFormat::Json,
+    ReportFormat::Sarif,
+    ReportFormat::OscalJson,
+];
 
 /// Run the validate command, returning the desired exit code.
 ///
@@ -22,37 +32,53 @@ use std::path::PathBuf;
 /// - [`exit_codes::COMPLIANCE_WARNINGS`] (2): warnings found with
 ///   `--fail-on-warning`
 ///
+/// These gate codes only apply to runs that completed a validation. A
+/// usage/configuration error surfaced from this function (unsupported output
+/// format, invalid `--as-of` or `--cra-product-class`, broken explicit
+/// sidecar) propagates as an `Err`, which the binary's `main()` maps to
+/// process exit code 1 (and clap parse errors exit 2) — the same numbers as
+/// the gate codes above. CI pipelines must therefore not interpret a nonzero
+/// exit as a compliance verdict unless the expected report was produced.
+///
 /// The caller is responsible for calling `std::process::exit()` with the
 /// returned code when it is non-zero.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub fn run_validate(
     sbom_path: PathBuf,
-    standard: String,
+    standards: Vec<StandardSelector>,
     output: ReportFormat,
     output_file: Option<PathBuf>,
     fail_on_warning: bool,
     summary: bool,
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
+    as_of: Option<&str>,
 ) -> Result<i32> {
+    // `--summary` overrides `--output` (documented on the flag), so the
+    // requested format is never rendered and must not be gated.
+    if !summary {
+        super::ensure_output_format_supported("validate", output, VALIDATE_OUTPUT_FORMATS)?;
+    }
+    // Pinned evaluation clock for deadline-sensitive checks (shared parser
+    // with `quality --as-of`).
+    let as_of: Option<chrono::DateTime<chrono::Utc>> = as_of.map(super::parse_as_of).transpose()?;
+    anyhow::ensure!(
+        !standards.is_empty(),
+        "no compliance standard selected; pass --standard (valid values: {})",
+        StandardSelector::valid_values()
+    );
+
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
 
-    // Load CRA sidecar — explicit flag wins, otherwise auto-discover next to the SBOM
-    let cra_sidecar = match cra_sidecar_path {
-        Some(p) => Some(
-            crate::model::CraSidecarMetadata::from_file(&p).map_err(|e| {
-                anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())
-            })?,
-        ),
-        None => crate::model::CraSidecarMetadata::find_for_sbom(&sbom_path),
-    };
+    // Load CRA sidecar — an explicit path is a hard error when broken,
+    // otherwise auto-discover next to the SBOM (best-effort).
+    let cra_sidecar = super::load_cra_sidecar(cra_sidecar_path.as_deref(), &sbom_path)?;
 
     // Resolve effective product class: sidecar wins; otherwise CLI flag.
+    // An explicitly passed unrecognized class is a hard error (strict parse).
     // Mismatch between explicit CLI flag and sidecar is reported as a Warning
     // on stderr (not turned into a Violation — sidecar is authoritative).
-    let cli_class = cra_product_class
-        .as_deref()
-        .and_then(crate::model::CraProductClass::parse_cli);
+    let cli_class = super::parse_cra_product_class(cra_product_class.as_deref())?;
     let sidecar_class = cra_sidecar.as_ref().and_then(|s| s.product_class);
     if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
         && cli != side
@@ -65,72 +91,37 @@ pub fn run_validate(
     }
     let effective_class = sidecar_class.or(cli_class);
 
-    let standards: Vec<&str> = standard.split(',').map(str::trim).collect();
     let mut results = Vec::new();
 
-    for std_name in &standards {
-        let result = match std_name.to_lowercase().as_str() {
-            "ntia" => check_ntia_compliance(parsed.sbom()),
-            "fda" => check_fda_compliance(parsed.sbom()),
-            "cra" => {
-                let mut checker = ComplianceChecker::new(ComplianceLevel::CraPhase2);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                if let Some(c) = effective_class {
-                    checker = checker.with_product_class(c);
-                }
-                checker.check(parsed.sbom())
-            }
-            "ssdf" | "nist-ssdf" | "nist_ssdf" => {
-                ComplianceChecker::new(ComplianceLevel::NistSsdf).check(parsed.sbom())
-            }
-            "eo14028" | "eo-14028" | "eo_14028" => {
-                ComplianceChecker::new(ComplianceLevel::Eo14028).check(parsed.sbom())
-            }
-            "cnsa2" | "cnsa-2" | "cnsa_2" | "cnsa2.0" => {
-                ComplianceChecker::new(ComplianceLevel::Cnsa2).check(parsed.sbom())
-            }
-            "pqc" | "nist-pqc" | "nist_pqc" => {
-                ComplianceChecker::new(ComplianceLevel::NistPqc).check(parsed.sbom())
-            }
-            "bsi" | "tr-03183" | "tr03183" | "bsi-tr-03183-2" => {
-                ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(parsed.sbom())
-            }
-            "oss-steward" | "cra-oss-steward" | "cra-oss" | "cra-art24" | "art24" => {
-                let mut checker = ComplianceChecker::new(ComplianceLevel::CraOssSteward);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                checker.check(parsed.sbom())
-            }
-            "eucc" | "eucc-substantial" | "common-criteria" => {
-                let mut checker = ComplianceChecker::new(ComplianceLevel::EuccSubstantial);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                checker.check(parsed.sbom())
-            }
-            "ai-act" | "ai_act" | "aiact" | "eu-ai-act" => {
-                // The sidecar carries the is_high_risk_ai flag, which escalates
-                // Annex IV readiness findings — attach it when present.
-                let mut checker = ComplianceChecker::new(ComplianceLevel::EuAiAct);
-                if let Some(sc) = cra_sidecar.clone() {
-                    checker = checker.with_sidecar(sc);
-                }
-                checker.check(parsed.sbom())
-            }
-            "bsi-ai" | "bsi_ai" | "bsiai" | "sbom-for-ai" | "ai-bom" => {
-                ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(parsed.sbom())
-            }
-            _ => {
-                bail!(
-                    "Unknown validation standard: {std_name}. \
-                    Valid options: ntia, fda, cra, ssdf, eo14028, cnsa2, pqc, bsi, oss-steward, eucc, ai-act, bsi-ai"
-                );
-            }
-        };
-        results.push(result);
+    for selector in &standards {
+        let level = selector.level();
+        let mut checker = ComplianceChecker::new(level);
+        if let Some(now) = as_of {
+            checker = checker.with_as_of(now);
+        }
+        // Sidecar metadata feeds the CRA family (manufacturer/disclosure/
+        // lifecycle fields), EUCC (certificate references), and the AI Act
+        // profile (the is_high_risk_ai flag escalates Annex IV findings).
+        if matches!(
+            level,
+            ComplianceLevel::CraPhase1
+                | ComplianceLevel::CraPhase2
+                | ComplianceLevel::CraOssSteward
+                | ComplianceLevel::EuccSubstantial
+                | ComplianceLevel::EuAiAct
+        ) && let Some(sc) = cra_sidecar.clone()
+        {
+            checker = checker.with_sidecar(sc);
+        }
+        // Product class drives severity calibration for the CRA phase checks.
+        if matches!(
+            level,
+            ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2
+        ) && let Some(c) = effective_class
+        {
+            checker = checker.with_product_class(c);
+        }
+        results.push(checker.check(parsed.sbom()));
     }
 
     if results.len() == 1 {
@@ -193,32 +184,39 @@ fn write_compliance_output(
 #[derive(serde::Serialize)]
 struct ComplianceSummary {
     standard: String,
+    /// Whether the standard actually evaluated the SBOM. When false,
+    /// `compliant` is the documented always-true N/A contract and `score`
+    /// is null — dashboards must not read either as a pass.
+    applicable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_applicable_reason: Option<String>,
     compliant: bool,
-    score: u8,
+    score: Option<u8>,
     errors: usize,
     warnings: usize,
     info: usize,
 }
 
-fn write_compliance_summary(result: &ComplianceResult, output_file: Option<PathBuf>) -> Result<()> {
-    let target = OutputTarget::from_option(output_file);
-    let total = result.violations.len() + 1;
-    let issues = result.error_count + result.warning_count;
-    let score = if issues >= total {
-        0
-    } else {
-        ((total - issues) * 100) / total
-    }
-    .min(100) as u8;
-
-    let summary = ComplianceSummary {
+fn compliance_summary(result: &ComplianceResult) -> ComplianceSummary {
+    let not_applicable_reason = match &result.applicability {
+        crate::quality::Applicability::NotApplicable(reason) => Some(reason.clone()),
+        crate::quality::Applicability::Applicable => None,
+    };
+    ComplianceSummary {
         standard: result.level.name().to_string(),
+        applicable: result.is_applicable(),
+        not_applicable_reason,
         compliant: result.is_compliant,
-        score,
+        score: result.score(),
         errors: result.error_count,
         warnings: result.warning_count,
         info: result.info_count,
-    };
+    }
+}
+
+fn write_compliance_summary(result: &ComplianceResult, output_file: Option<PathBuf>) -> Result<()> {
+    let target = OutputTarget::from_option(output_file);
+    let summary = compliance_summary(result);
     let content = serde_json::to_string(&summary)
         .map_err(|e| anyhow::anyhow!("Failed to serialize summary: {e}"))?;
     write_output(&content, &target, false)?;
@@ -255,28 +253,7 @@ fn write_multi_compliance_summary(
     output_file: Option<PathBuf>,
 ) -> Result<()> {
     let target = OutputTarget::from_option(output_file);
-    let summaries: Vec<ComplianceSummary> = results
-        .iter()
-        .map(|result| {
-            let total = result.violations.len() + 1;
-            let issues = result.error_count + result.warning_count;
-            let score = if issues >= total {
-                0
-            } else {
-                ((total - issues) * 100) / total
-            }
-            .min(100) as u8;
-
-            ComplianceSummary {
-                standard: result.level.name().to_string(),
-                compliant: result.is_compliant,
-                score,
-                errors: result.error_count,
-                warnings: result.warning_count,
-                info: result.info_count,
-            }
-        })
-        .collect();
+    let summaries: Vec<ComplianceSummary> = results.iter().map(compliance_summary).collect();
 
     let content = serde_json::to_string(&summaries)
         .map_err(|e| anyhow::anyhow!("Failed to serialize multi-standard summary: {e}"))?;
@@ -287,17 +264,21 @@ fn write_multi_compliance_summary(
 fn format_compliance_text(result: &ComplianceResult) -> String {
     let mut lines = Vec::new();
     lines.push(format!("Compliance ({})", result.level.name()));
-    lines.push(format!(
-        "Status: {} ({} errors, {} warnings, {} info)",
-        if result.is_compliant {
-            "COMPLIANT"
-        } else {
-            "NON-COMPLIANT"
-        },
-        result.error_count,
-        result.warning_count,
-        result.info_count
-    ));
+    if let crate::quality::Applicability::NotApplicable(reason) = &result.applicability {
+        lines.push(format!("Status: NOT APPLICABLE — {reason}"));
+    } else {
+        lines.push(format!(
+            "Status: {} ({} errors, {} warnings, {} info)",
+            if result.is_compliant {
+                "COMPLIANT"
+            } else {
+                "NON-COMPLIANT"
+            },
+            result.error_count,
+            result.warning_count,
+            result.info_count
+        ));
+    }
     lines.push(String::new());
 
     if result.violations.is_empty() {
@@ -325,467 +306,22 @@ fn format_compliance_text(result: &ComplianceResult) -> String {
     lines.join("\n")
 }
 
-/// Check SBOM against NTIA minimum elements, returning a structured result.
-fn check_ntia_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
-    let mut violations = Vec::new();
-
-    if sbom.document.creators.is_empty() {
-        violations.push(Violation {
-            severity: ViolationSeverity::Error,
-            category: ViolationCategory::DocumentMetadata,
-            message: "Missing author/creator information".to_string(),
-            element: None,
-            requirement: "NTIA Minimum Elements: Author".to_string(),
-            rule_id: "SBOM-NTIA-AUTHOR",
-            standard_refs: Vec::new(),
-        });
+/// Run the engine's NtiaMinimum check and print a compact PASSED/FAILED
+/// summary. Used by `view --validate-ntia`; gating errors are listed,
+/// warnings go to the log.
+pub fn print_ntia_validation(sbom: &NormalizedSbom) {
+    let result = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(sbom);
+    for v in result.violations_by_severity(ViolationSeverity::Warning) {
+        tracing::warn!("{}", v.message);
     }
-
-    for (_id, comp) in &sbom.components {
-        if comp.name.is_empty() {
-            violations.push(Violation {
-                severity: ViolationSeverity::Error,
-                category: ViolationCategory::ComponentIdentification,
-                message: "Component missing name".to_string(),
-                element: None,
-                requirement: "NTIA Minimum Elements: Component Name".to_string(),
-                rule_id: "SBOM-NTIA-NAME",
-                standard_refs: Vec::new(),
-            });
-        }
-        if comp.version.is_none() {
-            violations.push(Violation {
-                severity: ViolationSeverity::Warning,
-                category: ViolationCategory::ComponentIdentification,
-                message: format!("Component '{}' missing version", comp.name),
-                element: Some(comp.name.clone()),
-                requirement: "NTIA Minimum Elements: Version".to_string(),
-                rule_id: "SBOM-NTIA-VERSION",
-                standard_refs: Vec::new(),
-            });
-        }
-        if comp.supplier.is_none() {
-            violations.push(Violation {
-                severity: ViolationSeverity::Warning,
-                category: ViolationCategory::SupplierInfo,
-                message: format!("Component '{}' missing supplier", comp.name),
-                element: Some(comp.name.clone()),
-                requirement: "NTIA Minimum Elements: Supplier Name".to_string(),
-                rule_id: "SBOM-NTIA-SUPPLIER",
-                standard_refs: Vec::new(),
-            });
-        }
-        if comp.identifiers.purl.is_none()
-            && comp.identifiers.cpe.is_empty()
-            && comp.identifiers.swid.is_none()
-        {
-            violations.push(Violation {
-                severity: ViolationSeverity::Warning,
-                category: ViolationCategory::ComponentIdentification,
-                message: format!(
-                    "Component '{}' missing unique identifier (PURL/CPE/SWID)",
-                    comp.name
-                ),
-                element: Some(comp.name.clone()),
-                requirement: "NTIA Minimum Elements: Unique Identifier".to_string(),
-                rule_id: "SBOM-NTIA-IDENTIFIER",
-                standard_refs: Vec::new(),
-            });
-        }
-    }
-
-    if sbom.edges.is_empty() && sbom.component_count() > 1 {
-        violations.push(Violation {
-            severity: ViolationSeverity::Error,
-            category: ViolationCategory::DependencyInfo,
-            message: "Missing dependency relationships".to_string(),
-            element: None,
-            requirement: "NTIA Minimum Elements: Dependency Relationship".to_string(),
-            rule_id: "SBOM-NTIA-DEPENDENCY",
-            standard_refs: Vec::new(),
-        });
-    }
-
-    ComplianceResult::new(ComplianceLevel::NtiaMinimum, violations)
-}
-
-/// Check SBOM against FDA medical device requirements, returning a structured result.
-fn check_fda_compliance(sbom: &NormalizedSbom) -> ComplianceResult {
-    let mut fda_issues: Vec<FdaIssue> = Vec::new();
-
-    validate_fda_document(sbom, &mut fda_issues);
-    validate_fda_components(sbom, &mut fda_issues);
-    validate_fda_relationships(sbom, &mut fda_issues);
-    validate_fda_vulnerabilities(sbom, &mut fda_issues);
-
-    let violations = fda_issues
-        .into_iter()
-        .map(|issue| Violation {
-            severity: match issue.severity {
-                FdaSeverity::Error => ViolationSeverity::Error,
-                FdaSeverity::Warning => ViolationSeverity::Warning,
-                FdaSeverity::Info => ViolationSeverity::Info,
-            },
-            category: match issue.category {
-                "Document" => ViolationCategory::DocumentMetadata,
-                "Component" => ViolationCategory::ComponentIdentification,
-                "Dependency" => ViolationCategory::DependencyInfo,
-                "Security" => ViolationCategory::SecurityInfo,
-                _ => ViolationCategory::DocumentMetadata,
-            },
-            requirement: format!("FDA Medical Device: {}", issue.category),
-            message: issue.message,
-            element: None,
-            rule_id: match issue.category {
-                "Dependency" => "SBOM-FDA-DEPENDENCY",
-                "Security" => "SBOM-FDA-SECURITY",
-                _ => "SBOM-FDA-GENERAL",
-            },
-            standard_refs: Vec::new(),
-        })
-        .collect();
-
-    ComplianceResult::new(ComplianceLevel::FdaMedicalDevice, violations)
-}
-
-/// Validate SBOM against NTIA minimum elements
-#[allow(clippy::unnecessary_wraps)]
-pub fn validate_ntia_elements(sbom: &NormalizedSbom) -> Result<()> {
-    let mut issues = Vec::new();
-
-    // Check document-level requirements
-    if sbom.document.creators.is_empty() {
-        issues.push("Missing author/creator information");
-    }
-
-    // Check component-level requirements
-    for (_id, comp) in &sbom.components {
-        if comp.name.is_empty() {
-            issues.push("Component missing name");
-        }
-        if comp.version.is_none() {
-            tracing::warn!("Component '{}' missing version", comp.name);
-        }
-        if comp.supplier.is_none() {
-            tracing::warn!("Component '{}' missing supplier", comp.name);
-        }
-        if comp.identifiers.purl.is_none()
-            && comp.identifiers.cpe.is_empty()
-            && comp.identifiers.swid.is_none()
-        {
-            tracing::warn!(
-                "Component '{}' missing unique identifier (PURL/CPE/SWID)",
-                comp.name
-            );
-        }
-    }
-
-    if sbom.edges.is_empty() && sbom.component_count() > 1 {
-        issues.push("Missing dependency relationships");
-    }
-
-    if issues.is_empty() {
+    if result.is_compliant {
         tracing::info!("SBOM passes NTIA minimum elements validation");
         println!("NTIA Validation: PASSED");
     } else {
-        tracing::warn!("SBOM has {} NTIA validation issues", issues.len());
+        tracing::warn!("SBOM has {} NTIA validation errors", result.error_count);
         println!("NTIA Validation: FAILED");
-        for issue in &issues {
-            println!("  - {issue}");
-        }
-    }
-
-    Ok(())
-}
-
-/// FDA validation issue severity
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum FdaSeverity {
-    Error,   // Must fix - will likely cause FDA rejection
-    Warning, // Should fix - may cause FDA questions
-    Info,    // Recommendation for improvement
-}
-
-impl std::fmt::Display for FdaSeverity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Error => write!(f, "ERROR"),
-            Self::Warning => write!(f, "WARNING"),
-            Self::Info => write!(f, "INFO"),
-        }
-    }
-}
-
-/// FDA validation issue
-struct FdaIssue {
-    severity: FdaSeverity,
-    category: &'static str,
-    message: String,
-}
-
-/// Component validation statistics
-struct ComponentStats {
-    total: usize,
-    without_version: usize,
-    without_supplier: usize,
-    without_hash: usize,
-    without_strong_hash: usize,
-    without_identifier: usize,
-    without_support_info: usize,
-}
-
-fn validate_fda_document(sbom: &NormalizedSbom, issues: &mut Vec<FdaIssue>) {
-    // Manufacturer/Author Information
-    if sbom.document.creators.is_empty() {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Error,
-            category: "Document",
-            message: "Missing SBOM author/manufacturer information".to_string(),
-        });
-    } else {
-        let has_org = sbom
-            .document
-            .creators
-            .iter()
-            .any(|c| c.creator_type == CreatorType::Organization);
-        if !has_org {
-            issues.push(FdaIssue {
-                severity: FdaSeverity::Warning,
-                category: "Document",
-                message: "No organization/manufacturer listed as SBOM creator".to_string(),
-            });
-        }
-
-        let has_contact = sbom.document.creators.iter().any(|c| c.email.is_some());
-        if !has_contact {
-            issues.push(FdaIssue {
-                severity: FdaSeverity::Warning,
-                category: "Document",
-                message: "No contact email provided for SBOM creators".to_string(),
-            });
-        }
-    }
-
-    // SBOM Name/Title
-    if sbom.document.name.is_none() {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Warning,
-            category: "Document",
-            message: "Missing SBOM document name/title".to_string(),
-        });
-    }
-
-    // Serial Number/Namespace
-    if sbom.document.serial_number.is_none() {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Warning,
-            category: "Document",
-            message: "Missing SBOM serial number or document namespace".to_string(),
-        });
-    }
-}
-
-fn validate_fda_components(sbom: &NormalizedSbom, issues: &mut Vec<FdaIssue>) -> ComponentStats {
-    let mut stats = ComponentStats {
-        total: sbom.component_count(),
-        without_version: 0,
-        without_supplier: 0,
-        without_hash: 0,
-        without_strong_hash: 0,
-        without_identifier: 0,
-        without_support_info: 0,
-    };
-
-    for (_id, comp) in &sbom.components {
-        if comp.name.is_empty() {
-            issues.push(FdaIssue {
-                severity: FdaSeverity::Error,
-                category: "Component",
-                message: "Component has empty name".to_string(),
-            });
-        }
-
-        if comp.version.is_none() {
-            stats.without_version += 1;
-        }
-
-        if comp.supplier.is_none() {
-            stats.without_supplier += 1;
-        }
-
-        if comp.hashes.is_empty() {
-            stats.without_hash += 1;
-        } else {
-            let has_strong_hash = comp.hashes.iter().any(|h| {
-                matches!(
-                    h.algorithm,
-                    HashAlgorithm::Sha256
-                        | HashAlgorithm::Sha384
-                        | HashAlgorithm::Sha512
-                        | HashAlgorithm::Sha3_256
-                        | HashAlgorithm::Sha3_384
-                        | HashAlgorithm::Sha3_512
-                        | HashAlgorithm::Blake2b256
-                        | HashAlgorithm::Blake2b384
-                        | HashAlgorithm::Blake2b512
-                        | HashAlgorithm::Blake3
-                )
-            });
-            if !has_strong_hash {
-                stats.without_strong_hash += 1;
-            }
-        }
-
-        if comp.identifiers.purl.is_none()
-            && comp.identifiers.cpe.is_empty()
-            && comp.identifiers.swid.is_none()
-        {
-            stats.without_identifier += 1;
-        }
-
-        let has_support_info = comp.external_refs.iter().any(|r| {
-            matches!(
-                r.ref_type,
-                ExternalRefType::Support
-                    | ExternalRefType::Website
-                    | ExternalRefType::SecurityContact
-                    | ExternalRefType::Advisories
-            )
-        });
-        if !has_support_info {
-            stats.without_support_info += 1;
-        }
-    }
-
-    // Add component issues
-    if stats.without_version > 0 {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Error,
-            category: "Component",
-            message: format!(
-                "{}/{} components missing version information",
-                stats.without_version, stats.total
-            ),
-        });
-    }
-
-    if stats.without_supplier > 0 {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Error,
-            category: "Component",
-            message: format!(
-                "{}/{} components missing supplier/manufacturer information",
-                stats.without_supplier, stats.total
-            ),
-        });
-    }
-
-    if stats.without_hash > 0 {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Error,
-            category: "Component",
-            message: format!(
-                "{}/{} components missing cryptographic hash",
-                stats.without_hash, stats.total
-            ),
-        });
-    }
-
-    if stats.without_strong_hash > 0 {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Warning,
-            category: "Component",
-            message: format!(
-                "{}/{} components have only weak hash algorithms (MD5/SHA-1). FDA recommends SHA-256 or stronger",
-                stats.without_strong_hash, stats.total
-            ),
-        });
-    }
-
-    if stats.without_identifier > 0 {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Error,
-            category: "Component",
-            message: format!(
-                "{}/{} components missing unique identifier (PURL/CPE/SWID)",
-                stats.without_identifier, stats.total
-            ),
-        });
-    }
-
-    if stats.without_support_info > 0 && stats.total > 0 {
-        let percentage = (stats.without_support_info as f64 / stats.total as f64) * 100.0;
-        if percentage > 50.0 {
-            issues.push(FdaIssue {
-                severity: FdaSeverity::Info,
-                category: "Component",
-                message: format!(
-                    "{}/{} components ({:.0}%) lack support/contact information",
-                    stats.without_support_info, stats.total, percentage
-                ),
-            });
-        }
-    }
-
-    stats
-}
-
-fn validate_fda_relationships(sbom: &NormalizedSbom, issues: &mut Vec<FdaIssue>) {
-    let total = sbom.component_count();
-
-    if sbom.edges.is_empty() && total > 1 {
-        issues.push(FdaIssue {
-            severity: FdaSeverity::Error,
-            category: "Dependency",
-            message: format!("No dependency relationships defined for {total} components"),
-        });
-    }
-
-    // Check for orphan components
-    if !sbom.edges.is_empty() {
-        let mut connected: HashSet<String> = HashSet::new();
-        for edge in &sbom.edges {
-            connected.insert(edge.from.value().to_string());
-            connected.insert(edge.to.value().to_string());
-        }
-        let orphan_count = sbom
-            .components
-            .keys()
-            .filter(|id| !connected.contains(id.value()))
-            .count();
-
-        if orphan_count > 0 && orphan_count < total {
-            issues.push(FdaIssue {
-                severity: FdaSeverity::Warning,
-                category: "Dependency",
-                message: format!(
-                    "{orphan_count}/{total} components have no dependency relationships (orphaned)"
-                ),
-            });
-        }
-    }
-}
-
-fn validate_fda_vulnerabilities(sbom: &NormalizedSbom, issues: &mut Vec<FdaIssue>) {
-    let vuln_info = sbom.all_vulnerabilities();
-    if !vuln_info.is_empty() {
-        let critical_vulns = vuln_info
-            .iter()
-            .filter(|(_, v)| matches!(v.severity, Some(Severity::Critical)))
-            .count();
-        let high_vulns = vuln_info
-            .iter()
-            .filter(|(_, v)| matches!(v.severity, Some(Severity::High)))
-            .count();
-
-        if critical_vulns > 0 || high_vulns > 0 {
-            issues.push(FdaIssue {
-                severity: FdaSeverity::Warning,
-                category: "Security",
-                message: format!(
-                    "SBOM contains {critical_vulns} critical and {high_vulns} high severity vulnerabilities"
-                ),
-            });
+        for v in result.violations_by_severity(ViolationSeverity::Error) {
+            println!("  - {}", v.message);
         }
     }
 }
@@ -795,31 +331,174 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fda_severity_order() {
-        assert!(FdaSeverity::Error < FdaSeverity::Warning);
-        assert!(FdaSeverity::Warning < FdaSeverity::Info);
+    fn print_ntia_validation_does_not_panic_on_empty_sbom() {
+        print_ntia_validation(&NormalizedSbom::default());
     }
 
     #[test]
-    fn test_fda_severity_display() {
-        assert_eq!(format!("{}", FdaSeverity::Error), "ERROR");
-        assert_eq!(format!("{}", FdaSeverity::Warning), "WARNING");
-        assert_eq!(format!("{}", FdaSeverity::Info), "INFO");
+    fn rejects_unsupported_output_format_before_reading_sbom() {
+        // html/markdown/etc. used to silently fall through to the text
+        // renderer; they must now fail fast (before the SBOM is even read —
+        // the path here does not exist).
+        for format in [
+            ReportFormat::Html,
+            ReportFormat::Markdown,
+            ReportFormat::Csv,
+            ReportFormat::Ndjson,
+            ReportFormat::Table,
+            ReportFormat::SideBySide,
+            ReportFormat::Tui,
+        ] {
+            let err = run_validate(
+                PathBuf::from("/nonexistent/never-read.cdx.json"),
+                vec![StandardSelector::Ntia],
+                format,
+                None,
+                false,
+                false,
+                None,
+                None,
+                None,
+            )
+            .expect_err("unsupported format must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("not supported by `sbom-tools validate`"),
+                "unexpected error for {format}: {msg}"
+            );
+            assert!(
+                msg.contains("oscal-json") && msg.contains("sarif"),
+                "error must list the supported formats: {msg}"
+            );
+        }
     }
 
     #[test]
-    fn test_validate_empty_sbom() {
-        let sbom = NormalizedSbom::default();
-        // Should not panic
-        let _ = validate_ntia_elements(&sbom);
+    fn rejects_empty_standard_list() {
+        let err = run_validate(
+            PathBuf::from("/nonexistent/never-read.cdx.json"),
+            Vec::new(),
+            ReportFormat::Summary,
+            None,
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
+        .expect_err("empty standard list must be rejected");
+        assert!(err.to_string().contains("no compliance standard selected"));
     }
 
     #[test]
-    fn test_fda_document_validation() {
-        let sbom = NormalizedSbom::default();
-        let mut issues = Vec::new();
-        validate_fda_document(&sbom, &mut issues);
-        // Should find missing creator issue
-        assert!(!issues.is_empty());
+    fn summary_overrides_output_and_skips_the_format_gate() {
+        // `--summary` is documented as "(overrides --output)", so a stray
+        // `-o html` must not hard-error; the compact JSON summary is written.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("summary.json");
+        run_validate(
+            sbom_path,
+            vec![StandardSelector::Ntia],
+            ReportFormat::Html, // rejected without --summary; ignored with it
+            Some(out.clone()),
+            false,
+            true,
+            None,
+            None,
+            None,
+        )
+        .expect("--summary must override -o html instead of hard-erroring");
+        let content = std::fs::read_to_string(out).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(content.trim()).expect("compact summary JSON");
+        assert!(json["standard"].is_string(), "summary JSON shape: {json}");
+    }
+
+    #[test]
+    fn typod_cra_product_class_is_a_hard_error() {
+        // Regression: `--cra-product-class critcal` used to be silently
+        // dropped (scored as Default class), flipping the CRA verdict.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let err = run_validate(
+            sbom_path,
+            vec![StandardSelector::Cra],
+            ReportFormat::Summary,
+            None,
+            false,
+            true,
+            None,
+            Some("critcal".to_string()),
+            None,
+        )
+        .expect_err("typo'd --cra-product-class must be a hard error");
+        let msg = err.to_string();
+        assert!(msg.contains("critcal"), "must name the bad value: {msg}");
+        assert!(
+            msg.contains("important-class-2") && msg.contains("critical"),
+            "must list the valid values: {msg}"
+        );
+    }
+
+    #[test]
+    fn as_of_accepts_offsetless_datetime() {
+        // Regression: "2027-01-01T00:00:00" used to fail with a misleading
+        // "trailing input" error; it now parses as UTC.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        run_validate(
+            sbom_path,
+            vec![StandardSelector::Cra],
+            ReportFormat::Summary,
+            Some(dir.path().join("out.json")),
+            false,
+            true,
+            None,
+            None,
+            Some("2027-01-01T00:00:00"),
+        )
+        .expect("offset-less --as-of datetime must parse (assumed UTC)");
+    }
+
+    #[test]
+    fn explicit_missing_sidecar_is_a_hard_error() {
+        // Regression guard for the loader contract: an explicitly passed
+        // sidecar path that cannot be loaded must abort validation.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let err = run_validate(
+            sbom_path,
+            vec![StandardSelector::Cra],
+            ReportFormat::Summary,
+            None,
+            false,
+            true,
+            Some(dir.path().join("missing.cra.json")),
+            None,
+            None,
+        )
+        .expect_err("broken explicit sidecar must be a hard error");
+        assert!(err.to_string().contains("Failed to load CRA sidecar"));
     }
 }

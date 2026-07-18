@@ -15,8 +15,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// CRA sidecar metadata that supplements SBOM information
+///
+/// `deny_unknown_fields` makes a typo'd key (e.g. snake_case
+/// `security_contact` instead of `securityContact`) a load error instead of
+/// silently deserializing to an all-`None` sidecar that then fails
+/// compliance checks for the wrong reason.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CraSidecarMetadata {
     /// Security contact email or URL for vulnerability disclosure
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,15 +84,15 @@ pub struct CraSidecarMetadata {
 
     /// Coordinated vulnerability disclosure policy URL.
     /// Distinct from `vulnerability_disclosure_url` (which may point at a
-    /// portal) — this is the published *policy* that meets CRA Art. 13(7)
-    /// and ISO/IEC 29147 expectations.
+    /// portal) — this is the published *policy* that meets CRA Annex I
+    /// Part II (5) / Art. 13(8) and ISO/IEC 29147 expectations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinated_disclosure_policy_url: Option<String>,
 
     // -------- CRA Article 13(2) risk-assessment fields --------
     /// URL or document reference for the documented risk assessment
-    /// required by CRA Art. 13(2). Annex V technical documentation must
-    /// include or reference this assessment.
+    /// required by CRA Art. 13(2); Art. 13(4) requires it to be included
+    /// in the Annex VII technical documentation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk_assessment_url: Option<String>,
 
@@ -183,7 +188,7 @@ pub struct CraSidecarMetadata {
 /// dossier and cross-checked by `ComplianceChecker` (a control claimed
 /// `satisfied = true` without an `evidence_url` is flagged as a Warning).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ControlAssertion {
     /// Whether the manufacturer claims this control is satisfied.
     #[serde(default)]
@@ -272,6 +277,25 @@ impl CraProductClass {
         }
     }
 
+    /// Strict variant of [`Self::parse_cli`]: an unrecognized spelling is an
+    /// error naming the valid values instead of `None`.
+    ///
+    /// Used by the `--cra-product-class` CLI flags and the config-file
+    /// validator so a typo can never be silently dropped (which would score
+    /// the SBOM as `Default` class and flip CRA verdicts).
+    ///
+    /// # Errors
+    /// Returns a message listing the valid canonical spellings when `s` is
+    /// not a recognized product class.
+    pub fn parse_cli_strict(s: &str) -> Result<Self, String> {
+        Self::parse_cli(s).ok_or_else(|| {
+            format!(
+                "Invalid product class '{s}'. Valid options: \
+                 default, important-class-1, important-class-2, critical"
+            )
+        })
+    }
+
     /// The conformity-assessment route the regulation expects (or strictly
     /// requires) for this class. Manufacturers may choose a stricter route.
     #[must_use]
@@ -335,19 +359,34 @@ impl ConformityRoute {
     }
 }
 
+/// Format a serde parse error for sidecar files. serde already names the
+/// offending key on unknown-field errors; append a camelCase hint because the
+/// most common mistake is writing SBOM-style snake_case keys.
+fn sidecar_parse_error(e: &dyn std::fmt::Display) -> CraSidecarError {
+    let msg = e.to_string();
+    if msg.contains("unknown field") {
+        CraSidecarError::ParseError(format!(
+            "{msg}. Note: CRA sidecar keys use camelCase (e.g. `securityContact`, \
+             not `security_contact`)"
+        ))
+    } else {
+        CraSidecarError::ParseError(msg)
+    }
+}
+
 impl CraSidecarMetadata {
     /// Load sidecar metadata from a JSON file
     pub fn from_json_file(path: &Path) -> Result<Self, CraSidecarError> {
         let content =
             std::fs::read_to_string(path).map_err(|e| CraSidecarError::IoError(e.to_string()))?;
-        serde_json::from_str(&content).map_err(|e| CraSidecarError::ParseError(e.to_string()))
+        serde_json::from_str(&content).map_err(|e| sidecar_parse_error(&e))
     }
 
     /// Load sidecar metadata from a YAML file
     pub fn from_yaml_file(path: &Path) -> Result<Self, CraSidecarError> {
         let content =
             std::fs::read_to_string(path).map_err(|e| CraSidecarError::IoError(e.to_string()))?;
-        serde_yaml_ng::from_str(&content).map_err(|e| CraSidecarError::ParseError(e.to_string()))
+        serde_yaml_ng::from_str(&content).map_err(|e| sidecar_parse_error(&e))
     }
 
     /// Load sidecar metadata, auto-detecting format from extension
@@ -399,15 +438,43 @@ impl CraSidecarMetadata {
                 format!("{s}-cra.yaml"),
             ] {
                 let sidecar_path = parent.join(&pattern);
-                if sidecar_path.exists()
-                    && let Ok(metadata) = Self::from_file(&sidecar_path)
-                {
-                    return Some(metadata);
+                if sidecar_path.exists() {
+                    match Self::from_file(&sidecar_path) {
+                        Ok(metadata) => return Some(metadata),
+                        // Auto-discovery is best-effort: a broken candidate is
+                        // surfaced as a warning, not an abort (an *explicitly*
+                        // requested sidecar hard-errors at the CLI layer).
+                        Err(e) => tracing::warn!(
+                            "Ignoring auto-discovered CRA sidecar {}: {e}",
+                            sidecar_path.display()
+                        ),
+                    }
                 }
             }
         }
 
         None
+    }
+
+    /// Whether the sidecar carries live EUCC evidence: a non-empty
+    /// Protection-Profile / Target-of-Evaluation / ITSEF identifier, or a
+    /// certificate validity date that has not expired. Empty strings and
+    /// expired certificates must not satisfy the Critical-class Annex IV
+    /// gate (mirrors the dedicated EUCC profile's semantics).
+    #[must_use]
+    pub fn has_live_eucc_evidence(&self) -> bool {
+        self.has_live_eucc_evidence_at(Utc::now())
+    }
+
+    /// [`Self::has_live_eucc_evidence`] against a pinned evaluation instant
+    /// (reproducible compliance runs; see `ComplianceChecker::with_as_of`).
+    #[must_use]
+    pub fn has_live_eucc_evidence_at(&self, now: DateTime<Utc>) -> bool {
+        let live = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+        live(&self.eucc_protection_profile_id)
+            || live(&self.eucc_target_of_evaluation)
+            || live(&self.eucc_itsef_identifier)
+            || self.eucc_valid_until.is_some_and(|d| d > now)
     }
 
     /// Check if any CRA-relevant fields are populated
@@ -540,6 +607,81 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         let parsed: CraSidecarMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(original.security_contact, parsed.security_contact);
+    }
+
+    #[test]
+    fn unknown_field_is_rejected_not_silently_dropped() {
+        // A snake_case typo used to deserialize to an all-None sidecar; it
+        // must now fail, and the error must name the offending key.
+        let json = r#"{"security_contact": "security@example.com"}"#;
+        let err = serde_json::from_str::<CraSidecarMetadata>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("security_contact"),
+            "error must name the offending key: {err}"
+        );
+    }
+
+    #[test]
+    fn from_file_unknown_field_error_names_key_and_hints_camel_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("typo.cra.json");
+        std::fs::write(&path, r#"{"security_contact": "security@example.com"}"#).unwrap();
+        let err = CraSidecarMetadata::from_file(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("security_contact"),
+            "error must name the offending key: {msg}"
+        );
+        assert!(
+            msg.contains("camelCase") && msg.contains("securityContact"),
+            "error must hint at camelCase keys: {msg}"
+        );
+    }
+
+    #[test]
+    fn from_yaml_file_unknown_field_is_rejected_with_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("typo.cra.yaml");
+        std::fs::write(&path, "manufacturer_name: ExampleCorp\n").unwrap();
+        let err = CraSidecarMetadata::from_file(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("manufacturer_name"), "{msg}");
+        assert!(msg.contains("camelCase"), "{msg}");
+    }
+
+    #[test]
+    fn known_camel_case_fields_still_deserialize() {
+        let json = r#"{
+            "securityContact": "security@example.com",
+            "productClass": "critical",
+            "isOssSteward": true,
+            "annexIPartIControls": {
+                "1.a": { "satisfied": true, "evidenceUrl": "https://example.com/e" }
+            }
+        }"#;
+        let sidecar: CraSidecarMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            sidecar.security_contact.as_deref(),
+            Some("security@example.com")
+        );
+        assert_eq!(sidecar.product_class, Some(CraProductClass::Critical));
+        assert!(sidecar.is_oss_steward);
+        assert!(sidecar.annex_i_part_i_controls["1.a"].satisfied);
+    }
+
+    #[test]
+    fn find_for_sbom_soft_fails_on_broken_candidate() {
+        // Auto-discovery must skip (warn about) a broken adjacent sidecar
+        // rather than returning it or erroring.
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(&sbom_path, "{}").unwrap();
+        std::fs::write(
+            dir.path().join("app.cra.json"),
+            r#"{"security_contact": "typo"}"#,
+        )
+        .unwrap();
+        assert!(CraSidecarMetadata::find_for_sbom(&sbom_path).is_none());
     }
 
     #[test]

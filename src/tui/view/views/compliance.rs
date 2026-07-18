@@ -244,7 +244,9 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .enumerate()
         .map(|(i, level)| {
             let result = &compliance_results[i];
-            let (status_icon, status_color) = if result.is_compliant {
+            let (status_icon, status_color) = if !result.is_applicable() {
+                ("\u{2014}", scheme.muted)
+            } else if result.is_compliant {
                 if result.warning_count > 0 {
                     ("\u{26a0}", scheme.warning)
                 } else {
@@ -351,7 +353,12 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, app: &ViewApp) {
 fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceResult) {
     let scheme = colors();
 
-    let (status_color, status_text) = if result.is_compliant {
+    let (status_color, status_text) = if !result.is_applicable() {
+        (
+            scheme.muted,
+            "NOT APPLICABLE \u{2014} Standard did not evaluate this SBOM",
+        )
+    } else if result.is_compliant {
         if result.warning_count == 0 && result.info_count == 0 {
             (scheme.success, "COMPLIANT \u{2014} All checks passed")
         } else if result.warning_count == 0 {
@@ -1025,7 +1032,13 @@ fn render_empty_compliance(
     let all_levels = ComplianceLevel::all();
     for (i, level) in all_levels.iter().enumerate() {
         if let Some(r) = all_results.get(i) {
-            let (icon, icon_color) = if r.is_compliant {
+            // Applicability first, mirroring the tab strip: N/A results keep
+            // `is_compliant = true` (and warning_count = 0) by contract, so
+            // deriving the icon from those alone renders an unevaluated
+            // standard as a green pass one panel below the "\u{2014}" tab.
+            let (icon, icon_color) = if !r.is_applicable() {
+                ("\u{2014}", scheme.muted)
+            } else if r.is_compliant {
                 if r.warning_count > 0 {
                     ("\u{26a0}", scheme.warning)
                 } else {
@@ -1035,7 +1048,9 @@ fn render_empty_compliance(
                 ("\u{2717}", scheme.error)
             };
 
-            let detail = if r.is_compliant && r.violations.is_empty() {
+            let detail = if !r.is_applicable() {
+                "not applicable".to_string()
+            } else if r.is_compliant && r.violations.is_empty() {
                 "passed".to_string()
             } else if r.is_compliant {
                 format!("{} warnings", r.warning_count)
@@ -1255,11 +1270,17 @@ impl StandardComplianceState {
     }
 }
 
-/// Compute compliance results for all standards
+/// Compute compliance results for all standards.
+///
+/// `product_class` is the CLI-resolved effective CRA product class; it is
+/// applied to every checker (only the CRA-family checks consult it, and a
+/// sidecar-carried `productClass` still wins inside the checker) so the TUI
+/// renders the same severity-calibrated verdicts as the non-TUI report path.
 #[must_use]
 pub fn compute_compliance_results(
     sbom: &crate::model::NormalizedSbom,
     sidecar: Option<&crate::model::CraSidecarMetadata>,
+    product_class: Option<crate::model::CraProductClass>,
 ) -> Vec<ComplianceResult> {
     ComplianceLevel::all()
         .iter()
@@ -1267,6 +1288,9 @@ pub fn compute_compliance_results(
             let mut checker = ComplianceChecker::new(*level);
             if let Some(sc) = sidecar {
                 checker = checker.with_sidecar(sc.clone());
+            }
+            if let Some(class) = product_class {
+                checker = checker.with_product_class(class);
             }
             checker.check(sbom)
         })
