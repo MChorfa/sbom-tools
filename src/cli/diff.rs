@@ -38,6 +38,11 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
         bail!("Cannot read both SBOMs from stdin ('-'); only one '-' is allowed per diff");
     }
 
+    // Reject unknown --severity / --graph-impact-threshold values before
+    // parsing or enrichment; previously they silently filtered nothing /
+    // coerced to `low`.
+    crate::pipeline::validate_post_diff_filters(&config.filtering, &config.graph_diff)?;
+
     // Parse SBOMs
     let mut old_parsed = parse_sbom_with_context(&config.paths.old, quiet)?;
     let mut new_parsed = parse_sbom_with_context(&config.paths.new, quiet)?;
@@ -99,8 +104,25 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
         let kev_old = crate::pipeline::enrich_kev(old_parsed.sbom_mut(), &kev_config, quiet);
         let kev_new = crate::pipeline::enrich_kev(new_parsed.sbom_mut(), &kev_config, quiet);
         if kev_old.is_none() || kev_new.is_none() {
+            // The --fail-on-kev gate cannot be evaluated without KEV data:
+            // treating the load failure as a warning would silently pass the
+            // gate (fail-open). Abort as an operational error (exit 3)
+            // instead. `enrich_kev` has already printed the underlying cause
+            // ("Warning: KEV enrichment failed: ...") to stderr.
+            if config.behavior.fail_on_kev {
+                bail!(
+                    "--fail-on-kev requires KEV data: KEV catalog could not be loaded \
+                     (see warning above for the cause; if running offline, pre-populate \
+                     the KEV cache first)"
+                );
+            }
             enrichment_warnings.push("KEV enrichment failed");
         }
+    } else if config.behavior.fail_on_kev {
+        // Defensive: the CLI layer force-enables KEV enrichment whenever
+        // --fail-on-kev is set, but if a config path ever reaches here
+        // without it, the gate would be vacuously fail-open.
+        bail!("--fail-on-kev requires KEV data: KEV enrichment is not enabled");
     }
 
     // Enrich with FIRST EPSS exploit-probability scores
@@ -162,6 +184,14 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
 
     #[cfg(not(feature = "enrichment"))]
     {
+        // Without the enrichment feature, KEV data can never be loaded, so
+        // the --fail-on-kev gate would be permanently fail-open.
+        if config.behavior.fail_on_kev {
+            bail!(
+                "--fail-on-kev requires KEV data: this binary was built without the \
+                 'enrichment' feature. Rebuild with: cargo build --features enrichment"
+            );
+        }
         if config.enrichment.enabled {
             eprintln!(
                 "Warning: enrichment requested but the 'enrichment' feature is not enabled. \
@@ -188,8 +218,8 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
         // EU AI Act high-risk escalation, which otherwise renders COMPLIANT
         // in the TUI. Resolution is per-SBOM: each side of the diff is judged
         // against its own adjacent metadata, identically to the report stage.
-        let old_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.old);
-        let new_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.new);
+        let old_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.old)?;
+        let new_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.new)?;
 
         let (old_sbom, old_raw) = old_parsed.into_parts();
         let (new_sbom, new_raw) = new_parsed.into_parts();
@@ -231,8 +261,9 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
 
 /// Determine the appropriate exit code based on diff results and config flags.
 ///
-/// Priority (highest exit code wins): VEX gaps (4) > vulns introduced (2) > changes (1).
-/// VEX gaps are checked first because they are more specific — a user who sets
+/// Priority (most specific gate wins): ML regression (7) > VEX gaps (4) >
+/// KEV (6) > vulns introduced (2) > changes (1). VEX gaps are checked before
+/// the generic vuln gate because they are more specific — a user who sets
 /// `--fail-on-vex-gap` wants to know about missing VEX statements, not just
 /// that vulns were introduced.
 fn determine_exit_code(config: &DiffConfig, result: &crate::diff::DiffResult) -> i32 {

@@ -12,7 +12,8 @@ use crate::matching::{FuzzyMatchConfig, MatchingRulesConfig};
 use crate::model::NormalizedSbom;
 use crate::pipeline::{
     OutputTarget, apply_post_diff_filters, auto_detect_format, enrich_sbom_full, enrich_sboms,
-    exit_codes, graph_diff_config_from, parse_sbom_with_context, write_output,
+    exit_codes, graph_diff_config_from, parse_sbom_with_context, validate_post_diff_filters,
+    write_output,
 };
 use crate::reports::ReportFormat;
 use crate::tui::{App, run_tui};
@@ -98,6 +99,12 @@ fn build_multi_engine(
 pub fn run_diff_multi(config: MultiDiffConfig) -> Result<i32> {
     let quiet = config.behavior.quiet;
 
+    // Validate output mode and filter values before doing work (parsing,
+    // enrichment) so unsupported formats and unknown filter labels fail fast,
+    // matching timeline/matrix.
+    let output_mode = resolve_multi_output(&config.output)?;
+    validate_post_diff_filters(&config.filtering, &config.graph_diff)?;
+
     // Parse baseline
     let mut baseline_parsed = parse_sbom_with_context(&config.baseline, quiet)?;
     // Parse and optionally enrich targets
@@ -112,9 +119,6 @@ pub fn run_diff_multi(config: MultiDiffConfig) -> Result<i32> {
         baseline_parsed.sbom().component_count(),
         target_sboms.len()
     );
-
-    // Validate output mode before doing work so unsupported formats fail fast.
-    let output_mode = resolve_multi_output(&config.output)?;
 
     let fuzzy_config = get_fuzzy_config(&config.matching.fuzzy_preset);
 
@@ -167,6 +171,7 @@ pub fn run_diff_multi(config: MultiDiffConfig) -> Result<i32> {
         &config.behavior,
         &config.filtering,
         result.comparisons.iter().map(|c| &c.diff),
+        PairDirection::Ordered,
     );
 
     if let MultiOutput::Json(ref output_target) = output_mode {
@@ -208,8 +213,10 @@ pub fn run_timeline(config: TimelineConfig) -> Result<i32> {
         bail!("Timeline analysis requires at least 2 SBOMs");
     }
 
-    // Validate output mode before doing work so unsupported formats fail fast.
+    // Validate output mode and filter values before doing work so unsupported
+    // formats and unknown filter labels fail fast.
     let output_mode = resolve_multi_output(&config.output)?;
+    validate_post_diff_filters(&config.filtering, &config.graph_diff)?;
 
     let (sboms, _enrich_stats) =
         parse_and_enrich_sboms(&config.sbom_paths, &config.enrichment, quiet)?;
@@ -277,6 +284,7 @@ pub fn run_timeline(config: TimelineConfig) -> Result<i32> {
         &config.behavior,
         &config.filtering,
         result.incremental_diffs.iter(),
+        PairDirection::Ordered,
     );
 
     if let MultiOutput::Json(ref output_target) = output_mode {
@@ -299,8 +307,10 @@ pub fn run_matrix(config: MatrixConfig) -> Result<i32> {
         bail!("Matrix comparison requires at least 2 SBOMs");
     }
 
-    // Validate output mode before doing work so unsupported formats fail fast.
+    // Validate output mode and filter values before doing work so unsupported
+    // formats and unknown filter labels fail fast.
     let output_mode = resolve_multi_output(&config.output)?;
+    validate_post_diff_filters(&config.filtering, &config.graph_diff)?;
 
     let (sboms, _enrich_stats) =
         parse_and_enrich_sboms(&config.sbom_paths, &config.enrichment, quiet)?;
@@ -352,6 +362,7 @@ pub fn run_matrix(config: MatrixConfig) -> Result<i32> {
         &config.behavior,
         &config.filtering,
         result.diffs.iter().flatten(),
+        PairDirection::Unordered,
     );
 
     if let MultiOutput::Json(ref output_target) = output_mode {
@@ -395,6 +406,22 @@ pub(crate) fn parse_multiple_sboms(paths: &[PathBuf]) -> Result<Vec<NormalizedSb
     Ok(sboms)
 }
 
+/// How pairwise diffs should be interpreted when aggregating gate counts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PairDirection {
+    /// Pairs have a meaningful old→new orientation (diff-multi: baseline vs
+    /// target; timeline: chronological order). Only vulnerabilities
+    /// introduced in that direction count.
+    Ordered,
+    /// Pairs are unordered (matrix: the engine computes only the i<j upper
+    /// triangle, so which side is "old" depends on argv order). A vuln
+    /// present in exactly one side of a pair counts regardless of direction:
+    /// `resolved` in diff(a,b) is `introduced` in diff(b,a), so both are
+    /// counted to make `--fail-on-vuln` symmetric — `matrix a b` and
+    /// `matrix b a` must agree.
+    Unordered,
+}
+
 /// Determine the exit code for a multi-SBOM command from its pairwise diffs.
 ///
 /// Aggregates VEX gaps, introduced vulnerabilities, and total changes across
@@ -406,6 +433,7 @@ fn determine_multi_exit_code<'a, I>(
     behavior: &crate::config::BehaviorConfig,
     filtering: &FilterConfig,
     diffs: I,
+    direction: PairDirection,
 ) -> i32
 where
     I: IntoIterator<Item = &'a DiffResult>,
@@ -418,6 +446,11 @@ where
 
     for diff in diffs {
         total_introduced += diff.summary.vulnerabilities_introduced;
+        if direction == PairDirection::Unordered {
+            // Reverse-direction introductions surface as "resolved" in the
+            // single computed orientation of an unordered pair.
+            total_introduced += diff.summary.vulnerabilities_resolved;
+        }
         total_changes += diff.summary.total_changes;
         if filtering.fail_on_vex_gap {
             let vex = diff.vulnerabilities.vex_summary();
@@ -676,14 +709,69 @@ mod tests {
         };
         let filtering = FilterConfig::default();
         assert_eq!(
-            determine_multi_exit_code(&behavior, &filtering, std::iter::once(&diff)),
+            determine_multi_exit_code(
+                &behavior,
+                &filtering,
+                std::iter::once(&diff),
+                PairDirection::Ordered
+            ),
             exit_codes::CHANGES_DETECTED
         );
 
         // Without the gate flag, the same diff is success.
         let behavior = crate::config::BehaviorConfig::default();
         assert_eq!(
-            determine_multi_exit_code(&behavior, &filtering, std::iter::once(&diff)),
+            determine_multi_exit_code(
+                &behavior,
+                &filtering,
+                std::iter::once(&diff),
+                PairDirection::Ordered
+            ),
+            exit_codes::SUCCESS
+        );
+    }
+
+    /// Matrix pairs are unordered (the engine only computes the i<j upper
+    /// triangle), so `--fail-on-vuln` must fire when a vuln exists in either
+    /// side of a pair but not the other — otherwise `matrix a b` and
+    /// `matrix b a` disagree on the exit code.
+    #[test]
+    fn determine_multi_exit_code_vuln_gate_symmetric_for_unordered_pairs() {
+        let behavior = crate::config::BehaviorConfig {
+            fail_on_vuln: true,
+            ..Default::default()
+        };
+        let filtering = FilterConfig::default();
+
+        // `matrix a vuln.json` computes diff(a, vuln): vulns are "introduced".
+        let mut forward = DiffResult::new();
+        forward.summary.vulnerabilities_introduced = 1;
+        // `matrix vuln.json a` computes diff(vuln, a): same vulns are "resolved".
+        let mut reverse = DiffResult::new();
+        reverse.summary.vulnerabilities_resolved = 1;
+
+        for diff in [&forward, &reverse] {
+            assert_eq!(
+                determine_multi_exit_code(
+                    &behavior,
+                    &filtering,
+                    std::iter::once(diff),
+                    PairDirection::Unordered
+                ),
+                exit_codes::VULNS_INTRODUCED,
+                "matrix vuln gate must be argument-order independent"
+            );
+        }
+
+        // Ordered commands (diff-multi/timeline) keep directional semantics:
+        // a resolved vuln is progress, not a gate failure.
+        assert_eq!(
+            determine_multi_exit_code(
+                &behavior,
+                &filtering,
+                std::iter::once(&reverse),
+                PairDirection::Ordered
+            ),
             exit_codes::SUCCESS
         );
     }
