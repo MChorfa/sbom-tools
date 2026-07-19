@@ -434,6 +434,10 @@ pub struct IdentifierMetrics {
     pub ecosystems: Vec<String>,
     /// Components missing all identifiers (only name)
     pub missing_all_identifiers: usize,
+    /// File-typed inventory entries excluded from per-component counting
+    /// (denominator plumbing for `quality_score`; not part of the report).
+    #[serde(skip)]
+    pub file_components: usize,
 }
 
 impl IdentifierMetrics {
@@ -447,9 +451,19 @@ impl IdentifierMetrics {
         let mut with_swid = 0;
         let mut with_valid_id = 0;
         let mut missing_all = 0;
+        let mut file_components = 0;
         let mut ecosystems = std::collections::HashSet::new();
 
         for comp in sbom.components.values() {
+            // File/snippet inventory entries are not packages: they
+            // structurally lack purl/cpe/swid, and counting them cratered
+            // identifier coverage for file-cataloguing SBOMs (same exemption
+            // as CompletenessMetrics).
+            if matches!(comp.component_type, ComponentType::File) {
+                file_components += 1;
+                continue;
+            }
+
             let has_purl = comp.identifiers.purl.is_some();
             let has_cpe = !comp.identifiers.cpe.is_empty();
             let has_swid = comp.identifiers.swid.is_some();
@@ -504,26 +518,30 @@ impl IdentifierMetrics {
             components_with_valid_id: with_valid_id,
             ecosystems: ecosystem_list,
             missing_all_identifiers: missing_all,
+            file_components,
         }
     }
 
     /// Calculate identifier quality score (0-100)
     #[must_use]
     pub fn quality_score(&self, total_components: usize) -> f32 {
-        if total_components == 0 {
+        // File entries are exempt from identifier counting (see from_sbom),
+        // so remove them from the denominator too — otherwise a file
+        // catalogue dilutes package identifier coverage.
+        let countable = total_components.saturating_sub(self.file_components);
+        if countable == 0 {
             return 0.0;
         }
 
         // Coverage over components with at least one valid identifier — NOT
         // the sum of per-type counts, which a single PURL+CPE+SWID component
         // would inflate 3x (masking identifier-less components).
-        let coverage = (self.components_with_valid_id.min(total_components) as f32
-            / total_components as f32)
-            * 100.0;
+        let coverage =
+            (self.components_with_valid_id.min(countable) as f32 / countable as f32) * 100.0;
 
         // Penalize invalid identifiers
         let invalid_count = self.invalid_purls + self.invalid_cpes;
-        let penalty = (invalid_count as f32 / total_components as f32) * 20.0;
+        let penalty = (invalid_count as f32 / countable as f32) * 20.0;
 
         (coverage - penalty).clamp(0.0, 100.0)
     }
@@ -552,6 +570,10 @@ pub struct LicenseMetrics {
     pub copyleft_license_ids: Vec<String>,
     /// Unique licenses found
     pub unique_licenses: Vec<String>,
+    /// File-typed inventory entries excluded from per-component counting
+    /// (denominator plumbing for `quality_score`; not part of the report).
+    #[serde(skip)]
+    pub file_components: usize,
 }
 
 impl LicenseMetrics {
@@ -565,6 +587,7 @@ impl LicenseMetrics {
         let mut noassertion = 0;
         let mut deprecated = 0;
         let mut restrictive = 0;
+        let mut file_components = 0;
         let mut licenses = HashSet::new();
         let mut copyleft_ids = HashSet::new();
 
@@ -574,6 +597,16 @@ impl LicenseMetrics {
         // ratio past 1.0 — and a NOASSERTION-only component counted as
         // license-documented.
         for comp in sbom.components.values() {
+            // File/snippet inventory entries are not packages: per-file
+            // license facts (e.g. SPDX LicenseInfoInFile) must not dilute
+            // per-component license counting (same exemption as
+            // CompletenessMetrics). Their license strings still feed the
+            // informational unique/copyleft lists below.
+            let is_file = matches!(comp.component_type, ComponentType::File);
+            if is_file {
+                file_components += 1;
+            }
+
             let mut has_real_entry = false;
             let mut has_noassertion = false;
             let mut all_valid = true;
@@ -603,6 +636,12 @@ impl LicenseMetrics {
                     any_restrictive = true;
                     copyleft_ids.insert(expr.clone());
                 }
+            }
+
+            if is_file {
+                // Exempt from all per-component counters (license strings
+                // were still collected above).
+                continue;
             }
 
             if has_noassertion {
@@ -644,17 +683,22 @@ impl LicenseMetrics {
             restrictive_licenses: restrictive,
             copyleft_license_ids: copyleft_list,
             unique_licenses: license_list,
+            file_components,
         }
     }
 
     /// Calculate license quality score (0-100)
     #[must_use]
     pub fn quality_score(&self, total_components: usize) -> f32 {
-        if total_components == 0 {
+        // File entries are exempt from per-component license counting (see
+        // from_sbom), so remove them from the denominator too — otherwise a
+        // file catalogue dilutes package license coverage.
+        let countable = total_components.saturating_sub(self.file_components);
+        if countable == 0 {
             return 0.0;
         }
 
-        let coverage = (self.with_declared as f32 / total_components as f32) * 60.0;
+        let coverage = (self.with_declared as f32 / countable as f32) * 60.0;
 
         // Bonus for SPDX compliance
         let spdx_ratio = if self.with_declared > 0 {
@@ -665,8 +709,7 @@ impl LicenseMetrics {
         let spdx_bonus = spdx_ratio * 30.0;
 
         // Penalty for NOASSERTION
-        let noassertion_penalty =
-            (self.noassertion_count as f32 / total_components.max(1) as f32) * 10.0;
+        let noassertion_penalty = (self.noassertion_count as f32 / countable as f32) * 10.0;
 
         // Penalty for deprecated licenses (2 points each, capped)
         let deprecated_penalty = (self.deprecated_licenses as f32 * 2.0).min(10.0);
@@ -867,6 +910,10 @@ pub struct DependencyMetrics {
     pub complexity_level: Option<ComplexityLevel>,
     /// Factor breakdown. `None` when graph analysis skipped.
     pub complexity_factors: Option<ComplexityFactors>,
+    /// File-typed inventory entries excluded from the coverage denominator in
+    /// `quality_score` (denominator plumbing; not part of the report).
+    #[serde(skip)]
+    pub file_components: usize,
 }
 
 impl DependencyMetrics {
@@ -876,6 +923,17 @@ impl DependencyMetrics {
         use crate::model::CanonicalId;
 
         let total_deps = sbom.edges.len();
+
+        // File/snippet inventory entries are not dependency-graph members:
+        // nobody "depends on" a file, so they are excluded from the coverage
+        // denominator in quality_score (same exemption as
+        // CompletenessMetrics). Cycle/orphan penalties for real packages are
+        // unchanged.
+        let file_components = sbom
+            .components
+            .values()
+            .filter(|c| matches!(c.component_type, ComponentType::File))
+            .count();
 
         // Build adjacency lists using CanonicalId.value() for string keys
         let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -924,6 +982,7 @@ impl DependencyMetrics {
                 software_complexity_index: None,
                 complexity_level: None,
                 complexity_factors: None,
+                file_components,
             };
         }
 
@@ -962,6 +1021,7 @@ impl DependencyMetrics {
             software_complexity_index: Some(complexity_index),
             complexity_level: Some(complexity_lvl),
             complexity_factors: Some(factors),
+            file_components,
         }
     }
 
@@ -972,14 +1032,19 @@ impl DependencyMetrics {
             return 0.0;
         }
 
+        // File entries are not dependency-graph members (see from_sbom), so
+        // they are excluded from the coverage denominator — otherwise a file
+        // catalogue dilutes package dependency coverage.
+        let countable = total_components.saturating_sub(self.file_components);
+
         // Score based on how many components have dependency info. Clamp to
         // 100 BEFORE subtracting penalties: with an N/(N-1) denominator a
         // fully-cyclic graph reaches ~125% coverage, which silently absorbed
         // the cycle/orphan penalties below.
-        let coverage = if total_components > 1 {
-            ((self.components_with_deps as f32 / (total_components - 1) as f32) * 100.0).min(100.0)
+        let coverage = if countable > 1 {
+            ((self.components_with_deps as f32 / (countable - 1) as f32) * 100.0).min(100.0)
         } else {
-            100.0 // Single component SBOM
+            100.0 // Single package (or pure file inventory)
         };
 
         // Slight penalty for orphan components
@@ -1890,6 +1955,20 @@ impl CryptographyMetrics {
             return None;
         }
 
+        // Documented crypto assets exist but NONE are classifiable as an
+        // algorithm/certificate/key/protocol, so no penalty below can ever
+        // trigger and the 100 baseline would be vacuous. The compliance
+        // checkers treat such an inventory as unverifiable (the CNSA2/PQC
+        // "evaluable assets" gates fail it), so the score reads fully
+        // degraded instead of perfect.
+        let classified = self.algorithms_count
+            + self.certificates_count
+            + self.keys_count
+            + self.protocols_count;
+        if classified == 0 {
+            return Some(0.0);
+        }
+
         let mut score = 100.0_f32;
 
         // Weak algorithms: severe penalty (15 each, capped at 50)
@@ -1904,6 +1983,20 @@ impl CryptographyMetrics {
         score -= (self.inadequate_key_sizes as f32 * 5.0).min(20.0);
         // Expiring-soon certs: mild penalty (3 each, capped at 15)
         score -= (self.expiring_soon_certificates as f32 * 3.0).min(15.0);
+        // Unresolved crypto references: cert/key/protocol assets whose
+        // algorithm linkage can't be resolved are documented-but-unverifiable
+        // (the compliance checkers warn on them, and none of the penalties
+        // above can ever fire for them), so an inventory of opaque refs must
+        // not read as perfect hygiene. Proportional, mirroring
+        // `crypto_dependency_score`.
+        let linkable = self.certificates_count + self.keys_count + self.protocols_count;
+        if linkable > 0 {
+            let resolved = self.certs_with_signature_algo_ref
+                + self.keys_with_algorithm_ref
+                + self.protocols_with_cipher_suites;
+            let unresolved_pct = 1.0 - (resolved as f32 / linkable as f32);
+            score -= unresolved_pct * 30.0;
+        }
         // Hybrid PQC bonus: +2 each (capped at +10)
         score += (self.hybrid_pqc_count as f32 * 2.0).min(10.0);
 
@@ -2130,6 +2223,110 @@ mod tests {
         );
     }
 
+    /// Same File exemption for identifier scoring: files structurally lack
+    /// purl/cpe/swid, so a file catalogue must not dilute package identifier
+    /// coverage.
+    #[test]
+    fn file_components_do_not_dilute_identifier_score() {
+        use crate::model::{Component, ComponentType, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let mut pkg = Component::new("app".to_string(), "app@1".to_string());
+        pkg.identifiers.purl = Some("pkg:cargo/app@1.0.0".to_string());
+        sbom.add_component(pkg);
+        for i in 0..30 {
+            let mut f = Component::new(format!("file-{i}"), format!("file-{i}@x"));
+            f.component_type = ComponentType::File;
+            sbom.add_component(f);
+        }
+
+        let im = IdentifierMetrics::from_sbom(&sbom);
+        assert_eq!(im.file_components, 30);
+        assert_eq!(
+            im.missing_all_identifiers, 0,
+            "exempt files must not count as identifier-less"
+        );
+        let score = im.quality_score(sbom.components.len());
+        assert!(
+            (score - 100.0).abs() < 0.01,
+            "30 files must not dilute the package's identifier coverage, got {score}"
+        );
+    }
+
+    /// Same File exemption for license scoring: per-file license facts are
+    /// not package license documentation, so a file catalogue must not dilute
+    /// package license coverage (license strings still reach the lists).
+    #[test]
+    fn file_components_do_not_dilute_license_score() {
+        use crate::model::{Component, ComponentType, LicenseExpression, NormalizedSbom};
+        let mut sbom = NormalizedSbom::default();
+        let mut pkg = Component::new("app".to_string(), "app@1".to_string());
+        pkg.licenses
+            .add_declared(LicenseExpression::new("MIT".to_string()));
+        sbom.add_component(pkg);
+        for i in 0..30 {
+            let mut f = Component::new(format!("file-{i}"), format!("file-{i}@x"));
+            f.component_type = ComponentType::File;
+            f.licenses
+                .add_declared(LicenseExpression::new("GPL-2.0-only".to_string()));
+            sbom.add_component(f);
+        }
+
+        let lm = LicenseMetrics::from_sbom(&sbom);
+        assert_eq!(lm.file_components, 30);
+        assert_eq!(lm.with_declared, 1, "files are exempt from counters");
+        assert!(
+            lm.unique_licenses.contains(&"GPL-2.0-only".to_string()),
+            "file license strings still feed the informational lists"
+        );
+        // Coverage 1/1 * 60 + full SPDX bonus 30 = 90 for the one package.
+        let score = lm.quality_score(sbom.components.len());
+        assert!(
+            (score - 90.0).abs() < 0.01,
+            "30 files must not dilute the package's license coverage, got {score}"
+        );
+    }
+
+    /// Same File exemption for the dependency-coverage denominator: files
+    /// (typically attached via CONTAINS) are not dependency-graph members.
+    #[test]
+    fn file_components_do_not_dilute_dependency_coverage() {
+        use crate::model::{
+            Component, ComponentType, DependencyEdge, DependencyType, NormalizedSbom,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let app = Component::new("app".to_string(), "app@1".to_string());
+        let lib = Component::new("lib".to_string(), "lib@1".to_string());
+        let app_id = app.canonical_id.clone();
+        let lib_id = lib.canonical_id.clone();
+        sbom.add_component(app);
+        sbom.add_component(lib);
+        sbom.add_edge(DependencyEdge::new(
+            app_id.clone(),
+            lib_id,
+            DependencyType::DependsOn,
+        ));
+        for i in 0..30 {
+            let mut f = Component::new(format!("file-{i}"), format!("file-{i}@x"));
+            f.component_type = ComponentType::File;
+            let file_id = f.canonical_id.clone();
+            sbom.add_component(f);
+            // SPDX-style package CONTAINS file relationship.
+            sbom.add_edge(DependencyEdge::new(
+                app_id.clone(),
+                file_id,
+                DependencyType::Contains,
+            ));
+        }
+
+        let dm = DependencyMetrics::from_sbom(&sbom);
+        assert_eq!(dm.file_components, 30);
+        let score = dm.quality_score(sbom.components.len());
+        assert!(
+            (score - 100.0).abs() < 0.01,
+            "30 contained files must not dilute dependency coverage, got {score}"
+        );
+    }
+
     /// A Cryptographic component with NO cryptoProperties must not count as
     /// crypto inventory — otherwise has_data() is true and the CBOM sub-scores
     /// return 100 (grade A) for undocumented crypto.
@@ -2150,6 +2347,65 @@ mod tests {
         assert!(
             !m.has_data(),
             "has_data must be false → CBOM scores are N/A, not 100"
+        );
+    }
+
+    /// A CBOM whose documented crypto assets are ALL unclassifiable (asset
+    /// types outside algorithm/certificate/key/protocol) has nothing
+    /// evaluable, so no hygiene penalty can ever trigger — the score must
+    /// read fully degraded, not a vacuous 100 (matching the CNSA2/PQC
+    /// "evaluable assets" compliance gates, which fail such inventories).
+    #[test]
+    fn unclassifiable_crypto_inventory_scores_degraded_not_perfect() {
+        use crate::model::{
+            Component, ComponentType, CryptoAssetType, CryptoProperties, NormalizedSbom,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("mystery-asset".to_string(), "ma@1".to_string());
+        c.component_type = ComponentType::Cryptographic;
+        c.crypto_properties = Some(CryptoProperties::new(CryptoAssetType::Other(
+            "unknown".to_string(),
+        )));
+        sbom.add_component(c);
+
+        let m = CryptographyMetrics::from_sbom(&sbom);
+        assert!(m.has_data(), "documented crypto assets are inventory");
+        assert_eq!(m.algorithms_count, 0);
+        assert_eq!(
+            m.quality_score(),
+            Some(0.0),
+            "all-unclassifiable inventory must read degraded, not 100"
+        );
+    }
+
+    /// Certificates/protocols whose algorithm references cannot be resolved
+    /// are documented-but-unverifiable: none of the hygiene penalties can
+    /// fire for them, so without the unresolved-reference penalty an
+    /// inventory of opaque refs would read a perfect 100 while the
+    /// compliance checkers warn on every asset.
+    #[test]
+    fn unresolved_crypto_references_degrade_the_quality_score() {
+        use crate::model::{
+            CertificateProperties, Component, ComponentType, CryptoAssetType, CryptoProperties,
+            NormalizedSbom,
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut c = Component::new("opaque-cert".to_string(), "oc@1".to_string());
+        c.component_type = ComponentType::Cryptographic;
+        // Certificate with no signatureAlgorithmRef: classified, unlinked.
+        c.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Certificate)
+                .with_certificate_properties(CertificateProperties::new()),
+        );
+        sbom.add_component(c);
+
+        let m = CryptographyMetrics::from_sbom(&sbom);
+        assert_eq!(m.certificates_count, 1);
+        assert_eq!(m.certs_with_signature_algo_ref, 0);
+        let score = m.quality_score().expect("has data");
+        assert!(
+            score <= 70.0,
+            "fully-unresolved references must degrade the score, got {score}"
         );
     }
 

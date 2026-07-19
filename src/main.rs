@@ -329,7 +329,8 @@ struct DiffArgs {
     #[arg(long)]
     fail_on_kev: bool,
 
-    /// Exit with code 1 if any changes detected (default for non-zero changes)
+    /// Exit with code 1 if any changes detected (without this flag, changes
+    /// still exit 0)
     #[arg(long)]
     fail_on_change: bool,
 
