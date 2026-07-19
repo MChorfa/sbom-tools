@@ -2,23 +2,25 @@
 //!
 //! Filters an SBOM by removing components that don't match criteria.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::parsers::parse_sbom;
-use crate::pipeline::exit_codes;
+use crate::parsers::parse_sbom_str;
+use crate::pipeline::{exit_codes, read_input};
 use crate::serialization::{TailorConfig, tailor_sbom_json};
 
 /// Run the tailor command.
 pub fn run_tailor(
-    file: &PathBuf,
+    file: &Path,
     output_file: Option<&PathBuf>,
     config: TailorConfig,
     quiet: bool,
 ) -> Result<i32> {
-    let raw_json = std::fs::read_to_string(file)?;
-    let sbom = parse_sbom(file)?;
+    // Shared '-'-aware input path (same as view/validate): supports piping an
+    // SBOM via stdin and gives contextful errors instead of a raw ENOENT.
+    let raw_json = read_input(file)?;
+    let sbom = parse_sbom_str(&raw_json)?;
     let tailored = tailor_sbom_json(&raw_json, &sbom, &config)?;
 
     match output_file {

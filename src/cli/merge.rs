@@ -2,23 +2,25 @@
 //!
 //! Merges two SBOMs into one, deduplicating components.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::pipeline::exit_codes;
+use crate::pipeline::{exit_codes, read_input};
 use crate::serialization::{MergeConfig, merge_sbom_json};
 
 /// Run the merge command.
 pub fn run_merge(
-    primary: &PathBuf,
-    secondary: &PathBuf,
+    primary: &Path,
+    secondary: &Path,
     output_file: Option<&PathBuf>,
     config: MergeConfig,
     quiet: bool,
 ) -> Result<i32> {
-    let primary_json = std::fs::read_to_string(primary)?;
-    let secondary_json = std::fs::read_to_string(secondary)?;
+    // Shared '-'-aware input path (same as view/validate): either input may
+    // be piped via stdin (only one of the two can actually be '-').
+    let primary_json = read_input(primary)?;
+    let secondary_json = read_input(secondary)?;
     let merged = merge_sbom_json(&primary_json, &secondary_json, &config)?;
 
     match output_file {
