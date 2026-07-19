@@ -179,10 +179,10 @@ fn sarif_rule_ids_are_stable_for_cra_noncompliant_fixture() {
     );
 }
 
-/// The NTIA / FDA / SSDF / EO families keep their stable prefixes. The shared
-/// document-metadata checks (creator/serial-number) emit `SBOM-CRA-GENERAL`
-/// regardless of level, matching the pre-registry behaviour, so that generic
-/// fallback is permitted alongside the profile prefix.
+/// The NTIA / SSDF / EO families keep their stable prefixes — including the
+/// shared document-metadata checks (creator/serial-number), whose fallback is
+/// the family generic (`SBOM-<FAMILY>-GENERAL` via `generic_rule_id_for_level`),
+/// never another family's id.
 #[test]
 fn sarif_rule_ids_keep_profile_prefixes() {
     let fx = fixture_dir("cyclonedx").join("minimal.cdx.json");
@@ -193,9 +193,8 @@ fn sarif_rule_ids_keep_profile_prefixes() {
     ] {
         let ids = sarif_rule_ids(&fx, level);
         assert!(
-            ids.iter()
-                .all(|id| id.starts_with(prefix) || id == "SBOM-CRA-GENERAL"),
-            "{level:?} should emit only {prefix}* (or SBOM-CRA-GENERAL) rule IDs, got {ids:?}"
+            ids.iter().all(|id| id.starts_with(prefix)),
+            "{level:?} should emit only {prefix}* rule IDs, got {ids:?}"
         );
     }
 }

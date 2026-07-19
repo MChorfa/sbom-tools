@@ -407,7 +407,7 @@ fn write_view_component_table(html: &mut String, sbom: &NormalizedSbom) -> std::
             .licenses
             .declared
             .first()
-            .map_or("-", |l| l.expression.as_str());
+            .map_or("-", |l| l.display_name());
         let vuln_count = comp.vulnerabilities.len();
         let vuln_badge = if vuln_count > 0 {
             format!("<span class=\"badge badge-critical\">{vuln_count}</span>")
@@ -1199,7 +1199,12 @@ impl ReportGenerator for HtmlReporter {
         let licenses: HashSet<String> = sbom
             .components
             .values()
-            .flat_map(|c| c.licenses.declared.iter().map(|l| l.expression.clone()))
+            .flat_map(|c| {
+                c.licenses
+                    .declared
+                    .iter()
+                    .map(|l| l.display_name().to_string())
+            })
             .collect();
 
         let subtitle = sbom

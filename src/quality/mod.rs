@@ -37,7 +37,7 @@ pub use compliance::{
     ComplianceLevel, ComplianceResult, ConformityAssessmentSummary, ConformityEvidence, CraPhase,
     EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS, NTIA_SARIF_RULE_IDS, PQC_SARIF_RULE_IDS, RuleMeta,
     SSDF_SARIF_RULE_IDS, StandardKind, StandardRef, StandardSelector, Violation, ViolationCategory,
-    ViolationCounts, ViolationSeverity, all_rule_ids, rule_meta,
+    ViolationCounts, ViolationSeverity, all_rule_ids, generic_rule_id_for_level, rule_meta,
 };
 pub use metrics::{
     AuditabilityMetrics, CompletenessMetrics, ComplexityFactors, ComplexityLevel,

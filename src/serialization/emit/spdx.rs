@@ -16,7 +16,8 @@ use std::collections::HashSet;
 use serde_json::{Map, Value, json};
 
 use crate::model::{
-    CanonicalId, Component, DependencyType, Hash, HashAlgorithm, LicenseExpression, NormalizedSbom,
+    CanonicalId, Component, ComponentType, DependencyType, Hash, HashAlgorithm, LicenseExpression,
+    NormalizedSbom,
 };
 
 use super::EmitError;
@@ -41,9 +42,16 @@ pub fn emit_spdx(sbom: &NormalizedSbom) -> Result<(String, FidelityReport), Emit
     let id_assigner = SpdxIdAssigner::build(sbom);
 
     let mut packages = Vec::with_capacity(sbom.components.len());
+    let mut files = Vec::new();
     for (id, component) in &sbom.components {
         let spdx_id = id_assigner.id_for(id);
-        packages.push(emit_package(component, spdx_id, &mut report));
+        // File-typed components belong in the top-level `files` array so they
+        // re-parse as files rather than being promoted to packages.
+        if component.component_type == ComponentType::File {
+            files.push(emit_file(component, spdx_id));
+        } else {
+            packages.push(emit_package(component, spdx_id, &mut report));
+        }
     }
 
     let mut doc = Map::new();
@@ -68,6 +76,30 @@ pub fn emit_spdx(sbom: &NormalizedSbom) -> Result<(String, FidelityReport), Emit
         emit_creation_info(sbom, &mut report),
     );
     doc.insert("packages".to_string(), Value::Array(packages));
+    if !files.is_empty() {
+        doc.insert("files".to_string(), Value::Array(files));
+    }
+
+    // documentDescribes is the 2.2-era primary-component idiom; emit it
+    // alongside the DESCRIBES relationship so both mechanisms round-trip.
+    if let Some(primary) = &sbom.primary_component_id
+        && id_assigner.contains(primary)
+    {
+        doc.insert(
+            "documentDescribes".to_string(),
+            json!([id_assigner.id_for(primary)]),
+        );
+        report.synthesized("documentDescribes from primary component");
+    }
+
+    let extracted = emit_extracted_licenses(sbom);
+    if !extracted.is_empty() {
+        doc.insert(
+            "hasExtractedLicensingInfos".to_string(),
+            Value::Array(extracted),
+        );
+        report.synthesized("hasExtractedLicensingInfos from resolved LicenseRef names");
+    }
 
     let relationships = emit_relationships(sbom, &id_assigner, &mut report);
     doc.insert("relationships".to_string(), Value::Array(relationships));
@@ -213,6 +245,65 @@ fn emit_package(component: &Component, spdx_id: &str, report: &mut FidelityRepor
     splice_preserved_fields(component, &mut obj, report);
 
     Value::Object(obj)
+}
+
+/// Synthesize one SPDX file object from a `ComponentType::File` component.
+///
+/// Mirrors the fields the SPDX parser reads back (`fileName`, `checksums`,
+/// `licenseConcluded`, `copyrightText`) so file components round-trip.
+fn emit_file(component: &Component, spdx_id: &str) -> Value {
+    let mut obj = Map::new();
+    obj.insert("SPDXID".to_string(), json!(spdx_id));
+    obj.insert("fileName".to_string(), json!(component.name));
+
+    if let Some(checksums) = emit_checksums(&component.hashes) {
+        obj.insert("checksums".to_string(), checksums);
+    }
+
+    let concluded = component.licenses.concluded.as_ref().map_or_else(
+        || license_field(&component.licenses.declared),
+        |c| c.expression.clone(),
+    );
+    obj.insert("licenseConcluded".to_string(), json!(concluded));
+
+    if let Some(copyright) = &component.copyright {
+        obj.insert("copyrightText".to_string(), json!(copyright));
+    }
+
+    Value::Object(obj)
+}
+
+/// Re-emit `LicenseRef-*` definitions resolved at parse time as
+/// `hasExtractedLicensingInfos` entries so the id → name mapping survives a
+/// round-trip. The model keeps only the resolved display name, so the
+/// schema-required `extractedText` falls back to that same name.
+fn emit_extracted_licenses(sbom: &NormalizedSbom) -> Vec<Value> {
+    // BTreeMap for deterministic output order.
+    let mut by_id: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    for component in sbom.components.values() {
+        let licenses = component
+            .licenses
+            .declared
+            .iter()
+            .chain(component.licenses.concluded.as_ref());
+        for lic in licenses {
+            if let Some(name) = &lic.resolved_name
+                && lic.expression.starts_with("LicenseRef-")
+            {
+                by_id.entry(lic.expression.as_str()).or_insert(name);
+            }
+        }
+    }
+    by_id
+        .into_iter()
+        .map(|(id, name)| {
+            json!({
+                "licenseId": id,
+                "name": name,
+                "extractedText": name,
+            })
+        })
+        .collect()
 }
 
 /// Best-effort download location: a VCS/distribution external ref URL if present,
@@ -433,7 +524,14 @@ fn emit_creation_info(sbom: &NormalizedSbom, report: &mut FidelityReport) -> Val
                 CreatorType::Organization => "Organization",
                 CreatorType::Person => "Person",
             };
-            format!("{prefix}: {}", c.name)
+            // SPDX 2.3 §6.8: Person/Organization creators carry an optional
+            // "(email)" suffix; Tool creators are name-only.
+            match &c.email {
+                Some(email) if c.creator_type != CreatorType::Tool => {
+                    format!("{prefix}: {} ({email})", c.name)
+                }
+                _ => format!("{prefix}: {}", c.name),
+            }
         })
         .collect();
     if creators.is_empty() {
@@ -647,6 +745,136 @@ mod tests {
         assert!(names.contains(&"lodash"), "lodash mapped: {names:?}");
         // app depends-on lodash survives as a relationship.
         assert!(!reparsed.edges.is_empty(), "dependency edges mapped");
+    }
+
+    /// Document exercising creators with emails, a file entry owned by the
+    /// package, documentDescribes, and a resolved LicenseRef definition.
+    const SPDX_FULL: &str = r#"{
+        "spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT", "name": "app",
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": "https://example.com/app",
+        "creationInfo": {"created": "2026-01-04T12:00:00Z",
+                         "creators": ["Person: Jane Doe (jane@example.com)",
+                                      "Organization: Acme (contact@acme.com)",
+                                      "Tool: t-1.0"]},
+        "packages": [
+            {"SPDXID": "SPDXRef-Package-app", "name": "app",
+             "versionInfo": "1.0.0", "downloadLocation": "NOASSERTION",
+             "licenseDeclared": "LicenseRef-Proprietary",
+             "licenseConcluded": "LicenseRef-Proprietary",
+             "hasFiles": ["SPDXRef-File-main"]}
+        ],
+        "files": [
+            {"SPDXID": "SPDXRef-File-main", "fileName": "src/main.rs",
+             "checksums": [{"algorithm": "SHA1", "checksumValue": "deadbeef"}],
+             "licenseConcluded": "MIT",
+             "copyrightText": "Copyright Acme"}
+        ],
+        "hasExtractedLicensingInfos": [
+            {"licenseId": "LicenseRef-Proprietary", "name": "Acme Proprietary",
+             "extractedText": "All rights reserved."}
+        ],
+        "documentDescribes": ["SPDXRef-Package-app"]
+    }"#;
+
+    #[test]
+    fn creator_email_round_trips() {
+        let sbom = parse_sbom_str(SPDX_FULL).unwrap();
+        let (json, _report) = emit_spdx(&sbom).unwrap();
+        let doc: Value = serde_json::from_str(&json).unwrap();
+        let creators: Vec<&str> = doc["creationInfo"]["creators"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert!(
+            creators.contains(&"Person: Jane Doe (jane@example.com)"),
+            "person email kept: {creators:?}"
+        );
+        assert!(
+            creators.contains(&"Organization: Acme (contact@acme.com)"),
+            "org email kept: {creators:?}"
+        );
+        assert!(creators.contains(&"Tool: t-1.0"), "tool name-only kept");
+    }
+
+    #[test]
+    fn file_components_emit_as_files_not_packages() {
+        let sbom = parse_sbom_str(SPDX_FULL).unwrap();
+        let (json, _report) = emit_spdx(&sbom).unwrap();
+        let doc: Value = serde_json::from_str(&json).unwrap();
+
+        let files = doc["files"].as_array().expect("files array emitted");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["fileName"], "src/main.rs");
+        assert_eq!(files[0]["checksums"][0]["checksumValue"], "deadbeef");
+        assert_eq!(files[0]["licenseConcluded"], "MIT");
+
+        let packages = doc["packages"].as_array().unwrap();
+        assert_eq!(packages.len(), 1, "file must not appear as a package");
+        assert_eq!(packages[0]["name"], "app");
+
+        // The package→file CONTAINS edge (from hasFiles) survives.
+        let file_id = files[0]["SPDXID"].as_str().unwrap();
+        let pkg_id = packages[0]["SPDXID"].as_str().unwrap();
+        assert!(
+            doc["relationships"].as_array().unwrap().iter().any(|r| {
+                r["relationshipType"] == "CONTAINS"
+                    && r["spdxElementId"] == pkg_id
+                    && r["relatedSpdxElement"] == file_id
+            }),
+            "CONTAINS relationship preserved"
+        );
+
+        // And the whole thing re-parses with the file still typed File.
+        let reparsed = parse_sbom_str(&json).unwrap();
+        let file = reparsed
+            .components
+            .values()
+            .find(|c| c.name == "src/main.rs")
+            .expect("file component survives round-trip");
+        assert_eq!(file.component_type, crate::model::ComponentType::File);
+    }
+
+    #[test]
+    fn document_describes_emitted_for_primary() {
+        let sbom = parse_sbom_str(SPDX_FULL).unwrap();
+        assert!(sbom.primary_component_id.is_some(), "fixture has a primary");
+        let (json, _report) = emit_spdx(&sbom).unwrap();
+        let doc: Value = serde_json::from_str(&json).unwrap();
+
+        let pkg_id = doc["packages"][0]["SPDXID"].as_str().unwrap();
+        let describes = doc["documentDescribes"]
+            .as_array()
+            .expect("documentDescribes emitted");
+        assert_eq!(describes, &[json!(pkg_id)]);
+    }
+
+    #[test]
+    fn resolved_license_refs_emit_extracted_infos() {
+        let sbom = parse_sbom_str(SPDX_FULL).unwrap();
+        let (json, _report) = emit_spdx(&sbom).unwrap();
+        let doc: Value = serde_json::from_str(&json).unwrap();
+
+        let infos = doc["hasExtractedLicensingInfos"]
+            .as_array()
+            .expect("hasExtractedLicensingInfos emitted");
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0]["licenseId"], "LicenseRef-Proprietary");
+        assert_eq!(infos[0]["name"], "Acme Proprietary");
+
+        // The resolution survives a full round-trip.
+        let reparsed = parse_sbom_str(&json).unwrap();
+        let app = reparsed
+            .components
+            .values()
+            .find(|c| c.name == "app")
+            .unwrap();
+        assert_eq!(
+            app.licenses.declared[0].resolved_name.as_deref(),
+            Some("Acme Proprietary")
+        );
     }
 
     #[test]

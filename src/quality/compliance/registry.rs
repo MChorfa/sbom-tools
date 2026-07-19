@@ -442,6 +442,18 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[],
             remediation: REMEDIATION_GENERIC,
         },
+        // Generic bucket for quality-profile (Minimum/Standard/Comprehensive)
+        // findings whose check site has no specific registry mapping. The
+        // SARIF renderer re-buckets the `SBOM-CRA-GENERAL` fallback onto this
+        // rule for quality runs so they never surface under a CRA identity.
+        "SBOM-QUALITY-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-QUALITY-GENERAL",
+            name: "QualityGeneralRequirement",
+            short_description: "SBOM quality: general quality-profile requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[],
+            remediation: "Review the requirement and update the SBOM accordingly.",
+        },
         // ---- EUCC Substantial (reference-only profile) -------------------
         "SBOM-EUCC-PP" => RuleMeta {
             sarif_id: "SBOM-EUCC-PP",
@@ -481,6 +493,16 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "EUCC (Reg. (EU) 2024/482): Certification/Attestation external reference to an EUCC certificate (recommended)",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::Eucc, "Certification reference")],
+            remediation: REMEDIATION_EUCC,
+        },
+        // Generic bucket for EUCC-run findings whose check site has no
+        // specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-EUCC-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-EUCC-GENERAL",
+            name: "EuccGeneralRequirement",
+            short_description: "EUCC (Reg. (EU) 2024/482): general SBOM evidence requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::Eucc, "Reg. (EU) 2024/482")],
             remediation: REMEDIATION_EUCC,
         },
         // ---- EU AI Act Annex IV technical-documentation readiness --------
@@ -611,6 +633,16 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::EuAiAct, "Annex IV: applicability")],
             remediation: REMEDIATION_UNTYPED_ML,
+        },
+        // Generic bucket for EU-AI-Act-run findings whose check site has no
+        // specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-AIACT-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-AIACT-GENERAL",
+            name: "AiActGeneralRequirement",
+            short_description: "EU AI Act Annex IV: general documentation-readiness requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::EuAiAct, "Annex IV")],
+            remediation: "Review the EU AI Act Annex IV documentation requirement and update the AI-BOM metadata accordingly.",
         },
         // ---- BSI/G7 SBOM-for-AI Minimum Elements readiness ---------------
         // Self-descriptors for the shared per-cluster SARIF rules the
@@ -900,6 +932,16 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "BSI/G7 SBOM-for-AI Security cluster: AI-specific security controls, exploitability references",
             default_severity: ViolationSeverity::Info,
             refs: &[(K::BsiSbomForAi, "Security / Exploitability reference")],
+            remediation: REMEDIATION_BSIAI_GENERAL,
+        },
+        // Generic bucket for BSI/G7-SBOM-for-AI-run findings whose check site
+        // has no specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-BSIAI-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-BSIAI-GENERAL",
+            name: "BsiSbomForAiGeneralRequirement",
+            short_description: "BSI/G7 SBOM-for-AI: general minimum-elements requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::BsiSbomForAi, "Minimum Elements")],
             remediation: REMEDIATION_BSIAI_GENERAL,
         },
         // ---- NTIA --------------------------------------------------------
@@ -1504,6 +1546,16 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::Cnsa2, "CNSA 2.0")],
             remediation: REMEDIATION_CNSA2,
         },
+        // Generic bucket for CNSA-2.0-run findings whose check site has no
+        // specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-CNSA2-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-CNSA2-GENERAL",
+            name: "Cnsa2GeneralRequirement",
+            short_description: "CNSA 2.0: general algorithm-suite requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::Cnsa2, "CNSA 2.0")],
+            remediation: REMEDIATION_CNSA2,
+        },
         // ---- NIST PQC ----------------------------------------------------
         "SBOM-PQC-000" => RuleMeta {
             sarif_id: "SBOM-PQC-000",
@@ -1621,6 +1673,16 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             refs: &[(K::NistPqc, "IR 8547 ipd")],
             remediation: REMEDIATION_PQC_UNKNOWN,
         },
+        // Generic bucket for NIST-PQC-run findings whose check site has no
+        // specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-PQC-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-PQC-GENERAL",
+            name: "PqcGeneralRequirement",
+            short_description: "NIST PQC: general post-quantum readiness requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::NistPqc, "IR 8547 ipd")],
+            remediation: REMEDIATION_PQC,
+        },
         _ => return None,
     };
     Some(meta)
@@ -1664,11 +1726,13 @@ const ALL_RULE_IDS: &[&str] = &[
     "SBOM-CRA-PRE-8-RQ-02",
     "SBOM-CRA-PRE-7-RQ-07-RE",
     "SBOM-CRA-GENERAL",
+    "SBOM-QUALITY-GENERAL",
     "SBOM-EUCC-PP",
     "SBOM-EUCC-TOE",
     "SBOM-EUCC-ITSEF",
     "SBOM-EUCC-VALIDITY",
     "SBOM-EUCC-CERTREF",
+    "SBOM-EUCC-GENERAL",
     "SBOM-AIACT-ANNEX-IV-1",
     "SBOM-AIACT-ANNEX-IV-2D",
     "SBOM-AIACT-ANNEX-IV-2G",
@@ -1684,6 +1748,7 @@ const ALL_RULE_IDS: &[&str] = &[
     "SBOM-AIACT-ANNEX-IV-2C-ENERGY",
     "SBOM-AIACT-ANNEX-IV-3-LIMITATIONS",
     "SBOM-AIACT-UNTYPED-ML",
+    "SBOM-AIACT-GENERAL",
     "SBOM-BSIAI-META",
     "SBOM-BSIAI-SYS",
     "SBOM-BSIAI-MODEL",
@@ -1719,6 +1784,7 @@ const ALL_RULE_IDS: &[&str] = &[
     "SBOM-BSIAI-INFRA-RUNTIME",
     "SBOM-BSIAI-SEC-CONTROLS",
     "SBOM-BSIAI-SEC-EXPLOITABILITY",
+    "SBOM-BSIAI-GENERAL",
     "SBOM-NTIA-VERSION",
     "SBOM-NTIA-TIMESTAMP",
     "SBOM-NTIA-SUPPLIER",
@@ -1790,6 +1856,7 @@ const ALL_RULE_IDS: &[&str] = &[
     "SBOM-CNSA2-PROTO-001",
     "SBOM-CNSA2-PROTO-002",
     "SBOM-CNSA2-PROTO-UNKNOWN",
+    "SBOM-CNSA2-GENERAL",
     "SBOM-PQC-000",
     "SBOM-PQC-001",
     "SBOM-PQC-012",
@@ -1803,6 +1870,7 @@ const ALL_RULE_IDS: &[&str] = &[
     "SBOM-PQC-PROTO-001",
     "SBOM-PQC-PROTO-002",
     "SBOM-PQC-PROTO-UNKNOWN",
+    "SBOM-PQC-GENERAL",
 ];
 
 /// Enumerate every registered internal rule key, in registry order.
@@ -1971,6 +2039,7 @@ pub const CNSA2_SARIF_RULE_IDS: &[&str] = &[
     "SBOM-CNSA2-PROTO-001",
     "SBOM-CNSA2-PROTO-002",
     "SBOM-CNSA2-PROTO-UNKNOWN",
+    "SBOM-CNSA2-GENERAL",
 ];
 
 /// NIST PQC readiness SARIF rule catalogue: every `SBOM-PQC-*`
@@ -1990,6 +2059,7 @@ pub const PQC_SARIF_RULE_IDS: &[&str] = &[
     "SBOM-PQC-PROTO-001",
     "SBOM-PQC-PROTO-002",
     "SBOM-PQC-PROTO-UNKNOWN",
+    "SBOM-PQC-GENERAL",
 ];
 
 #[cfg(test)]

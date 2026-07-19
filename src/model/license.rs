@@ -50,6 +50,15 @@ impl LicenseExpression {
         }
     }
 
+    /// Human-readable display form: the name resolved from the document's
+    /// license definitions (e.g. SPDX `hasExtractedLicensingInfos` for a bare
+    /// `LicenseRef-*`) when present, otherwise the raw expression. For
+    /// rendering/emit only — equality and identity stay on `expression`.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.resolved_name.as_deref().unwrap_or(&self.expression)
+    }
+
     /// Create from an SPDX license ID
     #[must_use]
     pub fn from_spdx_id(id: &str) -> Self {
@@ -424,6 +433,17 @@ mod tests {
             info(&["MIT"], Some("GPL-3.0-only")).effective_family(),
             LicenseFamily::Copyleft
         );
+    }
+
+    #[test]
+    fn display_name_prefers_resolved_name() {
+        let mut lic = LicenseExpression::new("LicenseRef-foo".to_string());
+        assert_eq!(lic.display_name(), "LicenseRef-foo");
+
+        lic.resolved_name = Some("Foo Proprietary License".to_string());
+        assert_eq!(lic.display_name(), "Foo Proprietary License");
+        // Identity (equality) still ignores the resolved display name.
+        assert_eq!(lic, LicenseExpression::new("LicenseRef-foo".to_string()));
     }
 
     #[test]

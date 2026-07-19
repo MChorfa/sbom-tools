@@ -641,12 +641,44 @@ impl Violation {
     }
 
     /// Externally-visible SARIF rule id for this violation, looked up from
-    /// the rule registry by [`Violation::rule_id`]. Unregistered keys fall
-    /// back to the generic CRA rule — the exact fallback the SARIF renderer
-    /// uses, so JSON and SARIF always agree.
+    /// the rule registry by [`Violation::rule_id`]. Check sites stamp a
+    /// family-correct generic id (via [`generic_rule_id_for_level`]) when no
+    /// specific rule applies, so registered keys — i.e. every violation the
+    /// checkers produce — serialize identically in JSON and SARIF. Truly
+    /// unregistered keys (violations built outside the checkers, e.g. from
+    /// external config) fall back to the generic CRA rule here; the SARIF
+    /// renderer additionally re-buckets those by standard family, which is
+    /// the one residual place the two outputs can differ.
     #[must_use]
     pub fn sarif_rule_id(&self) -> &'static str {
         rule_meta(self.rule_id).map_or("SBOM-CRA-GENERAL", |m| m.sarif_id)
+    }
+}
+
+/// Family-generic rule for a compliance standard: the id a check site (or
+/// the SARIF renderer) falls back to when a finding has no specific registry
+/// mapping. Every returned id is a registered self-descriptor
+/// (`rule_meta(id).sarif_id == id`), so rule catalogues always declare it
+/// with registry metadata.
+#[must_use]
+pub const fn generic_rule_id_for_level(level: ComplianceLevel) -> &'static str {
+    match level {
+        ComplianceLevel::Minimum | ComplianceLevel::Standard | ComplianceLevel::Comprehensive => {
+            "SBOM-QUALITY-GENERAL"
+        }
+        ComplianceLevel::NtiaMinimum => "SBOM-NTIA-GENERAL",
+        ComplianceLevel::CraPhase1
+        | ComplianceLevel::CraPhase2
+        | ComplianceLevel::CraOssSteward => "SBOM-CRA-GENERAL",
+        ComplianceLevel::FdaMedicalDevice => "SBOM-FDA-GENERAL",
+        ComplianceLevel::NistSsdf => "SBOM-SSDF-GENERAL",
+        ComplianceLevel::Eo14028 => "SBOM-EO14028-GENERAL",
+        ComplianceLevel::Cnsa2 => "SBOM-CNSA2-GENERAL",
+        ComplianceLevel::NistPqc => "SBOM-PQC-GENERAL",
+        ComplianceLevel::BsiTr03183_2 => "SBOM-BSI-TR-03183-2-GENERAL",
+        ComplianceLevel::EuccSubstantial => "SBOM-EUCC-GENERAL",
+        ComplianceLevel::EuAiAct => "SBOM-AIACT-GENERAL",
+        ComplianceLevel::BsiSbomForAi => "SBOM-BSIAI-GENERAL",
     }
 }
 
