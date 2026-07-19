@@ -26,7 +26,7 @@ impl ComplianceChecker {
                 ),
                 _ => (
                     "Document creator identification".to_string(),
-                    "SBOM-CRA-GENERAL",
+                    generic_rule_id_for_level(self.level),
                 ),
             };
             violations.push(Violation {
@@ -515,7 +515,7 @@ impl ComplianceChecker {
             let rule_id = if self.level == ComplianceLevel::FdaMedicalDevice {
                 "SBOM-FDA-NAMESPACE"
             } else {
-                "SBOM-CRA-GENERAL"
+                generic_rule_id_for_level(self.level)
             };
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
@@ -578,7 +578,10 @@ impl ComplianceChecker {
                         "FDA: Component name (required)".to_string(),
                         "SBOM-FDA-GENERAL",
                     ),
-                    _ => ("Component name (required)".to_string(), "SBOM-CRA-GENERAL"),
+                    _ => (
+                        "Component name (required)".to_string(),
+                        generic_rule_id_for_level(self.level),
+                    ),
                 };
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
@@ -711,7 +714,7 @@ impl ComplianceChecker {
                             comp.name
                         ),
                         "Standard identifier (PURL/CPE/SWHID)".to_string(),
-                        "SBOM-CRA-GENERAL",
+                        generic_rule_id_for_level(self.level),
                     ),
                 };
                 violations.push(Violation {
@@ -805,7 +808,7 @@ impl ComplianceChecker {
                     message: format!("Component '{}' should have license information", comp.name),
                     element: Some(comp.name.clone()),
                     requirement: "License declaration".to_string(),
-                    rule_id: "SBOM-CRA-GENERAL",
+                    rule_id: generic_rule_id_for_level(self.level),
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
@@ -835,7 +838,7 @@ impl ComplianceChecker {
                         rule_id: if self.level == ComplianceLevel::FdaMedicalDevice {
                             "SBOM-FDA-HASH"
                         } else {
-                            "SBOM-CRA-GENERAL"
+                            generic_rule_id_for_level(self.level)
                         },
                         component_id: Some(comp.canonical_id.value().to_string()),
                         counts: None,
@@ -1218,7 +1221,7 @@ impl ComplianceChecker {
                 message: format!("CycloneDX {version} is outdated, consider upgrading to 1.7+"),
                 element: None,
                 requirement: "Current CycloneDX version".to_string(),
-                rule_id: "SBOM-CRA-GENERAL",
+                rule_id: generic_rule_id_for_level(self.level),
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
@@ -1235,7 +1238,7 @@ impl ComplianceChecker {
                     message: format!("Component '{}' may be missing bom-ref", comp.name),
                     element: Some(comp.name.clone()),
                     requirement: "CycloneDX: bom-ref for dependency tracking".to_string(),
-                    rule_id: "SBOM-CRA-GENERAL",
+                    rule_id: generic_rule_id_for_level(self.level),
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
@@ -1260,7 +1263,7 @@ impl ComplianceChecker {
                 message: format!("Unknown SPDX version: {version}"),
                 element: None,
                 requirement: "Valid SPDX version".to_string(),
-                rule_id: "SBOM-CRA-GENERAL",
+                rule_id: generic_rule_id_for_level(self.level),
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
@@ -1292,7 +1295,7 @@ impl ComplianceChecker {
                     ),
                     element: Some(comp.name.clone()),
                     requirement: expected.to_string(),
-                    rule_id: "SBOM-CRA-GENERAL",
+                    rule_id: generic_rule_id_for_level(self.level),
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),

@@ -3,7 +3,10 @@
 use super::{ReportConfig, ReportError, ReportFormat, ReportGenerator, ReportType};
 use crate::diff::{DiffResult, SlaStatus, VulnerabilityDetail};
 use crate::model::NormalizedSbom;
-use crate::quality::{ComplianceLevel, ComplianceResult, ViolationSeverity, rule_meta};
+use crate::quality::{
+    ComplianceLevel, ComplianceResult, StandardRef, ViolationSeverity, generic_rule_id_for_level,
+    rule_meta,
+};
 use serde::Serialize;
 
 /// SARIF report generator
@@ -853,16 +856,44 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
         .iter()
         .map(|v| {
             let element = v.element.as_deref().unwrap_or("unknown");
-            let standard_ids: Vec<String> = v
-                .standard_refs
+            // The externally-visible SARIF rule ID comes from the rule
+            // registry keyed by the violation's stable `rule_id` — never from
+            // re-parsing the human-readable requirement string. Check sites
+            // with no specific mapping stamp the generic `SBOM-CRA-GENERAL`
+            // key regardless of which checker ran; re-bucket that fallback
+            // (and any unregistered key) onto the running standard's own
+            // generic rule so NTIA/quality/... findings never surface under
+            // a CRA identity. Specifically-mapped rules keep their identity.
+            let is_unmapped = v.rule_id == "SBOM-CRA-GENERAL" || rule_meta(v.rule_id).is_none();
+            let sarif_rule_id = if is_unmapped {
+                generic_rule_id_for_level(result.level)
+            } else {
+                v.sarif_rule_id()
+            };
+            // Fallback violations carry no standard_refs (the generic CRA
+            // bucket has none); resolve them from the family-generic rule so
+            // fallback results still carry `properties.standardIds` when the
+            // running standard is known.
+            let fallback_refs: Vec<StandardRef>;
+            let refs: &[StandardRef] = if is_unmapped && v.standard_refs.is_empty() {
+                fallback_refs = rule_meta(sarif_rule_id)
+                    .map(|m| {
+                        m.refs
+                            .iter()
+                            .map(|(kind, id)| StandardRef::new(*kind, *id))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                &fallback_refs
+            } else {
+                &v.standard_refs
+            };
+            let standard_ids: Vec<String> = refs
                 .iter()
                 .map(|sr| format!("{}:{}", sarif_standard_label(sr.standard), sr.id))
                 .collect();
-            let standard_help_uris: Vec<String> = v
-                .standard_refs
-                .iter()
-                .filter_map(|sr| sr.help_uri.clone())
-                .collect();
+            let standard_help_uris: Vec<String> =
+                refs.iter().filter_map(|sr| sr.help_uri.clone()).collect();
             let properties = if standard_ids.is_empty()
                 && standard_help_uris.is_empty()
                 && v.component_id.is_none()
@@ -879,14 +910,8 @@ fn compliance_results_to_sarif(result: &ComplianceResult, label: Option<&str>) -
                     ..SarifResultProperties::default()
                 })
             };
-            // The externally-visible SARIF rule ID comes from the rule
-            // registry keyed by the violation's stable `rule_id` — never from
-            // re-parsing the human-readable requirement string. Unregistered
-            // keys fall back to the generic CRA rule (the same lookup the
-            // serde `sarif_rule_id` field uses, so JSON and SARIF agree).
-            let sarif_rule_id = v.sarif_rule_id().to_string();
             SarifResult {
-                rule_id: sarif_rule_id,
+                rule_id: sarif_rule_id.to_string(),
                 level: violation_severity_to_level(v.severity),
                 message: SarifMessage {
                     text: format!(
