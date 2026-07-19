@@ -14,7 +14,10 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::model::{Component, ComponentType, DependencyType, Hash, NormalizedSbom};
+use crate::model::{
+    Component, ComponentType, Creator, CreatorType, DependencyType, Hash, LicenseExpression,
+    NormalizedSbom,
+};
 
 use super::EmitError;
 use super::fidelity::FidelityReport;
@@ -55,6 +58,14 @@ pub fn emit_cyclonedx(sbom: &NormalizedSbom) -> Result<(String, FidelityReport),
     );
     if let Some(tools) = emit_tools(sbom) {
         metadata.insert("tools".to_string(), tools);
+    }
+    if let Some(authors) = emit_authors(sbom) {
+        metadata.insert("authors".to_string(), authors);
+        report.synthesized("metadata.authors from person creators");
+    }
+    if let Some(manufacturer) = emit_manufacturer(sbom) {
+        metadata.insert("manufacturer".to_string(), manufacturer);
+        report.synthesized("metadata.manufacturer from organization creator");
     }
     if let Some(primary) = primary_component_json {
         metadata.insert("component".to_string(), primary);
@@ -223,16 +234,13 @@ fn emit_licenses(component: &Component) -> Option<Value> {
     for expr in &component.licenses.declared {
         if !seen.contains(&expr.expression.as_str()) {
             seen.push(&expr.expression);
-            items.push(license_choice(&expr.expression, expr.is_valid_spdx));
+            items.push(license_choice(expr));
         }
     }
     if let Some(concluded) = &component.licenses.concluded
         && !seen.contains(&concluded.expression.as_str())
     {
-        items.push(license_choice(
-            &concluded.expression,
-            concluded.is_valid_spdx,
-        ));
+        items.push(license_choice(concluded));
     }
     if items.is_empty() {
         None
@@ -243,16 +251,24 @@ fn emit_licenses(component: &Component) -> Option<Value> {
 
 /// Build one CycloneDX license-choice object.
 ///
-/// Valid single SPDX ids use `{license:{id}}`; compound/invalid expressions use
-/// the `{expression}` form, matching CycloneDX semantics.
-fn license_choice(expr: &str, is_valid_spdx: bool) -> Value {
-    let is_compound = expr.contains(" OR ") || expr.contains(" AND ") || expr.contains(" WITH ");
-    if is_valid_spdx && !is_compound {
-        json!({ "license": { "id": expr } })
-    } else if is_valid_spdx {
-        json!({ "expression": expr })
+/// Valid single SPDX ids use `{license:{id}}`; compound valid expressions use
+/// the `{expression}` form, matching CycloneDX semantics. A bare
+/// `LicenseRef-*`/`DocumentRef-*` token parses as a valid SPDX *expression* but
+/// is not a valid SPDX *identifier*, so it must not go in `license.id`: it is
+/// emitted as `{license:{name}}`, preferring the human-readable name resolved
+/// from the source document (SPDX `hasExtractedLicensingInfos`) over the raw
+/// ref string.
+fn license_choice(expr: &LicenseExpression) -> Value {
+    let raw = expr.expression.as_str();
+    let is_compound = raw.contains(" OR ") || raw.contains(" AND ") || raw.contains(" WITH ");
+    let is_local_ref =
+        !is_compound && (raw.starts_with("LicenseRef-") || raw.starts_with("DocumentRef-"));
+    if expr.is_valid_spdx && !is_compound && !is_local_ref {
+        json!({ "license": { "id": raw } })
+    } else if expr.is_valid_spdx && is_compound {
+        json!({ "expression": raw })
     } else {
-        json!({ "license": { "name": expr } })
+        json!({ "license": { "name": expr.display_name() } })
     }
 }
 
@@ -498,7 +514,7 @@ fn emit_tools(sbom: &NormalizedSbom) -> Option<Value> {
         .document
         .creators
         .iter()
-        .filter(|c| matches!(c.creator_type, crate::model::CreatorType::Tool))
+        .filter(|c| matches!(c.creator_type, CreatorType::Tool))
         .map(|c| json!({ "name": c.name }))
         .collect();
     if tools.is_empty() {
@@ -506,6 +522,60 @@ fn emit_tools(sbom: &NormalizedSbom) -> Option<Value> {
     } else {
         Some(Value::Array(tools))
     }
+}
+
+/// Render a creator as a CycloneDX `organizationalContact` object.
+fn contact_json(creator: &Creator) -> Value {
+    let mut o = Map::new();
+    o.insert("name".to_string(), json!(creator.name));
+    if let Some(email) = &creator.email {
+        o.insert("email".to_string(), json!(email));
+    }
+    Value::Object(o)
+}
+
+/// Emit `metadata.authors` (CycloneDX 1.5+) from Person creators — the inverse
+/// of the parser's `metadata.authors` → Person mapping. Organization creators
+/// beyond the one emitted as `metadata.manufacturer` are folded in as well so
+/// no document creator is silently dropped (manufacturer is single-valued).
+fn emit_authors(sbom: &NormalizedSbom) -> Option<Value> {
+    let mut authors: Vec<Value> = sbom
+        .document
+        .creators
+        .iter()
+        .filter(|c| matches!(c.creator_type, CreatorType::Person))
+        .map(contact_json)
+        .collect();
+    authors.extend(
+        sbom.document
+            .creators
+            .iter()
+            .filter(|c| matches!(c.creator_type, CreatorType::Organization))
+            .skip(1)
+            .map(contact_json),
+    );
+    if authors.is_empty() {
+        None
+    } else {
+        Some(Value::Array(authors))
+    }
+}
+
+/// Emit `metadata.manufacturer` (CycloneDX 1.5+) from the first Organization
+/// creator — the inverse of the parser's manufacturer → Organization mapping
+/// (BSI TR-03183-2 Table 8's "Creator of the SBOM").
+fn emit_manufacturer(sbom: &NormalizedSbom) -> Option<Value> {
+    let org = sbom
+        .document
+        .creators
+        .iter()
+        .find(|c| matches!(c.creator_type, CreatorType::Organization))?;
+    let mut o = Map::new();
+    o.insert("name".to_string(), json!(org.name));
+    if let Some(email) = &org.email {
+        o.insert("contact".to_string(), json!([{ "email": email }]));
+    }
+    Some(Value::Object(o))
 }
 
 /// Emit the `dependencies` array from the edge list.
@@ -615,6 +685,109 @@ mod tests {
         // root (primary) + lodash
         assert_eq!(reparsed.components.len(), 2);
         assert_eq!(reparsed.document.format_version, "1.7");
+    }
+
+    /// SPDX input with a resolved LicenseRef (hasExtractedLicensingInfos), an
+    /// unresolved LicenseRef, and a plain SPDX id.
+    const SPDX_LICENSE_REFS: &str = r#"{
+        "spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT", "name": "license-ref-doc",
+        "documentNamespace": "https://example.com/license-ref-doc",
+        "creationInfo": {"created": "2024-01-01T00:00:00Z",
+                         "creators": ["Tool: sbom-gen-1.0"]},
+        "packages": [
+            {"SPDXID": "SPDXRef-Package-a", "name": "pkg-a", "versionInfo": "1.0",
+             "downloadLocation": "NOASSERTION",
+             "licenseDeclared": "LicenseRef-foo", "licenseConcluded": "LicenseRef-foo"},
+            {"SPDXID": "SPDXRef-Package-b", "name": "pkg-b", "versionInfo": "1.0",
+             "downloadLocation": "NOASSERTION", "licenseDeclared": "LicenseRef-bar"},
+            {"SPDXID": "SPDXRef-Package-c", "name": "pkg-c", "versionInfo": "1.0",
+             "downloadLocation": "NOASSERTION", "licenseDeclared": "MIT"}
+        ],
+        "hasExtractedLicensingInfos": [
+            {"licenseId": "LicenseRef-foo", "name": "Foo Proprietary License",
+             "extractedText": "Proprietary terms."}
+        ]
+    }"#;
+
+    /// Find the single license-choice object of the named emitted component.
+    fn license_of<'a>(doc: &'a Value, name: &str) -> &'a Value {
+        let comp = doc["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("component {name} not emitted"));
+        &comp["licenses"][0]
+    }
+
+    #[test]
+    fn license_ref_emits_resolved_name_never_id() {
+        let sbom = parse_sbom_str(SPDX_LICENSE_REFS).unwrap();
+        let (json, _report) = emit_cyclonedx(&sbom).unwrap();
+        let doc: Value = serde_json::from_str(&json).unwrap();
+
+        // (a) resolved LicenseRef -> name form with the resolved human name.
+        assert_eq!(
+            license_of(&doc, "pkg-a")["license"]["name"],
+            json!("Foo Proprietary License")
+        );
+        // (b) unresolved LicenseRef -> name form keeping the raw ref string.
+        assert_eq!(
+            license_of(&doc, "pkg-b")["license"]["name"],
+            json!("LicenseRef-bar")
+        );
+        // (c) valid SPDX id keeps the id form.
+        assert_eq!(license_of(&doc, "pkg-c")["license"]["id"], json!("MIT"));
+
+        // LicenseRef-* must never appear as a license `id` anywhere.
+        fn assert_no_license_ref_id(v: &Value) {
+            match v {
+                Value::Object(o) => {
+                    if let Some(Value::String(id)) = o.get("id") {
+                        assert!(
+                            !id.starts_with("LicenseRef-"),
+                            "LicenseRef emitted as license id: {id}"
+                        );
+                    }
+                    o.values().for_each(assert_no_license_ref_id);
+                }
+                Value::Array(a) => a.iter().for_each(assert_no_license_ref_id),
+                _ => {}
+            }
+        }
+        assert_no_license_ref_id(&doc);
+    }
+
+    #[test]
+    fn person_creators_emit_metadata_authors() {
+        let cdx_with_authors: &str = r#"{
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "metadata": {
+                "authors": [{"name": "Jane Doe", "email": "jane@example.com"}],
+                "manufacturer": {"name": "Acme Corp",
+                                 "contact": [{"email": "sbom@acme.example"}]},
+                "tools": [{"name": "gen", "version": "1.0"}]
+            },
+            "components": [{"type": "library", "bom-ref": "x", "name": "x",
+                            "version": "1.0"}]
+        }"#;
+        let sbom = parse_sbom_str(cdx_with_authors).unwrap();
+        let (json, _report) = emit_cyclonedx(&sbom).unwrap();
+        let doc: Value = serde_json::from_str(&json).unwrap();
+
+        // (d) Person creator with email round-trips into metadata.authors.
+        assert_eq!(
+            doc["metadata"]["authors"],
+            json!([{ "name": "Jane Doe", "email": "jane@example.com" }])
+        );
+        // Organization creator round-trips into metadata.manufacturer.
+        assert_eq!(
+            doc["metadata"]["manufacturer"],
+            json!({ "name": "Acme Corp", "contact": [{ "email": "sbom@acme.example" }] })
+        );
+        // Tool creators stay in metadata.tools, not authors.
+        assert_eq!(doc["metadata"]["tools"], json!([{ "name": "gen 1.0" }]));
     }
 
     #[test]

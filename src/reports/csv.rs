@@ -97,7 +97,7 @@ impl ReportGenerator for CsvReporter {
                 .licenses
                 .declared
                 .iter()
-                .map(|l| l.expression.as_str())
+                .map(|l| l.display_name())
                 .collect::<Vec<_>>()
                 .join("; ");
             let vuln_count = comp.vulnerabilities.len();

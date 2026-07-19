@@ -643,7 +643,7 @@ impl ReportGenerator for MarkdownReporter {
                 .licenses
                 .declared
                 .first()
-                .map(|l| escape_markdown_table(&l.expression));
+                .map(|l| escape_markdown_table(l.display_name()));
             let license = license.as_deref().unwrap_or("-");
             writeln!(
                 md,

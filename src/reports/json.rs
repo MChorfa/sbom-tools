@@ -190,7 +190,7 @@ impl ReportGenerator for JsonReporter {
                         .licenses
                         .declared
                         .iter()
-                        .map(|l| l.expression.clone())
+                        .map(|l| l.display_name().to_string())
                         .collect(),
                     supplier: c.supplier.as_ref().map(|s| s.name.clone()),
                     dependency_kind: kind,

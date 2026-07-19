@@ -601,7 +601,7 @@ impl ReportGenerator for TableReporter {
                 .licenses
                 .declared
                 .first()
-                .map_or("-", |l| l.expression.as_str());
+                .map_or("-", |l| l.display_name());
             let vulns = comp.vulnerabilities.len();
             let vuln_display = if vulns > 0 {
                 self.color(&vulns.to_string(), "red")
