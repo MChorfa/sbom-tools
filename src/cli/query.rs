@@ -13,6 +13,20 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 use std::collections::HashMap;
 
+/// Output formats `query` has a real renderer for.
+///
+/// `auto` resolves to the table renderer (there is no query TUI); JSON and
+/// CSV are dedicated emitters; `summary` renders the same compact table.
+/// Every other [`ReportFormat`] is rejected up front instead of silently
+/// falling back to the table renderer.
+pub const QUERY_OUTPUT_FORMATS: &[ReportFormat] = &[
+    ReportFormat::Auto,
+    ReportFormat::Table,
+    ReportFormat::Json,
+    ReportFormat::Csv,
+    ReportFormat::Summary,
+];
+
 // ============================================================================
 // Query Filter
 // ============================================================================
@@ -132,20 +146,23 @@ impl QueryFilter {
             None => return false,
         };
 
-        // If the filter starts with an operator, parse as semver range
+        // If the filter starts with an operator, treat it as a semver range —
+        // never fall back to comparing the component version against the range
+        // expression itself (that silently exact-matched non-semver versions).
         let trimmed = version_filter.trim();
-        let has_operator = trimmed.starts_with('<')
-            || trimmed.starts_with('>')
-            || trimmed.starts_with('=')
-            || trimmed.starts_with('~')
-            || trimmed.starts_with('^')
-            || trimmed.contains(',');
-
-        if has_operator
-            && let Ok(req) = semver::VersionReq::parse(trimmed)
-            && let Ok(ver) = semver::Version::parse(comp_version)
-        {
-            return req.matches(&ver);
+        if version_filter_is_range(trimmed) {
+            let Ok(req) = semver::VersionReq::parse(trimmed) else {
+                // Invalid range expressions are rejected up front in
+                // `run_query`; defensively exclude here.
+                return false;
+            };
+            return match semver::Version::parse(comp_version) {
+                Ok(ver) => req.matches(&ver),
+                Err(_) => {
+                    warn_non_semver_once(comp_version);
+                    false
+                }
+            };
         }
 
         // Exact string match (case-insensitive)
@@ -301,6 +318,30 @@ impl QueryFilter {
     }
 }
 
+/// Does a `--version` filter look like a semver range expression (as opposed
+/// to an exact version string)?
+fn version_filter_is_range(trimmed: &str) -> bool {
+    trimmed.starts_with('<')
+        || trimmed.starts_with('>')
+        || trimmed.starts_with('=')
+        || trimmed.starts_with('~')
+        || trimmed.starts_with('^')
+        || trimmed.contains(',')
+}
+
+/// Emit a one-time stderr warning when a component version cannot be parsed
+/// as semver during a range query (such components are excluded from the
+/// match rather than silently string-compared against the range expression).
+fn warn_non_semver_once(version: &str) {
+    static NON_SEMVER_WARNED: std::sync::Once = std::sync::Once::new();
+    NON_SEMVER_WARNED.call_once(|| {
+        eprintln!(
+            "warning: version '{version}' is not semver; excluded from range match \
+             (further non-semver versions suppressed)"
+        );
+    });
+}
+
 // ============================================================================
 // Query Results
 // ============================================================================
@@ -374,6 +415,30 @@ pub fn run_query(config: QueryConfig, filter: QueryFilter) -> Result<i32> {
         );
     }
 
+    // Reject unsupported output formats and an invalid --version range up
+    // front, before any SBOM is parsed.
+    super::ensure_output_format_supported("query", config.output.format, QUERY_OUTPUT_FORMATS)?;
+
+    let target = OutputTarget::from_option(config.output.file.clone());
+    let format = auto_detect_format(config.output.format, &target);
+
+    if config.group_by_sbom && matches!(format, ReportFormat::Json | ReportFormat::Csv) {
+        bail!(
+            "--group-by-sbom is only supported with table output; \
+             JSON output already lists per-SBOM sources in 'found_in' and 'sbom_summaries', \
+             and CSV lists them in the 'Found In' column"
+        );
+    }
+
+    if let Some(ref version_filter) = filter.version {
+        let trimmed = version_filter.trim();
+        if version_filter_is_range(trimmed)
+            && let Err(e) = semver::VersionReq::parse(trimmed)
+        {
+            bail!("invalid semver range '{version_filter}' for --version: {e}");
+        }
+    }
+
     // Stdin can only be consumed once, so at most one input may be "-".
     if config
         .sbom_paths
@@ -394,8 +459,12 @@ pub fn run_query(config: QueryConfig, filter: QueryFilter) -> Result<i32> {
     let mut total_components = 0;
     let mut sbom_summaries = Vec::with_capacity(sboms.len());
 
-    // Deduplicate matches by (name_lower, version)
-    let mut dedup_map: HashMap<(String, String), QueryMatch> = HashMap::new();
+    // Deduplicate matches by (name_lower, version, identity), where identity
+    // is the PURL (or the ecosystem when no PURL is present). Two components
+    // that share a name and version but come from different ecosystems (e.g.
+    // npm and pypi 'requests@2.0.0') are distinct and must not be collapsed
+    // into one row carrying the first one's purl/license.
+    let mut dedup_map: HashMap<(String, String, String), QueryMatch> = HashMap::new();
 
     for (sbom, path) in sboms.iter().zip(config.sbom_paths.iter()) {
         let sbom_name = super::multi::get_sbom_name(path);
@@ -419,6 +488,7 @@ pub fn run_query(config: QueryConfig, filter: QueryFilter) -> Result<i32> {
             let dedup_key = (
                 component.name.to_lowercase(),
                 component.version.clone().unwrap_or_default(),
+                component_identity(component),
             );
 
             let source = SbomSource {
@@ -475,10 +545,6 @@ pub fn run_query(config: QueryConfig, filter: QueryFilter) -> Result<i32> {
         sbom_summaries,
     };
 
-    // Determine output format
-    let target = OutputTarget::from_option(config.output.file.clone());
-    let format = auto_detect_format(config.output.format, &target);
-
     let output = match format {
         ReportFormat::Json => serde_json::to_string_pretty(&result)?,
         ReportFormat::Csv => format_csv_output(&result),
@@ -498,6 +564,24 @@ pub fn run_query(config: QueryConfig, filter: QueryFilter) -> Result<i32> {
     }
 
     Ok(exit_codes::SUCCESS)
+}
+
+/// Identity discriminator for deduplication beyond (name, version): the PURL
+/// when present, otherwise the ecosystem. Components with neither collapse
+/// together (matching the old behavior for purl-less, ecosystem-less entries).
+fn component_identity(component: &Component) -> String {
+    component
+        .identifiers
+        .purl
+        .as_ref()
+        .map(|p| p.to_lowercase())
+        .or_else(|| {
+            component
+                .ecosystem
+                .as_ref()
+                .map(|e| e.to_string().to_lowercase())
+        })
+        .unwrap_or_default()
 }
 
 /// Build a `QueryMatch` from a component and its source.
@@ -582,32 +666,33 @@ fn format_table_output(result: &QueryResult) -> String {
         return out;
     }
 
-    // Calculate column widths
+    // Calculate column widths (in characters, not bytes, so multi-byte
+    // UTF-8 names don't inflate the column or break truncation)
     let name_w = result
         .matches
         .iter()
-        .map(|m| m.name.len())
+        .map(|m| m.name.chars().count())
         .max()
         .unwrap_or(9)
         .clamp(9, 40);
     let ver_w = result
         .matches
         .iter()
-        .map(|m| m.version.len())
+        .map(|m| m.version.chars().count())
         .max()
         .unwrap_or(7)
         .clamp(7, 20);
     let eco_w = result
         .matches
         .iter()
-        .map(|m| m.ecosystem.len())
+        .map(|m| m.ecosystem.chars().count())
         .max()
         .unwrap_or(9)
         .clamp(9, 15);
     let lic_w = result
         .matches
         .iter()
-        .map(|m| m.license.len())
+        .map(|m| m.license.chars().count())
         .max()
         .unwrap_or(7)
         .clamp(7, 20);
@@ -726,14 +811,18 @@ fn csv_escape(s: &str) -> String {
     }
 }
 
-/// Truncate a string to the given width.
+/// Truncate a string to the given display width (in characters).
+///
+/// Operates on `char` boundaries, never byte offsets: slicing at a byte
+/// offset panics when it lands inside a multi-byte UTF-8 character.
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else if max > 3 {
-        format!("{}...", &s[..max - 3])
+        let kept: String = s.chars().take(max - 3).collect();
+        format!("{kept}...")
     } else {
-        s[..max].to_string()
+        s.chars().take(max).collect()
     }
 }
 
@@ -922,8 +1011,12 @@ mod tests {
 
         let comp = make_component("lodash", "4.17.21", None);
 
-        let mut dedup_map: HashMap<(String, String), QueryMatch> = HashMap::new();
-        let key = ("lodash".to_string(), "4.17.21".to_string());
+        let mut dedup_map: HashMap<(String, String, String), QueryMatch> = HashMap::new();
+        let key = (
+            "lodash".to_string(),
+            "4.17.21".to_string(),
+            component_identity(&comp),
+        );
 
         dedup_map.insert(key.clone(), build_query_match(&comp, source1));
         dedup_map.entry(key).and_modify(|existing| {
@@ -973,6 +1066,76 @@ mod tests {
         assert_eq!(truncate("short", 10), "short");
         assert_eq!(truncate("long string here", 10), "long st...");
         assert_eq!(truncate("ab", 2), "ab");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_no_panic() {
+        // Regression: a byte-offset slice panicked when the cut landed inside
+        // a multi-byte UTF-8 char ('a'*36 + 'é' + 'x'*10 truncated to 40).
+        let name = format!("{}é{}", "a".repeat(36), "x".repeat(10));
+        let out = truncate(&name, 40);
+        assert!(out.ends_with("..."));
+        assert_eq!(out.chars().count(), 40);
+
+        // Cut exactly at the multi-byte char
+        let s = format!("{}é", "a".repeat(36));
+        assert_eq!(truncate(&s, 37), s);
+        assert_eq!(truncate("ééééé", 2), "éé");
+    }
+
+    #[test]
+    fn test_version_range_excludes_non_semver() {
+        let filter = QueryFilter {
+            version: Some("<2.0.0".to_string()),
+            ..Default::default()
+        };
+
+        // Non-semver version is excluded from a range match (with a one-time
+        // stderr warning), not string-compared.
+        let comp = make_component("foo", "1.5", None);
+        let key = ComponentSortKey::from_component(&comp);
+        assert!(!filter.matches(&comp, &key));
+
+        // Proper semver still matches the range.
+        let comp2 = make_component("foo", "1.5.0", None);
+        let key2 = ComponentSortKey::from_component(&comp2);
+        assert!(filter.matches(&comp2, &key2));
+
+        // A version string literally equal to the range expression must NOT
+        // exact-match (the old fallback compared version vs. range text).
+        let comp3 = make_component("foo", "<2.0.0", None);
+        let key3 = ComponentSortKey::from_component(&comp3);
+        assert!(!filter.matches(&comp3, &key3));
+    }
+
+    #[test]
+    fn test_version_filter_is_range() {
+        assert!(version_filter_is_range("<2.0.0"));
+        assert!(version_filter_is_range(">=1.0, <2.0"));
+        assert!(version_filter_is_range("^1.2"));
+        assert!(version_filter_is_range("~1.2"));
+        assert!(version_filter_is_range("=1.2.3"));
+        assert!(!version_filter_is_range("1.2.3"));
+        assert!(!version_filter_is_range("2.0.0-beta.1"));
+    }
+
+    #[test]
+    fn test_component_identity_purl_over_ecosystem() {
+        let npm = make_component("requests", "2.0.0", Some("pkg:npm/requests@2.0.0"));
+        let pypi = make_component("requests", "2.0.0", Some("pkg:pypi/requests@2.0.0"));
+        assert_ne!(component_identity(&npm), component_identity(&pypi));
+
+        // No purl: fall back to ecosystem
+        let mut a = make_component("requests", "2.0.0", None);
+        a.ecosystem = Some(crate::model::Ecosystem::Npm);
+        let mut b = make_component("requests", "2.0.0", None);
+        b.ecosystem = Some(crate::model::Ecosystem::PyPi);
+        assert_ne!(component_identity(&a), component_identity(&b));
+
+        // Neither: identical (collapse, matching old behavior)
+        let c = make_component("requests", "2.0.0", None);
+        let d = make_component("requests", "2.0.0", None);
+        assert_eq!(component_identity(&c), component_identity(&d));
     }
 
     #[test]

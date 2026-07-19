@@ -56,9 +56,13 @@ fn cli_diff_summary_supports_match_explanations_and_threshold_recommendation() {
         .expect("diff command should run");
 
     assert!(output.status.success(), "{}", stderr(&output));
+    // Explanations go to STDERR so machine-readable stdout (-o json/sarif)
+    // stays parseable; the report itself stays on stdout.
+    let err = stderr(&output);
+    assert!(err.contains("=== Match Explanations ==="));
+    assert!(err.contains("=== Threshold Recommendation ==="));
     let text = stdout(&output);
-    assert!(text.contains("=== Match Explanations ==="));
-    assert!(text.contains("=== Threshold Recommendation ==="));
+    assert!(!text.contains("=== Match Explanations ==="));
     assert!(text.contains("SBOM Diff Summary"));
 }
 
