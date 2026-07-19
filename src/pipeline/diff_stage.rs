@@ -7,7 +7,42 @@ use crate::config::{DiffConfig, FilterConfig, GraphAwareDiffConfig};
 use crate::diff::{DiffEngine, DiffResult, GraphDiffConfig};
 use crate::matching::{FuzzyMatchConfig, MatchingRulesConfig};
 use crate::model::NormalizedSbom;
-use anyhow::Result;
+use anyhow::{Result, bail};
+
+/// Labels accepted by `--severity` and `--graph-impact-threshold`.
+const VALID_LEVELS: [&str; 4] = ["critical", "high", "medium", "low"];
+
+/// Validate user-supplied post-diff filter values up front.
+///
+/// Previously an unknown `--severity` value silently filtered nothing (an
+/// unrecognized label coerces to rank 0, so every vulnerability passes the
+/// `>=` check) and an unknown `--graph-impact-threshold` silently coerced to
+/// `low`. Both are now hard errors (operational error, exit 3 via `main`)
+/// listing the valid values.
+///
+/// # Errors
+///
+/// Returns an error if `filtering.min_severity` or `graph.impact_threshold`
+/// is not one of `critical`, `high`, `medium`, `low`.
+pub fn validate_post_diff_filters(
+    filtering: &FilterConfig,
+    graph: &GraphAwareDiffConfig,
+) -> Result<()> {
+    if let Some(ref sev) = filtering.min_severity
+        && !VALID_LEVELS.contains(&sev.to_lowercase().as_str())
+    {
+        bail!("invalid --severity value '{sev}'; valid values: critical, high, medium, low");
+    }
+    if let Some(ref threshold) = graph.impact_threshold
+        && !VALID_LEVELS.contains(&threshold.to_lowercase().as_str())
+    {
+        bail!(
+            "invalid --graph-impact-threshold value '{threshold}'; \
+             valid values: critical, high, medium, low"
+        );
+    }
+    Ok(())
+}
 
 /// Convert a [`GraphAwareDiffConfig`] (CLI/config representation) into the
 /// engine-level [`GraphDiffConfig`] consumed by the diff engine.
@@ -83,6 +118,11 @@ pub fn compute_diff(
 ) -> Result<DiffResult> {
     let quiet = config.behavior.quiet;
     let fuzzy_config = config.matching.to_fuzzy_config();
+
+    // Reject unknown filter values before doing any work. Callers that want
+    // to fail before parsing validate earlier as well; this is the backstop
+    // for any path that reaches the diff stage directly.
+    validate_post_diff_filters(&config.filtering, &config.graph_diff)?;
 
     // Load matching rules if specified
     let matching_rules = load_matching_rules(config)?;
@@ -205,21 +245,23 @@ fn load_matching_rules(config: &DiffConfig) -> Result<Option<MatchingRulesConfig
     )
 }
 
-/// Print match explanations for modified components to stdout.
+/// Print match explanations for modified components to STDERR.
 ///
-/// Uses `println!()` intentionally — this is user-facing CLI diagnostic output
-/// triggered by `--explain-matches`, not a log message.
+/// This is user-facing CLI diagnostic output triggered by `--explain-matches`.
+/// It must go to stderr: the report itself (including `-o json`/`sarif`/`csv`)
+/// is written to stdout, and interleaving these blocks there corrupts
+/// machine-parseable output.
 fn print_match_explanations(result: &DiffResult) {
-    println!("\n=== Match Explanations ===\n");
+    eprintln!("\n=== Match Explanations ===\n");
     for change in &result.components.modified {
         if let Some(ref match_info) = change.match_info {
-            println!("Component: {}", change.name);
-            println!("  Score: {:.2} ({})", match_info.score, match_info.method);
-            println!("  Reason: {}", match_info.reason);
+            eprintln!("Component: {}", change.name);
+            eprintln!("  Score: {:.2} ({})", match_info.score, match_info.method);
+            eprintln!("  Reason: {}", match_info.reason);
             if !match_info.score_breakdown.is_empty() {
-                println!("  Score breakdown:");
+                eprintln!("  Score breakdown:");
                 for component in &match_info.score_breakdown {
-                    println!(
+                    eprintln!(
                         "    - {}: {:.2} x {:.2} = {:.2}",
                         component.name,
                         component.raw_score,
@@ -229,17 +271,19 @@ fn print_match_explanations(result: &DiffResult) {
                 }
             }
             if !match_info.normalizations.is_empty() {
-                println!("  Normalizations: {}", match_info.normalizations.join(", "));
+                eprintln!("  Normalizations: {}", match_info.normalizations.join(", "));
             }
-            println!();
+            eprintln!();
         }
     }
 }
 
-/// Print threshold recommendation based on SBOMs to stdout.
+/// Print threshold recommendation based on SBOMs to STDERR.
 ///
-/// Uses `println!()` intentionally — this is user-facing CLI diagnostic output
-/// triggered by `--recommend-threshold`, not a log message.
+/// This is user-facing CLI diagnostic output triggered by
+/// `--recommend-threshold`. It must go to stderr: the report itself (including
+/// `-o json`/`sarif`/`csv`) is written to stdout, and interleaving this block
+/// there corrupts machine-parseable output.
 fn print_threshold_recommendation(
     old_sbom: &NormalizedSbom,
     new_sbom: &NormalizedSbom,
@@ -251,22 +295,78 @@ fn print_threshold_recommendation(
     let matcher = FuzzyMatcher::new(fuzzy_config);
 
     let recommendation = adaptive.compute_threshold(old_sbom, new_sbom, &matcher);
-    println!("\n=== Threshold Recommendation ===\n");
-    println!("Recommended threshold: {:.2}", recommendation.threshold);
-    println!("Confidence: {:.0}%", recommendation.confidence * 100.0);
-    println!("Method used: {:?}", recommendation.method);
-    println!("Samples analyzed: {}", recommendation.samples);
-    println!(
+    eprintln!("\n=== Threshold Recommendation ===\n");
+    eprintln!("Recommended threshold: {:.2}", recommendation.threshold);
+    eprintln!("Confidence: {:.0}%", recommendation.confidence * 100.0);
+    eprintln!("Method used: {:?}", recommendation.method);
+    eprintln!("Samples analyzed: {}", recommendation.samples);
+    eprintln!(
         "Match ratio at threshold: {:.1}%",
         recommendation.match_ratio * 100.0
     );
-    println!("\nScore distribution:");
-    println!("  Mean: {:.3}", recommendation.score_stats.mean);
-    println!("  Std dev: {:.3}", recommendation.score_stats.std_dev);
-    println!("  Median: {:.3}", recommendation.score_stats.median);
-    println!(
+    eprintln!("\nScore distribution:");
+    eprintln!("  Mean: {:.3}", recommendation.score_stats.mean);
+    eprintln!("  Std dev: {:.3}", recommendation.score_stats.std_dev);
+    eprintln!("  Median: {:.3}", recommendation.score_stats.median);
+    eprintln!(
         "  Min: {:.3}, Max: {:.3}",
         recommendation.score_stats.min, recommendation.score_stats.max
     );
-    println!();
+    eprintln!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filtering(min_severity: Option<&str>) -> FilterConfig {
+        FilterConfig {
+            min_severity: min_severity.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn graph(threshold: Option<&str>) -> GraphAwareDiffConfig {
+        GraphAwareDiffConfig {
+            impact_threshold: threshold.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn validate_accepts_known_severity_labels_case_insensitively() {
+        for sev in ["critical", "high", "medium", "low", "HIGH", "Critical"] {
+            validate_post_diff_filters(&filtering(Some(sev)), &graph(None)).unwrap();
+        }
+        // No filters at all is fine.
+        validate_post_diff_filters(&filtering(None), &graph(None)).unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_unknown_severity() {
+        let err = validate_post_diff_filters(&filtering(Some("bogus")), &graph(None)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--severity"), "{msg}");
+        assert!(msg.contains("bogus"), "{msg}");
+        assert!(msg.contains("critical, high, medium, low"), "{msg}");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_graph_impact_threshold() {
+        // The threshold must be validated even when graph diffing is not
+        // enabled — the old behavior silently coerced unknown labels to
+        // `low`, which is exactly the silent no-op being fixed.
+        let err = validate_post_diff_filters(&filtering(None), &graph(Some("bogus"))).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--graph-impact-threshold"), "{msg}");
+        assert!(msg.contains("bogus"), "{msg}");
+        assert!(msg.contains("critical, high, medium, low"), "{msg}");
+    }
+
+    #[test]
+    fn validate_accepts_known_graph_impact_thresholds() {
+        for level in ["critical", "high", "medium", "low"] {
+            validate_post_diff_filters(&filtering(None), &graph(Some(level))).unwrap();
+        }
+    }
 }

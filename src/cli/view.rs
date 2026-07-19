@@ -24,6 +24,12 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         );
     }
 
+    // Validate --severity before any parsing or (network) enrichment work so
+    // a typo fails fast instead of after expensive I/O.
+    if let Some(s) = config.min_severity.as_deref() {
+        parse_severity(s)?;
+    }
+
     // Resolve the CRA sidecar once for both the TUI and report paths: an
     // explicit --cra-sidecar that fails to load is a hard error; auto-
     // discovery next to the SBOM stays best-effort.
@@ -189,8 +195,19 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         );
     }
 
+    // Count vulnerabilities BEFORE display filters are applied: the
+    // --fail-on-vuln gate is documented as "if any vulnerabilities are
+    // present in the SBOM", so display filters (--severity / --ecosystem /
+    // --vulnerable-only) must not mask the exit code.
+    let vuln_count: usize = parsed
+        .sbom()
+        .components
+        .values()
+        .map(|c| c.vulnerabilities.len())
+        .sum();
+
     // Apply filters to SBOM
-    let filtered_count = apply_view_filters(parsed.sbom_mut(), &config);
+    let filtered_count = apply_view_filters(parsed.sbom_mut(), &config)?;
     if filtered_count > 0 {
         tracing::info!(
             "Filtered to {} components (removed {})",
@@ -207,14 +224,6 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
     // Output the result
     let output_target = OutputTarget::from_option(config.output.file.clone());
     let effective_output = auto_detect_format(config.output.format, &output_target);
-
-    // Check for vulnerabilities before rendering (for --fail-on-vuln exit code)
-    let vuln_count: usize = parsed
-        .sbom()
-        .components
-        .values()
-        .map(|c| c.vulnerabilities.len())
-        .sum();
 
     // Resolve BOM profile (CLI override or auto-detect)
     let bom_profile = config
@@ -263,12 +272,19 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
     Ok(crate::pipeline::exit_codes::SUCCESS)
 }
 
-/// Apply view filters to the SBOM, returns number of components removed
-pub fn apply_view_filters(sbom: &mut NormalizedSbom, config: &ViewConfig) -> usize {
+/// Apply view filters to the SBOM, returns number of components removed.
+///
+/// Errors if `--severity` carries an unrecognized value (which previously
+/// disabled severity filtering silently).
+pub fn apply_view_filters(sbom: &mut NormalizedSbom, config: &ViewConfig) -> Result<usize> {
     let original_count = sbom.component_count();
 
-    // Parse minimum severity if provided
-    let min_severity = config.min_severity.as_ref().map(|s| parse_severity(s));
+    // Parse minimum severity if provided (strict: unknown values hard-error)
+    let min_severity = config
+        .min_severity
+        .as_deref()
+        .map(parse_severity)
+        .transpose()?;
 
     // Parse ecosystem filter if provided
     let ecosystem_filter = config.ecosystem_filter.as_ref().map(|e| e.to_lowercase());
@@ -320,17 +336,22 @@ pub fn apply_view_filters(sbom: &mut NormalizedSbom, config: &ViewConfig) -> usi
         sbom.components.shift_remove(key);
     }
 
-    original_count - sbom.component_count()
+    Ok(original_count - sbom.component_count())
 }
 
-/// Parse severity string into Severity enum
-fn parse_severity(s: &str) -> Severity {
+/// Parse a `--severity` filter value strictly.
+///
+/// An unrecognized value used to map to [`Severity::Unknown`] (threshold
+/// order 0), which silently disabled the filter entirely — `--severity
+/// banana` behaved like no filter at all. It is now a hard error listing the
+/// valid values.
+fn parse_severity(s: &str) -> Result<Severity> {
     match s.to_lowercase().as_str() {
-        "critical" => Severity::Critical,
-        "high" => Severity::High,
-        "medium" => Severity::Medium,
-        "low" => Severity::Low,
-        _ => Severity::Unknown,
+        "critical" => Ok(Severity::Critical),
+        "high" => Ok(Severity::High),
+        "medium" => Ok(Severity::Medium),
+        "low" => Ok(Severity::Low),
+        _ => anyhow::bail!("invalid --severity '{s}'; valid values: critical, high, medium, low"),
     }
 }
 
@@ -393,12 +414,25 @@ mod tests {
 
     #[test]
     fn test_parse_severity() {
-        assert!(matches!(parse_severity("critical"), Severity::Critical));
-        assert!(matches!(parse_severity("HIGH"), Severity::High));
-        assert!(matches!(parse_severity("Medium"), Severity::Medium));
-        assert!(matches!(parse_severity("low"), Severity::Low));
-        assert!(matches!(parse_severity("unknown"), Severity::Unknown));
-        assert!(matches!(parse_severity("invalid"), Severity::Unknown));
+        assert!(matches!(parse_severity("critical"), Ok(Severity::Critical)));
+        assert!(matches!(parse_severity("HIGH"), Ok(Severity::High)));
+        assert!(matches!(parse_severity("Medium"), Ok(Severity::Medium)));
+        assert!(matches!(parse_severity("low"), Ok(Severity::Low)));
+    }
+
+    #[test]
+    fn test_parse_severity_rejects_unknown() {
+        // Regression: unknown values mapped to Severity::Unknown (order 0),
+        // which passed every vulnerability and silently disabled the filter.
+        for bad in ["banana", "unknown", "info", "none", ""] {
+            let err = parse_severity(bad).expect_err("should reject");
+            let msg = err.to_string();
+            assert!(msg.contains("invalid --severity"), "message: {msg}");
+            assert!(
+                msg.contains("critical, high, medium, low"),
+                "message should list valid values: {msg}"
+            );
+        }
     }
 
     #[test]
@@ -423,10 +457,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_apply_view_filters_no_filters() {
-        let mut sbom = NormalizedSbom::default();
-        let config = ViewConfig {
+    fn test_view_config(min_severity: Option<&str>) -> ViewConfig {
+        ViewConfig {
             sbom_path: std::path::PathBuf::from("test.json"),
             output: crate::config::OutputConfig {
                 format: ReportFormat::Summary,
@@ -437,7 +469,7 @@ mod tests {
                 export_template: None,
             },
             validate_ntia: false,
-            min_severity: None,
+            min_severity: min_severity.map(str::to_string),
             vulnerable_only: false,
             ecosystem_filter: None,
             fail_on_vuln: false,
@@ -445,9 +477,24 @@ mod tests {
             enrichment: crate::config::EnrichmentConfig::default(),
             cra_sidecar_path: None,
             cra_product_class: None,
-        };
+        }
+    }
 
-        let removed = apply_view_filters(&mut sbom, &config);
+    #[test]
+    fn test_apply_view_filters_no_filters() {
+        let mut sbom = NormalizedSbom::default();
+        let config = test_view_config(None);
+
+        let removed = apply_view_filters(&mut sbom, &config).expect("no filters should succeed");
         assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_apply_view_filters_invalid_severity_errors() {
+        let mut sbom = NormalizedSbom::default();
+        let config = test_view_config(Some("banana"));
+
+        let err = apply_view_filters(&mut sbom, &config).expect_err("should reject");
+        assert!(err.to_string().contains("invalid --severity"));
     }
 }

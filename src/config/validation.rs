@@ -231,6 +231,23 @@ impl Validatable for EnrichmentConfig {
             });
         }
 
+        // Keep the validator in lockstep with the published JSON Schema
+        // (`schemars(range(min = 1))`): a TTL or timeout of 0 must fail
+        // `config check`, not silently disable caching / hang requests.
+        if self.cache_ttl_hours == 0 {
+            errors.push(ConfigError {
+                field: "enrichment.cache_ttl_hours".to_string(),
+                message: "Cache TTL must be at least 1 hour".to_string(),
+            });
+        }
+
+        if self.timeout_secs == 0 {
+            errors.push(ConfigError {
+                field: "enrichment.timeout_secs".to_string(),
+                message: "API timeout must be at least 1 second".to_string(),
+            });
+        }
+
         // Every URL override must be a well-formed http(s) URL with a host.
         // These point the enricher at a network endpoint that supplies
         // SECURITY data (which CVEs affect you); an unvalidated override could
@@ -553,6 +570,35 @@ mod tests {
             ..EnrichmentConfig::default()
         };
         assert!(!invalid.is_valid());
+    }
+
+    #[test]
+    fn enrichment_config_rejects_zero_ttl_and_timeout() {
+        // The JSON Schema declares minimum 1 for both; the runtime validator
+        // must agree so `config check` and the schema can't disagree.
+        let zero_ttl = EnrichmentConfig {
+            cache_ttl_hours: 0,
+            ..EnrichmentConfig::default()
+        };
+        assert!(
+            zero_ttl
+                .validate()
+                .iter()
+                .any(|e| e.field == "enrichment.cache_ttl_hours"),
+            "cache_ttl_hours: 0 must be a config error"
+        );
+
+        let zero_timeout = EnrichmentConfig {
+            timeout_secs: 0,
+            ..EnrichmentConfig::default()
+        };
+        assert!(
+            zero_timeout
+                .validate()
+                .iter()
+                .any(|e| e.field == "enrichment.timeout_secs"),
+            "timeout_secs: 0 must be a config error"
+        );
     }
 
     #[test]

@@ -17,8 +17,16 @@ use std::path::PathBuf;
 /// This is the top-level configuration struct that aggregates all configuration
 /// options. It can be constructed from CLI arguments, config files, or both
 /// (with CLI overriding file settings).
+///
+/// `deny_unknown_fields` (here and on every nested section) makes a typo'd
+/// key or section a hard load error naming the offending field, instead of
+/// silently dropping the user's settings while `config check` reports the
+/// file as valid. This intentionally makes stale configs fail loudly
+/// (matches the CRA-sidecar precedent). Because the JSON Schema is generated
+/// from these types via `schemars`, `additionalProperties: false` follows
+/// automatically.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     /// Matching configuration (thresholds, presets)
     pub matching: MatchingConfig,
@@ -333,7 +341,7 @@ impl TuiPreferences {
 
 /// TUI-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TuiConfig {
     /// Theme name
     pub theme: ThemeName,
@@ -539,7 +547,7 @@ pub struct VexConfig {
 
 /// Output-related configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct OutputConfig {
     /// Output format
     pub format: ReportFormat,
@@ -579,7 +587,7 @@ impl Default for OutputConfig {
 /// to avoid loading entire SBOMs into memory. This is essential for SBOMs
 /// with thousands of components.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct StreamingConfig {
     /// Enable streaming mode automatically for files larger than this threshold (in bytes).
     /// Default: 10 MB (`10_485_760` bytes)
@@ -650,7 +658,7 @@ impl StreamingConfig {
 
 /// Matching and comparison configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MatchingConfig {
     /// Fuzzy matching preset
     pub fuzzy_preset: FuzzyPreset,
@@ -693,7 +701,7 @@ impl MatchingConfig {
 
 /// Filtering options for diff results
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FilterConfig {
     /// Only show items with changes
     pub only_changes: bool,
@@ -711,7 +719,7 @@ pub struct FilterConfig {
 
 /// Behavior flags for diff operations
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BehaviorConfig {
     /// Exit with code 2 if new vulnerabilities are introduced
     pub fail_on_vuln: bool,
@@ -730,7 +738,7 @@ pub struct BehaviorConfig {
 
 /// Graph-aware diffing configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GraphAwareDiffConfig {
     /// Enable graph-aware diffing
     pub enabled: bool,
@@ -763,7 +771,7 @@ impl GraphAwareDiffConfig {
 
 /// Custom matching rules configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MatchingRulesPathConfig {
     /// Path to matching rules YAML file
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -774,7 +782,7 @@ pub struct MatchingRulesPathConfig {
 
 /// Ecosystem-specific rules configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct EcosystemRulesConfig {
     /// Path to ecosystem rules configuration file
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -797,7 +805,7 @@ pub struct EcosystemRulesConfig {
 /// so every CLI spelling works in the file too; invalid values are rejected
 /// at config-validation time with the list of valid options.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ComplianceConfig {
     /// Default standard(s) for `validate --standard`
     /// (e.g. `[ntia, cra, cra-phase1]`; aliases accepted)
@@ -830,7 +838,7 @@ pub struct ComplianceConfig {
 /// This configuration is always defined regardless of the `enrichment` feature flag.
 /// When the feature is disabled, the configuration is silently ignored at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct EnrichmentConfig {
     /// Enable enrichment (if false, no enrichment is performed)
     pub enabled: bool,

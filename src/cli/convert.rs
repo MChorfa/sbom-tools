@@ -4,12 +4,12 @@
 //! single target format from the canonical model. A fidelity report is written
 //! to stderr describing synthesized and dropped fields (honest about lossiness).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::parsers::parse_sbom;
-use crate::pipeline::exit_codes;
+use crate::parsers::parse_sbom_str;
+use crate::pipeline::{exit_codes, read_input};
 use crate::serialization::emit::{self, EmitError, EmitTarget};
 
 /// Run the convert command.
@@ -19,7 +19,7 @@ use crate::serialization::emit::{self, EmitError, EmitTarget};
 /// format-specific blocks the canonical model can't fully reconstruct
 /// (`cryptoProperties`, `evidence`) are spliced back where present.
 pub fn run_convert(
-    file: &PathBuf,
+    file: &Path,
     target: &str,
     output_file: Option<&PathBuf>,
     preserve: bool,
@@ -30,8 +30,10 @@ pub fn run_convert(
         return Ok(exit_codes::ERROR);
     };
 
-    let raw_json = std::fs::read_to_string(file)?;
-    let mut sbom = parse_sbom(file)?;
+    // Shared '-'-aware input path (same as view/validate): supports piping an
+    // SBOM via stdin and gives contextful errors instead of a raw ENOENT.
+    let raw_json = read_input(file)?;
+    let mut sbom = parse_sbom_str(&raw_json)?;
 
     if preserve {
         emit::preserve_source_json(&raw_json, &mut sbom);

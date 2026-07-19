@@ -46,8 +46,8 @@ pub fn output_report(
     // sarif` renders the same sidecar-driven verdicts as the interactive TUI.
     let (old_cra, new_cra) = if !use_streaming && format_uses_compliance(effective_output) {
         (
-            Some(cra_phase2_check(&config.paths.old, old_sbom)),
-            Some(cra_phase2_check(&config.paths.new, new_sbom)),
+            Some(cra_phase2_check(&config.paths.old, old_sbom)?),
+            Some(cra_phase2_check(&config.paths.new, new_sbom)?),
         )
     } else {
         (None, None)
@@ -88,8 +88,11 @@ pub fn output_report(
 /// Auto-discover the CRA sidecar adjacent to an SBOM path.
 ///
 /// Looks for `<sbom>.cra.{json,yaml,yml}` (and the `-cra.*` / inner-stem
-/// variants handled by [`CraSidecarMetadata::find_for_sbom`]) next to the
+/// variants handled by [`CraSidecarMetadata::discover_for_sbom`]) next to the
 /// SBOM. Stdin (`-`) has no adjacent file, so it never resolves a sidecar.
+/// A discovered-but-invalid sidecar is a hard error, matching the explicit
+/// `--cra-sidecar` contract — the trust decision must not depend on how the
+/// file was found.
 ///
 /// The `diff` command has no `--cra-sidecar` / `--cra-product-class` flags, so
 /// auto-discovery is the only sidecar channel for diffs; the sidecar's own
@@ -97,16 +100,16 @@ pub fn output_report(
 /// Shared by the diff TUI path (`cli/diff.rs`) and this report stage so both
 /// resolve sidecars identically.
 ///
-/// [`CraSidecarMetadata::find_for_sbom`]: crate::model::CraSidecarMetadata::find_for_sbom
+/// [`CraSidecarMetadata::discover_for_sbom`]: crate::model::CraSidecarMetadata::discover_for_sbom
 /// [`ComplianceChecker::effective_product_class`]: crate::quality::ComplianceChecker::effective_product_class
-#[must_use]
 pub fn discover_cra_sidecar(
     sbom_path: &std::path::Path,
-) -> Option<crate::model::CraSidecarMetadata> {
+) -> Result<Option<crate::model::CraSidecarMetadata>> {
     if super::is_stdin_path(sbom_path) {
-        None
+        Ok(None)
     } else {
-        crate::model::CraSidecarMetadata::find_for_sbom(sbom_path)
+        crate::model::CraSidecarMetadata::discover_for_sbom(sbom_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load auto-discovered CRA sidecar: {e}"))
     }
 }
 
@@ -118,13 +121,13 @@ pub fn discover_cra_sidecar(
 fn cra_phase2_check(
     sbom_path: &std::path::Path,
     sbom: &NormalizedSbom,
-) -> crate::quality::ComplianceResult {
+) -> Result<crate::quality::ComplianceResult> {
     let mut checker =
         crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2);
-    if let Some(sidecar) = discover_cra_sidecar(sbom_path) {
+    if let Some(sidecar) = discover_cra_sidecar(sbom_path)? {
         checker = checker.with_sidecar(sidecar);
     }
-    checker.check(sbom)
+    Ok(checker.check(sbom))
 }
 
 /// Whether a report format renders the pre-computed CRA compliance results.

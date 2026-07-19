@@ -18,7 +18,13 @@ use crate::model::{LicenseExpression, LicenseFamily, NormalizedSbom};
 use serde::{Deserialize, Serialize};
 
 /// License policy configuration
+///
+/// `deny_unknown_fields` makes a typo'd key (e.g. `"denied"` instead of
+/// `"deny"`) a hard parse error naming the unknown field, instead of being
+/// silently ignored and yielding an allow-everything policy. Same precedent
+/// as the CRA sidecar.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LicensePolicyConfig {
     /// Allowed license SPDX IDs (glob patterns supported: `BSD-*`)
     #[serde(default)]
@@ -207,10 +213,17 @@ fn evaluate_expression(expr: &LicenseExpression, config: &LicensePolicyConfig) -
 }
 
 /// Evaluate all component licenses against a policy.
+///
+/// When `strict` is true, licenses that would merely need review (copyleft
+/// families on the review list, or licenses missing from a non-empty allow
+/// list) are treated as denied, so they gate CI the same way as an explicit
+/// deny. When `strict` is false, review findings are reported but never fail
+/// the policy.
 #[must_use]
 pub fn evaluate_license_policy(
     sbom: &NormalizedSbom,
     config: &LicensePolicyConfig,
+    strict: bool,
 ) -> LicensePolicyResult {
     let mut allowed_count = 0;
     let mut denied_count = 0;
@@ -248,12 +261,20 @@ pub fn evaluate_license_policy(
                     });
                 }
                 PolicyDecision::NeedsReview => {
-                    component_review = true;
+                    // In strict mode, review-needed licenses are policy
+                    // failures — otherwise --strict can never gate.
+                    let decision = if strict {
+                        component_denied = true;
+                        PolicyDecision::Denied
+                    } else {
+                        component_review = true;
+                        PolicyDecision::NeedsReview
+                    };
                     violations.push(LicensePolicyViolation {
                         component: comp.name.clone(),
                         version: comp.version.clone(),
                         license: license.expression.clone(),
-                        decision: PolicyDecision::NeedsReview,
+                        decision,
                         family: license.family(),
                     });
                 }
@@ -337,7 +358,7 @@ mod tests {
     fn permissive_policy_allows_all() {
         let sbom = make_sbom_with_licenses(&["MIT", "Apache-2.0", "GPL-3.0-only"]);
         let config = LicensePolicyConfig::permissive();
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(result.passed);
         assert_eq!(result.denied_count, 0);
     }
@@ -346,7 +367,7 @@ mod tests {
     fn strict_policy_denies_agpl() {
         let sbom = make_sbom_with_licenses(&["MIT", "AGPL-3.0-only"]);
         let config = LicensePolicyConfig::strict_permissive();
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(!result.passed);
         assert_eq!(result.denied_count, 1);
     }
@@ -355,16 +376,66 @@ mod tests {
     fn strict_policy_flags_gpl_for_review() {
         let sbom = make_sbom_with_licenses(&["MIT", "GPL-3.0-only"]);
         let config = LicensePolicyConfig::strict_permissive();
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(result.passed); // review doesn't fail
         assert_eq!(result.review_count, 1);
+    }
+
+    #[test]
+    fn strict_mode_denies_review_licenses() {
+        let sbom = make_sbom_with_licenses(&["MIT", "GPL-3.0-only"]);
+        let config = LicensePolicyConfig::strict_permissive();
+        let result = evaluate_license_policy(&sbom, &config, true);
+        assert!(!result.passed);
+        assert_eq!(result.denied_count, 1);
+        assert_eq!(result.review_count, 0);
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.license == "GPL-3.0-only" && v.decision == PolicyDecision::Denied)
+        );
+    }
+
+    #[test]
+    fn strict_mode_denies_off_allow_list_licenses() {
+        let sbom = make_sbom_with_licenses(&["Artistic-2.0"]);
+        let config = LicensePolicyConfig {
+            allow: vec!["MIT".to_string()],
+            ..Default::default()
+        };
+        let result = evaluate_license_policy(&sbom, &config, true);
+        assert!(!result.passed);
+        assert_eq!(result.denied_count, 1);
+    }
+
+    #[test]
+    fn policy_config_rejects_unknown_fields() {
+        let err = serde_json::from_str::<LicensePolicyConfig>(r#"{"denied": ["GPL-*"]}"#)
+            .expect_err("typo'd key must be a hard parse error");
+        let msg = err.to_string();
+        assert!(msg.contains("denied"), "error should name the field: {msg}");
+        assert!(
+            msg.contains("deny"),
+            "error should list valid fields: {msg}"
+        );
+    }
+
+    #[test]
+    fn policy_config_accepts_known_fields() {
+        let config: LicensePolicyConfig = serde_json::from_str(
+            r#"{"allow": ["MIT"], "deny": ["AGPL-*"], "review": ["GPL-*"], "fail_on_conflict": false}"#,
+        )
+        .expect("all documented keys must parse");
+        assert_eq!(config.allow, vec!["MIT"]);
+        assert!(!config.fail_on_conflict);
     }
 
     #[test]
     fn undeclared_licenses_flagged() {
         let sbom = make_sbom_with_licenses(&["MIT", ""]);
         let config = LicensePolicyConfig::strict_permissive();
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert_eq!(result.undeclared_count, 1);
     }
 
@@ -385,7 +456,7 @@ mod tests {
             fail_on_conflict: true,
             ..Default::default()
         };
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(!result.passed);
         assert_eq!(result.denied_count, 1);
         assert!(result.violations.iter().any(|v| {
@@ -400,7 +471,7 @@ mod tests {
             fail_on_conflict: false,
             ..Default::default()
         };
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(result.passed);
         assert_eq!(result.denied_count, 0);
     }
@@ -409,7 +480,7 @@ mod tests {
     fn concluded_only_license_evaluated() {
         let sbom = make_sbom_with_component(&[], Some("AGPL-3.0-only"));
         let config = LicensePolicyConfig::strict_permissive();
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(!result.passed);
         assert_eq!(result.denied_count, 1);
         assert_eq!(result.undeclared_count, 0);
@@ -423,12 +494,12 @@ mod tests {
         };
 
         let choice = make_sbom_with_component(&["MIT OR GPL-3.0-only"], None);
-        let result = evaluate_license_policy(&choice, &config);
+        let result = evaluate_license_policy(&choice, &config, false);
         assert!(result.passed);
         assert_eq!(result.denied_count, 0);
 
         let no_choice = make_sbom_with_component(&["GPL-2.0-only OR GPL-3.0-only"], None);
-        let result = evaluate_license_policy(&no_choice, &config);
+        let result = evaluate_license_policy(&no_choice, &config, false);
         assert!(!result.passed);
         assert_eq!(result.denied_count, 1);
     }
@@ -440,7 +511,7 @@ mod tests {
             ..Default::default()
         };
         let sbom = make_sbom_with_component(&["MIT AND GPL-3.0-only"], None);
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(!result.passed);
         assert_eq!(result.denied_count, 1);
     }
@@ -453,7 +524,7 @@ mod tests {
             ..Default::default()
         };
         let sbom = make_sbom_with_component(&["MIT OR GPL-3.0-only"], None);
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(result.passed);
         assert_eq!(result.allowed_count, 1);
         assert_eq!(result.review_count, 0);
@@ -467,14 +538,14 @@ mod tests {
             allow: vec!["Apache-2.0".to_string()],
             ..Default::default()
         };
-        let result = evaluate_license_policy(&sbom, &allow_config);
+        let result = evaluate_license_policy(&sbom, &allow_config, false);
         assert_eq!(result.allowed_count, 1);
 
         let deny_config = LicensePolicyConfig {
             deny: vec!["Apache-2.0".to_string()],
             ..Default::default()
         };
-        let result = evaluate_license_policy(&sbom, &deny_config);
+        let result = evaluate_license_policy(&sbom, &deny_config, false);
         assert_eq!(result.denied_count, 1);
     }
 
@@ -485,7 +556,7 @@ mod tests {
             ..Default::default()
         };
         let sbom = make_sbom_with_component(&["Commercial EULA v2"], None);
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert!(!result.passed);
         assert_eq!(result.denied_count, 1);
     }
@@ -497,7 +568,7 @@ mod tests {
             allow: vec!["MIT".to_string()],
             ..Default::default()
         };
-        let result = evaluate_license_policy(&sbom, &config);
+        let result = evaluate_license_policy(&sbom, &config, false);
         assert_eq!(result.review_count, 1); // Artistic-2.0 not on allow list
         assert_eq!(result.allowed_count, 1);
     }

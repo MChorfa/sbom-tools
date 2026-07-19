@@ -26,7 +26,7 @@ mod watch;
 #[cfg(feature = "enrichment")]
 pub use cache::{CacheAction, run_cache};
 pub use convert::run_convert;
-pub use cra_docs::run_cra_docs;
+pub use cra_docs::{run_cra_docs, run_cra_docs_with_force};
 pub use cra_standards_watch::{
     OnlineProbe, TrackedStandard, WatchOutputFormat, cra_catalogue, probe_cra_standards,
     run_cra_standards_watch,
@@ -77,11 +77,12 @@ pub(crate) fn ensure_output_format_supported(
 
 /// Resolve the CRA sidecar for a command.
 ///
-/// An **explicitly** requested sidecar (CLI flag or config file) that fails
-/// to load is a hard error — the user asked for that metadata, so silently
-/// scoring without it would misreport compliance. Auto-discovery (no explicit
-/// path) stays best-effort: `find_for_sbom` logs a warning for a discovered-
-/// but-broken candidate and returns `None`.
+/// A sidecar that fails to load is a hard error whether it was **explicitly**
+/// requested (CLI flag or config file) or **auto-discovered** next to the
+/// SBOM: silently scoring without discovered-but-broken metadata shifts the
+/// verdict with only a stderr warning, and the identical file passed via
+/// `--cra-sidecar` already hard-errors — the trust decision must not depend
+/// on how the file was found.
 pub(crate) fn load_cra_sidecar(
     explicit: Option<&std::path::Path>,
     sbom_path: &std::path::Path,
@@ -90,7 +91,8 @@ pub(crate) fn load_cra_sidecar(
         Some(p) => crate::model::CraSidecarMetadata::from_file(p)
             .map(Some)
             .map_err(|e| anyhow::anyhow!("Failed to load CRA sidecar from {}: {e}", p.display())),
-        None => Ok(crate::model::CraSidecarMetadata::find_for_sbom(sbom_path)),
+        None => crate::model::CraSidecarMetadata::discover_for_sbom(sbom_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load auto-discovered CRA sidecar: {e}")),
     }
 }
 

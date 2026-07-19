@@ -27,7 +27,7 @@ use sbom_tools::{
     reports::{ReportFormat, ReportType},
     watch::parse_duration,
 };
-use std::io::{self, Write as _};
+use std::io::{self, IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -51,13 +51,17 @@ const fn build_long_version() -> &'static str {
 #[command(version, long_version = build_long_version())]
 #[command(about = "Semantic SBOM diff and analysis tool", long_about = None)]
 #[command(after_help = "EXIT CODES:
-    0  No changes detected (or --no-fail-on-change)
-    1  Changes detected / no query matches
-    2  Vulnerabilities introduced
-    3  Error occurred
+    0  Success / gate passed
+    1  Gate failed: --fail-on-change, --min-score, --fail-on-noncompliant,
+       query with no matches, vex status/filter --actionable-only,
+       verify audit-hashes gate
+    2  Command-line usage error; also vulnerabilities introduced
+       (diff/view --fail-on-vuln)
+    3  Operational error (I/O, parse, config, invalid values)
     4  VEX gaps found (--fail-on-vex-gap)
-    5  License policy violations found
+    5  License policy violations found (license-check)
     6  Actively exploited (KEV) vulnerability introduced (--fail-on-kev)
+    7  ML performance metric regressed (diff --fail-on-ml-regression)
 
 EXAMPLES:
   Comparing SBOMs:
@@ -92,8 +96,8 @@ EXAMPLES:
     sbom-tools license-check app.cdx.json --strict
 
   VEX operations:
-    sbom-tools vex status --sbom app.json --vex vex.json
-    sbom-tools vex apply --sbom app.json --vex vex.json -O enriched.json
+    sbom-tools vex status app.json --vex vex.json
+    sbom-tools vex apply app.json --vex vex.json -O enriched.json
 
   SBOM operations (enrich, filter, merge):
     sbom-tools enrich app.cdx.json --enrich-vulns --enrich-eol -O enriched.json
@@ -102,7 +106,7 @@ EXAMPLES:
 
   Monitoring:
     sbom-tools watch --dir ./sboms --enrich-vulns --exit-on-change
-    sbom-tools verify hash app.cdx.json --algorithm sha256
+    sbom-tools verify hash app.cdx.json --hash-file app.cdx.json.sha256
 
 For more details on any command: sbom-tools <command> --help")]
 struct Cli {
@@ -134,8 +138,14 @@ struct Cli {
 
     /// Offline mode: never make network calls; enrichment is served purely from
     /// cache (including TTL-expired entries, with a staleness warning). For
-    /// air-gapped environments. Also settable via `SBOM_TOOLS_OFFLINE`.
-    #[arg(long, global = true, env = "SBOM_TOOLS_OFFLINE")]
+    /// air-gapped environments. Also settable via `SBOM_TOOLS_OFFLINE`
+    /// (accepted values, case-insensitive: 1/0, true/false, yes/no, on/off).
+    #[arg(
+        long,
+        global = true,
+        env = "SBOM_TOOLS_OFFLINE",
+        value_parser = parse_env_bool
+    )]
     offline: bool,
 
     #[command(subcommand)]
@@ -276,15 +286,66 @@ fn seed_enrichment(
     config
 }
 
+/// Build the effective `EnrichmentConfig` for `vex apply|status|filter`,
+/// layering the CLI enrichment flags over the config file's `enrichment:`
+/// block — the same precedence [`seed_enrichment`] applies for diff/view/
+/// query. (`vex` has its own flat argument struct instead of
+/// [`SharedEnrichmentArgs`], so it needs a dedicated seeder.)
+///
+/// `vex export` never routes through here: it exposes no enrichment flags and
+/// always runs with enrichment disabled.
+fn seed_vex_enrichment(
+    args: &VexArgs,
+    sub: Option<&ArgMatches>,
+    app: &AppConfig,
+    offline: bool,
+) -> EnrichmentConfig {
+    let cli = EnrichmentConfig {
+        enabled: args.enrich_vulns,
+        provider: "osv".to_string(),
+        cache_ttl_hours: args.vuln_cache_ttl,
+        max_concurrent: 10,
+        cache_dir: args
+            .vuln_cache_dir
+            .clone()
+            .or_else(|| Some(dirs::osv_cache_dir())),
+        bypass_cache: args.refresh_vulns,
+        timeout_secs: args.api_timeout,
+        enable_eol: args.enrich_eol,
+        vex_paths: Vec::new(),
+        ..Default::default()
+    };
+    let cli_touched = cli.enabled
+        || cli.enable_eol
+        || arg_was_set_sub(sub, "vuln_cache_dir")
+        || arg_was_set_sub(sub, "vuln_cache_ttl")
+        || arg_was_set_sub(sub, "api_timeout")
+        || arg_was_set_sub(sub, "refresh_vulns");
+    let mut config = match (&app.enrichment, cli_touched) {
+        (Some(file), false) => {
+            let mut file = file.clone();
+            // VEX documents are threaded separately via `VexConfig::vex_paths`
+            // (the CLI `--vex` flags); keeping the file's paths here would
+            // apply the overlay twice.
+            file.vex_paths = Vec::new();
+            file
+        }
+        _ => cli,
+    };
+    config.offline = offline || config.offline;
+    config
+}
+
 /// Arguments for the `diff` subcommand
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
-    0  No changes detected (or --no-fail-on-change)
+    0  Success (changes alone exit 0 without --fail-on-change)
     1  Changes detected (--fail-on-change)
-    2  Vulnerabilities introduced (--fail-on-vuln)
-    3  Error occurred
+    2  Vulnerabilities introduced (--fail-on-vuln); also CLI usage errors
+    3  Operational error (I/O, parse, config, invalid values)
     4  VEX gaps found (--fail-on-vex-gap)
     6  Actively exploited (KEV) vulnerability introduced (--fail-on-kev)
+    7  ML performance metric regressed (--fail-on-ml-regression)
 
 EXAMPLES:
     sbom-tools diff old.cdx.json new.cdx.json                    # Interactive TUI
@@ -354,7 +415,7 @@ struct DiffArgs {
     graph_max_depth: u32,
 
     /// Minimum impact level to include in graph diff output (low, medium, high, critical)
-    #[arg(long, default_value = "low")]
+    #[arg(long, default_value = "low", value_parser = ["low", "medium", "high", "critical"])]
     graph_impact_threshold: String,
 
     /// Comma-separated list of relationship types to include in graph diff
@@ -378,7 +439,7 @@ struct DiffArgs {
     #[arg(long, alias = "exclude-vex-not-affected")]
     exclude_vex_resolved: bool,
 
-    /// Exit with error if introduced vulnerabilities lack VEX statements (CI gate)
+    /// Exit with code 4 if introduced vulnerabilities lack VEX statements (CI gate)
     #[arg(long)]
     fail_on_vex_gap: bool,
 
@@ -450,8 +511,8 @@ struct ViewArgs {
     fail_on_vuln: bool,
 
     /// BOM type override (sbom, cbom, aibom). Auto-detected from content if omitted
-    #[arg(long, value_name = "TYPE")]
-    bom_type: Option<String>,
+    #[arg(long, value_name = "TYPE", value_parser = parse_bom_type)]
+    bom_type: Option<sbom_tools::BomProfile>,
 
     /// Path to a CRA sidecar metadata file (JSON or YAML).
     /// If omitted, auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
@@ -473,13 +534,14 @@ struct ViewArgs {
 #[command(after_help = "EXIT CODES:
     0  Compliant (no errors; no warnings with --fail-on-warning)
     1  Compliance errors found (non-compliant)
-    2  Compliance warnings found (only with --fail-on-warning)
+    2  Compliance warnings found (only with --fail-on-warning); also
+       command-line parse errors
+    3  Operational error (unsupported output format, invalid --as-of /
+       --cra-product-class / --cra-sidecar, broken config file, I/O)
 
-    The gate codes above only apply to runs that completed a validation.
-    Usage and configuration errors (unsupported output format, invalid
-    --as-of / --cra-product-class / --cra-sidecar, broken config file)
-    also exit 1, and command-line parse errors exit 2 — so a nonzero exit
-    is only a compliance verdict when the expected report was produced.
+    The gate codes (0/1/warning-2) only apply to runs that completed a
+    validation — a nonzero exit is only a compliance verdict when the
+    expected report was produced.
 
 EXAMPLES:
     sbom-tools validate app.cdx.json                              # NTIA minimum
@@ -548,7 +610,11 @@ struct ValidateArgs {
 
 /// Arguments for the `diff-multi` subcommand
 #[derive(Parser)]
-#[command(after_help = "EXAMPLES:
+#[command(after_help = "EXIT CODES:
+    Gates: 1 changes (--fail-on-change), 2 vulnerabilities (--fail-on-vuln),
+    4 VEX gaps (--fail-on-vex-gap). Operational errors exit 3.
+
+EXAMPLES:
     sbom-tools diff-multi baseline.json target1.json target2.json
     sbom-tools diff-multi baseline.json devices/*.json -o json
     sbom-tools diff-multi base.json t1.json t2.json --enrich-vulns --fail-on-vuln")]
@@ -585,7 +651,7 @@ struct DiffMultiArgs {
     graph_max_depth: u32,
 
     /// Minimum impact level for graph diff output (low, medium, high, critical)
-    #[arg(long, default_value = "low")]
+    #[arg(long, default_value = "low", value_parser = ["low", "medium", "high", "critical"])]
     graph_impact_threshold: String,
 
     /// Relationship types to include in graph diff (comma-separated, e.g., "DependsOn,DevDependsOn")
@@ -608,7 +674,7 @@ struct DiffMultiArgs {
     #[arg(long)]
     exclude_vex_resolved: bool,
 
-    /// Exit with error if introduced vulnerabilities lack VEX statements
+    /// Exit with code 4 if introduced vulnerabilities lack VEX statements
     #[arg(long)]
     fail_on_vex_gap: bool,
 
@@ -618,7 +684,11 @@ struct DiffMultiArgs {
 
 /// Arguments for the `timeline` subcommand
 #[derive(Parser)]
-#[command(after_help = "EXAMPLES:
+#[command(after_help = "EXIT CODES:
+    Gates: 1 changes (--fail-on-change), 2 vulnerabilities (--fail-on-vuln),
+    4 VEX gaps (--fail-on-vex-gap). Operational errors exit 3.
+
+EXAMPLES:
     sbom-tools timeline v1.0.json v1.1.json v1.2.json             # Version evolution
     sbom-tools timeline releases/*.json --enrich-vulns -o json     # Vuln trend report
     sbom-tools timeline *.json --fail-on-vuln --fail-on-change     # CI gate")]
@@ -648,7 +718,7 @@ struct TimelineArgs {
     graph_max_depth: u32,
 
     /// Minimum impact level for graph diff output (low, medium, high, critical)
-    #[arg(long, default_value = "low")]
+    #[arg(long, default_value = "low", value_parser = ["low", "medium", "high", "critical"])]
     graph_impact_threshold: String,
 
     /// Relationship types to include in graph diff (comma-separated, e.g., "DependsOn,DevDependsOn")
@@ -671,7 +741,7 @@ struct TimelineArgs {
     #[arg(long)]
     exclude_vex_resolved: bool,
 
-    /// Exit with error if introduced vulnerabilities lack VEX statements
+    /// Exit with code 4 if introduced vulnerabilities lack VEX statements
     #[arg(long)]
     fail_on_vex_gap: bool,
 
@@ -681,7 +751,11 @@ struct TimelineArgs {
 
 /// Arguments for the `matrix` subcommand
 #[derive(Parser)]
-#[command(after_help = "EXAMPLES:
+#[command(after_help = "EXIT CODES:
+    Gates: 1 changes (--fail-on-change), 2 vulnerabilities (--fail-on-vuln),
+    4 VEX gaps (--fail-on-vex-gap). Operational errors exit 3.
+
+EXAMPLES:
     sbom-tools matrix v1.json v2.json v3.json                     # NxN comparison
     sbom-tools matrix *.cdx.json --cluster-threshold 0.9 -o json  # Clustering
     sbom-tools matrix *.json --enrich-vulns --fail-on-vuln         # CI with enrichment")]
@@ -702,8 +776,8 @@ struct MatrixArgs {
     #[arg(long, value_enum, default_value_t = FuzzyPreset::Balanced)]
     fuzzy_preset: FuzzyPreset,
 
-    /// Similarity threshold for clustering (0.0-1.0)
-    #[arg(long, default_value = "0.8")]
+    /// Similarity threshold for clustering (finite, 0.0-1.0)
+    #[arg(long, default_value = "0.8", value_parser = parse_cluster_threshold)]
     cluster_threshold: f64,
 
     /// Enable graph-aware diffing for matrix comparison
@@ -715,7 +789,7 @@ struct MatrixArgs {
     graph_max_depth: u32,
 
     /// Minimum impact level for graph diff output (low, medium, high, critical)
-    #[arg(long, default_value = "low")]
+    #[arg(long, default_value = "low", value_parser = ["low", "medium", "high", "critical"])]
     graph_impact_threshold: String,
 
     /// Relationship types to include in graph diff (comma-separated, e.g., "DependsOn,DevDependsOn")
@@ -738,7 +812,7 @@ struct MatrixArgs {
     #[arg(long)]
     exclude_vex_resolved: bool,
 
-    /// Exit with error if introduced vulnerabilities lack VEX statements
+    /// Exit with code 4 if introduced vulnerabilities lack VEX statements
     #[arg(long)]
     fail_on_vex_gap: bool,
 
@@ -751,14 +825,14 @@ struct MatrixArgs {
 #[command(after_help = "EXIT CODES:
     0  Score meets --min-score (or no threshold) and, with --fail-on-noncompliant, the SBOM is compliant
     1  Overall score below --min-score, OR (with --fail-on-noncompliant) the SBOM is non-compliant
+    2  Command-line parse errors
+    3  Operational error (unsupported output format, invalid --as-of /
+       --cra-product-class / --cra-sidecar, broken config file, I/O)
 
-    The gate codes above only apply to runs that completed an assessment.
-    Usage and configuration errors (unsupported output format, invalid
-    --as-of / --cra-product-class / --cra-sidecar, broken config file)
-    also exit 1, and command-line parse errors exit 2 — so a nonzero exit
-    is only a quality/compliance verdict when the expected report was
-    produced. N/A runs (e.g. --profile ai-readiness on an SBOM without ML
-    components) never trip either gate.
+    The gate codes (0/1) only apply to runs that completed an assessment —
+    a nonzero exit is only a quality/compliance verdict when the expected
+    report was produced. N/A runs (e.g. --profile ai-readiness on an SBOM
+    without ML components) never trip either gate.
 
 EXAMPLES:
     sbom-tools quality app.cdx.json                                # Score overview
@@ -890,7 +964,7 @@ struct QueryArgs {
     #[arg(long, conflicts_with = "quantum_safe")]
     quantum_vulnerable: bool,
 
-    /// Output format (table, json, csv)
+    /// Output format (auto, table, json, csv, summary); unsupported formats error
     #[arg(short, long, default_value = "auto")]
     output: ReportFormat,
 
@@ -929,7 +1003,8 @@ struct WatchArgs {
     #[arg(long, default_value = "6h")]
     enrich_interval: String,
 
-    /// Output format (summary for human, json for NDJSON streaming)
+    /// Output format: auto, summary (human), or json (NDJSON streaming);
+    /// other formats error
     #[arg(short, long, default_value = "auto")]
     output: ReportFormat,
 
@@ -1239,7 +1314,13 @@ enum VerifyAction {
 
 /// Arguments for the `license-check` subcommand
 #[derive(Parser)]
-#[command(after_help = "EXAMPLES:
+#[command(after_help = "EXIT CODES:
+    0    License policy passed
+    3    Operational error (unreadable SBOM, parse failure, invalid policy file)
+    5    License policy violations (denied licenses; review-needed under --strict;
+         propagation conflicts under --check-propagation)
+
+EXAMPLES:
     sbom-tools license-check app.cdx.json                         # Default policy
     sbom-tools license-check app.cdx.json --strict                 # Permissive-only
     sbom-tools license-check app.cdx.json --policy policy.json     # Custom policy
@@ -1354,7 +1435,7 @@ struct MergeArgs {
 #[command(after_help = "EXAMPLES:
     sbom-tools convert app.spdx.json --to cyclonedx                # SPDX → CycloneDX (stdout)
     sbom-tools convert app.cdx.json  --to spdx                     # CycloneDX → SPDX 2.3
-    sbom-tools convert app.spdx.json --to cyclonedx -o out.cdx.json
+    sbom-tools convert app.spdx.json --to cyclonedx -O out.cdx.json
     sbom-tools convert app.cdx.json --to cyclonedx --preserve      # Keep format-specific blocks
 
 NOTE: Supported targets are --to cyclonedx (1.7 JSON) and --to spdx (2.3 JSON).
@@ -1368,7 +1449,10 @@ struct ConvertArgs {
     to: String,
 
     /// Output file (stdout if not specified)
-    #[arg(short = 'o', long)]
+    // -O like every sibling; -o here previously meant the output FILE while
+    // meaning output FORMAT everywhere else, so `-o json` silently wrote a
+    // file literally named "json".
+    #[arg(short = 'O', long)]
     output_file: Option<PathBuf>,
 
     /// Capture verbatim source JSON before conversion so format-specific blocks
@@ -1424,6 +1508,11 @@ struct CraDocsArgs {
     /// Sidecar `productClass` wins.
     #[arg(long, value_name = "CLASS")]
     cra_product_class: Option<String>,
+
+    /// Overwrite existing dossier files (by default a re-run refuses to
+    /// clobber hand-completed documents)
+    #[arg(long)]
+    force: bool,
 }
 
 /// Dedicated table/json output format for commands that only emit those two
@@ -1544,6 +1633,49 @@ fn supported_config_format(
     None
 }
 
+/// Parse a boolean environment/flag value leniently.
+///
+/// `SBOM_TOOLS_OFFLINE=1` (the natural spelling) used to hard-fail every
+/// invocation because clap's default bool parser only accepts `true`/`false`.
+/// Accepts 1/0, true/false, yes/no, on/off — case-insensitively. An empty
+/// value (`SBOM_TOOLS_OFFLINE=`) counts as unset/false.
+fn parse_env_bool(s: &str) -> std::result::Result<bool, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Ok(true),
+        "" | "0" | "false" | "no" | "n" | "off" => Ok(false),
+        other => Err(format!(
+            "invalid boolean value '{other}' \
+             (accepted, case-insensitive: 1/0, true/false, yes/no, on/off)"
+        )),
+    }
+}
+
+/// Parse and validate `--cluster-threshold`: a finite similarity in 0.0..=1.0.
+///
+/// NaN, infinities, and out-of-range values used to be accepted silently and
+/// produced nonsensical clustering.
+fn parse_cluster_threshold(s: &str) -> std::result::Result<f64, String> {
+    let value: f64 = s
+        .parse()
+        .map_err(|e| format!("invalid number '{s}': {e}"))?;
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(format!(
+            "cluster threshold must be a finite value between 0.0 and 1.0, got '{s}'"
+        ));
+    }
+    Ok(value)
+}
+
+/// Parse and validate `--bom-type` at the CLI boundary.
+///
+/// An unrecognized value used to be silently dropped (falling back to content
+/// auto-detection); it is now a hard error listing the valid spellings.
+fn parse_bom_type(s: &str) -> std::result::Result<sbom_tools::BomProfile, String> {
+    sbom_tools::BomProfile::from_str_opt(s).ok_or_else(|| {
+        format!("invalid BOM type '{s}' (valid values: sbom, cbom, aibom; aliases: ai, mlbom)")
+    })
+}
+
 /// Validate VEX state filter values at the CLI boundary.
 fn validate_vex_state(s: &str) -> std::result::Result<String, String> {
     match s.to_lowercase().as_str() {
@@ -1563,11 +1695,57 @@ fn validate_vex_state(s: &str) -> std::result::Result<String, String> {
     }
 }
 
-fn main() -> Result<()> {
+/// Restore the default `SIGPIPE` disposition.
+///
+/// Rust's runtime ignores `SIGPIPE`, so writes to a closed pipe surface as
+/// `EPIPE` errors — which `println!`/`generate` turn into a panic (exit 101)
+/// for pipelines like `sbom-tools completions bash | head`. Restoring
+/// `SIG_DFL` makes the process terminate quietly (conventional exit 141),
+/// matching standard CLI behaviour.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    unsafe extern "C" {
+        fn signal(signum: std::ffi::c_int, handler: usize) -> usize;
+    }
+    /// `SIGPIPE` is 13 on every supported Unix (Linux, macOS, BSDs).
+    const SIGPIPE: std::ffi::c_int = 13;
+    /// `SIG_DFL` is 0 on every supported Unix.
+    const SIG_DFL: usize = 0;
+    // SAFETY: setting SIGPIPE back to its default disposition cannot violate
+    // memory safety; this runs at the top of main() before any other threads
+    // are spawned.
+    unsafe {
+        signal(SIGPIPE, SIG_DFL);
+    }
+}
+
+fn main() {
+    #[cfg(unix)]
+    reset_sigpipe();
+
+    // Central operational-error exit: every anyhow error (I/O, parse, config,
+    // unsupported output format, invalid flag values) leaves with code 3, so
+    // it can never collide with gate codes (1 = verdict gates, 2 = clap usage
+    // errors and diff/view --fail-on-vuln, 4 = --fail-on-vex-gap, 5 =
+    // license-check denial, 6 = --fail-on-kev, 7 = diff ML regression).
+    if let Err(err) = run() {
+        // Mirror the format the default `fn main() -> Result` termination
+        // prints: message plus the "Caused by:" chain.
+        eprintln!("Error: {err:?}");
+        std::process::exit(3);
+    }
+}
+
+fn run() -> Result<()> {
     let matches = Cli::command().get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
-    // Initialize logging
+    // Initialize logging. ANSI escapes only when stderr is a live terminal
+    // and neither --no-color nor the NO_COLOR convention (set to a non-empty
+    // value) asked for monochrome — piped/redirected stderr stays clean.
+    let ansi = std::io::stderr().is_terminal()
+        && !cli.no_color
+        && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let log_level = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -1578,6 +1756,7 @@ fn main() -> Result<()> {
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(false)
+                .with_ansi(ansi)
                 .with_writer(std::io::stderr),
         )
         .init();
@@ -1745,10 +1924,7 @@ fn main() -> Result<()> {
                 vulnerable_only: args.vulnerable_only,
                 ecosystem_filter: args.ecosystem,
                 fail_on_vuln: resolve_bool(args.fail_on_vuln, app.behavior.fail_on_vuln),
-                bom_profile: args
-                    .bom_type
-                    .as_deref()
-                    .and_then(sbom_tools::BomProfile::from_str_opt),
+                bom_profile: args.bom_type,
                 enrichment,
                 cra_sidecar_path: args
                     .cra_sidecar
@@ -2158,6 +2334,9 @@ fn main() -> Result<()> {
         }
 
         Commands::Vex { action } => {
+            // Argument matches of the nested vex sub-subcommand
+            // (apply/status/filter/export), for CLI-explicitness detection.
+            let vex_sub = sub_matches.and_then(|m| m.subcommand()).map(|(_, m)| m);
             let (args, cli_action) = match action {
                 VexAction::Apply(args) => (args, cli::VexAction::Apply),
                 VexAction::Status(args) => (args, cli::VexAction::Status),
@@ -2184,17 +2363,29 @@ fn main() -> Result<()> {
                 }
             };
 
-            let enrichment = EnrichmentConfig {
-                enabled: args.enrich_vulns,
-                provider: "osv".to_string(),
-                cache_ttl_hours: args.vuln_cache_ttl,
-                max_concurrent: 10,
-                cache_dir: args.vuln_cache_dir.or_else(|| Some(dirs::osv_cache_dir())),
-                bypass_cache: args.refresh_vulns,
-                timeout_secs: args.api_timeout,
-                enable_eol: args.enrich_eol,
-                vex_paths: Vec::new(), // VEX paths handled separately
-                ..Default::default()
+            // `vex export` exposes no enrichment flags (it exports existing
+            // state), so it always runs with enrichment disabled. The other
+            // vex actions honor the config file's `enrichment:` block exactly
+            // like diff/view/query, with explicit CLI flags winning.
+            let enrichment = if matches!(cli_action, cli::VexAction::Export(_)) {
+                EnrichmentConfig {
+                    enabled: false,
+                    provider: "osv".to_string(),
+                    cache_ttl_hours: args.vuln_cache_ttl,
+                    max_concurrent: 10,
+                    cache_dir: args
+                        .vuln_cache_dir
+                        .clone()
+                        .or_else(|| Some(dirs::osv_cache_dir())),
+                    bypass_cache: args.refresh_vulns,
+                    timeout_secs: args.api_timeout,
+                    enable_eol: false,
+                    vex_paths: Vec::new(), // VEX paths handled separately
+                    offline,
+                    ..Default::default()
+                }
+            } else {
+                seed_vex_enrichment(&args, vex_sub, &app, offline)
             };
 
             let config = sbom_tools::config::VexConfig {
@@ -2271,10 +2462,14 @@ fn main() -> Result<()> {
 
         Commands::Config { action } => match action {
             ConfigAction::Show => {
+                // Strict like every consuming command: an explicit --config
+                // that is missing or unparseable is an error, never a silent
+                // fallback to a different discovered file or defaults.
                 let (config, loaded_from) = if cli.no_config {
                     (AppConfig::default(), None)
                 } else {
-                    sbom_tools::config::load_or_default(cli.config.as_deref())
+                    sbom_tools::config::load_strict(cli.config.as_deref())
+                        .context("failed to load config")?
                 };
                 if let Some(path) = &loaded_from {
                     eprintln!("# Loaded from: {}", path.display());
@@ -2313,7 +2508,12 @@ fn main() -> Result<()> {
                 }
                 eprintln!();
                 match sbom_tools::config::discover_config_file(cli.config.as_deref()) {
-                    Some(path) => eprintln!("Active config file: {}", path.display()),
+                    Some(path) => {
+                        if cli.config.is_some() && !path.exists() {
+                            anyhow::bail!("config file not found: {}", path.display());
+                        }
+                        eprintln!("Active config file: {}", path.display());
+                    }
                     None => eprintln!("No config file found."),
                 }
                 Ok(())
@@ -2412,8 +2612,9 @@ fn main() -> Result<()> {
 
         #[cfg(feature = "enrichment")]
         Commands::Enrich(args) => {
-            let mut enrichment = args.enrichment.to_enrichment_config();
-            enrichment.offline = offline || enrichment.offline;
+            // Same layering as diff/view/query: the config file's `enrichment:`
+            // block is the base and explicit CLI flags win.
+            let enrichment = seed_enrichment(&args.enrichment, sub_matches, &app, offline);
 
             let exit_code =
                 cli::run_enrich(&args.file, args.output_file.as_ref(), enrichment, cli.quiet)?;
@@ -2483,13 +2684,14 @@ fn main() -> Result<()> {
         // section supplies the sidecar path and product class when the CLI
         // flags are absent, so the dossier agrees with the validate verdict
         // produced under the same config.
-        Commands::CraDocs(args) => cli::run_cra_docs(
+        Commands::CraDocs(args) => cli::run_cra_docs_with_force(
             args.sbom,
             args.output,
             args.cra_sidecar
                 .or_else(|| app.compliance.cra_sidecar.clone()),
             args.cra_product_class
                 .or_else(|| app.compliance.cra_product_class.clone()),
+            args.force,
         ),
 
         Commands::CraStandardsWatch(args) => cli::run_cra_standards_watch(
@@ -2547,4 +2749,88 @@ fn has_sbom_extension(s: &str) -> bool {
         || lower.ends_with(".yaml")
         || lower.ends_with(".yml")
         || lower.ends_with(".rdf")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parse_env_bool_accepts_common_spellings_case_insensitively() {
+        for truthy in ["1", "true", "TRUE", "Yes", "y", "ON"] {
+            assert_eq!(parse_env_bool(truthy), Ok(true), "{truthy}");
+        }
+        for falsy in ["0", "false", "False", "NO", "n", "off", "", " "] {
+            assert_eq!(parse_env_bool(falsy), Ok(false), "{falsy:?}");
+        }
+    }
+
+    #[test]
+    fn parse_env_bool_rejects_garbage_with_accepted_values_listed() {
+        let err = parse_env_bool("banana").unwrap_err();
+        assert!(err.contains("banana"), "{err}");
+        assert!(err.contains("1/0") && err.contains("true/false"), "{err}");
+    }
+
+    #[test]
+    fn parse_cluster_threshold_accepts_finite_unit_interval() {
+        assert_eq!(parse_cluster_threshold("0"), Ok(0.0));
+        assert_eq!(parse_cluster_threshold("0.8"), Ok(0.8));
+        assert_eq!(parse_cluster_threshold("1.0"), Ok(1.0));
+    }
+
+    #[test]
+    fn parse_cluster_threshold_rejects_nan_infinite_and_out_of_range() {
+        for bad in ["NaN", "nan", "-0.5", "1.5", "inf", "-inf", "1e300", "x"] {
+            assert!(parse_cluster_threshold(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parse_bom_type_is_strict_and_lists_valid_values() {
+        assert_eq!(parse_bom_type("sbom"), Ok(sbom_tools::BomProfile::Sbom));
+        assert_eq!(parse_bom_type("CBOM"), Ok(sbom_tools::BomProfile::Cbom));
+        assert_eq!(parse_bom_type("aibom"), Ok(sbom_tools::BomProfile::AiBom));
+        let err = parse_bom_type("banana").unwrap_err();
+        assert!(err.contains("banana"), "{err}");
+        for valid in ["sbom", "cbom", "aibom"] {
+            assert!(err.contains(valid), "must list '{valid}': {err}");
+        }
+    }
+
+    /// The phantom `--no-fail-on-change` flag must not be advertised anywhere
+    /// (it never existed), and the root exit-code table must document the
+    /// central operational-error code 3.
+    #[test]
+    fn help_text_matches_reality() {
+        let mut cmd = Cli::command();
+        cmd.build();
+        let root = cmd.render_long_help().to_string();
+        assert!(
+            !root.contains("--no-fail-on-change"),
+            "phantom flag in root help"
+        );
+        assert!(
+            root.contains("Operational error"),
+            "root help must document exit 3"
+        );
+        let diff = cmd
+            .find_subcommand_mut("diff")
+            .expect("diff subcommand")
+            .render_long_help()
+            .to_string();
+        assert!(
+            !diff.contains("--no-fail-on-change"),
+            "phantom flag in diff help"
+        );
+        assert!(
+            diff.contains("--fail-on-ml-regression"),
+            "diff help must document exit 7 gate"
+        );
+    }
 }

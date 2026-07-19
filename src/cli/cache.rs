@@ -80,36 +80,45 @@ struct SourceStatus {
 }
 
 fn source_status(name: &str, dir: &Path) -> SourceStatus {
-    let mut entries = 0usize;
-    let mut total_size = 0u64;
-    let mut oldest: Option<Duration> = None;
-    let mut newest: Option<Duration> = None;
+    let mut status = SourceStatus {
+        name: name.to_string(),
+        entries: 0,
+        total_size: 0,
+        oldest: None,
+        newest: None,
+    };
+    collect_status(dir, &mut status);
+    status
+}
 
+/// Recursively fold every `*.json` file under `dir` into `status`.
+///
+/// Export/import copy the cache as a full tree, so nested entries (e.g. a
+/// source that shards its cache into subdirectories, or an imported bundle)
+/// must be counted too — `status` and `clear` must see exactly what
+/// `export`/`import` copy.
+fn collect_status(dir: &Path, status: &mut SourceStatus) {
     if let Ok(read_dir) = fs::read_dir(dir) {
         for entry in read_dir.flatten() {
             let path = entry.path();
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                collect_status(&path, status);
+                continue;
+            }
             if path.extension().is_none_or(|e| e != "json") {
                 continue;
             }
-            entries += 1;
+            status.entries += 1;
             if let Ok(meta) = entry.metadata() {
-                total_size += meta.len();
+                status.total_size += meta.len();
                 if let Ok(modified) = meta.modified()
                     && let Ok(age) = modified.elapsed()
                 {
-                    oldest = Some(oldest.map_or(age, |o| o.max(age)));
-                    newest = Some(newest.map_or(age, |n| n.min(age)));
+                    status.oldest = Some(status.oldest.map_or(age, |o| o.max(age)));
+                    status.newest = Some(status.newest.map_or(age, |n| n.min(age)));
                 }
             }
         }
-    }
-
-    SourceStatus {
-        name: name.to_string(),
-        entries,
-        total_size,
-        oldest,
-        newest,
     }
 }
 
@@ -223,15 +232,7 @@ fn cache_clear(quiet: bool) -> Result<i32> {
 
     let mut removed = 0usize;
     for ns in SOURCE_NAMESPACES {
-        let dir = root.join(ns);
-        if let Ok(read_dir) = fs::read_dir(&dir) {
-            for entry in read_dir.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "json") && fs::remove_file(&path).is_ok() {
-                    removed += 1;
-                }
-            }
-        }
+        removed += remove_json_recursive(&root.join(ns));
     }
 
     if !quiet {
@@ -240,10 +241,43 @@ fn cache_clear(quiet: bool) -> Result<i32> {
     Ok(exit_codes::SUCCESS)
 }
 
+/// Recursively remove every `*.json` file under `dir`, pruning subdirectories
+/// that become empty. Returns the number of files removed. `clear` must
+/// remove exactly what `import` brought in (a full tree), not just the
+/// top-level entries.
+fn remove_json_recursive(dir: &Path) -> usize {
+    let mut removed = 0usize;
+    if let Ok(read_dir) = fs::read_dir(dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                removed += remove_json_recursive(&path);
+                // Prune the subdirectory if it is now empty (best-effort).
+                let _ = fs::remove_dir(&path);
+            } else if path.extension().is_some_and(|e| e == "json")
+                && fs::remove_file(&path).is_ok()
+            {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 fn cache_export(dest: &Path, quiet: bool) -> Result<i32> {
     let root = root_cache_dir();
     if !root.exists() {
         anyhow::bail!("no cache to export ({} does not exist)", root.display());
+    }
+
+    // A destination inside the cache tree would be copied into while it is
+    // being read, nesting the cache into itself until the path length limit.
+    if paths_overlap(&root, dest) == Some(Containment::SecondInsideFirst) {
+        anyhow::bail!(
+            "refusing to export the cache into itself: {} is inside the cache directory {}",
+            dest.display(),
+            root.display()
+        );
     }
 
     fs::create_dir_all(dest)
@@ -265,6 +299,15 @@ fn cache_import(src: &Path, quiet: bool) -> Result<i32> {
     }
 
     let root = root_cache_dir();
+    // Importing from inside the cache (or from a directory that contains the
+    // cache) would copy the live cache into itself while reading it.
+    if paths_overlap(&root, src).is_some() {
+        anyhow::bail!(
+            "refusing to import the cache into itself: {} overlaps the cache directory {}",
+            src.display(),
+            root.display()
+        );
+    }
     fs::create_dir_all(&root)
         .with_context(|| format!("creating cache directory {}", root.display()))?;
     let copied = copy_dir_recursive(src, &root)?;
@@ -276,6 +319,58 @@ fn cache_import(src: &Path, quiet: bool) -> Result<i32> {
         );
     }
     Ok(exit_codes::SUCCESS)
+}
+
+/// How two paths overlap (see [`paths_overlap`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Containment {
+    /// The two paths resolve to the same directory.
+    Same,
+    /// The second path is inside the first.
+    SecondInsideFirst,
+    /// The first path is inside the second.
+    FirstInsideSecond,
+}
+
+/// Determine whether `a` and `b` overlap (same directory, or one inside the
+/// other), after resolving both to absolute, symlink-free forms. Returns
+/// `None` when the paths are disjoint.
+fn paths_overlap(a: &Path, b: &Path) -> Option<Containment> {
+    let a = resolve_for_containment(a);
+    let b = resolve_for_containment(b);
+    if a == b {
+        Some(Containment::Same)
+    } else if b.starts_with(&a) {
+        Some(Containment::SecondInsideFirst)
+    } else if a.starts_with(&b) {
+        Some(Containment::FirstInsideSecond)
+    } else {
+        None
+    }
+}
+
+/// Resolve `path` for containment checks: absolute, with symlinks in the
+/// existing portion resolved. The path itself may not exist yet — the nearest
+/// existing ancestor is canonicalized and the non-existing remainder
+/// re-appended, so `<cache>/new-subdir` still compares as inside `<cache>`.
+fn resolve_for_containment(path: &Path) -> PathBuf {
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut existing = abs.as_path();
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return abs,
+        }
+    }
+    let mut resolved = fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
+    for name in rest.iter().rev() {
+        resolved.push(name);
+    }
+    resolved
 }
 
 /// Recursively copy every file from `src` into `dest`, mirroring the directory
@@ -353,6 +448,66 @@ mod tests {
         assert_eq!(human_age(Duration::from_secs(120)), "2m");
         assert_eq!(human_age(Duration::from_secs(7200)), "2h");
         assert_eq!(human_age(Duration::from_secs(2 * 86_400)), "2d");
+    }
+
+    #[test]
+    fn paths_overlap_detects_nesting_even_for_nonexistent_dest() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+
+        // dest inside root (does not exist yet) — the export runaway case.
+        let dest = root.path().join("sub").join("deeper");
+        assert_eq!(
+            paths_overlap(root.path(), &dest),
+            Some(Containment::SecondInsideFirst)
+        );
+        // Same directory.
+        assert_eq!(
+            paths_overlap(root.path(), root.path()),
+            Some(Containment::Same)
+        );
+        // root inside src — the import-from-parent runaway case.
+        let inner = other.path().join("cache");
+        fs::create_dir_all(&inner).unwrap();
+        assert_eq!(
+            paths_overlap(&inner, other.path()),
+            Some(Containment::FirstInsideSecond)
+        );
+        // Disjoint paths do not overlap.
+        assert_eq!(paths_overlap(root.path(), other.path()), None);
+    }
+
+    #[test]
+    fn source_status_counts_nested_entries() {
+        // status must see what import copied: full trees, not only the
+        // namespace directory's top level.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("top.json"), "{}").unwrap();
+        let nested = dir.path().join("nested").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("a.json"), "{\"k\":1}").unwrap();
+        fs::write(nested.join("ignored.txt"), "x").unwrap();
+
+        let status = source_status("osv", dir.path());
+        assert_eq!(status.entries, 2, "top-level + nested json must count");
+        assert!(status.total_size >= 2);
+    }
+
+    #[test]
+    fn remove_json_recursive_clears_nested_entries_and_prunes_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("top.json"), "{}").unwrap();
+        let nested = dir.path().join("nested").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("a.json"), "{}").unwrap();
+        fs::write(nested.join("keep.txt"), "x").unwrap();
+
+        let removed = remove_json_recursive(dir.path());
+        assert_eq!(removed, 2);
+        assert!(!dir.path().join("top.json").exists());
+        assert!(!nested.join("a.json").exists());
+        // Non-json files survive; their directory is not pruned.
+        assert!(nested.join("keep.txt").exists());
     }
 
     #[test]

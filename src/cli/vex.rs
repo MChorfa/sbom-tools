@@ -60,12 +60,28 @@ pub fn run_vex(config: VexConfig, action: VexAction) -> Result<i32> {
         }
     }
 
-    // Apply external VEX documents
+    // Apply external VEX documents. A missing or malformed --vex document is
+    // a hard error (exit 3): silently continuing would let CI believe the VEX
+    // statements were applied when they were not.
     #[cfg(feature = "enrichment")]
     if !config.vex_paths.is_empty() {
-        let stats = crate::pipeline::enrich_vex(parsed.sbom_mut(), &config.vex_paths, quiet);
-        if stats.is_none() && !quiet {
-            eprintln!("Warning: VEX enrichment failed");
+        if !quiet {
+            eprintln!(
+                "Enriching SBOM with VEX data from {} document(s)...",
+                config.vex_paths.len()
+            );
+        }
+        let mut enricher = crate::enrichment::VexEnricher::from_files(&config.vex_paths)
+            .map_err(|e| anyhow::anyhow!("failed to load VEX documents: {e}"))?;
+        let stats = enricher.enrich_sbom(parsed.sbom_mut());
+        if !quiet {
+            eprintln!(
+                "VEX enrichment: {} documents, {} statements, {} vulns matched, {} components",
+                stats.documents_loaded,
+                stats.statements_parsed,
+                stats.vulns_matched,
+                stats.components_with_vex,
+            );
         }
     }
 
@@ -82,13 +98,23 @@ pub fn run_vex(config: VexConfig, action: VexAction) -> Result<i32> {
         sbom.calculate_content_hash();
     }
 
-    // Warn if enrichment requested but feature not enabled
     #[cfg(not(feature = "enrichment"))]
-    if config.enrichment.enabled || config.enrichment.enable_eol || !config.vex_paths.is_empty() {
-        eprintln!(
-            "Warning: enrichment requested but the 'enrichment' feature is not enabled. \
-             Rebuild with: cargo build --features enrichment"
-        );
+    {
+        // --vex must not silently no-op: CI would believe the VEX documents
+        // were applied. Hard error instead.
+        if !config.vex_paths.is_empty() {
+            anyhow::bail!(
+                "--vex requires the 'enrichment' feature, which is not enabled in this build. \
+                 Rebuild with: cargo build --features enrichment"
+            );
+        }
+        // Warn if other enrichment was requested but the feature is not enabled
+        if config.enrichment.enabled || config.enrichment.enable_eol {
+            eprintln!(
+                "Warning: enrichment requested but the 'enrichment' feature is not enabled. \
+                 Rebuild with: cargo build --features enrichment"
+            );
+        }
     }
 
     match action {
@@ -119,17 +145,30 @@ fn run_vex_export(
 }
 
 /// Apply VEX documents and output the enriched SBOM vulnerability data as JSON.
+///
+/// `--state` and `--actionable-only` restrict the emitted vulnerability list
+/// (AND-composed); they do not affect the exit code here — `apply` is a
+/// transformation, gating belongs to `filter`/`status`.
 fn run_vex_apply(sbom: &NormalizedSbom, config: &VexConfig) -> Result<i32> {
     let vulns = collect_all_vulns(sbom);
-    let output = serde_json::to_string_pretty(&vulns)?;
+    let filtered = filter_entries(&vulns, config)?;
+    let output = serde_json::to_string_pretty(&filtered)?;
     let target = OutputTarget::from_option(config.output_file.clone());
     write_output(&output, &target, false)?;
     Ok(exit_codes::SUCCESS)
 }
 
 /// Show VEX coverage summary.
+///
+/// `--state` restricts the report to vulnerabilities in that state ("none" =
+/// vulnerabilities without a VEX statement). `--actionable-only` keeps its
+/// documented gate semantics: exit code 1 when actionable vulnerabilities
+/// exist (in the possibly state-filtered set).
 fn run_vex_status(sbom: &NormalizedSbom, config: &VexConfig) -> Result<i32> {
-    let vulns = collect_all_vulns(sbom);
+    let mut vulns = collect_all_vulns(sbom);
+    if let Some(target_state) = parsed_state_filter(config)? {
+        vulns.retain(|v| v.vex_state.as_ref() == target_state.as_ref());
+    }
     let total = vulns.len();
     let with_vex = vulns.iter().filter(|v| v.vex_state.is_some()).count();
     let without_vex = total - with_vex;
@@ -184,37 +223,43 @@ fn run_vex_status(sbom: &NormalizedSbom, config: &VexConfig) -> Result<i32> {
         let output = serde_json::to_string_pretty(&summary)?;
         write_output(&output, &output_target, false)?;
     } else {
-        // Table output for terminal
-        println!("VEX Coverage Summary");
-        println!("====================");
-        println!();
-        println!("Total vulnerabilities:  {total}");
-        println!("With VEX statement:     {with_vex}");
-        println!("Without VEX statement:  {without_vex}");
-        println!("Actionable:             {actionable}");
-        println!("Coverage:               {coverage_pct:.1}%");
-        println!();
+        // Table output — rendered into a buffer so `-O <file>` writes the
+        // table to the file instead of losing it to stdout.
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        writeln!(out, "VEX Coverage Summary")?;
+        writeln!(out, "====================")?;
+        writeln!(out)?;
+        writeln!(out, "Total vulnerabilities:  {total}")?;
+        writeln!(out, "With VEX statement:     {with_vex}")?;
+        writeln!(out, "Without VEX statement:  {without_vex}")?;
+        writeln!(out, "Actionable:             {actionable}")?;
+        writeln!(out, "Coverage:               {coverage_pct:.1}%")?;
+        writeln!(out)?;
 
         if !by_state.is_empty() {
-            println!("By VEX State:");
+            writeln!(out, "By VEX State:")?;
             for (state, count) in &by_state {
-                println!("  {state:<20} {count}");
+                writeln!(out, "  {state:<20} {count}")?;
             }
-            println!();
+            writeln!(out)?;
         }
 
         if without_vex > 0 {
-            println!("Gaps (vulnerabilities without VEX):");
+            writeln!(out, "Gaps (vulnerabilities without VEX):")?;
             for v in vulns.iter().filter(|v| v.vex_state.is_none()) {
-                println!(
+                writeln!(
+                    out,
                     "  {} [{}] — {} {}",
                     v.id,
                     v.severity,
                     v.component_name,
                     v.version.as_deref().unwrap_or("")
-                );
+                )?;
             }
         }
+
+        write_output(out.trim_end(), &output_target, config.quiet)?;
     }
 
     // Exit code 1 if actionable-only mode and actionable vulns exist
@@ -226,28 +271,12 @@ fn run_vex_status(sbom: &NormalizedSbom, config: &VexConfig) -> Result<i32> {
 }
 
 /// Filter vulnerabilities by VEX state.
+///
+/// `--actionable-only` and `--state` compose (AND): a vulnerability must
+/// satisfy both filters to be kept.
 fn run_vex_filter(sbom: &NormalizedSbom, config: &VexConfig) -> Result<i32> {
     let vulns = collect_all_vulns(sbom);
-
-    let filtered: Vec<&VulnEntry> = if config.actionable_only {
-        vulns
-            .iter()
-            .filter(|v| {
-                !matches!(
-                    v.vex_state,
-                    Some(VexState::NotAffected) | Some(VexState::Fixed)
-                )
-            })
-            .collect()
-    } else if let Some(ref state_filter) = config.filter_state {
-        let target_state = parse_vex_state_filter(state_filter)?;
-        vulns
-            .iter()
-            .filter(|v| v.vex_state.as_ref() == target_state.as_ref())
-            .collect()
-    } else {
-        vulns.iter().collect()
-    };
+    let filtered = filter_entries(&vulns, config)?;
 
     let output = serde_json::to_string_pretty(&filtered)?;
     let target = OutputTarget::from_option(config.output_file.clone());
@@ -283,6 +312,40 @@ struct VulnEntry {
     vex_state: Option<VexState>,
     vex_justification: Option<String>,
     vex_impact: Option<String>,
+}
+
+/// True when the vulnerability is actionable (not suppressed by a
+/// `NotAffected`/`Fixed` VEX statement). Consistent with
+/// `VulnerabilityDetail::is_vex_actionable`.
+fn is_actionable(v: &VulnEntry) -> bool {
+    !matches!(
+        v.vex_state,
+        Some(VexState::NotAffected) | Some(VexState::Fixed)
+    )
+}
+
+/// Parse the optional `--state` flag. Outer `None` = flag absent; inner
+/// `None` = "none"/"missing" (vulnerabilities without any VEX statement).
+fn parsed_state_filter(config: &VexConfig) -> Result<Option<Option<VexState>>> {
+    config
+        .filter_state
+        .as_deref()
+        .map(parse_vex_state_filter)
+        .transpose()
+}
+
+/// Apply the shared `--state` / `--actionable-only` filters (AND-composed).
+fn filter_entries<'a>(vulns: &'a [VulnEntry], config: &VexConfig) -> Result<Vec<&'a VulnEntry>> {
+    let state = parsed_state_filter(config)?;
+    Ok(vulns
+        .iter()
+        .filter(|v| {
+            (!config.actionable_only || is_actionable(v))
+                && state
+                    .as_ref()
+                    .is_none_or(|target| v.vex_state.as_ref() == target.as_ref())
+        })
+        .collect())
 }
 
 /// Collect all vulnerabilities from an SBOM into a flat list.
@@ -358,5 +421,90 @@ mod tests {
     fn test_parse_vex_state_filter_rejects_unknown() {
         assert!(parse_vex_state_filter("fixd").is_err());
         assert!(parse_vex_state_filter("notaffected_typo").is_err());
+    }
+
+    fn entry(id: &str, state: Option<VexState>) -> VulnEntry {
+        VulnEntry {
+            id: id.to_string(),
+            severity: "High".to_string(),
+            component_name: "comp".to_string(),
+            version: Some("1.0".to_string()),
+            vex_state: state,
+            vex_justification: None,
+            vex_impact: None,
+        }
+    }
+
+    fn config_with(actionable_only: bool, state: Option<&str>) -> VexConfig {
+        VexConfig {
+            sbom_path: std::path::PathBuf::from("sbom.json"),
+            vex_paths: Vec::new(),
+            output_format: crate::reports::ReportFormat::Auto,
+            output_file: None,
+            quiet: true,
+            actionable_only,
+            filter_state: state.map(str::to_string),
+            enrichment: crate::config::EnrichmentConfig::default(),
+        }
+    }
+
+    fn sample_vulns() -> Vec<VulnEntry> {
+        vec![
+            entry("CVE-1", None),
+            entry("CVE-2", Some(VexState::NotAffected)),
+            entry("CVE-3", Some(VexState::Affected)),
+            entry("CVE-4", Some(VexState::Fixed)),
+            entry("CVE-5", Some(VexState::UnderInvestigation)),
+        ]
+    }
+
+    #[test]
+    fn filter_entries_no_flags_keeps_all() {
+        let vulns = sample_vulns();
+        let filtered = filter_entries(&vulns, &config_with(false, None)).unwrap();
+        assert_eq!(filtered.len(), 5);
+    }
+
+    #[test]
+    fn filter_entries_actionable_only_excludes_not_affected_and_fixed() {
+        let vulns = sample_vulns();
+        let filtered = filter_entries(&vulns, &config_with(true, None)).unwrap();
+        let ids: Vec<&str> = filtered.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, vec!["CVE-1", "CVE-3", "CVE-5"]);
+    }
+
+    #[test]
+    fn filter_entries_state_filter_matches_state() {
+        let vulns = sample_vulns();
+        let filtered = filter_entries(&vulns, &config_with(false, Some("affected"))).unwrap();
+        let ids: Vec<&str> = filtered.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, vec!["CVE-3"]);
+    }
+
+    #[test]
+    fn filter_entries_state_none_matches_missing_vex() {
+        let vulns = sample_vulns();
+        let filtered = filter_entries(&vulns, &config_with(false, Some("none"))).unwrap();
+        let ids: Vec<&str> = filtered.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, vec!["CVE-1"]);
+    }
+
+    #[test]
+    fn filter_entries_actionable_and_state_compose_with_and() {
+        let vulns = sample_vulns();
+        // fixed is excluded by --actionable-only even though --state matches it
+        let filtered = filter_entries(&vulns, &config_with(true, Some("fixed"))).unwrap();
+        assert!(filtered.is_empty());
+
+        // affected satisfies both filters
+        let filtered = filter_entries(&vulns, &config_with(true, Some("affected"))).unwrap();
+        let ids: Vec<&str> = filtered.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, vec!["CVE-3"]);
+    }
+
+    #[test]
+    fn filter_entries_rejects_invalid_state() {
+        let vulns = sample_vulns();
+        assert!(filter_entries(&vulns, &config_with(false, Some("bogus"))).is_err());
     }
 }

@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::ValueExt;
 
@@ -79,12 +79,16 @@ pub fn merge_sbom_json(
         return Err(MergeError::FormatMismatch);
     }
 
+    // SPDX 2.x and SPDX 3.0 are incompatible in BOTH directions. The old
+    // check only caught SPDX3-primary + SPDX2-secondary; the reverse silently
+    // emitted the primary unchanged.
+    if primary_is_spdx3 != secondary_is_spdx3 {
+        return Err(MergeError::SpdxVersionMismatch);
+    }
+
     if primary_is_cdx {
         merge_cyclonedx(&mut primary, &secondary, config)?;
     } else if primary_is_spdx3 {
-        if !secondary_is_spdx3 {
-            return Err(MergeError::SpdxVersionMismatch);
-        }
         merge_spdx3(&mut primary, &secondary, config)?;
     } else {
         merge_spdx2(&mut primary, &secondary, config)?;
@@ -98,11 +102,12 @@ fn merge_cyclonedx(
     secondary: &Value,
     config: &MergeConfig,
 ) -> Result<(), MergeError> {
-    let primary_components = primary.get_mut("components").and_then(Value::as_array_mut);
-
-    let secondary_components = secondary.get("components").and_then(Value::as_array);
-
-    if let (Some(p_comps), Some(s_comps)) = (primary_components, secondary_components) {
+    // The primary may legitimately lack a `components` array (metadata-only
+    // shell document): create it from the secondary rather than silently
+    // dropping every secondary component.
+    if let Some(s_comps) = secondary.get("components").and_then(Value::as_array)
+        && let Some(p_comps) = ensure_array(primary, "components")
+    {
         if config.dedup_strategy == DeduplicationStrategy::None {
             // No deduplication — keep all components
             for comp in s_comps {
@@ -123,13 +128,9 @@ fn merge_cyclonedx(
     }
 
     // Merge dependencies
-    let primary_deps = primary
-        .get_mut("dependencies")
-        .and_then(Value::as_array_mut);
-
-    let secondary_deps = secondary.get("dependencies").and_then(Value::as_array);
-
-    if let (Some(p_deps), Some(s_deps)) = (primary_deps, secondary_deps) {
+    if let Some(s_deps) = secondary.get("dependencies").and_then(Value::as_array)
+        && let Some(p_deps) = ensure_array(primary, "dependencies")
+    {
         let existing_refs: HashSet<String> = p_deps
             .iter()
             .filter_map(|d| d.get("ref").and_then(Value::as_str).map(String::from))
@@ -143,10 +144,123 @@ fn merge_cyclonedx(
         }
     }
 
-    // Merge vulnerabilities
-    merge_array_field(primary, secondary, "vulnerabilities");
+    // Merge vulnerabilities, deduplicating by id (affects refs are unioned)
+    merge_vulnerabilities(primary, secondary);
 
     Ok(())
+}
+
+/// Get a mutable reference to `primary[field]` as an array, creating an empty
+/// array when the field is absent. Returns `None` only when `primary` is not
+/// an object or the existing field is not an array.
+fn ensure_array<'a>(primary: &'a mut Value, field: &str) -> Option<&'a mut Vec<Value>> {
+    primary.as_object_mut().and_then(|o| {
+        o.entry(field)
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+    })
+}
+
+/// Merge the secondary's `vulnerabilities` into the primary, deduplicating by
+/// vulnerability id. When both documents carry the same id, the entries are
+/// merged by unioning `affects` refs (the primary's entry wins for every
+/// other field). Entries without an id cannot be identified and are appended.
+fn merge_vulnerabilities(primary: &mut Value, secondary: &Value) {
+    let Some(s_vulns) = secondary.get("vulnerabilities").and_then(Value::as_array) else {
+        return;
+    };
+    if s_vulns.is_empty() {
+        return;
+    }
+    let Some(p_vulns) = ensure_array(primary, "vulnerabilities") else {
+        return;
+    };
+
+    let mut index_by_id: HashMap<String, usize> = p_vulns
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| {
+            v.get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id.to_string(), i))
+        })
+        .collect();
+
+    for vuln in s_vulns {
+        let id = vuln.str_field("id");
+        if id.is_empty() {
+            p_vulns.push(vuln.clone());
+            continue;
+        }
+        if let Some(&i) = index_by_id.get(id) {
+            // Union affects refs into the primary's entry.
+            let Some(s_affects) = vuln.get("affects").and_then(Value::as_array) else {
+                continue;
+            };
+            let Some(existing) = p_vulns[i].as_object_mut() else {
+                continue;
+            };
+            let existing_refs: HashSet<String> = existing
+                .get("affects")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|a| a.get("ref").and_then(Value::as_str))
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let to_add: Vec<Value> = s_affects
+                .iter()
+                .filter(|a| {
+                    a.get("ref")
+                        .and_then(Value::as_str)
+                        .is_none_or(|r| !existing_refs.contains(r))
+                })
+                .cloned()
+                .collect();
+            if !to_add.is_empty()
+                && let Some(affects) = existing
+                    .entry("affects")
+                    .or_insert_with(|| Value::Array(Vec::new()))
+                    .as_array_mut()
+            {
+                affects.extend(to_add);
+            }
+        } else {
+            index_by_id.insert(id.to_string(), p_vulns.len());
+            p_vulns.push(vuln.clone());
+        }
+    }
+}
+
+/// Merge the secondary's SPDX `relationships` into the primary, deduplicating
+/// by the `(relationshipType, spdxElementId, relatedSpdxElement)` triple.
+fn merge_relationships(primary: &mut Value, secondary: &Value) {
+    let Some(s_rels) = secondary.get("relationships").and_then(Value::as_array) else {
+        return;
+    };
+    if s_rels.is_empty() {
+        return;
+    }
+    let Some(p_rels) = ensure_array(primary, "relationships") else {
+        return;
+    };
+
+    fn rel_key(rel: &Value) -> (String, String, String) {
+        (
+            rel.str_field("relationshipType").to_string(),
+            rel.str_field("spdxElementId").to_string(),
+            rel.str_field("relatedSpdxElement").to_string(),
+        )
+    }
+
+    let mut seen: HashSet<(String, String, String)> = p_rels.iter().map(rel_key).collect();
+    for rel in s_rels {
+        if seen.insert(rel_key(rel)) {
+            p_rels.push(rel.clone());
+        }
+    }
 }
 
 fn merge_spdx3(
@@ -159,7 +273,6 @@ fn merge_spdx3(
     } else {
         "@graph"
     };
-    let primary_elements = primary.get_mut(primary_key).and_then(Value::as_array_mut);
 
     let secondary_key = if secondary.get("element").is_some() {
         "element"
@@ -168,7 +281,9 @@ fn merge_spdx3(
     };
     let secondary_elements = secondary.get(secondary_key).and_then(Value::as_array);
 
-    if let (Some(p_elems), Some(s_elems)) = (primary_elements, secondary_elements) {
+    if let Some(s_elems) = secondary_elements
+        && let Some(p_elems) = ensure_array(primary, primary_key)
+    {
         let mut seen: HashSet<String> = p_elems
             .iter()
             .filter_map(|e| e.get("spdxId").and_then(Value::as_str).map(String::from))
@@ -200,11 +315,10 @@ fn merge_spdx2(
     secondary: &Value,
     config: &MergeConfig,
 ) -> Result<(), MergeError> {
-    // Merge packages
-    if let (Some(p_pkgs), Some(s_pkgs)) = (
-        primary.get_mut("packages").and_then(Value::as_array_mut),
-        secondary.get("packages").and_then(Value::as_array),
-    ) {
+    // Merge packages (creating the array when the primary lacks one)
+    if let Some(s_pkgs) = secondary.get("packages").and_then(Value::as_array)
+        && let Some(p_pkgs) = ensure_array(primary, "packages")
+    {
         if config.dedup_strategy == DeduplicationStrategy::None {
             for pkg in s_pkgs {
                 p_pkgs.push(pkg.clone());
@@ -220,8 +334,8 @@ fn merge_spdx2(
         }
     }
 
-    // Merge relationships
-    merge_array_field(primary, secondary, "relationships");
+    // Merge relationships, deduplicating by (type, source, target)
+    merge_relationships(primary, secondary);
 
     Ok(())
 }
@@ -279,22 +393,6 @@ fn name_version_key(comp: &Value) -> String {
     format!("{name}@{version}")
 }
 
-/// Merge an array field from secondary into primary (append new entries)
-fn merge_array_field(primary: &mut Value, secondary: &Value, field: &str) {
-    if let Some(s_arr) = secondary.get(field).and_then(Value::as_array) {
-        let p_arr = primary.as_object_mut().and_then(|o| {
-            o.entry(field)
-                .or_insert_with(|| Value::Array(Vec::new()))
-                .as_array_mut()
-        });
-        if let Some(p) = p_arr {
-            for item in s_arr {
-                p.push(item.clone());
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +441,106 @@ mod tests {
         let components = doc["components"].as_array().unwrap();
         // None strategy keeps all components, including duplicates
         assert_eq!(components.len(), 2);
+    }
+
+    /// A metadata-only primary (no `components` array) must still receive
+    /// every secondary component.
+    #[test]
+    fn merge_creates_components_when_primary_lacks_array() {
+        let primary = r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+            "metadata":{"component":{"type":"application","name":"shell"}}}"#;
+        let secondary = r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[
+            {"name":"foo","version":"1.0"},
+            {"name":"bar","version":"2.0"}
+        ]}"#;
+
+        let result = merge_sbom_json(primary, secondary, &MergeConfig::default()).unwrap();
+        let doc: Value = serde_json::from_str(&result).unwrap();
+        let components = doc["components"].as_array().unwrap();
+        assert_eq!(
+            components.len(),
+            2,
+            "secondary components must not be dropped"
+        );
+    }
+
+    /// SPDX 2.x primary + SPDX 3.0 secondary must error, exactly like the
+    /// reverse direction (it previously emitted the primary unchanged).
+    #[test]
+    fn merge_spdx2_primary_spdx3_secondary_errors() {
+        let spdx2 = r#"{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","packages":[]}"#;
+        let spdx3 = r#"{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld","@graph":[]}"#;
+
+        let result = merge_sbom_json(spdx2, spdx3, &MergeConfig::default());
+        assert!(matches!(result, Err(MergeError::SpdxVersionMismatch)));
+
+        // And the reverse direction still errors too.
+        let result = merge_sbom_json(spdx3, spdx2, &MergeConfig::default());
+        assert!(matches!(result, Err(MergeError::SpdxVersionMismatch)));
+    }
+
+    /// Overlapping vulnerabilities are deduplicated by id, with affects refs
+    /// unioned into the primary's entry.
+    #[test]
+    fn merge_dedups_vulnerabilities_by_id_and_unions_affects() {
+        let primary = r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+            "components":[{"bom-ref":"a","name":"a","version":"1.0"}],
+            "vulnerabilities":[{"id":"CVE-1","description":"keep me","affects":[{"ref":"a"}]}]}"#;
+        let secondary = r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+            "components":[{"bom-ref":"b","name":"b","version":"2.0"}],
+            "vulnerabilities":[
+                {"id":"CVE-1","description":"secondary copy","affects":[{"ref":"a"},{"ref":"b"}]},
+                {"id":"CVE-2","affects":[{"ref":"b"}]}
+            ]}"#;
+
+        let result = merge_sbom_json(primary, secondary, &MergeConfig::default()).unwrap();
+        let doc: Value = serde_json::from_str(&result).unwrap();
+        let vulns = doc["vulnerabilities"].as_array().unwrap();
+        assert_eq!(vulns.len(), 2, "CVE-1 must not be duplicated");
+
+        let cve1 = vulns.iter().find(|v| v["id"] == "CVE-1").unwrap();
+        assert_eq!(cve1["description"], "keep me", "primary entry wins");
+        let refs: Vec<&str> = cve1["affects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["ref"].as_str())
+            .collect();
+        assert_eq!(refs, vec!["a", "b"], "affects refs unioned without dupes");
+    }
+
+    /// Overlapping SPDX relationships are deduplicated by
+    /// (type, source, target).
+    #[test]
+    fn merge_dedups_relationships_by_triple() {
+        let primary = r#"{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT",
+            "packages":[{"SPDXID":"SPDXRef-a","name":"a"}],
+            "relationships":[
+                {"spdxElementId":"SPDXRef-DOCUMENT","relationshipType":"DESCRIBES","relatedSpdxElement":"SPDXRef-a"}
+            ]}"#;
+        let secondary = r#"{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT",
+            "packages":[{"SPDXID":"SPDXRef-b","name":"b"}],
+            "relationships":[
+                {"spdxElementId":"SPDXRef-DOCUMENT","relationshipType":"DESCRIBES","relatedSpdxElement":"SPDXRef-a"},
+                {"spdxElementId":"SPDXRef-a","relationshipType":"DEPENDS_ON","relatedSpdxElement":"SPDXRef-b"}
+            ]}"#;
+
+        let result = merge_sbom_json(primary, secondary, &MergeConfig::default()).unwrap();
+        let doc: Value = serde_json::from_str(&result).unwrap();
+        let rels = doc["relationships"].as_array().unwrap();
+        assert_eq!(rels.len(), 2, "duplicate DESCRIBES must be dropped");
+    }
+
+    /// SPDX2 primary without a packages array still receives secondary packages.
+    #[test]
+    fn merge_spdx2_creates_packages_when_primary_lacks_array() {
+        let primary = r#"{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT"}"#;
+        let secondary = r#"{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT",
+            "packages":[{"SPDXID":"SPDXRef-a","name":"a"}]}"#;
+
+        let result = merge_sbom_json(primary, secondary, &MergeConfig::default()).unwrap();
+        let doc: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(doc["packages"].as_array().unwrap().len(), 1);
     }
 
     #[test]
