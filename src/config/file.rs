@@ -26,12 +26,15 @@ const CONFIG_FILE_NAMES: &[&str] = &[
 /// 3. Git repository root (if in a repo)
 /// 4. User config directory (~/.config/sbom-tools/)
 /// 5. Home directory
+///
+/// An explicit path is **authoritative**: it is returned as-is even when the
+/// file does not exist, so callers surface "config file not found" instead of
+/// silently falling back to a *different* discovered file (or defaults).
+/// Existence/parse failures are reported by [`load_config_file`].
 #[must_use]
 pub fn discover_config_file(explicit_path: Option<&Path>) -> Option<PathBuf> {
-    // 1. Use explicit path if provided
-    if let Some(path) = explicit_path
-        && path.exists()
-    {
+    // 1. Use explicit path if provided — never fall through to discovery.
+    if let Some(path) = explicit_path {
         return Some(path.to_path_buf());
     }
 
@@ -154,6 +157,12 @@ pub fn load_config_file(path: &Path) -> Result<AppConfig, ConfigFileError> {
 }
 
 /// Load config from discovered file, or return default.
+///
+/// Lenient: a file that fails to load is warned about and replaced with
+/// defaults. Note that an explicit path no longer falls through to discovery
+/// (see [`discover_config_file`]) — a missing/broken `--config` yields
+/// defaults with a warning here, and a hard error via [`load_strict`].
+/// Prefer [`load_strict`] anywhere the user passed `--config` explicitly.
 #[must_use]
 pub fn load_or_default(explicit_path: Option<&Path>) -> (AppConfig, Option<PathBuf>) {
     discover_config_file(explicit_path).map_or_else(
@@ -166,6 +175,25 @@ pub fn load_or_default(explicit_path: Option<&Path>) -> (AppConfig, Option<PathB
             }
         },
     )
+}
+
+/// Load config strictly: once a file is selected (explicitly via `--config`
+/// or through discovery), any failure to load it is a hard error.
+///
+/// Semantics (shared by *every* command, including `config show`/`path`):
+/// - explicit path missing      → `Err(NotFound)`, never discovery/defaults
+/// - selected file fails to parse → `Err(Parse)`, never "showing defaults"
+/// - no file anywhere            → built-in defaults (`loaded_from = None`)
+pub fn load_strict(
+    explicit_path: Option<&Path>,
+) -> Result<(AppConfig, Option<PathBuf>), ConfigFileError> {
+    match discover_config_file(explicit_path) {
+        None => Ok((AppConfig::default(), None)),
+        Some(path) => {
+            let config = load_config_file(&path)?;
+            Ok((config, Some(path)))
+        }
+    }
 }
 
 // ============================================================================
@@ -605,6 +633,79 @@ behavior:
         let example = generate_example_config();
         assert!(example.contains("matching:"));
         assert!(example.contains("fuzzy_preset"));
+    }
+
+    #[test]
+    fn unknown_top_level_section_is_a_parse_error_naming_the_key() {
+        // Regression: a typo'd section (`matchingg:`) used to be silently
+        // dropped while `config check` printed "# Valid".
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("typo.yaml");
+        std::fs::write(&path, "matchingg:\n  fuzzy_preset: strict\n").unwrap();
+
+        let err = load_config_file(&path).expect_err("typo'd section must fail to load");
+        assert!(
+            err.to_string().contains("matchingg"),
+            "error must name the unknown key: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_nested_key_is_a_parse_error_naming_the_key() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("typo-nested.yaml");
+        std::fs::write(&path, "behavior:\n  fail_on_vulns: true\n").unwrap();
+
+        let err = load_config_file(&path).expect_err("typo'd nested key must fail to load");
+        assert!(
+            err.to_string().contains("fail_on_vulns"),
+            "error must name the unknown key: {err}"
+        );
+
+        // Enrichment section too (it is Option-wrapped, not `default`-only).
+        let path2 = tmp.path().join("typo-enrichment.yaml");
+        std::fs::write(&path2, "enrichment:\n  cache_ttl: 3600\n").unwrap();
+        let err2 = load_config_file(&path2).expect_err("unknown enrichment key must fail");
+        assert!(err2.to_string().contains("cache_ttl"), "{err2}");
+    }
+
+    #[test]
+    fn discover_explicit_missing_path_is_authoritative() {
+        // A missing --config path must NOT silently fall back to discovery;
+        // it is returned as-is so loading reports NotFound.
+        let missing = Path::new("/nonexistent/sbom-tools-test.yaml");
+        assert_eq!(
+            discover_config_file(Some(missing)),
+            Some(missing.to_path_buf())
+        );
+    }
+
+    #[test]
+    fn load_strict_errors_on_missing_explicit_path() {
+        let result = load_strict(Some(Path::new("/nonexistent/sbom-tools-test.yaml")));
+        assert!(matches!(result, Err(ConfigFileError::NotFound(_))));
+    }
+
+    #[test]
+    fn load_strict_errors_on_broken_selected_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("broken.yaml");
+        std::fs::write(&path, "matching: [not, a, mapping\n").unwrap();
+        let result = load_strict(Some(&path));
+        assert!(matches!(result, Err(ConfigFileError::Parse(_))));
+    }
+
+    #[test]
+    fn load_strict_loads_valid_explicit_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("ok.yaml");
+        std::fs::write(&path, "matching:\n  fuzzy_preset: strict\n").unwrap();
+        let (config, loaded_from) = load_strict(Some(&path)).unwrap();
+        assert_eq!(
+            config.matching.fuzzy_preset,
+            crate::config::FuzzyPreset::Strict
+        );
+        assert_eq!(loaded_from.as_deref(), Some(path.as_path()));
     }
 
     #[test]

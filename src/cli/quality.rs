@@ -828,9 +828,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_discovered_broken_sidecar_soft_fails() {
-        // Without an explicit path, a broken adjacent sidecar must not abort
-        // the command (best-effort discovery logs a warning instead).
+    fn auto_discovered_broken_sidecar_hard_fails() {
+        // A discovered-but-broken sidecar is a hard error, matching the
+        // explicit --cra-sidecar contract: silently scoring without it would
+        // shift the CRA verdict with only a stderr warning.
         let dir = tempfile::tempdir().unwrap();
         let sbom_path = dir.path().join("app.cdx.json");
         std::fs::write(
@@ -839,7 +840,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("app.cra.json"), "{ not json").unwrap();
-        let code = run_quality(
+        let err = run_quality(
             sbom_path,
             ScoringProfile::Cra,
             ReportFormat::Json,
@@ -854,8 +855,11 @@ mod tests {
             None,
             EnrichmentConfig::default(),
         )
-        .expect("auto-discovery must soft-fail on a broken sidecar");
-        assert_eq!(code, exit_codes::SUCCESS);
+        .expect_err("a discovered-but-broken sidecar must hard-error");
+        assert!(
+            err.to_string().contains("CRA sidecar"),
+            "error must name the sidecar: {err}"
+        );
     }
 
     fn ai_config(output: ReportFormat, min_score: Option<f32>) -> QualityConfig {

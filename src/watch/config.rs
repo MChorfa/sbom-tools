@@ -69,12 +69,25 @@ pub fn parse_duration(s: &str) -> Result<Duration, WatchError> {
         .parse()
         .map_err(|_| WatchError::InvalidInterval(s.to_string()))?;
 
+    // Overflow-safe unit conversion: an absurd interval like
+    // `300000000000000d` must be a clean error, not a multiply panic
+    // (debug) or a silently wrapped duration (release).
+    let too_large = || WatchError::InvalidInterval(format!("{s} (interval too large)"));
     match unit {
         "ms" => Ok(Duration::from_millis(value)),
         "s" => Ok(Duration::from_secs(value)),
-        "m" => Ok(Duration::from_secs(value * 60)),
-        "h" => Ok(Duration::from_secs(value * 3600)),
-        "d" => Ok(Duration::from_secs(value * 86400)),
+        "m" => value
+            .checked_mul(60)
+            .map(Duration::from_secs)
+            .ok_or_else(too_large),
+        "h" => value
+            .checked_mul(3600)
+            .map(Duration::from_secs)
+            .ok_or_else(too_large),
+        "d" => value
+            .checked_mul(86400)
+            .map(Duration::from_secs)
+            .ok_or_else(too_large),
         _ => Err(WatchError::InvalidInterval(s.to_string())),
     }
 }
@@ -131,5 +144,26 @@ mod tests {
     #[test]
     fn test_parse_duration_no_unit() {
         assert!(parse_duration("100").is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_overflow_is_clean_error() {
+        // Used to panic with "attempt to multiply with overflow".
+        for s in [
+            "300000000000000d",
+            "18446744073709551615h",
+            "18446744073709551615m",
+        ] {
+            let err = parse_duration(s).expect_err("overflowing interval must error");
+            assert!(
+                err.to_string().contains("interval too large"),
+                "error must say the interval is too large: {err}"
+            );
+        }
+        // Large but representable values still parse.
+        assert_eq!(
+            parse_duration("10000d").unwrap(),
+            Duration::from_secs(10_000 * 86_400)
+        );
     }
 }

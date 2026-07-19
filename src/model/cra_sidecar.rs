@@ -404,17 +404,33 @@ impl CraSidecarMetadata {
         }
     }
 
-    /// Try to find a sidecar file for the given SBOM path.
+    /// Try to find and load a sidecar file for the given SBOM path.
     ///
-    /// Looks for `<stem>.cra.{json,yaml,yml}` and `<stem>-cra.{json,yaml}`
+    /// Looks for `<stem>.cra.{json,yaml,yml}` and `<stem>-cra.{json,yaml,yml}`
     /// alongside the SBOM. Multi-extension stems (`app.cdx.json`,
     /// `app.spdx.json`, `app.spdx3.json`) also try the inner stem
     /// (`app.cra.json`) so the common SBOM naming conventions work
     /// without forcing operators to repeat the format suffix.
-    #[must_use]
-    pub fn find_for_sbom(sbom_path: &Path) -> Option<Self> {
-        let parent = sbom_path.parent()?;
-        let stem = sbom_path.file_stem()?.to_str()?;
+    ///
+    /// Discovery is **strict**: once a candidate file exists, it must load.
+    /// A broken discovered sidecar (typo'd field, bad YAML) is a hard error
+    /// naming the file and field — exactly like an explicitly passed
+    /// `--cra-sidecar` — instead of a stderr warning that silently shifts
+    /// the compliance verdict.
+    ///
+    /// Stdin input (`-`) has no adjacent files, so it never resolves a
+    /// sidecar (previously this probed a literal `-.cra.json`).
+    pub fn discover_for_sbom(sbom_path: &Path) -> Result<Option<Self>, CraSidecarError> {
+        // Stdin: no directory to discover in.
+        if sbom_path.as_os_str() == "-" {
+            return Ok(None);
+        }
+        let Some(parent) = sbom_path.parent() else {
+            return Ok(None);
+        };
+        let Some(stem) = sbom_path.file_stem().and_then(|s| s.to_str()) else {
+            return Ok(None);
+        };
 
         // Build the list of stems to try. Strip well-known SBOM format
         // suffixes (`.cdx`, `.spdx`, `.spdx3`, `.cyclonedx`) so e.g.
@@ -436,24 +452,38 @@ impl CraSidecarMetadata {
                 format!("{s}.cra.yml"),
                 format!("{s}-cra.json"),
                 format!("{s}-cra.yaml"),
+                format!("{s}-cra.yml"),
             ] {
                 let sidecar_path = parent.join(&pattern);
                 if sidecar_path.exists() {
-                    match Self::from_file(&sidecar_path) {
-                        Ok(metadata) => return Some(metadata),
-                        // Auto-discovery is best-effort: a broken candidate is
-                        // surfaced as a warning, not an abort (an *explicitly*
-                        // requested sidecar hard-errors at the CLI layer).
-                        Err(e) => tracing::warn!(
-                            "Ignoring auto-discovered CRA sidecar {}: {e}",
-                            sidecar_path.display()
-                        ),
-                    }
+                    // First existing candidate is authoritative: it either
+                    // loads or the command fails naming the broken file.
+                    return Self::from_file(&sidecar_path)
+                        .map(Some)
+                        .map_err(|e| e.with_path(&sidecar_path));
                 }
             }
         }
 
-        None
+        Ok(None)
+    }
+
+    /// Lenient wrapper around [`Self::discover_for_sbom`] that downgrades a
+    /// broken discovered sidecar to a warning.
+    ///
+    /// Transitional: call sites should migrate to [`Self::discover_for_sbom`]
+    /// so a broken sidecar aborts the command instead of silently shifting
+    /// the verdict; this wrapper only exists to keep the old signature alive
+    /// until they do.
+    #[must_use]
+    pub fn find_for_sbom(sbom_path: &Path) -> Option<Self> {
+        match Self::discover_for_sbom(sbom_path) {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!("Ignoring auto-discovered CRA sidecar: {e}");
+                None
+            }
+        }
     }
 
     /// Whether the sidecar carries live EUCC evidence: a non-empty
@@ -571,6 +601,20 @@ impl std::fmt::Display for CraSidecarError {
 
 impl std::error::Error for CraSidecarError {}
 
+impl CraSidecarError {
+    /// Prefix the error message with the sidecar path so discovery errors
+    /// name the exact file that failed (serde already names the field).
+    #[must_use]
+    pub fn with_path(self, path: &Path) -> Self {
+        let p = path.display();
+        match self {
+            Self::IoError(e) => Self::IoError(format!("{p}: {e}")),
+            Self::ParseError(e) => Self::ParseError(format!("{p}: {e}")),
+            Self::UnsupportedFormat(e) => Self::UnsupportedFormat(format!("{e} ({p})")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,9 +714,10 @@ mod tests {
     }
 
     #[test]
-    fn find_for_sbom_soft_fails_on_broken_candidate() {
-        // Auto-discovery must skip (warn about) a broken adjacent sidecar
-        // rather than returning it or erroring.
+    fn discover_for_sbom_hard_fails_on_broken_candidate_naming_file_and_field() {
+        // Strict discovery: a broken adjacent sidecar is a hard error that
+        // names the file and the offending field — the same treatment an
+        // explicit --cra-sidecar gets — never a silent verdict shift.
         let dir = tempfile::tempdir().unwrap();
         let sbom_path = dir.path().join("app.cdx.json");
         std::fs::write(&sbom_path, "{}").unwrap();
@@ -681,7 +726,59 @@ mod tests {
             r#"{"security_contact": "typo"}"#,
         )
         .unwrap();
+        let err = CraSidecarMetadata::discover_for_sbom(&sbom_path)
+            .expect_err("broken discovered sidecar must hard-error");
+        let msg = err.to_string();
+        assert!(msg.contains("app.cra.json"), "must name the file: {msg}");
+        assert!(
+            msg.contains("security_contact"),
+            "must name the field: {msg}"
+        );
+
+        // The transitional lenient wrapper still downgrades to None.
         assert!(CraSidecarMetadata::find_for_sbom(&sbom_path).is_none());
+    }
+
+    #[test]
+    fn discover_for_sbom_skips_stdin() {
+        // Stdin input previously probed a literal `-.cra.json` in the cwd.
+        assert!(
+            CraSidecarMetadata::discover_for_sbom(Path::new("-"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn discover_for_sbom_finds_hyphen_yml_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(&sbom_path, "{}").unwrap();
+        std::fs::write(
+            dir.path().join("app-cra.yml"),
+            "securityContact: sec@example.com\n",
+        )
+        .unwrap();
+        let found = CraSidecarMetadata::discover_for_sbom(&sbom_path)
+            .unwrap()
+            .expect("hyphen .yml sidecar must be discovered");
+        assert_eq!(found.security_contact.as_deref(), Some("sec@example.com"));
+    }
+
+    #[test]
+    fn discover_for_sbom_loads_valid_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(&sbom_path, "{}").unwrap();
+        std::fs::write(
+            dir.path().join("app.cra.json"),
+            r#"{"securityContact": "sec@example.com"}"#,
+        )
+        .unwrap();
+        let found = CraSidecarMetadata::discover_for_sbom(&sbom_path)
+            .unwrap()
+            .expect("valid sidecar must be discovered");
+        assert_eq!(found.security_contact.as_deref(), Some("sec@example.com"));
     }
 
     #[test]

@@ -18,7 +18,18 @@ use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+/// The dossier files `cra-docs` writes into the output directory.
+const DOSSIER_FILES: [&str; 3] = [
+    "eu-declaration-of-conformity.md",
+    "technical-documentation.md",
+    "vulnerability-handling-policy.md",
+];
+
 /// Run the `cra-docs` command. Generates 3 Markdown files in `output_dir`.
+///
+/// Refuses to overwrite existing dossier files (they are meant to be
+/// hand-completed after generation); see [`run_cra_docs_with_force`] for the
+/// `--force` variant.
 #[allow(clippy::needless_pass_by_value)]
 pub fn run_cra_docs(
     sbom_path: PathBuf,
@@ -26,6 +37,45 @@ pub fn run_cra_docs(
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
 ) -> Result<()> {
+    run_cra_docs_with_force(
+        sbom_path,
+        output_dir,
+        cra_sidecar_path,
+        cra_product_class,
+        false,
+    )
+}
+
+/// [`run_cra_docs`] with an explicit overwrite decision.
+///
+/// The generated dossier is a *starting point* the operator completes by
+/// hand (`_TBD_` placeholders), so a re-run must not silently clobber those
+/// edits: when `force` is false and any dossier file already exists, this
+/// errors listing the existing files; `--force` overwrites them.
+#[allow(clippy::needless_pass_by_value)]
+pub fn run_cra_docs_with_force(
+    sbom_path: PathBuf,
+    output_dir: PathBuf,
+    cra_sidecar_path: Option<PathBuf>,
+    cra_product_class: Option<String>,
+    force: bool,
+) -> Result<()> {
+    if !force {
+        let existing: Vec<String> = DOSSIER_FILES
+            .iter()
+            .map(|name| output_dir.join(name))
+            .filter(|p| p.exists())
+            .map(|p| format!("  {}", p.display()))
+            .collect();
+        if !existing.is_empty() {
+            anyhow::bail!(
+                "refusing to overwrite existing dossier file(s) (they may contain hand-completed \
+                 content):\n{}\nPass --force to overwrite.",
+                existing.join("\n")
+            );
+        }
+    }
+
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
     let sbom = parsed.sbom();
 
@@ -63,15 +113,15 @@ pub fn run_cra_docs(
         .with_context(|| format!("creating output directory {}", output_dir.display()))?;
 
     write_doc(
-        &output_dir.join("eu-declaration-of-conformity.md"),
+        &output_dir.join(DOSSIER_FILES[0]),
         &render_doc(sbom, sidecar.as_ref(), effective_class, route),
     )?;
     write_doc(
-        &output_dir.join("technical-documentation.md"),
+        &output_dir.join(DOSSIER_FILES[1]),
         &render_tech_doc(sbom, sidecar.as_ref(), effective_class, route, &compliance),
     )?;
     write_doc(
-        &output_dir.join("vulnerability-handling-policy.md"),
+        &output_dir.join(DOSSIER_FILES[2]),
         &render_vuln_policy(sbom, sidecar.as_ref()),
     )?;
 
@@ -524,6 +574,43 @@ mod tests {
         assert!(out.join("eu-declaration-of-conformity.md").exists());
         assert!(out.join("technical-documentation.md").exists());
         assert!(out.join("vulnerability-handling-policy.md").exists());
+    }
+
+    #[test]
+    fn rerun_refuses_to_clobber_existing_dossier_unless_forced() {
+        let dir = tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("dossier");
+
+        run_cra_docs(sbom_path.clone(), out.clone(), None, None).expect("first run succeeds");
+
+        // Simulate the operator completing the dossier by hand.
+        let doc = out.join("eu-declaration-of-conformity.md");
+        std::fs::write(&doc, "HAND-EDITED").unwrap();
+
+        // Second run without --force must refuse, naming the existing files.
+        let err = run_cra_docs(sbom_path.clone(), out.clone(), None, None)
+            .expect_err("rerun without --force must refuse to overwrite");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("eu-declaration-of-conformity.md") && msg.contains("--force"),
+            "error must list existing files and mention --force: {msg}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&doc).unwrap(),
+            "HAND-EDITED",
+            "hand-edited dossier must be untouched"
+        );
+
+        // --force overwrites.
+        run_cra_docs_with_force(sbom_path, out.clone(), None, None, true)
+            .expect("forced rerun succeeds");
+        assert_ne!(std::fs::read_to_string(&doc).unwrap(), "HAND-EDITED");
     }
 
     #[test]

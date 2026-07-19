@@ -67,7 +67,7 @@ pub use validation::{ConfigError, Validatable};
 // Re-export file utilities
 pub use file::{
     ConfigFileError, discover_config_file, generate_example_config, generate_full_example_config,
-    load_config_file, load_or_default,
+    load_config_file, load_or_default, load_strict,
 };
 
 /// Generate a JSON Schema for the `AppConfig` configuration format.

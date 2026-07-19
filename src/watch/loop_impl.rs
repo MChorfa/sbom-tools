@@ -22,7 +22,17 @@ use std::time::Instant;
 /// Polls directories for SBOM file changes at `config.poll_interval` and
 /// optionally re-enriches on `config.enrich_interval`. Returns only when
 /// the process is interrupted or `exit_on_change` triggers.
-pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
+///
+/// Returns the process exit code: [`exit_codes::SUCCESS`] for a normal
+/// shutdown (interrupt, dry-run) and [`exit_codes::CHANGES_DETECTED`] when
+/// exiting because `--exit-on-change` observed a change — the change gate is
+/// a verdict (exit 1), not a success.
+///
+/// [`exit_codes::SUCCESS`]: crate::pipeline::exit_codes::SUCCESS
+/// [`exit_codes::CHANGES_DETECTED`]: crate::pipeline::exit_codes::CHANGES_DETECTED
+pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<i32> {
+    use crate::pipeline::exit_codes;
+
     let mut monitor = FileMonitor::new(config.watch_dirs.clone());
     let mut state = WatchState::new(config.max_snapshots);
     let mut sinks = build_alert_sinks(config)?;
@@ -84,7 +94,7 @@ pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
                 eprintln!("  {} — {}", path.display(), status);
             }
         }
-        return Ok(());
+        return Ok(exit_codes::SUCCESS);
     }
 
     // If exit_on_change and we already discovered files, we wait for _changes_
@@ -98,7 +108,7 @@ pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
                 eprintln!("Shutting down gracefully...");
             }
             emit_status(&state, &mut sinks);
-            return Ok(());
+            return Ok(exit_codes::SUCCESS);
         }
 
         std::thread::sleep(config.poll_interval);
@@ -159,12 +169,14 @@ pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
             emit_status(&state, &mut sinks);
         }
 
-        // CI mode: exit after detecting a real change
+        // CI mode: exit after detecting a real change. The change gate maps
+        // to exit code 1 (like diff --fail-on-change), not 0 — CI must be
+        // able to distinguish "change seen" from "shut down cleanly".
         if config.exit_on_change && state.total_changes > 0 {
             if !config.quiet {
                 eprintln!("Change detected, exiting (--exit-on-change)");
             }
-            return Ok(());
+            return Ok(exit_codes::CHANGES_DETECTED);
         }
 
         // Check stop flag again after processing
@@ -173,7 +185,7 @@ pub fn run_watch_loop(config: &WatchConfig) -> anyhow::Result<()> {
                 eprintln!("Shutting down gracefully...");
             }
             emit_status(&state, &mut sinks);
-            return Ok(());
+            return Ok(exit_codes::SUCCESS);
         }
     }
 }

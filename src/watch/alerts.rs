@@ -51,16 +51,26 @@ pub(crate) enum CraEventKind {
 }
 
 // ============================================================================
-// Stdout sink — human-readable colored output to stderr
+// Summary sink — human-readable output to stderr or a file (-O)
 // ============================================================================
 
 pub(crate) struct StdoutAlertSink {
     quiet: bool,
+    /// Where summary lines go: stderr by default, or the `-O` output file.
+    writer: Box<dyn Write + Send>,
 }
 
 impl StdoutAlertSink {
-    pub(crate) fn new(quiet: bool) -> Self {
-        Self { quiet }
+    /// Summary sink writing to an explicit writer: stderr by default, or the
+    /// `-O` output file (previously silently ignored unless `-o json`).
+    pub(crate) fn with_writer(quiet: bool, writer: Box<dyn Write + Send>) -> Self {
+        Self { quiet, writer }
+    }
+
+    fn write_line(&mut self, line: &str) -> anyhow::Result<()> {
+        writeln!(self.writer, "{line}")?;
+        self.writer.flush()?;
+        Ok(())
     }
 }
 
@@ -119,8 +129,7 @@ impl AlertSink for StdoutAlertSink {
             parts.join(", ")
         };
 
-        eprintln!("[{ts}] {name}: {detail}");
-        Ok(())
+        self.write_line(&format!("[{ts}] {name}: {detail}"))
     }
 
     fn on_new_vulns(&mut self, path: &Path, vuln_ids: &[String]) -> anyhow::Result<()> {
@@ -129,12 +138,11 @@ impl AlertSink for StdoutAlertSink {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
         let ts = chrono::Local::now().format("%H:%M:%S");
-        eprintln!(
+        self.write_line(&format!(
             "[{ts}] {name}: enrichment found {} new vuln(s): {}",
             vuln_ids.len(),
             vuln_ids.join(", ")
-        );
-        Ok(())
+        ))
     }
 
     fn on_sbom_removed(&mut self, path: &Path) -> anyhow::Result<()> {
@@ -143,8 +151,7 @@ impl AlertSink for StdoutAlertSink {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
         let ts = chrono::Local::now().format("%H:%M:%S");
-        eprintln!("[{ts}] {name}: file removed");
-        Ok(())
+        self.write_line(&format!("[{ts}] {name}: file removed"))
     }
 
     fn on_status(&mut self, summary: &WatchSummary) -> anyhow::Result<()> {
@@ -152,15 +159,14 @@ impl AlertSink for StdoutAlertSink {
             return Ok(());
         }
         let ts = chrono::Local::now().format("%H:%M:%S");
-        eprintln!(
+        self.write_line(&format!(
             "[{ts}] Watching {} SBOMs | {} healthy | {} error | {} vulns | uptime {}s",
             summary.tracked_count,
             summary.healthy_count,
             summary.error_count,
             summary.total_vulns,
             summary.uptime_secs,
-        );
-        Ok(())
+        ))
     }
 
     fn on_cra_standard(&mut self, event: &CraStandardEvent) -> anyhow::Result<()> {
@@ -168,17 +174,17 @@ impl AlertSink for StdoutAlertSink {
         match &event.kind {
             CraEventKind::InitialBaseline { status } => {
                 if !self.quiet {
-                    eprintln!(
+                    self.write_line(&format!(
                         "[{ts}] cra-standard {}: baseline {} ({})",
                         event.id, status, event.title
-                    );
+                    ))?;
                 }
             }
             CraEventKind::StatusChanged { from, to } => {
-                eprintln!(
+                self.write_line(&format!(
                     "[{ts}] cra-standard {}: status drift {from} -> {to} ({})",
                     event.id, event.title
-                );
+                ))?;
             }
         }
         Ok(())
@@ -371,6 +377,11 @@ impl AlertSink for WebhookAlertSink {
 // ============================================================================
 
 /// Build alert sinks from the watch configuration.
+///
+/// `watch` emits an event stream, not a report, so only two formats exist:
+/// `summary` (human-readable lines; the `auto` default) and `json` (NDJSON).
+/// Any other `-o` value is an error instead of silently behaving like
+/// `summary`. The `-O` output file is honoured by both sinks.
 pub(crate) fn build_alert_sinks(
     config: &super::config::WatchConfig,
 ) -> anyhow::Result<Vec<Box<dyn AlertSink>>> {
@@ -378,23 +389,37 @@ pub(crate) fn build_alert_sinks(
 
     let mut sinks: Vec<Box<dyn AlertSink>> = Vec::new();
 
-    match config.output.format {
-        ReportFormat::Json => {
-            let writer: Box<dyn Write + Send> = match &config.output.file {
+    // Writer for the configured output target (used by both formats):
+    // append to `-O <file>` when given, else the format's default stream.
+    let open_output =
+        |default_stream: fn() -> Box<dyn Write + Send>| -> anyhow::Result<Box<dyn Write + Send>> {
+            match &config.output.file {
                 Some(path) => {
                     let file = std::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open(path)?;
-                    Box::new(file)
+                        .open(path)
+                        .map_err(|e| {
+                            anyhow::anyhow!("cannot open output file {}: {e}", path.display())
+                        })?;
+                    Ok(Box::new(file))
                 }
-                None => Box::new(std::io::stdout()),
-            };
+                None => Ok(default_stream()),
+            }
+        };
+
+    match config.output.format {
+        ReportFormat::Json => {
+            let writer = open_output(|| Box::new(std::io::stdout()))?;
             sinks.push(Box::new(NdjsonAlertSink::new(writer)));
         }
-        _ => {
-            sinks.push(Box::new(StdoutAlertSink::new(config.quiet)));
+        ReportFormat::Auto | ReportFormat::Summary => {
+            let writer = open_output(|| Box::new(std::io::stderr()))?;
+            sinks.push(Box::new(StdoutAlertSink::with_writer(config.quiet, writer)));
         }
+        other => anyhow::bail!(
+            "watch supports only --output summary or json (NDJSON stream); got '{other}'"
+        ),
     }
 
     #[cfg(feature = "enrichment")]
@@ -408,6 +433,93 @@ pub(crate) fn build_alert_sinks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn watch_config_with_output(
+        format: crate::reports::ReportFormat,
+        file: Option<std::path::PathBuf>,
+    ) -> super::super::config::WatchConfig {
+        super::super::config::WatchConfig {
+            watch_dirs: vec![],
+            poll_interval: std::time::Duration::from_secs(1),
+            enrich_interval: std::time::Duration::from_secs(1),
+            debounce: std::time::Duration::ZERO,
+            output: crate::config::OutputConfig {
+                format,
+                file,
+                ..Default::default()
+            },
+            enrichment: crate::config::EnrichmentConfig::default(),
+            webhook_url: None,
+            exit_on_change: false,
+            max_snapshots: 10,
+            quiet: false,
+            dry_run: false,
+            cra_standards_enabled: false,
+            cra_standards_interval: std::time::Duration::from_secs(1),
+            cra_standards_timeout: std::time::Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn build_alert_sinks_rejects_unsupported_formats() {
+        use crate::reports::ReportFormat;
+        for format in [
+            ReportFormat::Sarif,
+            ReportFormat::Html,
+            ReportFormat::Csv,
+            ReportFormat::Table,
+            ReportFormat::Markdown,
+            ReportFormat::Ndjson,
+        ] {
+            let err = build_alert_sinks(&watch_config_with_output(format, None))
+                .err()
+                .unwrap_or_else(|| panic!("format {format} must be rejected for watch"));
+            assert!(
+                err.to_string().contains("summary or json"),
+                "error must name the supported formats: {err}"
+            );
+        }
+        // Supported: auto (default), summary, json.
+        for format in [
+            ReportFormat::Auto,
+            ReportFormat::Summary,
+            ReportFormat::Json,
+        ] {
+            assert!(build_alert_sinks(&watch_config_with_output(format, None)).is_ok());
+        }
+    }
+
+    #[test]
+    fn summary_sink_honours_output_file() {
+        // Regression: `-O <file>` was silently ignored unless `-o json`.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("alerts.log");
+        let config =
+            watch_config_with_output(crate::reports::ReportFormat::Summary, Some(out.clone()));
+        let mut sinks = build_alert_sinks(&config).unwrap();
+
+        let snapshot = DiffSnapshot {
+            timestamp: chrono::Utc::now(),
+            components_added: 2,
+            components_removed: 0,
+            components_modified: 0,
+            new_vulns: vec![],
+            resolved_vulns: vec![],
+            new_kev: vec![],
+            new_eol: vec![],
+            crypto_changes: vec![],
+            crypto_downgrades: vec![],
+        };
+        sinks[0]
+            .on_change(Path::new("app.cdx.json"), &snapshot)
+            .unwrap();
+
+        let contents = std::fs::read_to_string(&out).unwrap();
+        assert!(
+            contents.contains("app.cdx.json") && contents.contains("+2 added"),
+            "summary alert must land in the -O file: {contents:?}"
+        );
+    }
 
     #[test]
     fn test_ndjson_sink_produces_valid_json() {
@@ -508,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_stdout_sink_cra_standard_does_not_panic() {
-        let mut sink = StdoutAlertSink::new(false);
+        let mut sink = StdoutAlertSink::with_writer(false, Box::new(std::io::stderr()));
         let event = CraStandardEvent {
             id: "STAN4CRA",
             title: "STAN4CRA hub",
@@ -532,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_stdout_sink_does_not_panic() {
-        let mut sink = StdoutAlertSink::new(true);
+        let mut sink = StdoutAlertSink::with_writer(true, Box::new(std::io::stderr()));
         let snapshot = DiffSnapshot {
             timestamp: chrono::Utc::now(),
             components_added: 1,
