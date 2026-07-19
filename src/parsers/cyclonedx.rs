@@ -1334,6 +1334,22 @@ impl CycloneDxParser {
                     && seen.insert(canonical_id)
                     && let Some(comp) = sbom.components.get_mut(canonical_id)
                 {
+                    // Per-entry version status also gates the attachment
+                    // itself: a component whose concrete version is
+                    // explicitly declared "unaffected" must not receive the
+                    // vulnerability. Only exact `version` matches skip —
+                    // `range` entries are not evaluated (no vers-range
+                    // parsing), and a component without a version always
+                    // attaches: false positives are safer here.
+                    if let (Some(versions), Some(comp_version)) =
+                        (&affect.versions, comp.version.as_deref())
+                        && versions.iter().any(|ver| {
+                            ver.status.as_deref() == Some("unaffected")
+                                && ver.version.as_deref() == Some(comp_version)
+                        })
+                    {
+                        continue;
+                    }
                     let mut v = vuln_ref.clone();
                     if let Some(versions) = &affect.versions {
                         // Respect per-entry status: only "affected" (or
@@ -3203,6 +3219,70 @@ mod tests {
             desc.len() <= super::super::MAX_VULN_DESCRIPTION_BYTES + 32,
             "description must be capped, got {} bytes",
             desc.len()
+        );
+    }
+
+    /// affects[].versions per-entry status must gate the attachment itself:
+    /// a component whose exact version is listed "unaffected" gets no vuln,
+    /// while one whose version is listed "affected" still does.
+    #[test]
+    fn unaffected_version_status_skips_vuln_attachment() {
+        let vulns = r#""vulnerabilities":[{"id":"CVE-1","affects":[{"ref":"c","versions":[
+            {"version":"1.2.3","status":"affected"},
+            {"version":"2.0.0","status":"unaffected"}]}]}]"#;
+        let json = |version: &str| {
+            format!(
+                r#"{{"bomFormat":"CycloneDX","specVersion":"1.5",
+                    "components":[{{"type":"library","bom-ref":"c","name":"libc","version":"{version}","purl":"pkg:npm/libc@{version}"}}],
+                    {vulns}}}"#
+            )
+        };
+
+        let affected = parse_json(&json("1.2.3"));
+        assert_eq!(
+            component(&affected, "libc").vulnerabilities.len(),
+            1,
+            "version listed as affected must receive the vuln"
+        );
+
+        let unaffected = parse_json(&json("2.0.0"));
+        assert_eq!(
+            component(&unaffected, "libc").vulnerabilities.len(),
+            0,
+            "version explicitly listed as unaffected must not receive the vuln"
+        );
+
+        // Unlisted version: conservative — attach.
+        let unlisted = parse_json(&json("3.0.0"));
+        assert_eq!(component(&unlisted, "libc").vulnerabilities.len(), 1);
+    }
+
+    /// Range entries and versionless components never trigger the
+    /// "unaffected" skip — no vers-range parsing, false positives are safer.
+    #[test]
+    fn unaffected_skip_ignores_ranges_and_versionless_components() {
+        let ranged = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","bom-ref":"c","name":"libc","version":"2.0.0","purl":"pkg:npm/libc@2.0.0"}],
+                "vulnerabilities":[{"id":"CVE-1","affects":[{"ref":"c","versions":[
+                    {"range":"vers:npm/>=2.0.0","status":"unaffected"}]}]}]}"#,
+        );
+        assert_eq!(
+            component(&ranged, "libc").vulnerabilities.len(),
+            1,
+            "unaffected range entries must not skip (no range parsing)"
+        );
+
+        let versionless = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","bom-ref":"c","name":"libc"}],
+                "vulnerabilities":[{"id":"CVE-1","affects":[{"ref":"c","versions":[
+                    {"version":"2.0.0","status":"unaffected"}]}]}]}"#,
+        );
+        assert_eq!(
+            component(&versionless, "libc").vulnerabilities.len(),
+            1,
+            "a component without a concrete version always attaches"
         );
     }
 
