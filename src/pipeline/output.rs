@@ -47,10 +47,13 @@ pub fn auto_detect_format(format: ReportFormat, target: &OutputTarget) -> Report
     }
 }
 
-/// Determine if color should be used based on flags and environment
+/// Determine if color should be used based on flags, environment, and
+/// whether stdout is actually a terminal — piped/redirected output must not
+/// receive ANSI escapes.
 #[must_use]
 pub fn should_use_color(no_color_flag: bool) -> bool {
-    !no_color_flag && std::env::var("NO_COLOR").is_err()
+    use std::io::IsTerminal;
+    !no_color_flag && std::env::var("NO_COLOR").is_err() && std::io::stdout().is_terminal()
 }
 
 /// Write output to the target (stdout or file)
@@ -121,8 +124,11 @@ mod tests {
 
     #[test]
     fn test_should_use_color_without_flag() {
-        // This depends on NO_COLOR env var
-        let expected = std::env::var("NO_COLOR").is_err();
+        // Depends on NO_COLOR and whether the test harness stdout is a
+        // terminal — under `cargo test` stdout is captured (not a TTY), so
+        // color must be off regardless of env.
+        use std::io::IsTerminal;
+        let expected = std::env::var("NO_COLOR").is_err() && std::io::stdout().is_terminal();
         assert_eq!(should_use_color(false), expected);
     }
 }

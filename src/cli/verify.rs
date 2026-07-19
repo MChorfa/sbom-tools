@@ -99,7 +99,10 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
             if result.verified {
                 Ok(exit_codes::SUCCESS)
             } else {
-                Ok(exit_codes::ERROR)
+                // A failed verification is a VERDICT, not an operational
+                // error — exit 1 so scripts can distinguish "hash mismatch"
+                // from "could not verify" (exit 3).
+                Ok(exit_codes::CHANGES_DETECTED)
             }
         }
         VerifyAction::AuditHashes { file, format } => {
@@ -159,6 +162,12 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
             let sbom = parse_sbom(&file)?;
             let report = verify_model_dir(&sbom, &model_dir);
 
+            // A verification pass over zero models is vacuous — exiting 0
+            // would let CI believe weights were verified when nothing was.
+            if report.total_models == 0 {
+                anyhow::bail!("SBOM contains no model components; nothing to verify");
+            }
+
             if format == "json" {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -204,7 +213,8 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
             }
 
             if report.has_failures() {
-                Ok(exit_codes::ERROR) // mismatch/missing weights → fail for CI gating
+                // Verdict, not operational error: exit 1 (see verify hash).
+                Ok(exit_codes::CHANGES_DETECTED)
             } else {
                 Ok(exit_codes::SUCCESS)
             }
