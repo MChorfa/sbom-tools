@@ -10,7 +10,7 @@ use ratatui::{
 
 pub fn render_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     match ctx.mode {
-        AppMode::Diff | AppMode::View => render_diff_summary(frame, area, ctx),
+        AppMode::Diff => render_diff_summary(frame, area, ctx),
         // Multi-comparison modes have their own views
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => {}
     }

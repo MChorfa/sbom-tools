@@ -27,7 +27,7 @@ fn compute_graph_hash(edges: &[(String, String)]) -> u64 {
 /// Takes `&mut DependenciesState` and `&DataContext` separately to avoid
 /// borrow conflicts when accessing both data and state on `App`.
 pub fn update_graph_cache(deps: &mut DependenciesState, data: &DataContext, mode: AppMode) {
-    if matches!(mode, AppMode::Diff | AppMode::View) {
+    if mode == AppMode::Diff {
         update_diff_mode_cache(deps, data);
     }
 }
@@ -539,7 +539,7 @@ fn render_dependency_tree(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let vuln_components = &ctx.dependencies.cached_vuln_components;
 
     match ctx.mode {
-        AppMode::Diff | AppMode::View => {
+        AppMode::Diff => {
             render_diff_tree_cached(
                 &mut lines,
                 &mut visible_nodes,
