@@ -116,7 +116,7 @@ Save as `tools/semantic_sbom_diff.json`:
 | `availability` | `OPEN_SOURCE`, `OSI_APPROVED` | MIT-licensed (MIT is OSI-approved). |
 | `functions` | `ANALYSIS`, `TRANSFORM` | Analyzes CycloneDX/SPDX BOMs; `merge`/`tailor`/`enrich` transform them. |
 | `analysis` | license / outdated / policy / vuln | `license-check`, EOL detection, license+quality policy engine, OSV/KEV enrichment. |
-| `transform` | `BOM_SERIALIZATION_FORMAT` | Reads/writes BOMs across JSON/XML during merge/tailor. Drop this entry if you consider it out of scope. |
+| `transform` | `BOM_SERIALIZATION_FORMAT` | The `convert` command converts between formats (SPDX ↔ CycloneDX); `merge`/`tailor` read/write BOMs across JSON/XML. |
 | `packaging` | `COMMAND_LINE_UTILITY` | Shipped as a CLI (also crates.io / Homebrew / prebuilt binaries). |
 | `library` | `RUST` | Implementation language. |
 | `platform` | Linux/Mac/Windows | Release ships binaries for all three. |

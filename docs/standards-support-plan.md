@@ -1,5 +1,12 @@
 # Standards Support Improvement Plan: CycloneDX 1.7 + SPDX 3.0
 
+> **Status: implemented.** CycloneDX 1.7 and SPDX 3.0 (JSON-LD) support has
+> since shipped — the parser today handles CycloneDX 1.4–1.7 (JSON/XML) and
+> SPDX 2.2/2.3 (JSON, tag-value, RDF/XML) plus SPDX 3.0 via a separate
+> `src/parsers/spdx3.rs`. This document is retained as the historical plan;
+> statements below about "current" parser capabilities describe the state
+> before implementation.
+
 ## Executive Summary
 
 This plan covers adding CycloneDX 1.7 and SPDX 3.0 support to sbom-tools. These are

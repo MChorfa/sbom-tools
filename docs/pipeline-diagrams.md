@@ -64,10 +64,12 @@ flowchart TD
     B -->|Table| D[TableReporter - color-aware]
     B -->|Json| E[JsonReporter]
     B -->|Sarif| F[SarifReporter]
+    B -->|OscalJson| E
     B -->|Markdown| G[MarkdownReporter]
     B -->|Html| H[HtmlReporter]
     B -->|SideBySide| I[SideBySideReporter]
     B -->|Csv| L[CsvReporter]
+    B -->|Ndjson| N[NdjsonReportGenerator]
     B -->|Tui| E
 
     C --> J[generate_diff_report / generate_view_report]
@@ -78,6 +80,7 @@ flowchart TD
     H --> J
     I --> J
     L --> J
+    N --> J
     J --> K[String output]
     K --> M[write to file/stdout]
 ```
@@ -85,12 +88,12 @@ flowchart TD
 ## Multi-SBOM Pipeline (diff-multi / timeline / matrix)
 Source: `src/cli/multi.rs`, `src/diff/multi.rs`
 
-Multi-SBOM commands bypass the standard pipeline and use `MultiDiffEngine` directly.
+Multi-SBOM commands reuse the pipeline for parsing and optional enrichment, then use `MultiDiffEngine` directly.
 
 ```mermaid
 flowchart TD
-    A[SBOM paths] --> B[parse_sbom per path]
-    B --> C[FuzzyMatchConfig::from_preset]
+    A[SBOM paths] --> B[pipeline::parse_sbom_with_context per path + optional enrichment]
+    B --> C[FuzzyMatchConfig + optional matching rules]
     C --> D[MultiDiffEngine::new]
 
     D --> E{Command}
@@ -110,7 +113,7 @@ flowchart TD
     N --> O[write to file/stdout]
 ```
 
-Note: No enrichment, no DiffConfig, no streaming, no report format variety.
+Note: Typed `MultiDiffConfig`; enrichment supported; no streaming; output limited to JSON or TUI.
 
 ## Vulnerability Enrichment Flow (feature-gated)
 Source: `src/pipeline/parse.rs`, `src/cli/diff.rs`
