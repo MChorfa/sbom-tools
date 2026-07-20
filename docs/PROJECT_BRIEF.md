@@ -45,7 +45,8 @@ behavior rather than implement independent parsing or analysis rules.
 - Semantic and graph-aware diffing.
 - Quality profiles, standards validation, and documented CI exit gates.
 - Optional vulnerability, lifecycle, and model-registry enrichment.
-- TUI and JSON, SARIF, HTML, Markdown, CSV, table, summary, and NDJSON output.
+- TUI and JSON, NDJSON, SARIF, OSCAL (validate), HTML, Markdown, CSV, table,
+  summary, and side-by-side output.
 - C ABI with Go, Swift, Python, and Node.js bindings.
 
 ## Interface contract
@@ -81,8 +82,10 @@ this repository.
 ## Current contribution sequence
 
 1. Installation packaging for the Python and Node.js bindings, proposed separately.
-2. BOM-visible ML-regression CI gate.
-3. OSCAL assessment-results export for existing validation findings.
+
+Previously sequenced items now implemented: the BOM-visible ML-regression CI
+gate (`diff --fail-on-ml-regression`, exit code 7) and OSCAL 1.1.2
+assessment-results export for validation findings (`validate -o oscal-json`).
 
 The sequence is a roadmap, not a claim that unmerged or proposed work is
 available in a release.

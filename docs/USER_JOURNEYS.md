@@ -52,7 +52,7 @@ cargo run --release -- diff \
   /tmp/model-v2.cdx.json \
   -o json > /tmp/model-diff.json
 
-jq '.components.modified' /tmp/model-diff.json
+jq '.reports.components.modified' /tmp/model-diff.json
 ```
 
 The diff reports only changes represented in the two BOMs. It does not infer
@@ -157,9 +157,10 @@ cargo run --release -- validate \
 ```
 
 With the repository's deliberately minimal fixture, the quality command exits
-with code 1 because its score is below 70, and strict validation exits with code
-2 because warnings are present. Those non-zero results demonstrate the gates;
-they are not command failures.
+with code 1 because its score is below 70, and validation exits with code 1
+because the engine-backed NTIA check reports compliance errors (code 2 is
+reserved for warnings-only results under `--fail-on-warning`). Those non-zero
+results demonstrate the gates; they are not command failures.
 
 Exit codes are part of the CLI contract. A pipeline should gate on the selected
 flag and exit code, then retain the JSON or SARIF output for diagnosis. See

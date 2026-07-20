@@ -55,7 +55,7 @@ language bindings provide application access to the JSON-oriented C ABI.
 - **Fleet Comparison** — 1:N baseline comparison, timeline analysis across versions, and NxN matrix analysis, all with enrichment support
 - **Incremental Diff** — Section-selective recomputation for partial changes with cached matching results
 - **VEX Tracking** — Detect VEX state transitions (NotAffected → Affected) across SBOM versions, with `--fail-on-vex-gap` CI gate
-- **Multiple Output Formats** — JSON, SARIF, HTML, Markdown, CSV, table, side-by-side, summary, and an interactive TUI
+- **Multiple Output Formats** — JSON, SARIF, OSCAL assessment results (`validate`), HTML, Markdown, CSV, table, side-by-side, summary, and an interactive TUI
 - **Ecosystem-Aware** — Configurable per-ecosystem normalization rules, typosquat detection, pre-release version handling, and cross-ecosystem package correlation
 
 ## Installation
@@ -405,6 +405,7 @@ Compares two SBOMs and reports added, removed, and modified components with vers
 | `--fail-on-change` | Exit with code 1 if changes are detected |
 | `--fail-on-vuln` | Exit with code 2 if new vulnerabilities are introduced |
 | `--fail-on-vex-gap` | Exit with code 4 if introduced vulnerabilities lack VEX statements |
+| `--fail-on-kev` | Exit with code 6 if an introduced vulnerability is in CISA's KEV catalog (implies `--kev` enrichment) |
 | `--fail-on-ml-regression` | Exit with code 7 if a supported numeric ML metric regresses |
 | `--graph-diff` | Enable dependency graph structure diffing |
 | `--ecosystem-rules <path>` | Load custom per-ecosystem normalization rules |
@@ -467,7 +468,7 @@ Launches an interactive TUI with component tree, vulnerability details, license 
 | `--ecosystem <name>` | Filter components by ecosystem (e.g., `npm`, `cargo`, `pypi`) |
 | `--enrich-eol` | Detect end-of-life status via endoflife.date API |
 | `--validate-ntia` | Validate against NTIA minimum elements |
-| `--bom-type <type>` | BOM type override (`sbom`, `cbom`). Auto-detected from content if omitted |
+| `--bom-type <type>` | BOM type override (`sbom`, `cbom`, `aibom`). Auto-detected from content if omitted |
 
 </details>
 
@@ -505,6 +506,7 @@ Scores an SBOM from 0–100 using a weighted profile. Use `--min-score` to fail 
 |------|-------------|
 | `--profile <name>` | Scoring profile: `minimal`, `standard` (default), `security`, `license-compliance`, `cra`, `bsi`, `comprehensive`, `cbom`, `ai-readiness` |
 | `--min-score <n>` | Fail if quality score is below threshold (0–100) |
+| `--fail-on-noncompliant` | Exit with code 1 if the profile's embedded compliance check reports the SBOM as non-compliant |
 | `--recommendations` | Show detailed improvement recommendations |
 | `--metrics` | Show detailed scoring metrics |
 
@@ -599,10 +601,11 @@ sbom-tools completions fish > ~/.config/fish/completions/sbom-tools.fish
 
 | Flag | Description |
 |------|-------------|
-| `-o, --output <fmt>` | Output format (see [Output Formats](#output-formats)) |
+| `-o, --output <fmt>` | Output format, accepted per command (see [Output Formats](#output-formats)) |
 | `-v, --verbose` | Enable debug output |
 | `-q, --quiet` | Suppress non-essential output |
 | `--no-color` | Disable colored output (also respects `NO_COLOR`) |
+| `--offline` | Never make network calls; serve enrichment purely from cache (also settable via `SBOM_TOOLS_OFFLINE`) |
 
 ## Interactive TUI
 
@@ -610,7 +613,7 @@ Both `diff` and `view` commands launch an interactive terminal UI by default whe
 
 ### Diff Mode
 
-Compare two SBOMs with semantic change detection across 9 tabs.
+Compare two SBOMs with semantic change detection across 10 tabs.
 
 **Summary** — Overall change score with component, vulnerability, and compliance breakdowns at a glance.
 
@@ -639,7 +642,7 @@ Compare two SBOMs with semantic change detection across 9 tabs.
 
 ### View Mode
 
-Explore a single SBOM or CBOM interactively. SBOM mode shows 8 tabs (Overview, Tree, Vulnerabilities, Licenses, Dependencies, Quality, Compliance, Source). CBOM mode auto-detects and shows crypto-specific tabs (Overview, Algorithms, Certificates, Keys, Protocols, Quality, PQC Compliance, Source). Press `P` to toggle between modes.
+Explore a single SBOM, CBOM, or AI-BOM interactively. SBOM mode shows 8 tabs (Overview, Tree, Vulnerabilities, Licenses, Dependencies, Quality, Compliance, Source). CBOM mode auto-detects and shows crypto-specific tabs (Overview, Algorithms, Certificates, Keys, Protocols, Quality, PQC Compliance, Source). AI-BOM mode shows model-centric tabs (Overview, Models, Datasets, AI-Readiness, Compliance, Source). Press `P` to cycle between modes.
 
 **Overview** — SBOM metadata, component statistics, and vulnerability summary.
 
@@ -673,7 +676,7 @@ Explore a single SBOM or CBOM interactively. SBOM mode shows 8 tabs (Overview, T
 | `f` | Filter panel |
 | `s` | Sync panels (Source) / sort (Algorithms, Vulnerabilities) |
 | `w` | Switch focus (Source, Side-by-Side) |
-| `P` | Toggle SBOM/CBOM profile |
+| `P` | Cycle SBOM/CBOM/AI-BOM profile |
 | `v` | Tree / raw toggle (Source) |
 | `e` | Export |
 | `T` | Cycle theme |
@@ -725,7 +728,7 @@ sbom-tools validate sbom.json --standard cra -o sarif -O compliance.sarif
 sbom-tools validate sbom.json --standard ntia \
   -o oscal-json -O validation-results.oscal.json
 
-# Check for vulnerable Log4j versions across all SBOMs (exits 1 if found)
+# Find vulnerable Log4j versions across all SBOMs (exits 1 if nothing matches)
 sbom-tools query "log4j" --version "<2.17.0" fleet/*.json -o json
 
 # Check license compliance with strict policy
@@ -845,20 +848,21 @@ jobs:
 | Code | Meaning |
 |------|---------|
 | `0` | Success (no changes detected, or run without `--fail-on-change`) |
-| `1` | Changes detected (`--fail-on-change`) / no query matches |
-| `2` | New vulnerabilities introduced (`--fail-on-vuln`) |
-| `3` | Error |
+| `1` | Changes detected (`--fail-on-change`) / compliance errors (`validate`) / quality score below `--min-score` or non-compliant with `--fail-on-noncompliant` (`quality`) / no query matches |
+| `2` | New vulnerabilities introduced (`--fail-on-vuln`) / compliance warnings (`validate --fail-on-warning`); also command-line parse errors |
+| `3` | Operational error (I/O, parse, config, invalid flag values) |
 | `4` | VEX coverage gaps found (`--fail-on-vex-gap`) |
 | `5` | License policy violations found (`license-check`) |
 | `6` | Actively exploited (KEV) vulnerability introduced (`--fail-on-kev`) |
 | `7` | Supported ML performance metric regressed (`--fail-on-ml-regression`) |
 
 Gate codes only apply to runs that completed successfully and produced their
-report. Usage and configuration errors (an unsupported `-o` format for the
-command, an invalid `--as-of`/`--cra-product-class` value, a broken explicit
-`--cra-sidecar`, or an invalid config file) exit `1`, and command-line parse
-errors exit `2` — CI pipelines should therefore only interpret a nonzero exit
-as a gate verdict when the expected report output was produced.
+report. Every operational error — I/O, parse failures, an unsupported `-o`
+format for the command, an invalid `--as-of`/`--cra-product-class` value, a
+broken explicit `--cra-sidecar`, or an invalid config file — exits `3`, and
+command-line parse errors exit `2` — CI pipelines should therefore only
+interpret a nonzero exit as a gate verdict when the expected report output was
+produced.
 
 ML regression directions are explicit. Higher is better for `accuracy`, `f1`,
 `f1_score`, `precision`, `recall`, `auc`, `roc_auc`, `bleu`, and `rouge`.
@@ -897,7 +901,7 @@ src/
 ├── matching/     Multi-tier fuzzy matching (PURL, alias, ecosystem, adaptive, LSH)
 ├── diff/         Semantic diffing engine with graph support + incremental section-selective diff
 ├── enrichment/   OSV/KEV vulnerability data + EOL detection + VEX (feature-gated)
-├── quality/      8-category scoring engine + CBOM crypto scoring profile + 11 compliance standards (NTIA/FDA/CRA/SSDF/EO 14028/CNSA 2.0/NIST PQC)
+├── quality/      8-category scoring engine + CBOM crypto scoring profile + 13 compliance standards (NTIA/FDA/CRA/SSDF/EO 14028/CNSA 2.0/NIST PQC/BSI TR-03183-2/OSS-steward/EUCC/EU AI Act/BSI SBOM-for-AI)
 ├── pipeline/     parse → enrich → diff → report orchestration + shared enrichment pipeline
 ├── reports/      9 output format generators + streaming reporter
 ├── verification/ File hash verification + component hash auditing
