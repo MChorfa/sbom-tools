@@ -40,7 +40,7 @@ pub(super) fn get_selected_component_name(app: &App) -> Option<String> {
             }
             None
         }
-        AppMode::Diff | AppMode::View => {
+        AppMode::Diff => {
             // Resolve through the same filtered + sorted list the Components
             // table renders (the raw added->removed->modified concatenation
             // opened the wrong component's deep dive under any sort/filter).

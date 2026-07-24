@@ -260,10 +260,15 @@ pub fn handle_key_event(app: &mut super::App, key: KeyEvent) {
 /// Dispatch a key to the active tab's handler.
 ///
 /// Returns `true` if the tab consumed the key, meaning it must not fall through
-/// to [`handle_global_fallback`]. Tabs without a dedicated handler
-/// (Summary/Overview/Tree) never consume, so global bindings and list
-/// navigation still apply on them.
+/// to [`handle_global_fallback`]. Tabs without a dedicated handler (Summary)
+/// never consume, so global bindings and list navigation still apply on them.
 fn dispatch_tab_key(app: &mut super::App, key: KeyEvent) -> bool {
+    // Gated to Diff mode: the multi modes have no visible tabs — their
+    // `active_tab` is a stale preference restore (see `App::base`) — so no
+    // key may leak into an invisible tab handler.
+    if app.mode != super::AppMode::Diff {
+        return false;
+    }
     match app.active_tab {
         super::TabKind::Components => components::handle_components_keys(app, key),
         super::TabKind::Dependencies => dependencies::handle_dependencies_keys(app, key),
@@ -274,20 +279,20 @@ fn dispatch_tab_key(app: &mut super::App, key: KeyEvent) -> bool {
         super::TabKind::GraphChanges => graph_changes::handle_graph_changes_keys(app, key),
         super::TabKind::SideBySide => sidebyside::handle_sidebyside_keys(app, key),
         super::TabKind::Source => source::handle_source_keys(app, key),
-        super::TabKind::Summary | super::TabKind::Overview | super::TabKind::Tree => false,
+        super::TabKind::Summary => false,
     }
 }
 
 /// Dispatch a key to the active multi-comparison mode handler.
 ///
-/// Returns `true` if the mode consumed the key. Single-pair modes (Diff/View)
-/// have no mode handler and never consume here.
+/// Returns `true` if the mode consumed the key. The single-pair Diff mode
+/// has no mode handler and never consumes here.
 fn dispatch_mode_key(app: &mut super::App, key: KeyEvent) -> bool {
     match app.mode {
         super::AppMode::MultiDiff => multi_diff::handle_multi_diff_keys(app, key),
         super::AppMode::Timeline => timeline::handle_timeline_keys(app, key),
         super::AppMode::Matrix => matrix::handle_matrix_keys(app, key),
-        super::AppMode::Diff | super::AppMode::View => false,
+        super::AppMode::Diff => false,
     }
 }
 
@@ -370,19 +375,25 @@ fn handle_global_fallback(app: &mut super::App, key: KeyEvent) {
             }
         }
         // Real terminals report Shift+Tab as BackTab (never Tab+SHIFT), so
-        // the modifier check above only serves synthetic events. Gated to the
-        // tabbed modes: the multi-mode handlers consume Tab as a panel toggle
+        // the modifier check above only serves synthetic events. Gated to
+        // Diff mode: the multi-mode handlers consume Tab as a panel toggle
         // and BackTab must not mutate their hidden diff active_tab.
-        KeyCode::BackTab if matches!(app.mode, super::AppMode::Diff | super::AppMode::View) => {
+        KeyCode::BackTab if app.mode == super::AppMode::Diff => {
             app.prev_tab();
         }
         KeyCode::Char('/') => app.start_search(),
-        KeyCode::Char('1') => app.select_tab(super::TabKind::Summary),
-        KeyCode::Char('2') => app.select_tab(super::TabKind::Components),
-        KeyCode::Char('3') => app.select_tab(super::TabKind::Dependencies),
-        KeyCode::Char('4') => app.select_tab(super::TabKind::Licenses),
-        KeyCode::Char('5') => app.select_tab(super::TabKind::Vulnerabilities),
-        KeyCode::Char('6') => app.select_tab(super::TabKind::Quality),
+        // Digit tab-select only in Diff mode: the multi modes have no visible
+        // tabs, so a digit must never mutate their hidden active_tab.
+        KeyCode::Char(c @ '1'..='6') if app.mode == super::AppMode::Diff => {
+            app.select_tab(match c {
+                '1' => super::TabKind::Summary,
+                '2' => super::TabKind::Components,
+                '3' => super::TabKind::Dependencies,
+                '4' => super::TabKind::Licenses,
+                '5' => super::TabKind::Vulnerabilities,
+                _ => super::TabKind::Quality,
+            });
+        }
         KeyCode::Char('7') => {
             // Compliance only in diff mode
             if app.mode == super::AppMode::Diff {
@@ -396,16 +407,20 @@ fn handle_global_fallback(app: &mut super::App, key: KeyEvent) {
             }
         }
         KeyCode::Char('9') => {
-            // Graph changes tab when graph diff data is available, otherwise Source
+            // Graph changes tab when graph diff data is available, otherwise
+            // Source. Diff mode only (belt-and-braces: multi modes never have
+            // diff_result, but they must not reach a tab select either way).
             let has_graph = app
                 .data
                 .diff_result
                 .as_ref()
                 .is_some_and(|r| !r.graph_changes.is_empty());
-            if has_graph {
-                app.select_tab(super::TabKind::GraphChanges);
-            } else if app.mode == super::AppMode::Diff {
-                app.select_tab(super::TabKind::Source);
+            if app.mode == super::AppMode::Diff {
+                if has_graph {
+                    app.select_tab(super::TabKind::GraphChanges);
+                } else {
+                    app.select_tab(super::TabKind::Source);
+                }
             }
         }
         KeyCode::Char('0') => {
@@ -575,7 +590,6 @@ fn open_shortcuts_overlay(app: &mut super::App) {
         super::AppMode::Timeline => super::app::ShortcutsContext::Timeline,
         super::AppMode::Matrix => super::app::ShortcutsContext::Matrix,
         super::AppMode::Diff => super::app::ShortcutsContext::Diff,
-        super::AppMode::View => super::app::ShortcutsContext::View,
     };
     let tab = app.active_view_state().map(|v| {
         (
@@ -772,5 +786,57 @@ mod dispatch_precedence_tests {
             TabKind::Components,
             "Tab must switch tabs from Components, not toggle panel focus"
         );
+    }
+
+    /// The three multi-mode dashboards, built from the real fixtures. The
+    /// active tab is forced post-construction (the same prefs-isolation
+    /// convention as [`diff_app`]) — in production it is a stale preference
+    /// restore from `App::base`.
+    fn multi_apps() -> Vec<App> {
+        use crate::tui::test_support::{demo_matrix, demo_multi_diff, demo_timeline};
+        pin_theme();
+        vec![
+            App::new_multi_diff(demo_multi_diff()),
+            App::new_timeline(demo_timeline()),
+            App::new_matrix(demo_matrix()),
+        ]
+    }
+
+    /// The multi modes have no visible tabs; their `active_tab` is a stale
+    /// preference restore. `dispatch_tab_key` must never route a key into an
+    /// invisible tab handler there — neither a tab-local binding ('f' filter,
+    /// '/' search) nor a digit the hidden tab would swallow.
+    #[test]
+    fn multi_modes_never_dispatch_to_hidden_tab_handlers() {
+        for mut app in multi_apps() {
+            for hidden_tab in [TabKind::Components, TabKind::SideBySide] {
+                app.active_tab = hidden_tab;
+                for key in ['f', '1', '/'] {
+                    assert!(
+                        !dispatch_tab_key(&mut app, k(KeyCode::Char(key))),
+                        "{:?} with hidden {hidden_tab:?} must not consume '{key}' in an invisible tab handler",
+                        app.mode
+                    );
+                }
+            }
+        }
+    }
+
+    /// End-to-end through the real dispatcher: the global digit tab-select is
+    /// gated to Diff mode, so a digit pressed in a multi-mode dashboard leaves
+    /// the hidden `active_tab` untouched.
+    #[test]
+    fn digit_tab_select_is_inert_in_multi_modes() {
+        for mut app in multi_apps() {
+            for hidden_tab in [TabKind::Components, TabKind::SideBySide] {
+                app.active_tab = hidden_tab;
+                handle_key_event(&mut app, k(KeyCode::Char('2')));
+                assert_eq!(
+                    app.active_tab, hidden_tab,
+                    "'2' in {:?} must not mutate the hidden active_tab",
+                    app.mode
+                );
+            }
+        }
     }
 }

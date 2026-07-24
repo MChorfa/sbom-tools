@@ -522,20 +522,44 @@ fn get_shortcuts_for_context(
     context: ShortcutsContext,
     profile: Option<crate::model::BomProfile>,
 ) -> Vec<ShortcutSection> {
-    // When the active profile is known (view mode), the number keys map
-    // positionally to that profile's tab set, so derive the "Jump to tab"
-    // range from the real tab count instead of a hard-coded "1-8".
-    let jump_hint = profile.map_or_else(
-        || "1-8".to_string(),
-        |p| {
-            let n = crate::tui::view::ViewTab::tabs_for_profile(p).len();
-            if n <= 1 {
-                "1".to_string()
-            } else {
-                format!("1-{n}")
-            }
-        },
-    );
+    let mut nav_items = vec![
+        item("j/k", "Up/Down"),
+        item("h/l", "Left/Right"),
+        item("g/G", "First/Last"),
+        item("PgUp/PgDn", "Page up/down"),
+        item("Home/End", "Jump to start/end"),
+    ];
+    // Tab-switching rows only exist in the tabbed modes; the multi modes bind
+    // Tab to panel switching (documented in their own sections) and digits are
+    // gated off there.
+    if !matches!(
+        context,
+        ShortcutsContext::MultiDiff | ShortcutsContext::Timeline | ShortcutsContext::Matrix
+    ) {
+        // When the active profile is known (view mode), the number keys map
+        // positionally to that profile's tab set, so derive the "Jump to tab"
+        // range from the real tab count. The Diff tab bar binds 1-9 plus 0
+        // (Source shifts to 0 when the Graph tab appears).
+        let jump_hint = profile.map_or_else(
+            || {
+                if context == ShortcutsContext::Diff {
+                    "1-9/0".to_string()
+                } else {
+                    "1-8".to_string()
+                }
+            },
+            |p| {
+                let n = crate::tui::view::ViewTab::tabs_for_profile(p).len();
+                if n <= 1 {
+                    "1".to_string()
+                } else {
+                    format!("1-{n}")
+                }
+            },
+        );
+        nav_items.push(item("Tab", "Next tab"));
+        nav_items.push((jump_hint, "Jump to tab".to_string()));
+    }
 
     let mut sections = vec![
         ShortcutSection {
@@ -557,15 +581,7 @@ fn get_shortcuts_for_context(
         },
         ShortcutSection {
             title: "Navigation",
-            items: vec![
-                item("j/k", "Up/Down"),
-                item("h/l", "Left/Right"),
-                item("g/G", "First/Last"),
-                item("PgUp/PgDn", "Page up/down"),
-                item("Home/End", "Jump to start/end"),
-                item("Tab", "Next tab"),
-                (jump_hint, "Jump to tab".to_string()),
-            ],
+            items: nav_items,
         },
     ];
 
@@ -1002,7 +1018,8 @@ mod tests {
 
     #[test]
     fn no_profile_falls_back_to_generic_hint_without_tab_section() {
-        // Diff-mode passes None: keep the existing generic "1-8" hint and no
+        // Diff-mode passes None: the hint documents the real diff digit
+        // targets (1-9 plus 0 when the Graph tab appears) and there is no
         // profile-specific tab listing.
         let sections = get_shortcuts_for_context(ShortcutsContext::Diff, None);
         assert!(
@@ -1010,7 +1027,29 @@ mod tests {
             "no profile -> no profile-tab section"
         );
         let items: Vec<_> = sections.into_iter().flat_map(|s| s.items).collect();
-        assert_eq!(jump_range(&items), "1-8");
+        assert_eq!(jump_range(&items), "1-9/0");
+    }
+
+    /// The multi modes have no visible tabs — Tab switches panels there — so
+    /// the Navigation section must not advertise tab switching or digit
+    /// jumping in those contexts.
+    #[test]
+    fn multi_contexts_do_not_advertise_tab_switching() {
+        for ctx in [
+            ShortcutsContext::MultiDiff,
+            ShortcutsContext::Timeline,
+            ShortcutsContext::Matrix,
+        ] {
+            let items = flatten(ctx, None);
+            assert!(
+                !items.iter().any(|(_, d)| d == "Next tab"),
+                "{ctx:?} must not advertise a Next tab row"
+            );
+            assert!(
+                !items.iter().any(|(_, d)| d == "Jump to tab"),
+                "{ctx:?} must not advertise a Jump to tab row"
+            );
+        }
     }
 
     /// The MultiDiff/Timeline/Matrix sections must document the phase-6

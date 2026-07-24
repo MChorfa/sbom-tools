@@ -109,7 +109,7 @@ responsible for calling it at the right time.
 
 The TUI has two independent app types:
 
-- **DiffApp** (`src/tui/app.rs`, `src/tui/views/`): Handles diff mode with `App` struct holding all state. Supports diff, multi-diff, timeline, and matrix modes across 12 tabs. Uses `ViewState` trait with per-tab state structs for all tabs.
+- **DiffApp** (`src/tui/app.rs`, `src/tui/views/`): Handles diff mode with `App` struct holding all state — 10 tabs (Summary, Components, Dependencies, Licenses, Vulnerabilities, Quality, Compliance, Side-by-Side, Graph, Source; Graph appears only when the diff contains graph changes). Multi-diff, timeline, and matrix modes reuse the same `App` but render full-screen dashboards with panel navigation instead of tabs. Uses `ViewState` trait with per-tab state structs for all tabs.
 
 - **ViewApp** (`src/tui/view/app.rs`, `src/tui/view/views/`): Handles single-SBOM/CBOM/AI-BOM view mode. Profile-driven tab system via `ViewTab::tabs_for_profile(BomProfile)` — SBOM mode shows 8 tabs, CBOM mode shows 8 crypto-specific tabs, AI-BOM mode shows 6 tabs (Overview, Models, Datasets, AI Readiness, Compliance, Source). Quality scoring uses `ScoringProfile::Cbom` when CBOM is detected. Runtime toggle via `P` key re-scores with the selected profile.
 

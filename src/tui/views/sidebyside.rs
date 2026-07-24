@@ -42,7 +42,7 @@ enum SemverBump {
 /// Render side-by-side diff view
 pub fn render_sidebyside(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     match ctx.mode {
-        AppMode::Diff | AppMode::View => render_diff_sidebyside(frame, area, ctx),
+        AppMode::Diff => render_diff_sidebyside(frame, area, ctx),
         // Multi-comparison modes have their own views
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => {
             crate::tui::widgets::render_empty_state_enhanced(

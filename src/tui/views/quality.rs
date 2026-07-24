@@ -17,7 +17,7 @@ use ratatui::{
 
 pub fn render_quality(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     match ctx.mode {
-        AppMode::Diff | AppMode::View => render_diff_quality(frame, area, ctx),
+        AppMode::Diff => render_diff_quality(frame, area, ctx),
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => {}
     }
 }

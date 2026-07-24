@@ -72,13 +72,13 @@ pub fn render_components(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     // Totals and clamp_selection are done in prepare_render().
     // Compute total_unfiltered for empty-state display only.
     let total_unfiltered = match ctx.mode {
-        AppMode::Diff | AppMode::View => ctx.diff_result.map_or(0, |r| r.components.total()),
+        AppMode::Diff => ctx.diff_result.map_or(0, |r| r.components.total()),
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
     };
 
     // Build the list data once for rendering
     let component_data = match ctx.mode {
-        AppMode::Diff | AppMode::View => ComponentListData::Diff(ctx.diff_component_items()),
+        AppMode::Diff => ComponentListData::Diff(ctx.diff_component_items()),
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => ComponentListData::Empty,
     };
 

@@ -589,6 +589,8 @@ sbom-tools timeline v1.json v2.json v3.json
 sbom-tools matrix sbom1.json sbom2.json sbom3.json
 ```
 
+Each command opens a full-screen dashboard: press `p`/`Tab` to switch panels, `v` for the variable-components drill-down (multi-diff), `Enter` for a pair diff (matrix), and `d` to compare adjacent versions (timeline).
+
 ### Shell completions
 
 ```sh
@@ -613,7 +615,7 @@ Both `diff` and `view` commands launch an interactive terminal UI by default whe
 
 ### Diff Mode
 
-Compare two SBOMs with semantic change detection across 10 tabs.
+Compare two SBOMs with semantic change detection across 10 tabs (the Graph tab appears when dependency-graph changes are detected).
 
 **Summary** — Overall change score with component, vulnerability, and compliance breakdowns at a glance.
 
@@ -669,7 +671,7 @@ Explore a single SBOM, CBOM, or AI-BOM interactively. SBOM mode shows 8 tabs (Ov
 
 | Key | Action |
 |-----|--------|
-| `1`–`0` / `Tab` | Switch tabs |
+| `1`–`0` / `Tab` | Switch tabs (diff/view modes) |
 | `↑↓` / `jk` | Navigate items |
 | `Enter` / `Space` | Expand / collapse |
 | `/` | Search |

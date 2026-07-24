@@ -120,8 +120,8 @@ fn render(frame: &mut Frame, app: &mut App) {
             render_cross_view_overlays(frame, app);
             return;
         }
-        // Diff and View modes use the tabbed layout below
-        AppMode::Diff | AppMode::View => {}
+        // Diff mode uses the tabbed layout below
+        AppMode::Diff => {}
     }
 
     // Main layout: header, tabs, content, status bar, footer
@@ -155,8 +155,6 @@ fn render(frame: &mut Frame, app: &mut App) {
     match app.active_tab {
         // --- Migrated to RenderContext ---
         TabKind::Summary
-        | TabKind::Overview
-        | TabKind::Tree
         | TabKind::Quality
         | TabKind::GraphChanges
         | TabKind::Compliance
@@ -167,9 +165,7 @@ fn render(frame: &mut Frame, app: &mut App) {
         | TabKind::Vulnerabilities => {
             let ctx = super::render_context::RenderContext::from_app(app);
             match app.active_tab {
-                TabKind::Summary | TabKind::Overview | TabKind::Tree => {
-                    views::render_summary(frame, chunks[2], &ctx);
-                }
+                TabKind::Summary => views::render_summary(frame, chunks[2], &ctx),
                 TabKind::Quality => views::render_quality(frame, chunks[2], &ctx),
                 TabKind::GraphChanges => views::render_graph_changes(frame, chunks[2], &ctx),
                 TabKind::Compliance => views::render_diff_compliance(frame, chunks[2], &ctx),
@@ -261,10 +257,6 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             let new_label = sbom_label(app.data.new_sbom.as_ref());
             ("diff", format!("{old_label} \u{27f7} {new_label}"))
         }
-        AppMode::View => {
-            let label = sbom_label(app.data.sbom.as_ref());
-            ("view", label)
-        }
         AppMode::MultiDiff => ("multi-diff", "Multi-Diff Comparison".to_string()),
         AppMode::Timeline => ("timeline", "Timeline Analysis".to_string()),
         AppMode::Matrix => ("matrix", "Matrix Comparison".to_string()),
@@ -328,8 +320,8 @@ pub(crate) fn diff_tab_entries(app: &App) -> Vec<(TabKind, &'static str, &'stati
         (TabKind::Quality, "6", "Quality"),
     ];
 
-    // Compliance and side-by-side tabs only in diff/view mode
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
+    // Compliance and side-by-side tabs only in diff mode
+    if app.mode == AppMode::Diff {
         tabs_data.push((TabKind::Compliance, "7", "Compliance"));
         tabs_data.push((TabKind::SideBySide, "8", "Diff"));
     }
@@ -344,9 +336,9 @@ pub(crate) fn diff_tab_entries(app: &App) -> Vec<(TabKind, &'static str, &'stati
         tabs_data.push((TabKind::GraphChanges, "9", "Graph"));
     }
 
-    // Source tab always available in diff/view mode.
+    // Source tab always available in diff mode.
     // Uses [9] when it's the 9th tab (no graph changes), [0] when it's the 10th.
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
+    if app.mode == AppMode::Diff {
         let source_key = if has_graph_changes { "0" } else { "9" };
         tabs_data.push((TabKind::Source, source_key, "Source"));
     }
@@ -434,10 +426,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
             let score = result.map_or(0.0, |r| r.semantic_score);
             (comp, vuln, Some(score))
         }
-        AppMode::View => {
-            let comp = app.data.sbom.as_ref().map_or(0, |s| s.components.len());
-            (comp, 0, None)
-        }
         // Multi-comparison modes use their own status bars
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => (0, 0, None),
     };
@@ -450,7 +438,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 .filter(|v| v.severity == "Critical")
                 .count()
         }),
-        AppMode::View | AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
+        AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
     };
 
     let mut spans = vec![

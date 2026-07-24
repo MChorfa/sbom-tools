@@ -85,7 +85,7 @@ pub fn render_vulnerabilities(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
     // Compute total unfiltered count (totals/clamping already done in prepare_render)
     let total_unfiltered = match ctx.mode {
-        AppMode::Diff | AppMode::View => ctx.diff_result.map_or(0, |r| {
+        AppMode::Diff => ctx.diff_result.map_or(0, |r| {
             r.vulnerabilities.introduced.len()
                 + r.vulnerabilities.resolved.len()
                 + r.vulnerabilities.persistent.len()
@@ -95,9 +95,7 @@ pub fn render_vulnerabilities(frame: &mut Frame, area: Rect, ctx: &RenderContext
 
     // Build the list data once for rendering (cache already warmed in prepare_render)
     let vuln_data = match ctx.mode {
-        AppMode::Diff | AppMode::View => {
-            VulnListData::Diff(ctx.diff_vulnerability_items_from_cache())
-        }
+        AppMode::Diff => VulnListData::Diff(ctx.diff_vulnerability_items_from_cache()),
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => VulnListData::Empty,
     };
 
