@@ -94,8 +94,17 @@ fn golden_diff_demo_pair() {
     assert_eq!(diff.summary.components_added, 4);
     assert_eq!(diff.summary.components_removed, 4);
     assert_eq!(diff.summary.components_modified, 5);
-    // Document-metadata changes: created timestamp + primary-component version
-    // (1.0.0 -> 2.0.0) now count alongside the 13 component changes.
-    assert_eq!(diff.summary.metadata_changes_count, 2);
-    assert_eq!(diff.summary.total_changes, 15);
+    // Document-metadata changes: created timestamp, primary-component version
+    // (1.0.0 -> 2.0.0), and the document revision counter (top-level
+    // CycloneDX `version`, 1 -> 2 in these fixtures) now count alongside the
+    // 13 component changes.
+    assert_eq!(diff.summary.metadata_changes_count, 3);
+    // Dependency edges resolve via purl fallback (the fixtures reference
+    // components by purl, not bom-ref): prisma->typescript appears in new,
+    // request->lodash disappears with request.
+    assert_eq!(diff.summary.dependencies_added, 1);
+    assert_eq!(diff.summary.dependencies_removed, 1);
+    // 13 component + 2 dependency + 3 metadata changes (was 17 before the
+    // doc_version metadata change was emitted).
+    assert_eq!(diff.summary.total_changes, 18);
 }

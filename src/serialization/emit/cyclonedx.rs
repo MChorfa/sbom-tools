@@ -75,7 +75,12 @@ pub fn emit_cyclonedx(sbom: &NormalizedSbom) -> Result<(String, FidelityReport),
     let mut doc = Map::new();
     doc.insert("bomFormat".to_string(), json!("CycloneDX"));
     doc.insert("specVersion".to_string(), json!(SPEC_VERSION));
-    doc.insert("version".to_string(), json!(1));
+    // Round-trip the source document's revision counter when it was
+    // captured; 1 is the CycloneDX default for a first revision.
+    doc.insert(
+        "version".to_string(),
+        json!(sbom.document.doc_version.unwrap_or(1)),
+    );
     if let Some(serial) = &sbom.document.serial_number {
         doc.insert("serialNumber".to_string(), json!(serial));
     }

@@ -28,6 +28,24 @@ fn read_fixture(name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn cyclonedx_round_trip_preserves_doc_version() {
+    // A CycloneDX revision counter > 1 must survive convert; emitting a
+    // hardcoded "version": 1 silently rewound document history.
+    let raw = r#"{"bomFormat":"CycloneDX","specVersion":"1.5","version":7,
+        "components":[{"type":"library","name":"lib","version":"1.0"}]}"#;
+    let original = parse_sbom_str(raw).unwrap();
+    assert_eq!(original.document.doc_version, Some(7));
+
+    let (emitted, _report) = emit::emit(&original, EmitTarget::CycloneDx).unwrap();
+    let reparsed = parse_sbom_str(&emitted).expect("emitted CycloneDX must re-parse");
+    assert_eq!(
+        reparsed.document.doc_version,
+        Some(7),
+        "doc revision counter must round-trip through convert"
+    );
+}
+
+#[test]
 fn cyclonedx_round_trip_preserves_counts() {
     let raw = read_fixture("cyclonedx/minimal.cdx.json");
     let original = parse_sbom_str(&raw).unwrap();

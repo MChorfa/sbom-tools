@@ -182,6 +182,20 @@ impl NormalizedSbom {
             hasher_input.extend(scope.as_bytes());
         }
 
+        // CDXA declarations (CycloneDX 1.6+): folded in only when present so
+        // documents without declarations hash identically to previous
+        // releases, while attestation-evidence changes stay visible to the
+        // diff's identical-SBOM short-circuit and the incremental cache key.
+        // Tagged + length-prefixed so the block cannot collide with the edge
+        // bytes above.
+        if let Some(declarations) = &self.extensions.declarations
+            && let Ok(json) = serde_json::to_vec(declarations)
+        {
+            hasher_input.extend(b"cdxa-declarations");
+            hasher_input.extend((json.len() as u64).to_le_bytes());
+            hasher_input.extend(json);
+        }
+
         self.content_hash = xxh3_64(&hasher_input);
     }
 
@@ -189,6 +203,18 @@ impl NormalizedSbom {
     #[must_use]
     pub fn component_count(&self) -> usize {
         self.components.len()
+    }
+
+    /// CycloneDX 1.6 CDXA declarations parsed from the document, if any.
+    ///
+    /// Stored under [`FormatExtensions::declarations`]; `None` for SPDX,
+    /// pre-1.6 CycloneDX, XML input, and 1.6+ documents without the
+    /// `declarations`/`definitions.standards` sections. Signature objects in
+    /// the returned model record PRESENCE only — no cryptographic
+    /// verification is performed (see [`super::AttestationDeclarations`]).
+    #[must_use]
+    pub fn declarations(&self) -> Option<&super::AttestationDeclarations> {
+        self.extensions.declarations.as_ref()
     }
 
     /// Get the primary/root product component if set
