@@ -225,7 +225,13 @@ pub fn create_reporter_with_options(
         ReportFormat::OscalJson => Box::new(JsonReporter::new()),
         ReportFormat::Markdown => Box::new(MarkdownReporter::new()),
         ReportFormat::Html => Box::new(HtmlReporter::new()),
-        ReportFormat::SideBySide => Box::new(SideBySideReporter::new()),
+        ReportFormat::SideBySide => {
+            if use_color {
+                Box::new(SideBySideReporter::new())
+            } else {
+                Box::new(SideBySideReporter::new().no_colors())
+            }
+        }
         ReportFormat::Table => {
             if use_color {
                 Box::new(TableReporter::new())
@@ -240,5 +246,49 @@ pub fn create_reporter_with_options(
         // diff/view pipeline has no sbomqs renderer, so it takes the same
         // structured-JSON fallback as OscalJson.
         ReportFormat::SbomqsJson => Box::new(JsonReporter::new()),
+    }
+}
+
+#[cfg(test)]
+mod factory_tests {
+    use super::{ReportConfig, ReportFormat, create_reporter_with_options};
+
+    /// The factory must honour `use_color` for EVERY colored format.
+    ///
+    /// The `SideBySide` arm used to ignore the flag and hand back a colored
+    /// reporter, so `--no-color`, `NO_COLOR=1`, and redirecting to a file all
+    /// still emitted ANSI escapes — the reporter's own `no_colors()` builder
+    /// was simply never called.
+    #[test]
+    fn colorable_formats_honour_use_color_false() {
+        let (diff, old, new) = crate::tui::test_support::demo_diff();
+        let config = ReportConfig::default();
+
+        for format in [
+            ReportFormat::SideBySide,
+            ReportFormat::Summary,
+            ReportFormat::Table,
+        ] {
+            let report = create_reporter_with_options(format, false)
+                .generate_diff_report(&diff, &old, &new, &config)
+                .expect("report generation must succeed");
+            assert!(
+                !report.contains('\u{1b}'),
+                "{format:?} emitted ANSI escapes with use_color=false"
+            );
+        }
+    }
+
+    /// The colored path still works — the fix must not disable colors outright.
+    #[test]
+    fn side_by_side_still_colors_when_enabled() {
+        let (diff, old, new) = crate::tui::test_support::demo_diff();
+        let report = create_reporter_with_options(ReportFormat::SideBySide, true)
+            .generate_diff_report(&diff, &old, &new, &ReportConfig::default())
+            .expect("report generation must succeed");
+        assert!(
+            report.contains('\u{1b}'),
+            "side-by-side must still color when use_color=true"
+        );
     }
 }

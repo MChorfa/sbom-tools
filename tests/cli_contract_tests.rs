@@ -748,3 +748,60 @@ fn validate_sidecar_with_snake_case_typo_names_key_and_hints_camel_case() {
         "error must hint at camelCase keys: {err}"
     );
 }
+
+/// `--no-color` must suppress ANSI escapes in EVERY colored format.
+///
+/// The side-by-side reporter honoured its own `no_colors()` builder, but the
+/// reporter factory never called it for this format, so redirected/CI-captured
+/// side-by-side output was polluted with escape sequences.
+#[test]
+fn side_by_side_honours_no_color_flag() {
+    let output = base_command()
+        .arg("diff")
+        .arg(fixture_path("demo-old.cdx.json"))
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "side-by-side"])
+        .output()
+        .expect("diff command should run");
+
+    let rendered = stdout(&output);
+    // Guard against a vacuous pass: the report must actually have rendered.
+    assert!(
+        rendered.contains("lodash"),
+        "expected side-by-side content, got:\n{rendered}\n{}",
+        stderr(&output)
+    );
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "--no-color must suppress ANSI escapes in side-by-side output:\n{}",
+        stderr(&output)
+    );
+}
+
+/// The `NO_COLOR` convention is honoured for side-by-side too (the flag and
+/// the environment variable resolve through the same helper).
+#[test]
+fn side_by_side_honours_no_color_env() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sbom-tools"));
+    cmd.env("RUST_LOG", "error");
+    cmd.env("NO_COLOR", "1");
+    let output = cmd
+        .arg("diff")
+        .arg(fixture_path("demo-old.cdx.json"))
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "side-by-side"])
+        .output()
+        .expect("diff command should run");
+
+    let rendered = stdout(&output);
+    assert!(
+        rendered.contains("lodash"),
+        "expected side-by-side content, got:\n{rendered}\n{}",
+        stderr(&output)
+    );
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "NO_COLOR=1 must suppress ANSI escapes in side-by-side output:\n{}",
+        stderr(&output)
+    );
+}
