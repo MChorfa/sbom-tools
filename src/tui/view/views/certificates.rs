@@ -55,6 +55,7 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .split(area);
 
     // ── Left: certificate list ──
+    let inner_width = panels[0].width.saturating_sub(2) as usize;
     let items: Vec<ListItem> = certs
         .iter()
         .enumerate()
@@ -79,13 +80,19 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default()
             };
 
+            // Ellipsize the name so the expiry date survives narrow widths
+            // (ratatui otherwise clips the row and the date degrades to "2").
+            let expiry_txt = format!("  {expiry}");
+            let name = crate::tui::widgets::truncate_str(
+                &comp.name,
+                inner_width
+                    .saturating_sub(2 + unicode_width::UnicodeWidthStr::width(expiry_txt.as_str())),
+            );
+
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
-                Span::raw(&comp.name),
-                Span::styled(
-                    format!("  {expiry}"),
-                    Style::default().fg(scheme.text_muted),
-                ),
+                Span::raw(name),
+                Span::styled(expiry_txt, Style::default().fg(scheme.text_muted)),
             ]))
             .style(style)
         })
@@ -95,7 +102,9 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" Certificates ({}) ", certs.len()))
-            .title_bottom(crate::tui::shared::crypto::cert_legend()),
+            .title_bottom(crate::tui::shared::crypto::cert_legend(
+                panels[0].width.saturating_sub(2),
+            )),
     );
     let mut list_state = ratatui::widgets::ListState::default();
     if !certs.is_empty() {
@@ -125,8 +134,11 @@ pub fn render_certificates(frame: &mut Frame, area: Rect, app: &ViewApp) {
     if let Some(cp) = &comp.crypto_properties
         && let Some(cert) = &cp.certificate_properties
     {
+        let refs = crate::tui::shared::crypto::CryptoRefLookup::new(&app.sbom);
         lines.push(Line::raw(""));
-        lines.extend(crate::tui::shared::crypto::certificate_detail_lines(cert));
+        lines.extend(crate::tui::shared::crypto::certificate_detail_lines(
+            cert, &refs,
+        ));
     }
 
     let detail = Paragraph::new(lines)

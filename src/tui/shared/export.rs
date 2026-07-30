@@ -58,7 +58,21 @@ pub fn render_export_dialog(
 ) {
     let scheme = colors();
     // Content: 3 data + 2 doc + 2 section headers + 2 blank + output + cancel + 2 borders = 14
-    let popup_area = centered_rect_fn(45, 30, area);
+    let mut popup_area = centered_rect_fn(45, 30, area);
+    // Percentage sizing clips the fixed 14-row content on small terminals
+    // (30% of 24 rows is 7 — the doc formats, output path, and Esc hint all
+    // vanished). Grow to the content's absolute minimum, capped by the
+    // terminal, and re-center.
+    let min_h = 14u16.min(area.height);
+    let min_w = 46u16.min(area.width);
+    if popup_area.height < min_h {
+        popup_area.height = min_h;
+        popup_area.y = area.y + (area.height.saturating_sub(min_h)) / 2;
+    }
+    if popup_area.width < min_w {
+        popup_area.width = min_w;
+        popup_area.x = area.x + (area.width.saturating_sub(min_w)) / 2;
+    }
     frame.render_widget(Clear, popup_area);
 
     let section_style = Style::default().fg(scheme.text_muted);
@@ -78,19 +92,13 @@ pub fn render_export_dialog(
         lines.push(format_row(row, &scheme));
     }
 
-    // Output path preview
+    // Output path preview. Files land in the current working directory —
+    // "./<cwd-name>/…" read as a subdirectory that does not exist.
     lines.push(Line::from(""));
-    let output_dir = std::env::current_dir()
-        .ok()
-        .and_then(|p| {
-            p.file_name()
-                .map(|name| format!("./{}/", name.to_string_lossy()))
-        })
-        .unwrap_or_else(|| "./".to_string());
     lines.push(Line::from(vec![
         Span::styled(" Output: ", Style::default().fg(scheme.muted)),
         Span::styled(
-            format!("{output_dir}sbom_*.{{ext}}"),
+            "./sbom_*.{ext} (current directory)",
             Style::default().fg(scheme.text_muted),
         ),
     ]));

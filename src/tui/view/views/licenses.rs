@@ -70,7 +70,7 @@ fn render_license_list(
     // Compute risk summary
     let (permissive, copyleft, unknown) = compute_risk_summary(license_data);
 
-    let filter_line1 = Line::from(vec![
+    let mut line1_spans = vec![
         Span::styled("Group: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!(" {group_label} "),
@@ -80,13 +80,20 @@ fn render_license_list(
                 .bold(),
         ),
         Span::raw("  │  "),
-        Span::styled("[g]", Style::default().fg(scheme.accent)),
-        Span::raw(" toggle  "),
-        Span::styled("[Enter]", Style::default().fg(scheme.accent)),
-        Span::raw(" inspect"),
-    ]);
+    ];
+    // Fit hints whole to the left-panel width (no mid-token clipping).
+    super::push_fitted_hints(
+        &mut line1_spans,
+        &[("[g]", "toggle"), ("[Enter]", "inspect")],
+        area.width as usize,
+    );
+    let filter_line1 = Line::from(line1_spans);
 
+    // Units are labelled explicitly: the ✓/⚠/? glyphs count COMPONENTS per
+    // risk bucket, while the right side counts distinct LICENSES — without
+    // labels the strip read as "8+0+1 = 3", i.e. a dishonest sum.
     let mut filter_line2 = Line::from(vec![
+        Span::styled("components: ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!("✓ {permissive}"),
             Style::default().fg(scheme.success),
@@ -100,7 +107,7 @@ fn render_license_list(
         ),
         Span::raw("  │  "),
         Span::styled(
-            format!("{} total", license_data.len()),
+            crate::tui::shared::text::count_noun(license_data.len(), "license"),
             Style::default().fg(scheme.text_muted),
         ),
     ]);
@@ -130,7 +137,12 @@ fn render_license_list(
     app.license_state.total = license_data.len();
     app.license_state.clamp_selection();
 
-    // Phase 3: Full license expressions (no truncation), use Min() constraint
+    // License column width: table area minus borders (2), highlight symbol
+    // (2), Count (14) + Category (15) columns and 2 column gaps — floored at
+    // the column's Min(20) constraint (narrow layouts steal from the trailing
+    // Length columns first). Long SPDX expressions are ellipsized so a
+    // clipped "(Apache-2.0" can never render.
+    let license_col_width = (chunks[1].width as usize).saturating_sub(35).max(20);
     let rows: Vec<Row> = license_data
         .iter()
         .enumerate()
@@ -160,7 +172,10 @@ fn render_license_list(
             };
 
             Row::new(vec![
-                Cell::from(Span::styled(license.as_str(), license_style)),
+                Cell::from(Span::styled(
+                    crate::tui::widgets::truncate_str(license, license_col_width),
+                    license_style,
+                )),
                 Cell::from(count_cell),
                 Cell::from(Span::styled(
                     format!(
@@ -314,7 +329,10 @@ fn render_license_details(
                 lines.push(Line::from(vec![
                     Span::styled("  ✓ ", Style::default().fg(scheme.success)),
                     Span::styled(
-                        format!("No conflicts with {} other licenses", distinct - 1),
+                        format!(
+                            "No conflicts with {}",
+                            crate::tui::shared::text::count_noun(distinct - 1, "other license")
+                        ),
                         Style::default().fg(scheme.success),
                     ),
                 ]));

@@ -16,6 +16,8 @@ use std::io::{self, stdout};
 use super::events::{Event, EventHandler, handle_key_event, handle_mouse_event};
 
 #[cfg(test)]
+mod frame_dump_tests;
+#[cfg(test)]
 mod render_snapshot_tests;
 
 /// Run the `ViewApp` TUI.
@@ -268,14 +270,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let mut spans = if app.bom_profile == crate::model::BomProfile::Cbom {
         // CBOM status bar: crypto-focused stats
         let metrics = crate::quality::CryptographyMetrics::from_sbom(&app.sbom);
-        let readiness = metrics.quantum_readiness_score();
-        let q_color = if readiness >= 80.0 {
-            colors().success
-        } else if readiness >= 40.0 {
-            colors().warning
-        } else {
-            colors().error
-        };
         let mut s = vec![
             Span::styled(" Algo: ", Style::default().fg(colors().text_muted)),
             Span::styled(
@@ -296,10 +290,25 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ),
             Span::styled(" │ ", Style::default().fg(colors().muted)),
             Span::styled("Quantum: ", Style::default().fg(colors().text_muted)),
-            Span::styled(
-                format!("{readiness:.0}%"),
-                Style::default().fg(q_color).bold(),
-            ),
+            // A zero denominator must read n/a: quantum_readiness_score()
+            // is `None` when there are no algorithms, and a green
+            // "Quantum: 100%" over zero crypto assets is a lie.
+            match metrics.quantum_readiness_score() {
+                None => Span::styled("n/a", Style::default().fg(colors().text_muted)),
+                Some(readiness) => {
+                    let q_color = if readiness >= 80.0 {
+                        colors().success
+                    } else if readiness >= 40.0 {
+                        colors().warning
+                    } else {
+                        colors().error
+                    };
+                    Span::styled(
+                        format!("{readiness:.0}%"),
+                        Style::default().fg(q_color).bold(),
+                    )
+                }
+            },
         ];
         if metrics.weak_algorithm_count > 0 {
             s.push(Span::styled(" │ ", Style::default().fg(colors().muted)));
@@ -309,6 +318,28 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ));
         }
         s
+    } else if app.bom_profile == crate::model::BomProfile::AiBom {
+        // AI-BOM status bar: model/dataset counts — the generic Vulns/Licenses
+        // counts pointed at tabs this profile doesn't even have.
+        vec![
+            Span::styled(" Components: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                widgets::format_count(stats.component_count),
+                Style::default().fg(colors().primary).bold(),
+            ),
+            Span::styled(" │ ", Style::default().fg(colors().muted)),
+            Span::styled("Models: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                app.ml_model_count().to_string(),
+                Style::default().fg(colors().primary).bold(),
+            ),
+            Span::styled(" │ ", Style::default().fg(colors().muted)),
+            Span::styled("Datasets: ", Style::default().fg(colors().text_muted)),
+            Span::styled(
+                app.dataset_count().to_string(),
+                Style::default().fg(colors().primary),
+            ),
+        ]
     } else {
         // SBOM status bar: software-focused stats
         let mut s = vec![
@@ -420,7 +451,15 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &ViewApp) {
     // Get tab-specific hints
     let tab_name = app.active_tab.as_str();
 
-    let hints = FooterHints::for_view_tab(tab_name);
+    let mut hints = FooterHints::for_view_tab(tab_name);
+    // "1-4 detail tabs" is only true while the detail panel has focus with a
+    // component selected — otherwise digits jump between app tabs.
+    if app.active_tab == ViewTab::Tree
+        && !(app.focus_panel == super::app::FocusPanel::Right && app.selected_component.is_some())
+    {
+        hints.retain(|(k, _)| *k != "1-4");
+    }
+    let hints = hints;
 
     // Budget the row (mirrors diff mode; the logic lives in theme.rs).
     let yank_text = super::events::get_yank_text(app);
@@ -595,7 +634,9 @@ fn render_search_overlay(frame: &mut Frame, area: Rect, app: &ViewApp) {
 }
 
 fn render_legend_overlay(frame: &mut Frame, area: Rect) {
-    let popup_area = widgets::centered_rect(50, 60, area);
+    // 90% height: the legend now documents tree symbols and the Unknown
+    // license bucket too, and the old 60% box clipped its own content.
+    let popup_area = widgets::centered_rect(50, 90, area);
     frame.render_widget(Clear, popup_area);
 
     // Legend with accessibility patterns (symbols + colors)
@@ -680,6 +721,41 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             ),
             Span::styled("Proprietary ", Style::default().fg(colors().text)),
             Span::styled("(Commercial)", Style::default().fg(colors().text_muted)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ? ■ ", Style::default().fg(colors().text_muted)),
+            Span::styled("Unknown     ", Style::default().fg(colors().text)),
+            Span::styled(
+                "(No license data)",
+                Style::default().fg(colors().text_muted),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Tree Symbols",
+            Style::default().fg(colors().primary).bold(),
+        )]),
+        Line::from(vec![
+            Span::styled("  ▶ ▼ ", Style::default().fg(colors().accent)),
+            Span::styled(
+                "Group collapsed / expanded",
+                Style::default().fg(colors().text),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  ·   ", Style::default().fg(colors().text_muted)),
+            Span::styled("Component", Style::default().fg(colors().text)),
+        ]),
+        Line::from(vec![
+            Span::styled("  !   ", Style::default().fg(colors().critical)),
+            Span::styled("Has vulnerabilities", Style::default().fg(colors().text)),
+        ]),
+        Line::from(vec![
+            Span::styled("  C 2 H 1 ", Style::default().fg(colors().critical)),
+            Span::styled(
+                "Vulnerability count by severity",
+                Style::default().fg(colors().text),
+            ),
         ]),
         Line::from(""),
         Line::styled(

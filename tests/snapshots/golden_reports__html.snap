@@ -215,7 +215,7 @@ expression: "render(&HtmlReporter::new())"
 </div>
 <nav class="toc">
     <strong>Contents:</strong>
-    <a href="#metadata-changes">Metadata</a>    <a href="#component-changes">Components</a>    <a href="#cra-compliance">CRA Compliance</a>
+    <a href="#metadata-changes">Metadata</a>    <a href="#component-changes">Components</a>    <a href="#vulnerabilities">Vulnerabilities</a>    <a href="#cra-compliance">CRA Compliance</a>
 </nav>
 <div class="summary-cards">
     <div class="card">
@@ -232,11 +232,11 @@ expression: "render(&HtmlReporter::new())"
     </div>
     <div class="card">
         <div class="card-title">Vulns Introduced</div>
-        <div class="card-value critical">0</div>
+        <div class="card-value critical">2</div>
     </div>
     <div class="card">
         <div class="card-title">Semantic Score</div>
-        <div class="card-value ">53.5</div>
+        <div class="card-value ">57.7</div>
     </div>
 </div>
 <div class="section" id="metadata-changes">
@@ -254,6 +254,11 @@ expression: "render(&HtmlReporter::new())"
                 <td>created</td>
                 <td>[TIMESTAMP]</td>
                 <td>[TIMESTAMP]</td>
+            </tr>
+            <tr>
+                <td>doc_version</td>
+                <td>1</td>
+                <td>2</td>
             </tr>
             <tr>
                 <td>primary_component_version</td>
@@ -370,6 +375,45 @@ expression: "render(&HtmlReporter::new())"
         </tbody>
     </table>
 </div>
+<div class="section" id="vulnerabilities">
+    <h2>Introduced Vulnerabilities</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Severity</th>
+                <th>CVSS</th>
+                <th>SLA</th>
+                <th>Type</th>
+                <th>Component</th>
+                <th>Version</th>
+                <th>VEX</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>CVE-2023-45857</td>
+                <td><span class="badge badge-critical">Critical</span></td>
+                <td>9.8</td>
+                <td><span class="sla-unknown">-</span></td>
+                <td><span class="badge badge-transitive">Transitive</span></td>
+                <td>axios</td>
+                <td>1.4.0</td>
+                <td>-</td>
+            </tr>
+            <tr>
+                <td>CVE-2023-26136</td>
+                <td><span class="badge badge-high">High</span></td>
+                <td>8.1</td>
+                <td><span class="sla-unknown">-</span></td>
+                <td><span class="badge badge-transitive">Transitive</span></td>
+                <td>express</td>
+                <td>4.18.2</td>
+                <td>-</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
 <div class="section" id="cra-compliance">
     <h2>CRA Compliance</h2>
     <table>
@@ -378,9 +422,9 @@ expression: "render(&HtmlReporter::new())"
         </thead>
         <tbody>
             <tr><td><strong>Status</strong></td><td><span class="badge badge-removed">Non-compliant</span></td><td><span class="badge badge-removed">Non-compliant</span></td><td></td></tr>
-            <tr><td><strong>Score</strong></td><td>5%</td><td>5%</td><td></td></tr>
+            <tr><td><strong>Score</strong></td><td>4%</td><td>4%</td><td></td></tr>
             <tr><td><strong>Level</strong></td><td>EU CRA Phase 2 (2027)</td><td>EU CRA Phase 2 (2027)</td><td></td></tr>
-            <tr><td><strong>Errors</strong></td><td>3</td><td>3</td><td></td></tr>
+            <tr><td><strong>Errors</strong></td><td>2</td><td>2</td><td></td></tr>
             <tr><td><strong>Warnings</strong></td><td>[N]</td><td>[N]</td><td></td></tr>
         </tbody>
     </table>

@@ -64,6 +64,11 @@ impl ViewState for GraphChangesView {
                 self.inner.go_last();
                 EventResult::Consumed
             }
+            // The detail panel is always visible on this tab; make Enter
+            // respond instead of being the one silent Enter in the app.
+            KeyCode::Enter => {
+                EventResult::status("Details for the selected change are shown in the right panel")
+            }
             _ => EventResult::Ignored,
         }
     }

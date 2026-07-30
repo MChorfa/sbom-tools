@@ -4,18 +4,18 @@ expression: text
 ---
 sbom-tools  VIEW  │ SBOM │ CycloneDX  │ [SBOM]
 
-« [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  »
+« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌──────────────────┐┌──────────────────┐┌──────────────────┐┌──────────────────┐
 │     CRITICAL     ││       HIGH       ││      MEDIUM      ││        LOW       │
 │         1        ││         1        ││         0        ││         0        │
 └──────────────────┘└──────────────────┘└──────────────────┘└──────────────────┘
-⚡  KEV 1 [k] · Fixable 1 · EPSS≥10% 1
+⚡  KEV 1 [K] · Fixable 1 · EPSS≥10% 1
 Filter:  All  KEV:  Off  Sort:  Severity  Dedupe:  On  Group:  Component
-[f] filter [k] kev [s] sort [d] dedupe [g] group [E/C] fold [Tab] next group
+[f] filter [K] kev [s] sort [d] dedupe [g] group [E/C] fold [}/{] group jump
 ┌ Vulnerabilities (1 of 2) ────────────────┐┌ Group Details ───────────────────┐
-│  Vuln ID              Fix CWE            ││kev-lib  (1 vulnerabilities)      │
+│  Vuln ID              Fix CWE            ││kev-lib  (1 vulnerability)        │
 │▶ ├─▶ kev-lib (1)                         ││                                  │
 │  └─▶ fix-lib (1)                         ││CVEs (1):                         │
 │                                          ││ C       CVE-2024-0001 KEV        │
@@ -24,5 +24,5 @@ Filter:  All  KEV:  Off  Sort:  Severity  Dedupe:  On  Group:  Component
 │                                          ││                                  │
 │                                          ││                                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
- Components: 2 │ Vulns: 2 (1C/1H) │ Licenses: 1
-    …  Tab switch  / search  e export  ? help  q quit [y] copy CVE-2024-0001
+ Components: 2 │ Vulns: 2 (1C/1H) │ Licenses: 0
+ …  f filter │  Tab switch  / search  e export  ? help  q quit [y] copy kev-lib

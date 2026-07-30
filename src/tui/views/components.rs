@@ -57,6 +57,61 @@ fn field_change_severity(field: &str, old_is_none: bool) -> Option<(&'static str
     }
 }
 
+/// True when either side of the diff was profiled as a CBOM or AI-BOM at
+/// load time (the quality reports carry the `BomProfile::detect` result).
+/// For these profiles the component TYPE (algorithm/certificate/ml-model/…)
+/// is the primary identity signal, not the package ecosystem.
+pub(crate) fn is_typed_bom_diff(
+    old_quality: Option<&crate::quality::QualityReport>,
+    new_quality: Option<&crate::quality::QualityReport>,
+) -> bool {
+    use crate::quality::ScoringProfile;
+    [new_quality, old_quality].into_iter().flatten().any(|q| {
+        matches!(
+            q.profile,
+            ScoringProfile::Cbom | ScoringProfile::AiReadiness
+        )
+    })
+}
+
+/// Resolve a changed component's display type from the loaded SBOMs (new
+/// side first so a changed type shows its current value; removed components
+/// fall back to the old side).
+pub(crate) fn component_display_type(
+    old_sbom: Option<&crate::model::NormalizedSbom>,
+    new_sbom: Option<&crate::model::NormalizedSbom>,
+    format_id: &str,
+) -> Option<String> {
+    let canonical_id = crate::model::CanonicalId::from_format_id(format_id);
+    let comp = new_sbom
+        .and_then(|sbom| sbom.components.get(&canonical_id))
+        .or_else(|| old_sbom.and_then(|sbom| sbom.components.get(&canonical_id)))?;
+    Some(component_type_label(comp))
+}
+
+/// Human display type for a component. CBOM crypto assets use their
+/// CycloneDX cryptoProperties assetType (algorithm/certificate/protocol/…) —
+/// far more informative than the uniform "cryptographic" component type —
+/// with related-crypto-material narrowed to its material type (public-key,
+/// private-key, …) when declared. ML models and datasets get their short
+/// AI-BOM names; everything else keeps its CycloneDX component type.
+fn component_type_label(comp: &crate::model::Component) -> String {
+    use crate::model::{ComponentType, CryptoAssetType};
+    if let Some(cp) = &comp.crypto_properties {
+        if cp.asset_type == CryptoAssetType::RelatedCryptoMaterial
+            && let Some(mat) = &cp.related_crypto_material_properties
+        {
+            return mat.material_type.to_string();
+        }
+        return cp.asset_type.to_string();
+    }
+    match &comp.component_type {
+        ComponentType::MachineLearningModel => "ml-model".to_string(),
+        ComponentType::Data if comp.dataset.is_some() => "dataset".to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub fn render_components(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -98,6 +153,68 @@ pub fn render_components(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     );
     // Render detail panel
     render_detail_panel(frame, content_chunks[1], ctx, &component_data);
+}
+
+/// Render the Quick Filters picker modal (Components tab, 'Q').
+///
+/// While it is open, digits 1-8 toggle the corresponding security quick
+/// filter and 0 clears them all; outside it, digits always jump tabs.
+pub fn render_quick_filter_picker(
+    frame: &mut Frame,
+    security_filter: &crate::tui::viewmodel::security_filter::SecurityFilterState,
+) {
+    use crate::tui::viewmodel::security_filter::QuickFilter;
+    use ratatui::widgets::Clear;
+
+    let scheme = colors();
+    let area = frame.area();
+    let width = 44u16.min(area.width.saturating_sub(4));
+    // 8 filters + title spacing + footer + borders
+    let height = (QuickFilter::all().len() as u16 + 6).min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Quick Filters ")
+        .title_style(Style::default().fg(scheme.accent).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(scheme.accent));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Toggle security quick filters:",
+            Style::default().fg(scheme.text_muted),
+        )),
+        Line::from(""),
+    ];
+    for (i, qf) in QuickFilter::all().iter().enumerate() {
+        let active = qf.is_active(&security_filter.criteria);
+        let marker = if active { "\u{25cf}" } else { " " };
+        let label_style = if active {
+            Style::default().fg(scheme.accent).bold()
+        } else {
+            Style::default().fg(scheme.text)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" [{}] ", i + 1), Style::default().fg(scheme.accent)),
+            Span::styled(format!("{marker} "), Style::default().fg(scheme.accent)),
+            Span::styled(qf.label(), label_style),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("[0]", Style::default().fg(scheme.accent)),
+        Span::styled(" clear all  ", Style::default().fg(scheme.text_muted)),
+        Span::styled("[Esc/Q]", Style::default().fg(scheme.accent)),
+        Span::styled(" close", Style::default().fg(scheme.text_muted)),
+    ]));
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
@@ -159,20 +276,8 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         Span::styled(" filter  ", Style::default().fg(colors().text_muted)),
         Span::styled("[s]", Style::default().fg(colors().accent)),
         Span::styled(" sort  ", Style::default().fg(colors().text_muted)),
-        Span::styled("[", Style::default().fg(colors().accent)),
-    ]);
-    for (i, qf) in QuickFilter::all().iter().enumerate() {
-        if i > 0 {
-            filter_spans.push(Span::styled("/", Style::default().fg(colors().border)));
-        }
-        filter_spans.push(Span::styled(
-            qf.shortcut().to_string(),
-            Style::default().fg(colors().accent),
-        ));
-    }
-    filter_spans.extend(vec![
-        Span::styled("]", Style::default().fg(colors().accent)),
-        Span::styled(" quick  ", Style::default().fg(colors().text_muted)),
+        Span::styled("[Q]", Style::default().fg(colors().accent)),
+        Span::styled(" quick filters  ", Style::default().fg(colors().text_muted)),
         Span::styled("[v]", Style::default().fg(colors().accent)),
         Span::styled(
             if multi_select {
@@ -213,6 +318,176 @@ fn status_badge(text: &str, color: Color) -> Span<'static> {
     )
 }
 
+/// Responsive column layout for the diff components table.
+///
+/// Versions are the data this tab exists to show, so they get priority
+/// width: at narrow widths the Ecosystem/Changes columns are dropped (and
+/// the status badge collapses to its symbol) before a version column ever
+/// shrinks below a readable width. The Name column absorbs the remainder
+/// and is ellipsis-truncated instead of silently clipped.
+struct DiffTableLayout {
+    compact_status: bool,
+    show_ecosystem: bool,
+    /// Component TYPE column for CBOM/AI-BOM diffs (algorithm/certificate/
+    /// ml-model/…): for those profiles the type identifies the asset, so it
+    /// replaces the (mostly "unknown") Ecosystem column and outlives the
+    /// Changes column when width runs out.
+    show_type: bool,
+    show_changes: bool,
+    name_width: u16,
+    version_width: u16,
+}
+
+impl DiffTableLayout {
+    const STATUS_W: u16 = 12;
+    const COMPACT_STATUS_W: u16 = 3;
+    const VERSION_W: u16 = 11;
+    const COMPACT_VERSION_W: u16 = 9;
+    const ECO_W: u16 = 9;
+    const TYPE_W: u16 = 11; // "certificate" exactly; longer types elide
+    const CHANGES_W: u16 = 7;
+
+    fn for_width(area_width: u16, want_type: bool) -> Self {
+        // Borders (2) + highlight symbol (2).
+        let avail = area_width.saturating_sub(4);
+        let fits = |cols: &[u16]| -> Option<u16> {
+            let fixed: u16 = cols.iter().sum::<u16>() + cols.len() as u16; // +1 gap per col
+            avail.checked_sub(fixed).filter(|w| *w >= 12)
+        };
+
+        if want_type {
+            if let Some(name_width) = fits(&[
+                Self::STATUS_W,
+                Self::TYPE_W,
+                Self::VERSION_W,
+                Self::VERSION_W,
+                Self::CHANGES_W,
+            ]) {
+                return Self {
+                    compact_status: false,
+                    show_ecosystem: false,
+                    show_type: true,
+                    show_changes: true,
+                    name_width,
+                    version_width: Self::VERSION_W,
+                };
+            }
+            if let Some(name_width) = fits(&[
+                Self::STATUS_W,
+                Self::TYPE_W,
+                Self::VERSION_W,
+                Self::VERSION_W,
+            ]) {
+                return Self {
+                    compact_status: false,
+                    show_ecosystem: false,
+                    show_type: true,
+                    show_changes: false,
+                    name_width,
+                    version_width: Self::VERSION_W,
+                };
+            }
+            // Too narrow even for the type column: fall through to the
+            // untyped ladder (the detail pane still shows the type).
+        }
+
+        if let Some(name_width) = fits(&[
+            Self::STATUS_W,
+            Self::VERSION_W,
+            Self::VERSION_W,
+            Self::ECO_W,
+            Self::CHANGES_W,
+        ]) {
+            return Self {
+                compact_status: false,
+                show_ecosystem: true,
+                show_type: false,
+                show_changes: true,
+                name_width,
+                version_width: Self::VERSION_W,
+            };
+        }
+        if let Some(name_width) = fits(&[
+            Self::STATUS_W,
+            Self::VERSION_W,
+            Self::VERSION_W,
+            Self::CHANGES_W,
+        ]) {
+            return Self {
+                compact_status: false,
+                show_ecosystem: false,
+                show_type: false,
+                show_changes: true,
+                name_width,
+                version_width: Self::VERSION_W,
+            };
+        }
+        if let Some(name_width) = fits(&[Self::STATUS_W, Self::VERSION_W, Self::VERSION_W]) {
+            return Self {
+                compact_status: false,
+                show_ecosystem: false,
+                show_type: false,
+                show_changes: false,
+                name_width,
+                version_width: Self::VERSION_W,
+            };
+        }
+        let name_width = fits(&[
+            Self::COMPACT_STATUS_W,
+            Self::COMPACT_VERSION_W,
+            Self::COMPACT_VERSION_W,
+        ])
+        .unwrap_or(10);
+        Self {
+            compact_status: true,
+            show_ecosystem: false,
+            show_type: false,
+            show_changes: false,
+            name_width,
+            version_width: Self::COMPACT_VERSION_W,
+        }
+    }
+
+    fn constraints(&self) -> Vec<Constraint> {
+        let mut w = vec![
+            Constraint::Length(if self.compact_status {
+                Self::COMPACT_STATUS_W
+            } else {
+                Self::STATUS_W
+            }),
+            Constraint::Min(self.name_width),
+        ];
+        if self.show_type {
+            w.push(Constraint::Length(Self::TYPE_W));
+        }
+        w.push(Constraint::Length(self.version_width));
+        w.push(Constraint::Length(self.version_width));
+        if self.show_ecosystem {
+            w.push(Constraint::Length(Self::ECO_W));
+        }
+        if self.show_changes {
+            w.push(Constraint::Length(Self::CHANGES_W));
+        }
+        w
+    }
+
+    fn header(&self) -> Vec<&'static str> {
+        let mut h = vec!["", "Name"];
+        if self.show_type {
+            h.push("Type");
+        }
+        h.push("Old Ver");
+        h.push("New Ver");
+        if self.show_ecosystem {
+            h.push("Ecosystem");
+        }
+        if self.show_changes {
+            h.push("Changes");
+        }
+        h
+    }
+}
+
 fn render_component_table(
     frame: &mut Frame,
     area: Rect,
@@ -221,18 +496,14 @@ fn render_component_table(
     total_unfiltered: usize,
 ) {
     let is_diff = matches!(component_data, ComponentListData::Diff(_));
+    let want_type = is_diff && is_typed_bom_diff(ctx.old_quality, ctx.new_quality);
+    let layout = DiffTableLayout::for_width(area.width, want_type);
     let header_cells: Vec<Cell> = if is_diff {
-        [
-            "",
-            "Name",
-            "Old Version",
-            "New Version",
-            "Ecosystem",
-            "Changes",
-        ]
-        .into_iter()
-        .map(|h| Cell::from(h).style(Style::default().fg(colors().accent).bold()))
-        .collect()
+        layout
+            .header()
+            .into_iter()
+            .map(|h| Cell::from(h).style(Style::default().fg(colors().accent).bold()))
+            .collect()
     } else {
         ["", "Name", "Version", "", "Ecosystem", "Staleness", "EOL"]
             .into_iter()
@@ -243,7 +514,7 @@ fn render_component_table(
 
     // Use pre-built component list (state already updated in prepare_render)
     let rows: Vec<Row> = match component_data {
-        ComponentListData::Diff(components) => get_diff_rows(ctx, components),
+        ComponentListData::Diff(components) => get_diff_rows(ctx, components, &layout),
         ComponentListData::Empty => vec![],
     };
 
@@ -267,14 +538,7 @@ fn render_component_table(
     }
 
     let widths: Vec<Constraint> = if is_diff {
-        vec![
-            Constraint::Length(12),
-            Constraint::Min(16),
-            Constraint::Length(11),
-            Constraint::Length(11),
-            Constraint::Length(9),
-            Constraint::Length(7),
-        ]
+        layout.constraints()
     } else {
         vec![
             Constraint::Length(12),
@@ -394,6 +658,17 @@ fn render_diff_detail(
                 Span::styled(&comp.id, Style::default().fg(colors().text)),
             ]),
         ];
+        // CBOM/AI-BOM: the CycloneDX type (algorithm/certificate/ml-model/…)
+        // identifies what kind of asset this is — surface it instead of
+        // leaving it buried inside the ID string (#80).
+        if is_typed_bom_diff(ctx.old_quality, ctx.new_quality)
+            && let Some(type_label) = component_display_type(ctx.old_sbom, ctx.new_sbom, &comp.id)
+        {
+            lines.push(Line::from(vec![
+                Span::styled("Type: ", Style::default().fg(colors().text_muted)),
+                Span::styled(type_label, Style::default().fg(colors().text)),
+            ]));
+        }
         if ctx.diff_result.is_some_and(|r| {
             r.ml_regressions
                 .iter()
@@ -612,13 +887,27 @@ fn render_diff_detail(
             if let Some(ci) = &match_info.confidence_interval
                 && ci.width() > 0.0
             {
-                lines.push(Line::styled(
+                // A point score outside its own displayed interval must be
+                // annotated, not left to contradict the CI line above it
+                // (e.g. "Score: 1.00" over "CI: 0.83–0.99").
+                let ci_line = if match_info.score < ci.lower || match_info.score > ci.upper {
+                    format!(
+                        "CI: {:.2}\u{2013}{:.2} ({:.0}%; score outside CI: {} match)",
+                        ci.lower,
+                        ci.upper,
+                        ci.level * 100.0,
+                        match_info.method
+                    )
+                } else {
                     format!(
                         "CI: {:.2}\u{2013}{:.2} ({:.0}%)",
                         ci.lower,
                         ci.upper,
                         ci.level * 100.0
-                    ),
+                    )
+                };
+                lines.push(Line::styled(
+                    widgets::truncate_str(&ci_line, (area.width as usize).saturating_sub(4)),
                     Style::default().fg(scheme.text_muted),
                 ));
             }
@@ -802,14 +1091,21 @@ fn render_diff_detail(
         let reverse_graph = &ctx.dependencies.cached_reverse_graph;
         let (direct_deps, transitive_count) =
             crate::tui::shared::components::compute_blast_radius(&comp.name, reverse_graph);
+        // Resolve the license from the new SBOM, falling back to the old one
+        // so REMOVED components stop resolving to nothing. A component with
+        // no declared license at all gets a neutral "No license declared"
+        // (LicenseRisk::None) — absence is not copyleft risk, and crypto
+        // assets/datasets legitimately carry no license.
+        let canonical_id = crate::model::CanonicalId::from_format_id(&comp.id);
         let license_text = ctx
             .new_sbom
-            .and_then(|sbom| {
-                let canonical_id = crate::model::CanonicalId::from_format_id(&comp.id);
-                sbom.components.get(&canonical_id)
+            .and_then(|sbom| sbom.components.get(&canonical_id))
+            .or_else(|| {
+                ctx.old_sbom
+                    .and_then(|sbom| sbom.components.get(&canonical_id))
             })
             .and_then(|c| c.licenses.declared.first())
-            .map_or("Unknown", |l| l.expression.as_str());
+            .map_or("No license declared", |l| l.expression.as_str());
         lines.extend(
             crate::tui::shared::components::render_security_analysis_lines(
                 related_vulns.len(),
@@ -856,7 +1152,11 @@ fn render_empty_detail(frame: &mut Frame, area: Rect, focused: bool) {
     );
 }
 
-fn get_diff_rows(ctx: &RenderContext, components: &[&ComponentChange]) -> Vec<Row<'static>> {
+fn get_diff_rows(
+    ctx: &RenderContext,
+    components: &[&ComponentChange],
+    layout: &DiffTableLayout,
+) -> Vec<Row<'static>> {
     let multi_select = ctx.components.multi_select_mode;
 
     components
@@ -871,37 +1171,54 @@ fn get_diff_rows(ctx: &RenderContext, components: &[&ComponentChange]) -> Vec<Ro
             };
 
             let scheme = colors();
-            let (label, status_bg, status_fg, row_style) = match comp.change_type {
+            let (label, compact_label, status_bg, status_fg, row_style) = match comp.change_type {
                 crate::diff::ChangeType::Added => (
                     " + ADDED    ",
+                    " + ",
                     scheme.added,
                     scheme.badge_fg_dark,
                     Style::default().fg(scheme.added),
                 ),
                 crate::diff::ChangeType::Removed => (
                     " - REMOVED  ",
+                    " - ",
                     scheme.removed,
                     scheme.badge_fg_light,
                     Style::default().fg(scheme.removed),
                 ),
                 crate::diff::ChangeType::Modified => (
                     " ~ MODIFIED ",
+                    " ~ ",
                     scheme.modified,
                     scheme.badge_fg_dark,
                     Style::default().fg(scheme.modified),
                 ),
                 crate::diff::ChangeType::Unchanged => (
                     " = SAME     ",
+                    " = ",
                     scheme.muted,
                     scheme.badge_fg_light,
                     Style::default().fg(scheme.text),
                 ),
+            };
+            let label = if layout.compact_status {
+                compact_label
+            } else {
+                label
             };
 
             let row_style = if is_selected {
                 row_style.bg(scheme.selection)
             } else {
                 row_style
+            };
+
+            let version_budget = layout.version_width as usize;
+            let version_cell = |v: &Option<String>| {
+                Cell::from(v.as_deref().map_or_else(
+                    || "\u{2014}".to_string(),
+                    |v| widgets::truncate_str(v, version_budget),
+                ))
             };
 
             // Detect version downgrades for the "New Version" cell
@@ -911,44 +1228,55 @@ fn get_diff_rows(ctx: &RenderContext, components: &[&ComponentChange]) -> Vec<Ro
                 use crate::tui::security::{VersionChange, detect_version_downgrade};
                 if detect_version_downgrade(old_ver, new_ver) == VersionChange::Downgrade {
                     Cell::from(Line::from(vec![
-                        Span::raw(new_ver.clone()),
+                        Span::raw(widgets::truncate_str(
+                            new_ver,
+                            version_budget.saturating_sub(4),
+                        )),
                         Span::styled(" \u{2193}DG", Style::default().fg(colors().critical).bold()),
                     ]))
                 } else {
-                    Cell::from(
-                        comp.new_version
-                            .clone()
-                            .unwrap_or_else(|| "\u{2014}".to_string()),
-                    )
+                    version_cell(&comp.new_version)
                 }
             } else {
-                Cell::from(
-                    comp.new_version
-                        .clone()
-                        .unwrap_or_else(|| "\u{2014}".to_string()),
-                )
+                version_cell(&comp.new_version)
             };
 
-            Row::new(vec![
+            // Ellipsis-truncate the name to its real budget: ratatui clips
+            // cells silently, which made distinct crypto asset names
+            // ("SLH-DSA-SHAKE-256s"/"-128s") indistinguishable.
+            let mut cells = vec![
                 Cell::from(Span::styled(
                     format!("{checkbox}{label}"),
                     Style::default().fg(status_fg).bg(status_bg).bold(),
                 )),
-                Cell::from(comp.name.clone()),
-                Cell::from(
-                    comp.old_version
-                        .clone()
-                        .unwrap_or_else(|| "\u{2014}".to_string()),
-                ),
-                new_version_cell,
-                Cell::from(comp.ecosystem.clone().unwrap_or_else(|| "-".to_string())),
-                Cell::from(if comp.field_changes.is_empty() {
+                Cell::from(widgets::truncate_str(
+                    &comp.name,
+                    layout.name_width as usize,
+                )),
+            ];
+            if layout.show_type {
+                cells.push(Cell::from(
+                    component_display_type(ctx.old_sbom, ctx.new_sbom, &comp.id).map_or_else(
+                        || "-".to_string(),
+                        |t| widgets::truncate_str(&t, DiffTableLayout::TYPE_W as usize),
+                    ),
+                ));
+            }
+            cells.push(version_cell(&comp.old_version));
+            cells.push(new_version_cell);
+            if layout.show_ecosystem {
+                cells.push(Cell::from(
+                    comp.ecosystem.clone().unwrap_or_else(|| "-".to_string()),
+                ));
+            }
+            if layout.show_changes {
+                cells.push(Cell::from(if comp.field_changes.is_empty() {
                     "-".to_string()
                 } else {
                     comp.field_changes.len().to_string()
-                }),
-            ])
-            .style(row_style)
+                }));
+            }
+            Row::new(cells).style(row_style)
         })
         .collect()
 }

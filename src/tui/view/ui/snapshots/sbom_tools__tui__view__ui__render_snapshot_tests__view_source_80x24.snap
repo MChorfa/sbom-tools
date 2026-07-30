@@ -4,11 +4,11 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-« [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌ SBOM Source [Tree] (126 nodes) 'v':Raw ──────────────┐┌ SBOM Map ────────────┐
-│root                                                  ││ CycloneDX 1.5 │ 2024-│
+│root                                                  ││ CycloneDX 1.5 │ 2024…│
 │> ▼ root: {} (7 keys)                                 ││──────────────────────│
 │  ├─ bomFormat: "CycloneDX"                           ││ ▸ components      [8]│
 │  ├─ ▶ components: [] (8 items)                       ││ ▸ dependencies    [5]│
@@ -17,12 +17,12 @@ sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 │  ├─ specVersion: "1.5"                               ││──────────────────────│
 │  ├─ version: 2                                       ││ root                 │
 │  └─ ▶ vulnerabilities: [] (2 items)                  ││ 9 components         │
-│                                                      ││ 3 licenses           │
-│                                                      ││                      │
-│                                                      ││                      │
+│                                                      ││ 2 vulnerabilities    │
+│                                                      ││ 2 licenses           │
+│                                                      ││ 2 dependency edges   │
 │                                                      ││                      │
 │                                                      ││                      │
 │                                                      ││ ▓░░░░░░░░░   1/8  12%│
 └──────────────────────────────────────── Ln 1/8 (12%) ┘└──────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2
   …  v tree/raw │  Tab switch  / search  e export  ? help  q quit [y] copy root

@@ -45,6 +45,11 @@ pub(super) fn handle_components_keys(app: &mut App, key: KeyEvent) -> bool {
 /// Returns `true` if the key matched one of the data-dependent actions.
 fn handle_data_dependent_keys(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
+        // Enter drills into the selection like every sibling list tab —
+        // same populated modal as the global 'D' binding.
+        KeyCode::Enter => {
+            super::helpers::open_diff_component_deep_dive(app);
+        }
         KeyCode::Char('y') => {
             if let Some(comp_name) = get_components_tab_selected_name(app) {
                 let info = get_components_tab_clipboard_info(app, &comp_name);

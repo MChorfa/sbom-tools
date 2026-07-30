@@ -4,25 +4,25 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  »
+[1] Overview  │ [2] Components  │ [3] Dependencies  │ [4] Licenses  »
 
 ────────────────────────────────────────────────────────────────────────────────
-┌ Components ─┐┌ Vulnerabili┐┌ Licenses ───┐┌ Document Info ───────────────────┐
-│      9      ││      0     ││      3      ││Name:    acme-webapp              │
-│ Components  ││Vulnerabilit││Unique Licens││Format:   CycloneDX 1.5           │
-│2 ecosystems ││ 0C 0H 0M 0L││  1 unknown  ││Created: 2024-06-15 10:00:00 (AGE)│
-└─────────────┘└────────────┘└─────────────┘│                                  │
-┌ Statistics ──────────────────────────────┐│[e] Export (JSON, SARIF, Markdown,│
-│── Vulnerability Severity ──              │└──────────────────────────────────┘
-│  Critical ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)│┌ Top Vulnerable Components (0) ───┐
-│      High ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││Component                      C M│
-│    Medium ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││                                  │
-│       Low ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││                                  │
-│── Ecosystems ──                          ││                                  │
-│         npm ██████████████████████░░░    ││                                  │
-│       Other 1 more                       ││                                  │
-│── Licenses ──                            ││                                  │
-│         MIT ████████████████░░░░░░░░░    ││                                  │
+┌ Components ─┐┌ Vulns ─────┐┌ Licenses ───┐┌ Document Info ───────────────────┐
+│      9      ││      2     ││      2      ││Name:    acme-webapp              │
+│ Components  ││    Vulns   ││  Licenses   ││Format:   CycloneDX 1.5           │
+│2 ecosystems ││ 1C 1H 0M 0L││  1 unknown  ││Created: 2024-06-15 10:00:00      │
+└─────────────┘└────────────┘└─────────────┘│[e] Export…                       │
+┌ Statistics ──────────────────────────────┐└──────────────────────────────────┘
+│── Vulnerability Severity ──              │┌ Top Vulnerable Components (2) ───┐
+│  Critical ██████████░░░░░░░░░░    1 (50%)││Component            CVEs Max Sev │
+│      High ██████████░░░░░░░░░░    1 (50%)││express              1    High    │
+│    Medium ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)││axios                1    Critical│
+│       Low ░░░░░░░░░░░░░░░░░░░░    0 ( 0%)│└──────────────────────────────────┘
+│── Ecosystems ──                          │┌ Top Depended-On Components (2) ──┐
+│      Other: 2 ecosystems (9 components)  ││Component            Deps   Vulns │
+│── Licenses ──                            ││lodash               1      0     │
+│      Other: 2 licenses (8 components)    ││typescript           1      0     │
+│ unlicensed: 1 component                  ││                                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3
-                  Tab switch  / search  e export  ? help  q quit
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2
+        P cycle profile │  Tab switch  / search  e export  ? help  q quit

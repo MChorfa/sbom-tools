@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 
-[1] Overview  │ [2] Algorithms  │ [3] Certs  │ [4] Keys  │ [5] Protocols  »
+[1] Overview  │ [2] Algorithms  │ [3] Certificates  │ [4] Keys  »
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌ Crypto Summary ──────────────────────────────────────────────────────────────┐
@@ -17,12 +17,12 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │[ALG] Q ML-DSA-87                     ││OID:  2.16.840.1.101.3.4.4.3          │
 │[ALG] Q ML-DSA-65                     ││                                      │
 │[ALG] Q SLH-DSA-SHAKE-256s            ││-- Algorithm Properties --            │
-│[ALG] Q AES-256-GCM                   ││Primitive: kem                        │
-│[ALG] Q SHA-384                       ││Family:    ML-KEM                     │
-│[ALG] V X25519                        ││Params:    1024                       │
-│[ALG] Q X25519-ML-KEM-768             ││Security:  256 bits                   │
-│[ALG] V ECDSA-P521                    ││Quantum:   Level 5 SAFE               │
-│[ALG] Q XMSS                          ││Functions: keygen, encapsulate,       │
-└ ! weak  Q quantum-safe  V vulnerable ┘└──────────────────────────────────────┘
+│[ALG] Q AES-256-GCM                   ││Primitive: key encapsulation mechanism│
+│[ALG] Q SHA-384                       ││(kem)                                 │
+│[ALG] V X25519                        ││Family:    ML-KEM                     │
+│[ALG] Q X25519-ML-KEM-768             ││Params:    1024                       │
+│[ALG] V ECDSA-P521                    ││Security:  256 bits                   │
+│[ALG] Q XMSS                          ││Quantum:   Level 5 SAFE               │
+└ ! weak  Q safe  V vuln  ? unk ───────┘└──────────────────────────────────────┘
  Algo: 11 │ Certs: 1 │ Keys: 2 │ Quantum: 82%
        Tab switch  / search  e export  ? help  q quit [y] copy ML-KEM-1024

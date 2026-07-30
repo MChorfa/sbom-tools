@@ -4,25 +4,25 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
-« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Diff  »
+« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] SxS  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
-Filter:  All   [s] Sort: Severity  │  C  0  H  0  M  0  L  0 │ + 0  - 0  = 0
+Filter:  All   [s] Sort: Severity  │  C  +1  H  -1  M  -1  L  0 │ + 2  - 3  = 0
 View:  List   │  [f] filter  [s] sort  [g] group
 ────────────────────────────────────────────────────────────────────────────────
-┌──────────────────────────────────────────┐┌ Vulnerability Details ───────────┐
+┌ Vulnerabilities ─────────────────────────┐┌ Vulnerability Details ───────────┐
+│  Status       Sev ID  CVSS  SLA        Co││C  Critical  9.8                  │
+│▶  + NEW        C  TRN 9.8   -          ax││CVE-2023-45857 [NVD]              │
+│   + NEW        H  TRN 8.1   -          ex││+ Introduced  axios               │
+│   - FIXED      H  TRN 7.5   -          ex││                                  │
+│   - FIXED      H  DIR 7.2   -          lo││Affects: 1.4.0                    │
+│   - FIXED      M  TRN 5.3   -          ex││                                  │
+│                                          ││Axios SSRF vulnerability          │
+│                                          ││allowing server-side request      │
+│                                          ││forgery                           │
 │                                          ││                                  │
-│                     ✓                    ││                 ⚠                │
-│                                          ││                                  │
-│        No vulnerabilities detected       ││Select a vulnerability to view det│
-│                                          ││                                  │
-│Great news! No known vulnerabilities were ││   [↑↓] navigate  [Enter] expand  │
-│                                          ││                                  │
-│                                          ││                                  │
-│                                          ││                                  │
-│                                          ││                                  │
-│                                          ││                                  │
-│                                          ││                                  │
+│                                          ││[o] open CVE  [Enter] go to       │
+│                                          ││component                         │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
-   f filter  s sort  g group │  Tab switch  / search  e export  ? help  q quit
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
+    …  Tab switch  / search  e export  ? help  q quit [y] copy CVE-2023-45857

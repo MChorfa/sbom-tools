@@ -120,7 +120,7 @@ fn render_diff_summary(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_chunks[row]);
 
-        render_ecosystem_breakdown_chart(frame, chart_chunks[0], result);
+        render_ecosystem_breakdown_chart(frame, chart_chunks[0], ctx);
         if has_vulns {
             render_severity_chart(frame, chart_chunks[1], result);
         } else {
@@ -308,12 +308,14 @@ fn render_match_metrics_card(
                 format!("{}", mm.exact_matches),
                 Style::default().fg(scheme.success).bold(),
             ),
-            Span::styled(" exact, ", Style::default().fg(scheme.text_muted)),
+            // Score buckets (>=0.995 vs below), NOT match methods — a
+            // Fuzzy-method pairing with score 1.00 counts as high-conf.
+            Span::styled(" high-conf, ", Style::default().fg(scheme.text_muted)),
             Span::styled(
                 format!("{}", mm.fuzzy_matches),
                 Style::default().fg(scheme.warning).bold(),
             ),
-            Span::styled(" fuzzy", Style::default().fg(scheme.text_muted)),
+            Span::styled(" low-conf", Style::default().fg(scheme.text_muted)),
             if mm.rule_matches > 0 {
                 Span::styled(
                     format!(", {} rule", mm.rule_matches),
@@ -613,20 +615,43 @@ fn count_findings(result: &crate::diff::DiffResult) -> usize {
 fn summary_risk_line(
     result: &crate::diff::DiffResult,
     scheme: &crate::tui::theme::ColorScheme,
+    compact: bool,
 ) -> Line<'static> {
     let (risk_label, risk_color, risk_badge_fg) = compute_risk_level(result, scheme);
     let score = result.semantic_score;
     let total_changes = result.summary.total_changes;
     let major_bumps = count_major_bumps(&result.components.modified);
 
+    // Scope the headline: total_changes mixes component, dependency-edge and
+    // metadata changes, and the unlabeled sum contradicted every other count
+    // on the same screen.
+    let s = &result.summary;
+    let comp_changes = s.components_added + s.components_removed + s.components_modified;
+    let dep_changes = s.dependencies_added + s.dependencies_removed;
+    let meta_changes = result.metadata_changes.len();
+    let (comp_l, dep_l, meta_l) = if compact {
+        ("c", "d", "m")
+    } else {
+        (" comp", " dep", " meta")
+    };
+    let mut scope_parts = vec![format!("{comp_changes}{comp_l}")];
+    if dep_changes > 0 {
+        scope_parts.push(format!("{dep_changes}{dep_l}"));
+    }
+    if meta_changes > 0 {
+        scope_parts.push(format!("{meta_changes}{meta_l}"));
+    }
+
     let mut line1 = vec![
         Span::styled(
             format!(" {risk_label} "),
             Style::default().fg(risk_badge_fg).bg(risk_color).bold(),
         ),
-        Span::raw("  Score: "),
+        // The number is a 0-100 similarity percentage, not a risk score —
+        // label it so "Low Risk / 66" cannot read as contradictory.
+        Span::raw("  Similarity: "),
         Span::styled(
-            format!("{score:.1}"),
+            format!("{score:.0}%"),
             Style::default().fg(risk_color).bold(),
         ),
         Span::raw("  \u{2502}  "),
@@ -634,10 +659,19 @@ fn summary_risk_line(
             format!("{total_changes} changes"),
             Style::default().fg(scheme.text),
         ),
+        Span::styled(
+            format!(" ({})", scope_parts.join(", ")),
+            Style::default().fg(scheme.text_muted),
+        ),
     ];
     if major_bumps > 0 {
+        let label = if compact {
+            format!(", {major_bumps} major")
+        } else {
+            format!(", {major_bumps} major bumps")
+        };
         line1.push(Span::styled(
-            format!(", {major_bumps} major bumps"),
+            label,
             Style::default().fg(scheme.warning).bold(),
         ));
     }
@@ -697,7 +731,7 @@ fn render_compact_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderCont
         ),
     ]);
 
-    let para = Paragraph::new(vec![summary_risk_line(result, &scheme), stat_line]).block(
+    let para = Paragraph::new(vec![summary_risk_line(result, &scheme, true), stat_line]).block(
         Block::default()
             .title(" Summary ")
             .borders(Borders::ALL)
@@ -717,15 +751,26 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Line 1: Risk badge + Score + Changes
-    lines.push(summary_risk_line(result, &scheme));
+    lines.push(summary_risk_line(result, &scheme, false));
 
     // Line 2: SBOM metadata + Quality + Matching
     let mut line2: Vec<Span> = Vec::new();
     if let Some(old) = ctx.old_sbom {
-        line2.push(Span::styled(
-            format!("{} {}", old.document.format, old.document.format_version),
-            Style::default().fg(scheme.accent),
-        ));
+        // Show a format/spec-version transition when the two sides differ —
+        // the badge previously described only the old document.
+        let old_fmt = format!("{} {}", old.document.format, old.document.format_version);
+        let badge = match ctx.new_sbom {
+            Some(new) => {
+                let new_fmt = format!("{} {}", new.document.format, new.document.format_version);
+                if new_fmt == old_fmt {
+                    old_fmt
+                } else {
+                    format!("{old_fmt} \u{2192} {new_fmt}")
+                }
+            }
+            None => old_fmt,
+        };
+        line2.push(Span::styled(badge, Style::default().fg(scheme.accent)));
         line2.push(Span::raw("  "));
     }
     if let Some(delta) = result.quality_delta.as_ref() {
@@ -744,9 +789,13 @@ fn render_summary_header(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         line2.push(Span::raw("  "));
     }
     if let Some(metrics) = result.match_metrics.as_ref() {
+        // Confidence buckets, not methods: the engine counts by score
+        // (>=0.995), so a Fuzzy-method 1.00 pairing lands in the first
+        // bucket. Calling that bucket "exact" contradicted the per-component
+        // "via Fuzzy" detail on the Components tab.
         line2.push(Span::styled(
             format!(
-                "Match: {} exact, {} fuzzy",
+                "Match: {} high-conf, {} low-conf",
                 metrics.exact_matches, metrics.fuzzy_matches
             ),
             Style::default().fg(scheme.muted),
@@ -1417,46 +1466,56 @@ fn render_vulnerabilities_card(frame: &mut Frame, area: Rect, ctx: &RenderContex
     frame.render_widget(paragraph, area);
 }
 
-fn render_ecosystem_breakdown_chart(
-    frame: &mut Frame,
-    area: Rect,
-    result: &crate::diff::DiffResult,
-) {
+fn render_ecosystem_breakdown_chart(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let scheme = colors();
+    let Some(result) = ctx.diff_result else {
+        return;
+    };
 
-    // Per-ecosystem (added, removed, modified) triples: the previous flat sum
-    // hid the change direction, and its rotating palette could paint an
-    // ecosystem in the semantically-critical red.
-    let mut eco_counts: std::collections::HashMap<&str, (u64, u64, u64)> =
+    // CBOM/AI-BOM diffs group by component TYPE (algorithm/certificate/
+    // ml-model/…) resolved from the loaded SBOMs: crypto assets and models
+    // have no package ecosystem, so the ecosystem grouping lumped nearly
+    // everything under "unknown" (#80).
+    let typed = super::components::is_typed_bom_diff(ctx.old_quality, ctx.new_quality);
+    let key_of = |comp: &crate::diff::ComponentChange| -> String {
+        if typed {
+            super::components::component_display_type(ctx.old_sbom, ctx.new_sbom, &comp.id)
+                .unwrap_or_else(|| "unknown".to_string())
+        } else {
+            comp.ecosystem
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string())
+        }
+    };
+
+    // Per-group (added, removed, modified) triples: the previous flat sum
+    // hid the change direction, and its rotating palette could paint a
+    // group in the semantically-critical red.
+    let mut eco_counts: std::collections::HashMap<String, (u64, u64, u64)> =
         std::collections::HashMap::new();
     for comp in &result.components.added {
-        eco_counts
-            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
-            .or_default()
-            .0 += 1;
+        eco_counts.entry(key_of(comp)).or_default().0 += 1;
     }
     for comp in &result.components.removed {
-        eco_counts
-            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
-            .or_default()
-            .1 += 1;
+        eco_counts.entry(key_of(comp)).or_default().1 += 1;
     }
     for comp in &result.components.modified {
-        eco_counts
-            .entry(comp.ecosystem.as_deref().unwrap_or("unknown"))
-            .or_default()
-            .2 += 1;
+        eco_counts.entry(key_of(comp)).or_default().2 += 1;
     }
 
     let mut ecosystems: Vec<_> = eco_counts.into_iter().collect();
     ecosystems.sort_by(|a, b| {
         let ta = a.1.0 + a.1.1 + a.1.2;
         let tb = b.1.0 + b.1.1 + b.1.2;
-        tb.cmp(&ta).then_with(|| a.0.cmp(b.0))
+        tb.cmp(&ta).then_with(|| a.0.cmp(&b.0))
     });
 
     let block = Block::default()
-        .title(" Changes by Ecosystem ")
+        .title(if typed {
+            " Changes by Asset Type "
+        } else {
+            " Changes by Ecosystem "
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.border));
 
@@ -1510,8 +1569,10 @@ fn render_ecosystem_breakdown_chart(
                     .label(Line::from("~"))
                     .style(Style::default().fg(scheme.modified)),
             ];
+            // 9 = the group's own width (3 bars × 3): "algorithm" fits
+            // exactly; longer labels elide.
             BarGroup::default()
-                .label(Line::from(crate::tui::widgets::truncate_str(eco, 8)))
+                .label(Line::from(crate::tui::widgets::truncate_str(eco, 9)))
                 .bars(&bars)
         })
         .collect();
@@ -1853,16 +1914,55 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
             Span::styled(" ~ ", Style::default().fg(name_color).bold()),
             Span::styled(comp.name.clone(), Style::default().fg(name_color)),
             Span::raw(" "),
-            Span::styled(
-                comp.old_version.as_deref().unwrap_or("?").to_string(),
-                Style::default().fg(scheme.removed),
-            ),
-            Span::styled(" \u{2192} ", Style::default().fg(scheme.muted)),
-            Span::styled(
-                comp.new_version.as_deref().unwrap_or("?").to_string(),
-                Style::default().fg(scheme.added),
-            ),
         ];
+        // When the version pair says nothing ("1.0.0 → 1.0.0", "? → ?"),
+        // show WHAT changed instead: the changed-field names from the diff.
+        let version_is_informative = comp.old_version != comp.new_version
+            && (comp.old_version.is_some() || comp.new_version.is_some());
+        if version_is_informative {
+            spans.push(Span::styled(
+                comp.old_version
+                    .as_deref()
+                    .unwrap_or("\u{2014}")
+                    .to_string(),
+                Style::default().fg(scheme.removed),
+            ));
+            spans.push(Span::styled(
+                " \u{2192} ",
+                Style::default().fg(scheme.muted),
+            ));
+            spans.push(Span::styled(
+                comp.new_version
+                    .as_deref()
+                    .unwrap_or("\u{2014}")
+                    .to_string(),
+                Style::default().fg(scheme.added),
+            ));
+        } else {
+            let mut fields: Vec<&str> = comp
+                .field_changes
+                .iter()
+                .filter(|c| c.field != "version")
+                .map(|c| c.field.as_str())
+                .collect();
+            let extra = fields.len().saturating_sub(3);
+            fields.truncate(3);
+            let label = if fields.is_empty() {
+                if comp.old_version.is_none() && comp.new_version.is_none() {
+                    "(no version)".to_string()
+                } else {
+                    format!(
+                        "{} (unchanged version)",
+                        comp.new_version.as_deref().unwrap_or("\u{2014}")
+                    )
+                }
+            } else if extra > 0 {
+                format!("changed: {} +{extra} more", fields.join(", "))
+            } else {
+                format!("changed: {}", fields.join(", "))
+            };
+            spans.push(Span::styled(label, Style::default().fg(scheme.text_muted)));
+        }
         if let Some(label) = level_label {
             spans.push(label);
         }
@@ -1995,9 +2095,12 @@ fn render_all_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     let max_scroll = lines.len().saturating_sub(visible);
     let offset = ctx.summary.scroll_offset.min(max_scroll);
 
+    // Line positions ("Ln", like the Source tab), not change counts: the
+    // rendered list includes section-header rows, so a bare [a-b/N] read as
+    // a second, disagreeing change total next to the "(N)" in this title.
     let window_suffix = if lines.len() > visible {
         format!(
-            "[{}-{}/{} j/k] ",
+            "[Ln {}-{}/{} j/k] ",
             offset + 1,
             (offset + visible).min(lines.len()),
             lines.len()

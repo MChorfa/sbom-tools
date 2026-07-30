@@ -522,32 +522,11 @@ fn get_shortcuts_for_context(
     context: ShortcutsContext,
     profile: Option<crate::model::BomProfile>,
 ) -> Vec<ShortcutSection> {
-    let mut nav_items = vec![
-        item("j/k", "Up/Down"),
-        item("h/l", "Left/Right"),
-        item("g/G", "First/Last"),
-        item("PgUp/PgDn", "Page up/down"),
-        item("Home/End", "Jump to start/end"),
-    ];
-    // Tab-switching rows only exist in the tabbed modes; the multi modes bind
-    // Tab to panel switching (documented in their own sections) and digits are
-    // gated off there.
-    if !matches!(
-        context,
-        ShortcutsContext::MultiDiff | ShortcutsContext::Timeline | ShortcutsContext::Matrix
-    ) {
-        // When the active profile is known (view mode), the number keys map
-        // positionally to that profile's tab set, so derive the "Jump to tab"
-        // range from the real tab count. The Diff tab bar binds 1-9 plus 0
-        // (Source shifts to 0 when the Graph tab appears).
+    // The View context lists ONLY the true View-app global keys; everything
+    // tab-specific lives in each tab's toolbar (kept truthful there).
+    if context == ShortcutsContext::View {
         let jump_hint = profile.map_or_else(
-            || {
-                if context == ShortcutsContext::Diff {
-                    "1-9/0".to_string()
-                } else {
-                    "1-8".to_string()
-                }
-            },
+            || "1-8".to_string(),
             |p| {
                 let n = crate::tui::view::ViewTab::tabs_for_profile(p).len();
                 if n <= 1 {
@@ -557,50 +536,110 @@ fn get_shortcuts_for_context(
                 }
             },
         );
+        let mut sections = vec![ShortcutSection {
+            title: "Global",
+            items: vec![
+                item("?", "Toggle help"),
+                item("Tab/Shift-Tab", "Next/previous tab"),
+                (jump_hint, "Jump to tab".to_string()),
+                item("j/k", "Up/Down"),
+                item("/", "Search"),
+                item("e", "Export dialog"),
+                item("l", "Color legend"),
+                item("y", "Copy selected to clipboard"),
+                item("P", "Cycle profile (SBOM → CBOM → AI-BOM)"),
+                item("b/Backspace", "Navigate back"),
+                item("T", "Toggle theme"),
+                item("q/Esc", "Quit / close overlay"),
+            ],
+        }];
+        if let Some(p) = profile {
+            let tabs = crate::tui::view::ViewTab::tabs_for_profile(p);
+            let items = tabs
+                .iter()
+                .enumerate()
+                .map(|(i, tab)| item(&(i + 1).to_string(), tab.title()))
+                .collect();
+            sections.push(ShortcutSection {
+                title: "Tabs (this profile)",
+                items,
+            });
+        }
+        sections.push(ShortcutSection {
+            title: "Tab-specific actions are shown in each tab's toolbar",
+            items: vec![],
+        });
+        return sections;
+    }
+
+    let is_multi = matches!(
+        context,
+        ShortcutsContext::MultiDiff | ShortcutsContext::Timeline | ShortcutsContext::Matrix
+    );
+
+    // Navigation rows are built per context so no mode advertises movement
+    // keys that are dead (g/G, PgUp/PgDn in multi modes) or rebound there
+    // (h/l = chart scroll / cell movement / heat map).
+    let mut nav_items = match context {
+        ShortcutsContext::Matrix => vec![item("j/k", "Up/Down"), item("h/l", "Left/Right (cell)")],
+        ShortcutsContext::MultiDiff | ShortcutsContext::Timeline => vec![item("j/k", "Up/Down")],
+        _ => vec![
+            item("j/k", "Up/Down"),
+            item("g/G", "First/Last"),
+            item("PgUp/PgDn", "Page up/down"),
+            item("Home/End", "Jump to start/end"),
+        ],
+    };
+    // Tab-switching rows only exist in the tabbed modes; the multi modes bind
+    // Tab to panel switching (documented in their own sections) and digits are
+    // gated off there.
+    if !is_multi {
+        // The Diff tab bar binds 1-9 plus 0 (Source shifts to 0 when the
+        // Graph tab appears) — digits always jump tabs, on every tab.
         nav_items.push(item("Tab", "Next tab"));
-        nav_items.push((jump_hint, "Jump to tab".to_string()));
+        // Honest everywhere: no tab shadows the digits anymore.
+        nav_items.push(item("1-9/0", "Jump to tab"));
+    }
+
+    // Global rows, gated per context so every listed key really works there:
+    // the legend renders only in Diff, 'V' is bound only in the multi modes,
+    // deep dive rows are dishonest in Matrix (rows are SBOMs), and 'b'
+    // breadcrumb-back only exists in Diff.
+    let mut global_items = vec![
+        item("q", "Quit application"),
+        item("?", "Toggle help"),
+        item("e", "Export dialog"),
+    ];
+    if context == ShortcutsContext::Diff {
+        global_items.push(item("l", "Color legend"));
+    }
+    global_items.extend([
+        item("T", "Toggle theme"),
+        item("/", "Search"),
+        item("K", "Keyboard shortcuts"),
+    ]);
+    if is_multi {
+        global_items.push(item("V", "View switcher"));
+    }
+    if context != ShortcutsContext::Matrix {
+        global_items.push(item("D", "Component deep dive"));
+    }
+    global_items.push(item("y/Ctrl+C", "Copy selected to clipboard"));
+    global_items.push(item("Shift+drag", "Select text with mouse"));
+    if context == ShortcutsContext::Diff {
+        global_items.push(item("b/Backspace", "Navigate back"));
     }
 
     let mut sections = vec![
         ShortcutSection {
             title: "Global",
-            items: vec![
-                item("q", "Quit application"),
-                item("?", "Toggle help"),
-                item("e", "Export dialog"),
-                item("l", "Color legend"),
-                item("T", "Toggle theme"),
-                item("/", "Search"),
-                item("K", "Keyboard shortcuts"),
-                item("V", "View switcher (multi-views)"),
-                item("D", "Component deep dive"),
-                item("y/Ctrl+C", "Copy selected to clipboard"),
-                item("Shift+drag", "Select text with mouse"),
-                item("b/Backspace", "Navigate back"),
-            ],
+            items: global_items,
         },
         ShortcutSection {
             title: "Navigation",
             items: nav_items,
         },
     ];
-
-    // Profile-accurate tab listing (view mode only): show exactly the tabs
-    // available for the active BOM profile so the overlay never advertises a
-    // tab the user cannot reach (e.g. AI-BOM shows Models/Datasets/AI-Readiness,
-    // not the SBOM-specific tabs).
-    if let Some(p) = profile {
-        let tabs = crate::tui::view::ViewTab::tabs_for_profile(p);
-        let items = tabs
-            .iter()
-            .enumerate()
-            .map(|(i, tab)| item(&(i + 1).to_string(), tab.title()))
-            .collect();
-        sections.push(ShortcutSection {
-            title: "Tabs (this profile)",
-            items,
-        });
-    }
 
     match context {
         ShortcutsContext::MultiDiff => {
@@ -659,45 +698,23 @@ fn get_shortcuts_for_context(
                 items: vec![
                     item("f", "Filter/toggle options"),
                     item("s", "Sort/cycle options"),
-                    item("d", "Toggle deduplication"),
-                    item("t", "Toggle transitive deps"),
+                    item("d", "Go to Dependencies (components)"),
+                    item("t", "Tune match threshold (Dependencies tab: transitive)"),
                     item("v", "Multi-select mode"),
-                    item("Enter", "View details"),
+                    item("Q", "Quick filters picker (components)"),
+                    item("Enter", "View details / deep dive (list tabs)"),
                     item("n/N", "Next/prev search match (source/deps/side-by-side)"),
                     item("c", "Go to component (dependencies)"),
                     item("F", "Flag for review (components)"),
                     item("o", "Open CVE in browser (components)"),
                     item("n", "Cycle security note (components)"),
-                    item("p", "Toggle panel focus"),
+                    item("p", "Toggle panel focus (Summary: cycle policy)"),
                     item("h/l", "Collapse/expand (tree tabs)"),
                     item("E", "Export compliance (compliance tab)"),
                 ],
             });
         }
-        ShortcutsContext::View => {
-            sections.push(ShortcutSection {
-                title: "View Mode",
-                items: vec![
-                    item("f", "Filter (tree/vulns/compliance)"),
-                    item("s", "Sort (vulnerabilities)"),
-                    item("d", "Toggle deduplication (vulns)"),
-                    item("g", "Toggle grouping (tree/vulns/licenses)"),
-                    item("v", "Toggle view mode (quality/source)"),
-                    item("p", "Toggle panel focus"),
-                    item("m", "Bookmark component (tree)"),
-                    item("y/Ctrl+C", "Copy selected to clipboard"),
-                    item("Shift+drag", "Select text with mouse"),
-                    item("h/l", "Collapse/expand, prev/next standard"),
-                    item("Enter", "Select / expand node"),
-                    item("[/]", "Prev/next detail tab"),
-                    item("E", "Export compliance"),
-                    item("n/N", "Next/prev search match (source)"),
-                    item("H/L", "Collapse/expand all (source)"),
-                    item("w", "Toggle focus (source)"),
-                ],
-            });
-        }
-        ShortcutsContext::Global => {}
+        ShortcutsContext::View | ShortcutsContext::Global => {}
     }
 
     sections
@@ -885,12 +902,13 @@ pub fn render_threshold_tuning(f: &mut Frame, state: &ThresholdTuningState) {
         Span::styled("=permissive", Style::default().fg(scheme.text_muted)),
     ]));
 
-    // Controls
+    // Controls — must list exactly what the handler binds (events/mod.rs):
+    // Up/Down or j/k step, Left/Right or +/- fine, r reset, Enter, Esc/q.
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("↑/↓", Style::default().fg(scheme.accent)),
+        Span::styled("↑↓/j/k", Style::default().fg(scheme.accent)),
         Span::styled(" adjust  ", Style::default().fg(scheme.text_muted)),
-        Span::styled("+/-", Style::default().fg(scheme.accent)),
+        Span::styled("←→/+/-", Style::default().fg(scheme.accent)),
         Span::styled(" fine  ", Style::default().fg(scheme.text_muted)),
         Span::styled("r", Style::default().fg(scheme.accent)),
         Span::styled(" reset  ", Style::default().fg(scheme.text_muted)),
@@ -946,7 +964,7 @@ mod tests {
         }
 
         // It must NOT advertise SBOM-only tabs the user cannot reach.
-        for sbom_only in ["Components", "Vulns", "Licenses", "Deps"] {
+        for sbom_only in ["Components", "Vulnerabilities", "Licenses", "Dependencies"] {
             assert!(
                 !descs.iter().any(|d| d == sbom_only),
                 "AI-BOM overlay must not list the SBOM-only {sbom_only} tab"
@@ -961,7 +979,13 @@ mod tests {
     fn sbom_overlay_lists_sbom_tabs_and_full_range() {
         let items = flatten(ShortcutsContext::View, Some(BomProfile::Sbom));
         let descs = descriptions(&items);
-        for expected in ["Components", "Vulns", "Licenses", "Deps", "Compliance"] {
+        for expected in [
+            "Components",
+            "Vulnerabilities",
+            "Licenses",
+            "Dependencies",
+            "Compliance",
+        ] {
             assert!(
                 descs.iter().any(|d| d == expected),
                 "SBOM overlay should list the {expected} tab; got {descs:?}"
@@ -974,7 +998,7 @@ mod tests {
     fn cbom_overlay_lists_crypto_tabs() {
         let items = flatten(ShortcutsContext::View, Some(BomProfile::Cbom));
         let descs = descriptions(&items);
-        for expected in ["Algorithms", "Certs", "Keys", "Protocols"] {
+        for expected in ["Algorithms", "Certificates", "Keys", "Protocols"] {
             assert!(
                 descs.iter().any(|d| d == expected),
                 "CBOM overlay should list the {expected} tab; got {descs:?}"
@@ -1050,6 +1074,104 @@ mod tests {
                 "{ctx:?} must not advertise a Jump to tab row"
             );
         }
+    }
+
+    /// Multi-mode overlays must not advertise keys that are dead or rebound
+    /// there: no color legend (never rendered outside Diff), no dedup row,
+    /// no g/G / PgUp/PgDn / Home/End (inert), and no 'D' deep dive in Matrix
+    /// (its rows are SBOMs, not components).
+    #[test]
+    fn multi_contexts_gate_dead_global_keys() {
+        for ctx in [
+            ShortcutsContext::MultiDiff,
+            ShortcutsContext::Timeline,
+            ShortcutsContext::Matrix,
+        ] {
+            let items = flatten(ctx, None);
+            assert!(
+                !items.iter().any(|(_, d)| d == "Color legend"),
+                "{ctx:?} must not advertise the Diff-only legend"
+            );
+            assert!(
+                !items.iter().any(|(_, d)| d.contains("deduplication")),
+                "{ctx:?} must not advertise deduplication"
+            );
+            for key in ["g/G", "PgUp/PgDn", "Home/End"] {
+                assert!(
+                    !items.iter().any(|(k, _)| k == key),
+                    "{ctx:?} must not advertise inert '{key}'"
+                );
+            }
+            assert!(
+                items.iter().any(|(k, d)| k == "e" && d == "Export dialog"),
+                "{ctx:?} export dialog is real now and should be listed"
+            );
+            assert!(
+                items.iter().any(|(k, _)| k == "V"),
+                "{ctx:?} binds the view switcher"
+            );
+        }
+
+        assert!(
+            !flatten(ShortcutsContext::Matrix, None)
+                .iter()
+                .any(|(k, _)| k == "D"),
+            "Matrix must not advertise the component deep dive"
+        );
+        for ctx in [ShortcutsContext::MultiDiff, ShortcutsContext::Timeline] {
+            assert!(
+                flatten(ctx, None).iter().any(|(k, _)| k == "D"),
+                "{ctx:?} keeps the (populated) deep dive row"
+            );
+        }
+    }
+
+    /// The Diff section documents the rebound keys and drops the fictional
+    /// deduplication row.
+    #[test]
+    fn diff_section_matches_rebound_keys() {
+        let items = flatten(ShortcutsContext::Diff, None);
+        assert!(
+            !items.iter().any(|(_, d)| d.contains("deduplication")),
+            "no Diff tab implements deduplication"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|(k, d)| k == "Q" && d.contains("Quick filters")),
+            "the Q picker must be documented"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|(k, d)| k == "t" && d.contains("threshold")),
+            "the threshold-tuning binding must be documented"
+        );
+        assert!(
+            items.iter().any(|(k, _)| k == "l" || k == "b/Backspace"),
+            "Diff keeps legend and breadcrumb-back rows"
+        );
+    }
+
+    /// The View section lists only true View-app globals: no Diff-only K/V/D
+    /// rows, and the profile cycle is documented.
+    #[test]
+    fn view_section_lists_only_view_globals() {
+        let items = flatten(ShortcutsContext::View, Some(BomProfile::Sbom));
+        for key in ["K", "V", "D"] {
+            assert!(
+                !items.iter().any(|(k, _)| k == key),
+                "'{key}' is Diff-only and must not appear in the View overlay"
+            );
+        }
+        assert!(
+            items.iter().any(|(k, d)| k == "P" && d.contains("profile")),
+            "the P profile cycle must be documented"
+        );
+        assert!(
+            items.iter().any(|(k, _)| k == "Tab/Shift-Tab"),
+            "tab switching must be documented"
+        );
     }
 
     /// The MultiDiff/Timeline/Matrix sections must document the phase-6

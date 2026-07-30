@@ -4,25 +4,25 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-« [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌ Compliance Standards (←/→ to switch) ────────────────────────────────────────┐
+│  ⚠ Min(10)  ✗ Std(13)  ✗ NTIA(21)  ✗ CRA-1(43)  ✗ CRA-2(47)  ✗ FDA(36) ›     │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ NTIA Minimum Elements ───────────────────────────────┐┌ Summary ─────────────┐
-└──────────────────────────────────────────────────────┘└──────────────────────┘
+┌ NTIA Minimum Elements ───────────────────────────────────────────────────────┐
+│ NON-COMPLIANT  │  11 errors  1 warning  9 info                               │
+└──────────────────────────────────────────────────────────────────────────────┘
 ┌ Violations (grouped: 5 patterns, 21 total┐┌ Affected (9) K/J scroll ─────────┐
-│Severi Catego Issue Pattern        Count  ││  Component  missing supplier/... █
-│                                          ││  9 named                         █
-│ERROR  Suppli Component  missing s 9      ││  ──────────────────────────────  █
-│ERROR  Comp I Component  missing u 1      ││  zod                             █
-│ERROR  Doc Me SBOM must have creat 1      ││  axios                           █
-│ERROR  Deps   SBOM with multiple c 1      ││  dayjs                           █
-│INFO   Format Component  may be mi 9      ││  react                           ║
-│                                          ││  lodash                          ║
+│Sev   Category Issue Pattern          Cnt █│  Component missing supplier/m... █
+│                                          █│  9 named                         █
+│ERROR Supplier Component missing s... 9   █│  ──────────────────────────────  █
+│ERROR Comp IDs Component missing u... 1   █│  zod                             ║
+│ERROR Doc Meta SBOM must have crea... 1   █│  axios                           ║
+│WARN  Deps     Primary component p... 1   █│  dayjs                           ║
 └──────────────────────────────────────────┘└──────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│←/→ standard  j/k navigate  Enter details  g view [Grouped]  f filter [All]  E│
+│←/→ standard  j/k navigate  Enter details  g group [Grouped]  f filter [All] …│
 └──────────────────────────────────────────────────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2
    …  f filter  ←→ standard │  Tab switch  / search  e export  ? help  q quit

@@ -4,21 +4,21 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+« [2] Components  │ [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  »
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Group:  Ecosystem   Filter:  All   │  [/] search  [g] group  [f] f┌ npm ───────────────────────────────────────────────┐
+Group:  Ecosystem   Filter:  All   │  [/] filter  [g] group …     ┌ npm ───────────────────────────────────────────────┐
                                                                   │npm                                                 │
 ┌ Components (9) ────────────────────────────────────────────────┐│Components: 8                                       │
-│▶ ▼ npm (8)                                                     ││                                                    │
-│  │  ├─ · axios@1.4.0 [npm]                                     ││Vulnerabilities: 0                                  │
-│  │  ├─ · dayjs@1.11.7 [npm]                                    ││Clean           8 █████████████████████████         │
-│  │  ├─ · express@4.18.2 [npm]                                  ││                                                    │
-│  │  ├─ · lodash@4.17.21 [npm]                                  ││                                                    │
+│▶ ▼ npm (8) ! 2                                                 ││                                                    │
+│  │  ├─ · axios@1.4.0 [npm] C 1                                 ││Vulnerabilities: 2                                  │
+│  │  ├─ · dayjs@1.11.7 [npm]                                    ││Critical        1 ████                              │
+│  │  ├─ · express@4.18.2 [npm] H 1                              ││High            1 ████                              │
+│  │  ├─ · lodash@4.17.21 [npm]                                  ││Clean           6 █████████████████████████         │
 │  │  ├─ · prisma@4.15.0 [npm]                                   ││                                                    │
-│  │  ├─ · react@18.2.0 [npm]                                    ││                                                    │
-│  │  ├─ · typescript@5.0.4 [npm]                                ││                                                    │
-│  │  └─ · zod@3.21.4 [npm]                                      ││                                                    │
+│  │  ├─ · react@18.2.0 [npm]                                    ││Most Vulnerable:                                    │
+│  │  ├─ · typescript@5.0.4 [npm]                                ││axios (1)                                           │
+│  │  └─ · zod@3.21.4 [npm]                                      ││express (1)                                         │
 │  ▼ Unknown (1)                                                 ││                                                    │
 │     └─ · acme-webapp@2.0.0                                     ││                                                    │
 │                                                                ││                                                    │
@@ -40,5 +40,5 @@ Group:  Ecosystem   Filter:  All   │  [/] search  [g] group  [f] f┌ npm ─�
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 └────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3 │ Group:  Ecosystem  Filter:  All
-                 p panel  Enter select  1-4 detail tabs │  Tab switch  / search  e export  ? help  q quit
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2 │ Group:  Ecosystem  Filter:  All
+                   p panel  Enter select │  Tab switch  / filter  e export  ? help  q quit [y] copy npm

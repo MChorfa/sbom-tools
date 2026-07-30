@@ -229,11 +229,17 @@ impl AnalystReport {
             let _ = writeln!(md, "| Certificates | {} |", cf.certificates_count);
             let _ = writeln!(md, "| Key Material | {} |", cf.keys_count);
             let _ = writeln!(md, "| Protocols | {} |", cf.protocols_count);
-            let _ = writeln!(
-                md,
-                "| Quantum Readiness | {:.0}% ({}/{}) |",
-                cf.quantum_readiness_pct, cf.quantum_safe_count, cf.algorithms_count
-            );
+            // A 0/0 readiness is vacuous, not perfect: without algorithms
+            // there is nothing to be quantum-ready about.
+            if cf.algorithms_count > 0 {
+                let _ = writeln!(
+                    md,
+                    "| Quantum Readiness | {:.0}% ({}/{}) |",
+                    cf.quantum_readiness_pct, cf.quantum_safe_count, cf.algorithms_count
+                );
+            } else {
+                md.push_str("| Quantum Readiness | n/a (no algorithms declared) |\n");
+            }
             if cf.hybrid_pqc_count > 0 {
                 let _ = writeln!(md, "| Hybrid PQC Combiners | {} |", cf.hybrid_pqc_count);
             }
@@ -964,5 +970,19 @@ mod tests {
         assert!(RecommendationPriority::Critical < RecommendationPriority::High);
         assert!(RecommendationPriority::High < RecommendationPriority::Medium);
         assert!(RecommendationPriority::Medium < RecommendationPriority::Low);
+    }
+
+    /// Zero algorithms must render as "n/a", never a vacuous 100% readiness.
+    #[test]
+    fn test_crypto_findings_zero_algorithms_render_na() {
+        let mut report = AnalystReport::new();
+        report.crypto_findings = Some(CryptoFindings {
+            total_crypto_assets: 2,
+            certificates_count: 2,
+            ..Default::default()
+        });
+        let md = report.to_markdown();
+        assert!(md.contains("| Quantum Readiness | n/a (no algorithms declared) |"));
+        assert!(!md.contains("Quantum Readiness | 100%"));
     }
 }

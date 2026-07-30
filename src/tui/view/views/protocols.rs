@@ -43,6 +43,7 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .split(area);
 
     // ── Left: protocol list ──
+    let inner_width = panels[0].width.saturating_sub(2) as usize;
     let items: Vec<ListItem> = protos
         .iter()
         .enumerate()
@@ -54,7 +55,24 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
             let version = proto.and_then(|p| p.version.as_deref()).unwrap_or("-");
 
+            // Badge the crypto bindings the protocol actually carries: IKEv2
+            // profiles document transforms, not cipher suites — "[0 suites]"
+            // over a fully-specified IKEv2 asset misread as "no crypto".
             let suite_count = proto.map_or(0, |p| p.cipher_suites.len());
+            let transform_slots =
+                proto
+                    .and_then(|p| p.ikev2_transform_types.as_ref())
+                    .map_or(0, |ik| {
+                        [&ik.encr, &ik.prf, &ik.integ, &ik.ke]
+                            .iter()
+                            .filter(|v| !v.is_empty())
+                            .count()
+                    });
+            let badge = if suite_count == 0 && transform_slots > 0 {
+                crate::tui::shared::text::count_noun(transform_slots, "transform")
+            } else {
+                crate::tui::shared::text::count_noun(suite_count, "suite")
+            };
 
             let style = if i == app.protocols_selected {
                 crate::tui::theme::Styles::selected()
@@ -62,12 +80,17 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default()
             };
 
+            // Ellipsize the name so the version/badge survive narrow widths.
+            let badge_txt = format!("  v{version}  [{badge}]");
+            let name = crate::tui::widgets::truncate_str(
+                &comp.name,
+                inner_width
+                    .saturating_sub(unicode_width::UnicodeWidthStr::width(badge_txt.as_str())),
+            );
+
             ListItem::new(Line::from(vec![
-                Span::raw(&comp.name),
-                Span::styled(
-                    format!("  v{version}  [{suite_count} suites]"),
-                    Style::default().fg(scheme.text_muted),
-                ),
+                Span::raw(name),
+                Span::styled(badge_txt, Style::default().fg(scheme.text_muted)),
             ]))
             .style(style)
         })
@@ -106,8 +129,11 @@ pub fn render_protocols(frame: &mut Frame, area: Rect, app: &ViewApp) {
     if let Some(cp) = &comp.crypto_properties
         && let Some(proto) = &cp.protocol_properties
     {
+        let refs = crate::tui::shared::crypto::CryptoRefLookup::new(&app.sbom);
         lines.push(Line::raw(""));
-        lines.extend(crate::tui::shared::crypto::protocol_detail_lines(proto));
+        lines.extend(crate::tui::shared::crypto::protocol_detail_lines(
+            proto, &refs,
+        ));
     }
 
     let detail = Paragraph::new(lines)

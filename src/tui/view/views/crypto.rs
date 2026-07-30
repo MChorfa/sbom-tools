@@ -56,14 +56,6 @@ pub fn render_crypto(frame: &mut Frame, area: Rect, app: &ViewApp) {
 
 fn render_header(frame: &mut Frame, area: Rect, metrics: &CryptographyMetrics) {
     let scheme = crate::tui::theme::colors();
-    let readiness = metrics.quantum_readiness_score();
-    let readiness_color = if readiness >= 80.0 {
-        scheme.success
-    } else if readiness >= 40.0 {
-        scheme.warning
-    } else {
-        scheme.error
-    };
 
     // Line 1: danger metrics, most severe first, zero counts omitted — leading
     // with the worst signal guarantees it survives narrow-width truncation.
@@ -131,27 +123,46 @@ fn render_header(frame: &mut Frame, area: Rect, metrics: &CryptographyMetrics) {
         Line::from(danger)
     };
 
-    // Line 2: the neutral inventory counts + quantum readiness.
-    let counts_line = Line::from(vec![
-        Span::raw(format!(
-            " Algo:{} Cert:{} Key:{} Proto:{} ",
-            metrics.algorithms_count,
-            metrics.certificates_count,
-            metrics.keys_count,
-            metrics.protocols_count,
-        )),
-        Span::raw("| Quantum: "),
-        Span::styled(
-            format!("{readiness:.0}%"),
-            Style::default()
-                .fg(readiness_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(
-            " ({}/{}) ",
-            metrics.quantum_safe_count, metrics.algorithms_count
-        )),
-    ]);
+    // Line 2: the neutral inventory counts + quantum readiness. A zero
+    // denominator must read n/a — 100% "(0/0)" is a vacuously perfect
+    // verdict over zero evidence.
+    let mut counts_spans = vec![Span::raw(format!(
+        " Algo:{} Cert:{} Key:{} Proto:{} ",
+        metrics.algorithms_count,
+        metrics.certificates_count,
+        metrics.keys_count,
+        metrics.protocols_count,
+    ))];
+    match metrics.quantum_readiness_score() {
+        None => {
+            counts_spans.push(Span::raw("| Quantum: "));
+            counts_spans.push(Span::styled(
+                "n/a (no algorithms) ",
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
+        Some(readiness) => {
+            let readiness_color = if readiness >= 80.0 {
+                scheme.success
+            } else if readiness >= 40.0 {
+                scheme.warning
+            } else {
+                scheme.error
+            };
+            counts_spans.push(Span::raw("| Quantum: "));
+            counts_spans.push(Span::styled(
+                format!("{readiness:.0}%"),
+                Style::default()
+                    .fg(readiness_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            counts_spans.push(Span::raw(format!(
+                " ({}/{}) ",
+                metrics.quantum_safe_count, metrics.algorithms_count
+            )));
+        }
+    }
+    let counts_line = Line::from(counts_spans);
 
     let header = Paragraph::new(vec![danger_line, counts_line]).block(
         Block::default()
@@ -208,7 +219,9 @@ fn render_list(
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" Assets ({}) ", crypto_components.len()))
-            .title_bottom(crate::tui::shared::crypto::quantum_legend()),
+            .title_bottom(crate::tui::shared::crypto::quantum_legend(
+                area.width.saturating_sub(2),
+            )),
     );
     // Stateful render so the selected asset scrolls into view on large CBOMs
     // (a plain render_widget always shows the top of the list).
@@ -246,6 +259,7 @@ fn render_detail(
     ]));
 
     if let Some(cp) = &comp.crypto_properties {
+        let refs = crate::tui::shared::crypto::CryptoRefLookup::new(&app.sbom);
         lines.push(Line::from(vec![
             Span::styled("Type: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(cp.asset_type.to_string()),
@@ -274,7 +288,9 @@ fn render_detail(
                 "-- Certificate Properties --",
                 Style::default().fg(scheme.primary),
             ));
-            lines.extend(crate::tui::shared::crypto::certificate_detail_lines(cert));
+            lines.extend(crate::tui::shared::crypto::certificate_detail_lines(
+                cert, &refs,
+            ));
         }
 
         if let Some(mat) = &cp.related_crypto_material_properties {
@@ -282,7 +298,9 @@ fn render_detail(
                 "-- Key Material Properties --",
                 Style::default().fg(scheme.primary),
             ));
-            lines.extend(crate::tui::shared::crypto::key_material_detail_lines(mat));
+            lines.extend(crate::tui::shared::crypto::key_material_detail_lines(
+                mat, &refs,
+            ));
         }
 
         if let Some(proto) = &cp.protocol_properties {
@@ -290,7 +308,9 @@ fn render_detail(
                 "-- Protocol Properties --",
                 Style::default().fg(scheme.primary),
             ));
-            lines.extend(crate::tui::shared::crypto::protocol_detail_lines(proto));
+            lines.extend(crate::tui::shared::crypto::protocol_detail_lines(
+                proto, &refs,
+            ));
         }
     }
 

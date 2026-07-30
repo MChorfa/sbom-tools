@@ -84,7 +84,10 @@ impl ViewState for DependenciesView {
                 }
                 EventResult::Consumed
             }
-            KeyCode::Char('y') => {
+            // 'C' toggles the cycles display. 'y' is deliberately NOT bound
+            // here: it falls through to the global yank ("y Copy path"), and
+            // 'e' falls through to the global export dialog.
+            KeyCode::Char('C') => {
                 self.inner.toggle_cycles();
                 EventResult::Consumed
             }
@@ -97,7 +100,7 @@ impl ViewState for DependenciesView {
                 self.inner.toggle_sort();
                 EventResult::Consumed
             }
-            KeyCode::Char('e') => {
+            KeyCode::Char('x') => {
                 self.inner.expand_all();
                 EventResult::Consumed
             }
@@ -235,7 +238,8 @@ impl ViewState for DependenciesView {
             Shortcut::new("\u{2190}", "Collapse node"),
             Shortcut::new("+/-", "Depth"),
             Shortcut::new(">/<", "Roots"),
-            Shortcut::new("e/E", "Expand/Collapse all"),
+            Shortcut::new("x/E", "Expand/Collapse all"),
+            Shortcut::new("C", "Toggle cycles"),
             Shortcut::new("/", "Search"),
             Shortcut::new("s", "Sort"),
             Shortcut::new("y", "Copy path"),

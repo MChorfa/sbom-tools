@@ -16,21 +16,21 @@ Filter:  All   Sort: Name┌─────────────────�
 │   ~ MODIFIED  axios    │o  CVE                                                              │                        │
 │   + ADDED     dayjs    │n  note                                                             │                        │
 │   ~ MODIFIED  express  │j/k  Navigate                                                       │                        │
-│   - REMOVED   jquery   │d  Dependencies                                                     │                        │
-│   ~ MODIFIED  lodash   │v  Multi-select                                                     │                        │
-│   - REMOVED   moment   │1-8  Quick filters                                                  │                        │
-│   + ADDED     prisma   │y  Copy                                                             │                        │
-│   ~ MODIFIED  react    │                                                                    │names: 'acme-webapp'    │
-│   - REMOVED   request  │Global                                                              │_name                   │
-│   + ADDED     typescrip│                                                                    │                        │
-│   - REMOVED   underscor│q  Quit application                                                 │                        │
-│   + ADDED     zod      │?  Toggle help                                                      │                        │
-│                        │e  Export dialog                                                    │dents)                  │
-│                        │l  Color legend                                                     │wn                      │
+│   - REMOVED   jquery   │Enter  Component deep dive                                          │                        │
+│   ~ MODIFIED  lodash   │d  Dependencies                                                     │                        │
+│   - REMOVED   moment   │v  Multi-select                                                     │                        │
+│   + ADDED     prisma   │Q  Quick filters                                                    │                        │
+│   ~ MODIFIED  react    │y  Copy                                                             │names: 'acme-webapp'    │
+│   - REMOVED   request  │                                                                    │_name                   │
+│   + ADDED     typescrip│Global                                                              │                        │
+│   - REMOVED   underscor│                                                                    │                        │
+│   + ADDED     zod      │q  Quit application                                                 │                        │
+│                        │?  Toggle help                                                      │dents)                  │
+│                        │e  Export dialog                                                    │                        │
+│                        │l  Color legend                                                     │                        │
 │                        │T  Toggle theme                                                     │                        │
 │                        │/  Search                                                           │                        │
 │                        │K  Keyboard shortcuts                                               │                        │
-│                        │V  View switcher (multi-views)                                      │                        │
 │                        │D  Component deep dive                                              │                        │
 │                        │y/Ctrl+C  Copy selected to clipboard                                │                        │
 │                        │Shift+drag  Select text with mouse                                  │                        │
@@ -40,5 +40,5 @@ Filter:  All   Sort: Name┌─────────────────�
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 └────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
       f filter  s sort  F flag  o CVE  n note │  Tab switch  / search  e export  ? help  q quit [y] copy acme-webapp

@@ -4,10 +4,10 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
-« [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
+« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] SxS  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
-Mode: Grouped │ Change: 0/0 │ [a]lign [/]search [a] for row actions
+Mode: Grouped │ [a]lign [/]search [A/r/m]filter [a] for row actions
 
 ┌ acme-webapp (Old) ◄ ────────────────┐ │┌ acme-webapp (New) ──────────────────┐
 │Removed: 4 │ Modified: 5             │ ││Added: 4 │ Modified: 5               │
@@ -24,5 +24,5 @@ Mode: Grouped │ Change: 0/0 │ [a]lign [/]search [a] for row actions
 │~ express 4.17.1                     │ ││~ express 4.18.2                     │
 │~ lodash 4.17.20                     │ ││~ lodash 4.17.21                     │
 └─────────────────────────────────────┘ │└─────────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
     …  a align  n/N change │  Tab switch  / search  e export  ? help  q quit

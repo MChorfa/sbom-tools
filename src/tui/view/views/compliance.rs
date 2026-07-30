@@ -83,13 +83,19 @@ pub(crate) fn build_groups<'a>(
 /// Extract a grouping pattern from a violation message.
 /// Strips the component name quoted in single quotes to create a shared pattern.
 fn extract_pattern(msg: &str) -> String {
-    // Match "Component 'xxx' <rest>" → "Component <rest>"
+    // Match "Component 'xxx' <rest>" → "Component <rest>". The surrounding
+    // whitespace is collapsed to a single space so the pattern never renders
+    // with a doubled gap ("Component  missing supplier").
     if let Some(start) = msg.find('\'')
         && let Some(end) = msg[start + 1..].find('\'')
     {
-        let before = &msg[..start];
-        let after = &msg[start + 1 + end + 1..];
-        return format!("{before}{after}").trim().to_string();
+        let before = msg[..start].trim_end();
+        let after = msg[start + 1 + end + 1..].trim_start();
+        return match (before.is_empty(), after.is_empty()) {
+            (true, _) => after.to_string(),
+            (_, true) => before.to_string(),
+            _ => format!("{before} {after}"),
+        };
     }
     msg.to_string()
 }
@@ -126,19 +132,74 @@ fn severity_style(s: ViolationSeverity) -> Style {
 pub fn render_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     app.ensure_compliance_results();
 
-    // Main layout
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Standard selector tabs
-            Constraint::Length(7), // Category breakdown summary
-            Constraint::Min(10),   // Violations list (grouped or flat)
-            Constraint::Length(3), // Help bar
-        ])
-        .split(area);
+    // Degenerate heights: the verdict is the last thing to go. Never emit
+    // border-only panel slivers.
+    if area.height < 6 {
+        let Some(results) = app.compliance_results.as_ref() else {
+            return;
+        };
+        let result = &results[app
+            .compliance_state
+            .selected_standard
+            .min(results.len() - 1)];
+        if area.height >= 3 {
+            render_compact_verdict(frame, area, result);
+        } else {
+            frame.render_widget(Paragraph::new(compact_verdict_line(result)), area);
+        }
+        return;
+    }
+
+    // Height-aware layout. The full layout needs 3+7+10+3 = 23 rows; below
+    // that the Min(10) violations list would starve the fixed panels into
+    // border-only slivers, hiding the selected standard and its verdict at
+    // the advertised 80x24 minimum size. Degrade decorative-first instead:
+    // shrink the 7-row category breakdown to a 3-row one-line verdict, then
+    // drop the help bar, then the violations list — the selector and the
+    // verdict always render.
+    let full = area.height >= 23;
+    let (selector_area, verdict_area, violations_area, help_area) = if full {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Standard selector tabs
+                Constraint::Length(7), // Category breakdown summary
+                Constraint::Min(10),   // Violations list (grouped or flat)
+                Constraint::Length(3), // Help bar
+            ])
+            .split(area);
+        (chunks[0], chunks[1], Some(chunks[2]), Some(chunks[3]))
+    } else if area.height >= 13 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Standard selector tabs
+                Constraint::Length(3), // One-line verdict + counts
+                Constraint::Min(4),    // Violations list
+                Constraint::Length(3), // Help bar
+            ])
+            .split(area);
+        (chunks[0], chunks[1], Some(chunks[2]), Some(chunks[3]))
+    } else if area.height >= 10 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(4),
+            ])
+            .split(area);
+        (chunks[0], chunks[1], Some(chunks[2]), None)
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(3)])
+            .split(area);
+        (chunks[0], chunks[1], None, None)
+    };
 
     // Adjust scroll before borrowing results (avoids borrow conflict)
-    let violations_viewport = chunks[2].height.saturating_sub(4) as usize;
+    let violations_viewport = violations_area.map_or(0, |a| a.height.saturating_sub(4) as usize);
     app.compliance_state.adjust_scroll(violations_viewport);
 
     // Snapshot scroll state before immutable borrows
@@ -150,7 +211,7 @@ pub fn render_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     let affected_scroll = app.compliance_state.affected_scroll;
 
     // Render standard selector with violation counts
-    render_standard_selector(frame, chunks[0], app);
+    render_standard_selector(frame, selector_area, app);
 
     // Get compliance result for selected standard
     let Some(results) = app.compliance_results.as_ref() else {
@@ -158,36 +219,45 @@ pub fn render_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     };
     let result = &results[selected_standard];
 
-    // Render category breakdown summary (replaces old gauge + counts)
-    render_category_breakdown(frame, chunks[1], result);
+    // Render category breakdown summary (replaces old gauge + counts), or the
+    // compact one-line verdict when the breakdown cannot fit.
+    if full {
+        render_category_breakdown(frame, verdict_area, result);
+    } else {
+        render_compact_verdict(frame, verdict_area, result);
+    }
 
     // Render violations with scroll + filter
     let severity_filter = app.compliance_state.severity_filter;
-    if grouped {
-        render_grouped_violations(
-            frame,
-            chunks[2],
-            result,
-            results,
-            selected_violation,
-            scroll_offset,
-            severity_filter,
-            affected_scroll,
-        );
-    } else {
-        render_flat_violations(
-            frame,
-            chunks[2],
-            result,
-            results,
-            selected_violation,
-            scroll_offset,
-            severity_filter,
-        );
+    if let Some(viol_area) = violations_area {
+        if grouped {
+            render_grouped_violations(
+                frame,
+                viol_area,
+                result,
+                results,
+                selected_violation,
+                scroll_offset,
+                severity_filter,
+                affected_scroll,
+            );
+        } else {
+            render_flat_violations(
+                frame,
+                viol_area,
+                result,
+                results,
+                selected_violation,
+                scroll_offset,
+                severity_filter,
+            );
+        }
     }
 
     // Render help bar
-    render_help_bar(frame, chunks[3], severity_filter, grouped);
+    if let Some(help) = help_area {
+        render_help_bar(frame, help, severity_filter, grouped);
+    }
 
     // Render detail overlay if active
     if show_detail {
@@ -522,6 +592,77 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
     frame.render_widget(right_widget, h_chunks[1]);
 }
 
+/// Verdict color + short label for a compliance result.
+fn verdict_status(result: &ComplianceResult) -> (Color, &'static str) {
+    let scheme = colors();
+    if !result.is_applicable() {
+        (scheme.muted, "NOT APPLICABLE")
+    } else if result.is_compliant {
+        if result.warning_count > 0 {
+            (scheme.warning, "COMPLIANT")
+        } else {
+            (scheme.success, "COMPLIANT")
+        }
+    } else {
+        (scheme.error, "NON-COMPLIANT")
+    }
+}
+
+/// One-line verdict + severity counts.
+fn compact_verdict_line(result: &ComplianceResult) -> Line<'static> {
+    let scheme = colors();
+    let (status_color, status_text) = verdict_status(result);
+    let count_style = |count: usize, color: Color| {
+        if count > 0 {
+            Style::default().fg(color)
+        } else {
+            Style::default().fg(scheme.muted)
+        }
+    };
+    let plural = |count: usize, noun: &str| {
+        if count == 1 {
+            format!("{count} {noun}")
+        } else {
+            format!("{count} {noun}s")
+        }
+    };
+    Line::from(vec![
+        Span::styled(
+            format!(" {status_text}"),
+            Style::default().fg(status_color).bold(),
+        ),
+        Span::styled("  \u{2502}  ", Style::default().fg(scheme.border)),
+        Span::styled(
+            plural(result.error_count, "error"),
+            count_style(result.error_count, scheme.error),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            plural(result.warning_count, "warning"),
+            count_style(result.warning_count, scheme.warning),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("{} info", result.info_count),
+            count_style(result.info_count, scheme.info),
+        ),
+    ])
+}
+
+/// Compact one-line verdict for short terminals: standard name in the title,
+/// verdict + severity counts in a single bordered line. Replaces both the
+/// 7-row category breakdown and the Summary panel when they cannot fit.
+fn render_compact_verdict(frame: &mut Frame, area: Rect, result: &ComplianceResult) {
+    let (status_color, _) = verdict_status(result);
+    let widget = Paragraph::new(compact_verdict_line(result)).block(
+        Block::default()
+            .title(format!(" {} ", result.level.name()))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(status_color)),
+    );
+    frame.render_widget(widget, area);
+}
+
 // ---------------------------------------------------------------------------
 // Grouped violations view
 // ---------------------------------------------------------------------------
@@ -563,6 +704,23 @@ fn render_grouped_violations(
     let viewport_height = h_chunks[0].height.saturating_sub(4) as usize;
     let visible_end = (scroll_offset + viewport_height).min(total_groups);
 
+    // Narrow panels (e.g. the 55% split at 80 cols) cannot afford the wide
+    // fixed side columns — they starve the Issue Pattern column into a
+    // meaningless stub. Shrink the fixed columns first so the pattern keeps
+    // the widest share.
+    let narrow = h_chunks[0].width < 60;
+
+    // Resolve the Issue Pattern column width up front so overlong patterns
+    // can be pre-truncated with a visible ellipsis instead of letting
+    // ratatui hard-clip the cell mid-word at the column edge.
+    let fixed_cols: u16 = if narrow { 5 + 8 + 4 } else { 8 + 10 + 7 };
+    let column_spacing: u16 = 3; // 3 gaps at the default spacing of 1
+    let pattern_width = h_chunks[0]
+        .width
+        .saturating_sub(2) // table borders
+        .saturating_sub(fixed_cols + column_spacing)
+        .max(if narrow { 16 } else { 20 }) as usize;
+
     let rows: Vec<Row> = groups
         .iter()
         .enumerate()
@@ -579,7 +737,10 @@ fn render_grouped_violations(
             Row::new(vec![
                 Cell::from(severity_text(group.severity)).style(severity_style(group.severity)),
                 Cell::from(group.category.short_name()),
-                Cell::from(group.pattern.clone()),
+                Cell::from(crate::tui::widgets::truncate_str(
+                    &group.pattern,
+                    pattern_width,
+                )),
                 Cell::from(format!("{}", group.violations.len()))
                     .style(Style::default().fg(scheme.text).bold()),
             ])
@@ -587,16 +748,30 @@ fn render_grouped_violations(
         })
         .collect();
 
-    let header = Row::new(vec!["Severity", "Category", "Issue Pattern", "Count"])
+    let header_cells: Vec<&str> = if narrow {
+        vec!["Sev", "Category", "Issue Pattern", "Cnt"]
+    } else {
+        vec!["Severity", "Category", "Issue Pattern", "Count"]
+    };
+    let header = Row::new(header_cells)
         .style(Style::default().fg(scheme.primary).bold())
         .bottom_margin(1);
 
-    let widths = [
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Min(20),
-        Constraint::Length(7),
-    ];
+    let widths = if narrow {
+        [
+            Constraint::Length(5),
+            Constraint::Length(8),
+            Constraint::Min(16),
+            Constraint::Length(4),
+        ]
+    } else {
+        [
+            Constraint::Length(8),
+            Constraint::Length(10),
+            Constraint::Min(20),
+            Constraint::Length(7),
+        ]
+    };
 
     let filter_label = if severity_filter == SeverityFilter::All {
         String::new()
@@ -1087,30 +1262,46 @@ fn render_help_bar(frame: &mut Frame, area: Rect, severity_filter: SeverityFilte
 
     let group_label = if grouped { "Grouped" } else { "Flat" };
 
-    let help = Line::from(vec![
-        Span::styled("\u{2190}/\u{2192}", Style::default().fg(scheme.primary)),
-        Span::styled(" standard  ", Style::default().fg(scheme.muted)),
-        Span::styled("j/k", Style::default().fg(scheme.primary)),
-        Span::styled(" navigate  ", Style::default().fg(scheme.muted)),
-        Span::styled("Enter", Style::default().fg(scheme.primary)),
-        Span::styled(" details  ", Style::default().fg(scheme.muted)),
-        Span::styled("g", Style::default().fg(scheme.primary)),
-        Span::styled(
-            format!(" view [{group_label}]  "),
+    // Whole-hint fitting: dropping a trailing hint (with a visible "…") beats
+    // ratatui clipping mid-token at the border ("E export" → bare "E").
+    let hints: Vec<(&str, String)> = vec![
+        ("\u{2190}/\u{2192}", "standard".to_string()),
+        ("j/k", "navigate".to_string()),
+        ("Enter", "details".to_string()),
+        ("g", format!("group [{group_label}]")),
+        ("f", format!("filter [{}]", severity_filter.label())),
+        ("E", "export".to_string()),
+        ("?", "help".to_string()),
+    ];
+    let budget = area.width.saturating_sub(2) as usize;
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let mut dropped = false;
+    for (i, (key, label)) in hints.iter().enumerate() {
+        let gap = if i == 0 { 0 } else { 2 };
+        let w = gap + key.chars().count() + 1 + label.chars().count();
+        if used + w > budget {
+            dropped = true;
+            break;
+        }
+        if gap > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            (*key).to_string(),
+            Style::default().fg(scheme.primary),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}"),
             Style::default().fg(scheme.muted),
-        ),
-        Span::styled("f", Style::default().fg(scheme.primary)),
-        Span::styled(
-            format!(" filter [{}]  ", severity_filter.label()),
-            Style::default().fg(scheme.muted),
-        ),
-        Span::styled("E", Style::default().fg(scheme.primary)),
-        Span::styled(" export  ", Style::default().fg(scheme.muted)),
-        Span::styled("?", Style::default().fg(scheme.primary)),
-        Span::styled(" help", Style::default().fg(scheme.muted)),
-    ]);
+        ));
+        used += w;
+    }
+    if dropped && used + 2 <= budget {
+        spans.push(Span::styled(" \u{2026}", Style::default().fg(scheme.muted)));
+    }
 
-    let paragraph = Paragraph::new(help).block(Block::default().borders(Borders::ALL));
+    let paragraph = Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
 
     frame.render_widget(paragraph, area);
 }
@@ -1295,4 +1486,84 @@ pub fn compute_compliance_results(
             checker.check(sbom)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::test_support::{DEMO_NEW, demo_single, pin_theme, render_to_text};
+    use crate::tui::view::ViewApp;
+
+    /// The doubled interior space left by stripping the quoted component name
+    /// must be collapsed to a single space.
+    #[test]
+    fn extract_pattern_collapses_stripped_name_gap() {
+        assert_eq!(
+            extract_pattern("Component 'foo' missing supplier/manufacturer"),
+            "Component missing supplier/manufacturer"
+        );
+        assert_eq!(
+            extract_pattern("Primary component 'app' participates in a dependency cycle"),
+            "Primary component participates in a dependency cycle"
+        );
+        // Name at the start / end degrades gracefully.
+        assert_eq!(extract_pattern("'foo' missing version"), "missing version");
+        assert_eq!(
+            extract_pattern("Missing hash for 'foo'"),
+            "Missing hash for"
+        );
+        // No quoted name: message passes through untouched.
+        assert_eq!(
+            extract_pattern("SBOM must have creation timestamp"),
+            "SBOM must have creation timestamp"
+        );
+    }
+
+    /// At 80x24 the Compliance tab's content area is 17 rows tall; the
+    /// selected standard and its verdict must be visible there instead of
+    /// empty border boxes.
+    #[test]
+    fn verdict_visible_at_min_size_content_area() {
+        pin_theme();
+        let (sbom, profile) = demo_single();
+        let mut app = ViewApp::new(sbom, DEMO_NEW, profile);
+        let text = render_to_text(80, 17, |frame| {
+            render_compliance(frame, Rect::new(0, 0, 80, 17), &mut app);
+        });
+        assert!(
+            text.contains("Compliance Standards"),
+            "standard selector must render at min size:\n{text}"
+        );
+        assert!(
+            text.contains("NTIA"),
+            "the selected standard must be identifiable at min size:\n{text}"
+        );
+        assert!(
+            text.contains("COMPLIANT"),
+            "the verdict (COMPLIANT/NON-COMPLIANT) must be visible at min size:\n{text}"
+        );
+        assert!(
+            text.contains("errors"),
+            "severity counts must be visible at min size:\n{text}"
+        );
+        assert!(
+            text.contains("Violations"),
+            "the violations list must still render at min size:\n{text}"
+        );
+    }
+
+    /// Rendered violation patterns must not contain the doubled space.
+    #[test]
+    fn rendered_patterns_have_no_double_space() {
+        pin_theme();
+        let (sbom, profile) = demo_single();
+        let mut app = ViewApp::new(sbom, DEMO_NEW, profile);
+        let text = render_to_text(120, 33, |frame| {
+            render_compliance(frame, Rect::new(0, 0, 120, 33), &mut app);
+        });
+        assert!(
+            !text.contains("Component  missing"),
+            "stripped component names must not leave a doubled space:\n{text}"
+        );
+    }
 }

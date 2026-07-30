@@ -16,6 +16,7 @@ mod timeline;
 mod vulnerabilities;
 
 pub use components::render_components;
+pub(crate) use components::render_quick_filter_picker;
 pub use dependencies::render_dependencies;
 pub(crate) use dependencies::update_graph_cache;
 pub(crate) use diff_compliance::nth_diff_violation;

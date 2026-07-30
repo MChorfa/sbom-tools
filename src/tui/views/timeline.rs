@@ -349,6 +349,48 @@ fn render_timeline_bar(f: &mut Frame, area: Rect, result: &TimelineResult, state
         .min(result.sboms.len().saturating_sub(visible_count as usize));
     let end_idx = (start_idx + visible_count as usize).min(result.sboms.len());
 
+    // When the series spans more than one calendar year, MM-DD labels lie
+    // about the chronology (a 2-year gap reads as adjacent days), so switch
+    // to YY-MM labels that keep the year visible in the same 5 columns.
+    let spans_multiple_years = {
+        let mut years = result
+            .sboms
+            .iter()
+            .filter_map(|s| s.timestamp.as_deref().and_then(|t| t.get(..4)));
+        let first = years.next();
+        first.is_some() && years.any(|y| Some(y) != first)
+    };
+
+    let title = format!(
+        " {} Evolution ({}-{}/{}) [m: metric, +/-: zoom, h/l: scroll] ",
+        metric.label(),
+        start_idx + 1,
+        end_idx,
+        result.sboms.len()
+    );
+
+    // Degenerate series: zero-height bars render as an entirely blank panel,
+    // indistinguishable from a rendering failure. Say what the data says.
+    let max_value = (0..result.sboms.len()).map(value).max().unwrap_or(0);
+    if !result.sboms.is_empty() && max_value == 0 {
+        let note = Paragraph::new(Line::from(Span::styled(
+            format!(
+                "No {} recorded in any of these {} versions (all values are 0)",
+                metric.label().to_lowercase(),
+                result.sboms.len()
+            ),
+            Style::default().fg(scheme.text_muted),
+        )))
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(scheme.info)),
+        );
+        f.render_widget(note, area);
+        return;
+    }
+
     let bars: Vec<Bar> = result
         .sboms
         .iter()
@@ -364,12 +406,14 @@ fn render_timeline_bar(f: &mut Frame, area: Rect, result: &TimelineResult, state
                 Style::default().fg(scheme.primary)
             };
 
-            // Prefer the timestamp's MM-DD slice (a time axis shows time);
-            // fall back to the truncated name.
+            // Prefer a timestamp slice (a time axis shows time); fall back to
+            // the truncated name. Same-year series show MM-DD; multi-year
+            // series show YY-MM so the year is never hidden.
+            let date_slice = if spans_multiple_years { 2..7 } else { 5..10 };
             let label = sbom
                 .timestamp
                 .as_deref()
-                .and_then(|t| t.get(5..10))
+                .and_then(|t| t.get(date_slice.clone()))
                 .map_or_else(
                     || {
                         sbom.name
@@ -386,14 +430,6 @@ fn render_timeline_bar(f: &mut Frame, area: Rect, result: &TimelineResult, state
                 .style(style)
         })
         .collect();
-
-    let title = format!(
-        " {} Evolution ({}-{}/{}) [m: metric, +/-: zoom, h/l: scroll] ",
-        metric.label(),
-        start_idx + 1,
-        end_idx,
-        result.sboms.len()
-    );
 
     let barchart = BarChart::default()
         .block(
@@ -583,22 +619,26 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
         )
         .bottom_margin(1);
 
+    // Fixed widths must SUM within the pane (30 usable cells at 80 cols, 46
+    // at 120): the old set requested more than the pane had, so ratatui
+    // clipped the Changes cell mid-token — "+4 -4" became "+4 -", silently
+    // erasing the removed count — and the CRA column vanished.
     let widths: Vec<Constraint> = if show_date {
         vec![
-            Constraint::Length(4),
-            Constraint::Min(10),
+            Constraint::Length(3),
+            Constraint::Min(8),
             Constraint::Length(10),
-            Constraint::Length(6),
-            Constraint::Length(10),
-            Constraint::Length(4),
+            Constraint::Length(5),
+            Constraint::Length(8),
+            Constraint::Length(3),
         ]
     } else {
         vec![
-            Constraint::Length(4),
-            Constraint::Min(10),
-            Constraint::Length(6),
-            Constraint::Length(10),
-            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(5),
+            Constraint::Length(7),
+            Constraint::Length(3),
         ]
     };
 
@@ -625,6 +665,14 @@ fn render_versions_list(f: &mut Frame, area: Rect, result: &TimelineResult, stat
 /// The Components panel's display list: added+removed evolutions tagged with
 /// `is_removed`, filtered by the active component filter.
 ///
+/// Statuses are mutually exclusive: the engine puts a TRANSIENT component
+/// (appeared after v1, gone before the end) in BOTH `components_added` and
+/// `components_removed`, which double-listed every such component — and every
+/// version bump of a purl-identified component — once as "Added" and once as
+/// "Removed". Entries from the added list are kept only when the component is
+/// still present at the end of the timeline, so "Added" always means "present
+/// in the latest version"; the transient's single entry is its "Removed" row.
+///
 /// Single source of truth for every consumer that resolves
 /// `selected_component` — the panel render, the history modal, and the
 /// event-side name lookup — so a filtered display can never desync from the
@@ -637,6 +685,7 @@ pub(crate) fn filtered_evolution_entries(
         .evolution_summary
         .components_added
         .iter()
+        .filter(|e| e.last_seen_index.is_none()) // still present: drop transient dupes
         .map(|e| (e, false)) // (evolution, is_removed)
         .chain(
             result
@@ -657,6 +706,29 @@ pub(crate) fn filtered_evolution_entries(
             }
         })
         .collect()
+}
+
+/// The version a component actually had at the point it was last seen.
+///
+/// `first_seen_version` is the FIRST version; for a removed component whose
+/// version changed during its lifetime the removal-point version lives only
+/// in the per-component version history.
+fn last_seen_version<'a>(
+    result: &'a TimelineResult,
+    evo: &'a crate::diff::ComponentEvolution,
+) -> &'a str {
+    evo.last_seen_index
+        .and_then(|last| {
+            result
+                .evolution_summary
+                .version_history
+                .get(&evo.id)?
+                .iter()
+                .find(|p| p.sbom_index == last)?
+                .version
+                .as_deref()
+        })
+        .unwrap_or(&evo.first_seen_version)
 }
 
 fn render_component_history(
@@ -686,6 +758,12 @@ fn render_component_history(
     // visible at any terminal size.
     let visible_rows = (area.height.saturating_sub(4) as usize).max(1);
     let window_start = selected.saturating_sub(visible_rows - 1);
+    // Component-column budget (40% of the pane interior, minus the spacing
+    // ratatui takes out of the percentage columns) for explicit '…'
+    // truncation — a silently clipped "product-reviews" is a different name
+    // than "product-reviews-1M". Deliberately conservative: an ellipsis wider
+    // than the real column would itself be clipped away.
+    let name_budget = ((area.width.saturating_sub(2)) as usize * 40 / 100).saturating_sub(3);
     let rows: Vec<Row> = filtered_evolutions
         .iter()
         .enumerate()
@@ -707,24 +785,43 @@ fn render_component_history(
             };
 
             let status = if *is_removed { "Removed" } else { "Added" };
+            // Version column: the component's LAST version — for removed rows
+            // that is the version at the removal point, not the first-seen
+            // version the old rendering repeated in two columns.
             let version_info = if *is_removed {
-                format!("{} @ v{}", evo.first_seen_version, evo.first_seen_index + 1)
+                last_seen_version(result, evo).to_string()
             } else {
                 evo.current_version
                     .clone()
                     .unwrap_or_else(|| evo.first_seen_version.clone())
             };
+            // Seen column: the presence range. "v1-v2" = last present in v2
+            // (i.e. dropped in v3); "v2+" = still present at the end.
+            let seen = match evo.last_seen_index {
+                Some(last) if last == evo.first_seen_index => {
+                    format!("v{}", evo.first_seen_index + 1)
+                }
+                Some(last) => format!("v{}-v{}", evo.first_seen_index + 1, last + 1),
+                None => format!("v{}+", evo.first_seen_index + 1),
+            };
+
+            let name = if name_budget >= 4 && evo.name.chars().count() > name_budget {
+                let cut: String = evo.name.chars().take(name_budget - 1).collect();
+                format!("{cut}\u{2026}")
+            } else {
+                evo.name.clone()
+            };
 
             Row::new(vec![
-                Cell::from(evo.name.clone()).style(style),
+                Cell::from(name).style(style),
                 Cell::from(version_info).style(style),
-                Cell::from(format!("v{}", evo.first_seen_index + 1)).style(style),
+                Cell::from(seen).style(style),
                 Cell::from(status).style(status_style),
             ])
         })
         .collect();
 
-    let header = Row::new(vec!["Component", "Version", "Since", "Status"])
+    let header = Row::new(vec!["Component", "Version", "Seen", "Status"])
         .style(
             Style::default()
                 .fg(scheme.primary)
@@ -745,13 +842,25 @@ fn render_component_history(
         scheme.text
     };
 
-    let unfiltered_total = result.evolution_summary.components_added.len()
-        + result.evolution_summary.components_removed.len();
-    let title = format!(
+    // The total must count what the panel can actually list (the deduped
+    // entry set), not the raw added+removed list lengths.
+    let unfiltered_total = filtered_evolution_entries(result, TimelineComponentFilter::All).len();
+    // Drop whole title hints when they cannot fit instead of clipping
+    // "[f: filter, Enter: detail]" mid-word at 80 cols.
+    let full_title = format!(
         " Component Evolution ({}/{}) [f: filter, Enter: detail] ",
         filtered_evolutions.len(),
         unfiltered_total
     );
+    let title = if full_title.chars().count() + 2 <= area.width as usize {
+        full_title
+    } else {
+        format!(
+            " Component Evolution ({}/{}) ",
+            filtered_evolutions.len(),
+            unfiltered_total
+        )
+    };
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -770,7 +879,7 @@ fn render_status_bar(
     f: &mut Frame,
     area: Rect,
     result: &TimelineResult,
-    _state: &TimelineState,
+    state: &TimelineState,
     status: Option<&str>,
 ) {
     let scheme = colors();
@@ -785,18 +894,37 @@ fn render_status_bar(
         .map(|d| d.summary.components_removed)
         .sum();
 
+    // Sums of the per-step pairwise diffs (the Versions panel's Changes
+    // column). Labeled as such: the Component Evolution panel counts
+    // lifecycle entries with different granularity, and the old bare
+    // "Added:/Removed:" invited reading these as the same numbers.
     let mut spans = vec![
-        Span::styled("Added: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(total_added.to_string(), Style::default().fg(scheme.added)),
-        Span::raw("  "),
-        Span::styled("Removed: ", Style::default().fg(scheme.text_muted)),
         Span::styled(
-            total_removed.to_string(),
+            "Changes across versions: ",
+            Style::default().fg(scheme.text_muted),
+        ),
+        Span::styled(format!("+{total_added}"), Style::default().fg(scheme.added)),
+        Span::raw(" "),
+        Span::styled(
+            format!("-{total_removed}"),
             Style::default().fg(scheme.removed),
         ),
         Span::raw("  \u{2502}  "),
     ];
-    crate::tui::views::matrix_status_tail(&mut spans, area, status, "timeline");
+    // An open modal swallows every key, so the mode hints would all be false
+    // advertising; show the modal's own keys instead (#198).
+    let modal_hints: Option<&[(&str, &str)]> = if state.show_version_diff_modal {
+        Some(&[("\u{2190}/\u{2192}", "compare version"), ("Esc", "close")])
+    } else if state.show_component_history {
+        Some(&[("Esc", "close")])
+    } else {
+        None
+    };
+    if let Some(hints) = modal_hints {
+        super::matrix::extend_with_modal_hints(&mut spans, hints);
+    } else {
+        crate::tui::views::matrix_status_tail(&mut spans, area, status, "timeline");
+    }
 
     let block = Block::default().borders(Borders::ALL);
     let paragraph = Paragraph::new(Line::from(spans)).block(block);
@@ -900,7 +1028,10 @@ fn render_version_diff_modal(
             Span::raw(diff.summary.components_modified.to_string()),
         ]));
 
-        // Show some added components
+        // Sample lists mirror the Matrix pair modal's conventions: versions on
+        // every entry, an explicit "... and N more" when a list is elided, and
+        // a Modified section (the old modal announced "~ Modified: 5" but
+        // never listed a single one).
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "Added Components:",
@@ -910,7 +1041,18 @@ fn render_version_diff_modal(
             lines.push(Line::from(vec![
                 Span::raw("  + "),
                 Span::styled(&comp.name, Style::default().fg(scheme.text)),
+                Span::raw(" "),
+                Span::styled(
+                    comp.new_version.as_deref().unwrap_or("").to_string(),
+                    Style::default().fg(scheme.text_muted),
+                ),
             ]));
+        }
+        if diff.components.added.len() > 5 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  ... and {} more", diff.components.added.len() - 5),
+                Style::default().fg(scheme.text_muted),
+            )]));
         }
 
         lines.push(Line::from(""));
@@ -922,7 +1064,46 @@ fn render_version_diff_modal(
             lines.push(Line::from(vec![
                 Span::raw("  - "),
                 Span::styled(&comp.name, Style::default().fg(scheme.text)),
+                Span::raw(" "),
+                Span::styled(
+                    comp.old_version.as_deref().unwrap_or("").to_string(),
+                    Style::default().fg(scheme.text_muted),
+                ),
             ]));
+        }
+        if diff.components.removed.len() > 5 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  ... and {} more", diff.components.removed.len() - 5),
+                Style::default().fg(scheme.text_muted),
+            )]));
+        }
+
+        if !diff.components.modified.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![Span::styled(
+                "Modified Components:",
+                Style::default().fg(scheme.modified),
+            )]));
+            for comp in diff.components.modified.iter().take(5) {
+                let version_change = match (&comp.old_version, &comp.new_version) {
+                    (Some(old), Some(new)) => format!("{old} \u{2192} {new}"),
+                    (None, Some(new)) => format!("? \u{2192} {new}"),
+                    (Some(old), None) => format!("{old} \u{2192} ?"),
+                    (None, None) => "(changed)".to_string(),
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("  ~ "),
+                    Span::styled(&comp.name, Style::default().fg(scheme.text)),
+                    Span::raw(" "),
+                    Span::styled(version_change, Style::default().fg(scheme.accent)),
+                ]));
+            }
+            if diff.components.modified.len() > 5 {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  ... and {} more", diff.components.modified.len() - 5),
+                    Style::default().fg(scheme.text_muted),
+                )]));
+            }
         }
     } else {
         lines.push(Line::from(vec![Span::styled(
@@ -935,21 +1116,25 @@ fn render_version_diff_modal(
         )]));
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
+    // Height-fit with an explicit overflow marker and the key hints pinned to
+    // the last row (shared with the Matrix pair modal). No Wrap: the row
+    // accounting is exact only when one Line is one row.
+    let footer = Line::from(vec![
         Span::styled("←/→", Style::default().fg(scheme.primary)),
         Span::raw(": change compare version  "),
         Span::styled("Esc", Style::default().fg(scheme.primary)),
         Span::raw(": close"),
-    ]));
+    ]);
+    let lines =
+        super::matrix::fit_modal_lines(lines, modal_area.height.saturating_sub(2) as usize, footer);
 
     let block = Block::default()
         .title(format!(" Version Diff: {name_a} ↔ {name_b} "))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
-    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, modal_area);
 }
 
@@ -962,14 +1147,6 @@ fn render_component_history_modal(
 ) {
     let scheme = colors();
 
-    let modal_width = area.width * 75 / 100;
-    let modal_height = area.height * 60 / 100;
-    let modal_x = (area.width - modal_width) / 2;
-    let modal_y = (area.height - modal_height) / 2;
-    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
-
-    f.render_widget(Clear, modal_area);
-
     // Resolve the selection through the SAME filtered list the Components
     // panel displays (the unfiltered list opened the wrong component's
     // history whenever a filter was active).
@@ -979,25 +1156,19 @@ fn render_component_history_modal(
         None => return,
     };
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Component: ", Style::default().fg(scheme.text_muted)),
-            Span::styled(
-                &evo.name,
-                Style::default()
-                    .fg(scheme.primary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("First Seen: ", Style::default().fg(scheme.text_muted)),
-            Span::styled(
-                format!("v{} ({})", evo.first_seen_index + 1, evo.first_seen_version),
-                Style::default().fg(scheme.accent),
-            ),
-        ]),
-    ];
+    // The component name is already the block title — repeating it as the
+    // first body line was pure duplication.
+    // A component without a version string rendered as "v3 ()" — empty
+    // parens read as missing data rather than "no version declared".
+    let first_seen = if evo.first_seen_version.trim().is_empty() {
+        format!("v{} (no version declared)", evo.first_seen_index + 1)
+    } else {
+        format!("v{} ({})", evo.first_seen_index + 1, evo.first_seen_version)
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled("First Seen: ", Style::default().fg(scheme.text_muted)),
+        Span::styled(first_seen, Style::default().fg(scheme.accent)),
+    ])];
 
     if let Some(current) = &evo.current_version {
         lines.push(Line::from(vec![
@@ -1060,11 +1231,32 @@ fn render_component_history_modal(
         Span::raw(": close"),
     ]));
 
+    // Size to the content (a fixed 75%x60% box left ~10 lines floating in a
+    // half-screen void), clamped to the terminal.
+    let title = format!(" Component: {} ", evo.name);
+    let content_w = lines
+        .iter()
+        .map(ratatui::text::Line::width)
+        .max()
+        .unwrap_or(0) as u16;
+    let modal_width = (content_w + 4)
+        .max(title.chars().count() as u16 + 4)
+        .min(area.width.saturating_sub(2))
+        .max(20);
+    let modal_height = (lines.len() as u16 + 2)
+        .min(area.height.saturating_sub(2))
+        .max(5);
+    let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
+
+    f.render_widget(Clear, modal_area);
+
     let block = Block::default()
-        .title(format!(" Component: {} ", evo.name))
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.info))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     f.render_widget(paragraph, modal_area);
@@ -1096,7 +1288,7 @@ fn render_jump_overlay(f: &mut Frame, area: Rect, state: &TimelineState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.warning))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
     let paragraph = Paragraph::new(jump_text).block(block);
     f.render_widget(paragraph, jump_area);
@@ -1107,4 +1299,193 @@ fn render_jump_overlay(f: &mut Frame, area: Rect, state: &TimelineState) {
 pub enum TimelinePanel {
     Versions,
     Components,
+}
+
+#[cfg(test)]
+mod truthfulness_tests {
+    use super::*;
+    use crate::tui::app::TimelineState;
+    use crate::tui::test_support::{demo_timeline, pin_theme, render_to_text};
+
+    /// Lifecycle statuses are mutually exclusive: no component id may be
+    /// listed both as Added and as Removed (the engine double-lists
+    /// transients), and "Added" always means present in the latest version.
+    #[test]
+    fn evolution_entries_are_deduped_and_presence_honest() {
+        let result = demo_timeline();
+        let entries = filtered_evolution_entries(&result, TimelineComponentFilter::All);
+
+        let mut ids: Vec<&str> = entries.iter().map(|(e, _)| e.id.as_str()).collect();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            total,
+            "no component id may appear twice (Added+Removed double-listing)"
+        );
+        for (evo, is_removed) in &entries {
+            if *is_removed {
+                assert!(
+                    evo.last_seen_index.is_some(),
+                    "'Removed' rows must actually be gone: {}",
+                    evo.name
+                );
+            } else {
+                assert!(
+                    evo.last_seen_index.is_none(),
+                    "'Added' must mean present in the latest version: {}",
+                    evo.name
+                );
+            }
+        }
+    }
+
+    /// A removed component whose version changed during its lifetime shows
+    /// the version it had at the removal point, not its first version.
+    #[test]
+    fn removed_rows_show_last_seen_version() {
+        let result = demo_timeline();
+        let evo = filtered_evolution_entries(&result, TimelineComponentFilter::Removed)
+            .into_iter()
+            .map(|(e, _)| e)
+            .find(|e| e.name == "acme-webapp")
+            .expect("acme-webapp is removed in the demo timeline");
+        // acme-webapp: 1.0.0 in v1, 2.0.0 in v2, gone in v3.
+        assert_eq!(evo.first_seen_version, "1.0.0");
+        assert_eq!(last_seen_version(&result, evo), "2.0.0");
+    }
+
+    /// Rendered frame checks: year-bearing chart labels for a multi-year
+    /// series, an honestly-labeled status bar, lifetime ranges in the Seen
+    /// column, and an un-clipped Changes column in the narrow layout.
+    #[test]
+    fn timeline_frames_are_truthful_at_both_sizes() {
+        pin_theme();
+        let result = demo_timeline();
+        let mut state = TimelineState::new();
+        state.total_versions = result.sboms.len();
+        state.total_components =
+            filtered_evolution_entries(&result, TimelineComponentFilter::All).len();
+
+        let added: usize = result
+            .incremental_diffs
+            .iter()
+            .map(|d| d.summary.components_added)
+            .sum();
+        let removed: usize = result
+            .incremental_diffs
+            .iter()
+            .map(|d| d.summary.components_removed)
+            .sum();
+
+        let text = render_to_text(120, 40, |f| {
+            render_timeline(f, f.area(), &result, &state, None);
+        });
+        // 2024 -> 2026 series: the year must be visible on the time axis.
+        assert!(
+            text.contains("26-06"),
+            "multi-year series must carry the year in chart labels:\n{text}"
+        );
+        assert!(
+            text.contains(&format!("Changes across versions: +{added} -{removed}")),
+            "status bar must label what it sums:\n{text}"
+        );
+        assert!(
+            text.contains("v1-v2"),
+            "removed components must show their presence range (Seen column):\n{text}"
+        );
+        assert!(
+            text.contains("Seen"),
+            "the Seen header replaces the ambiguous Since:\n{text}"
+        );
+
+        // Narrow layout: the Changes column must not clip mid-token.
+        let last = result.incremental_diffs.last().expect("diffs");
+        let narrow = render_to_text(80, 24, |f| {
+            render_timeline(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            narrow.contains(&format!(
+                "+{} -{}",
+                last.summary.components_added, last.summary.components_removed
+            )),
+            "the removed count must survive the 80-col Versions table:\n{narrow}"
+        );
+        assert!(
+            !narrow.contains("- \u{2717}") && !narrow.contains("- \u{2713}"),
+            "a dangling '-' means the Changes cell clipped mid-token:\n{narrow}"
+        );
+    }
+
+    /// An all-zero metric series renders an explicit note, not a blank panel
+    /// indistinguishable from a rendering failure.
+    #[test]
+    fn all_zero_metric_series_renders_note() {
+        use crate::tui::app::TimelineChartMetric;
+        pin_theme();
+        let mut result = demo_timeline();
+        for snap in &mut result.evolution_summary.vulnerability_trend {
+            snap.counts = crate::model::VulnerabilityCounts::default();
+        }
+        let mut state = TimelineState::new();
+        state.total_versions = result.sboms.len();
+        state.total_components =
+            filtered_evolution_entries(&result, TimelineComponentFilter::All).len();
+        state.chart_metric = TimelineChartMetric::Vulnerabilities;
+
+        let text = render_to_text(120, 40, |f| {
+            render_timeline(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            text.contains("No vulnerabilities recorded in any of these 3 versions"),
+            "the all-zero chart must say so instead of rendering blank:\n{text}"
+        );
+    }
+
+    /// The 'd' modal lists modified components with version arrows and marks
+    /// every elided list — and its footer survives the 80x24 clip.
+    #[test]
+    fn version_diff_modal_is_marked_and_footer_survives() {
+        pin_theme();
+        let result = demo_timeline();
+        let mut state = TimelineState::new();
+        state.total_versions = result.sboms.len();
+        state.total_components =
+            filtered_evolution_entries(&result, TimelineComponentFilter::All).len();
+        state.selected_version = 0;
+        state.compare_version = Some(1);
+        state.show_version_diff_modal = true;
+
+        let text = render_to_text(120, 40, |f| {
+            render_timeline(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            text.contains("Modified Components:") && text.contains("\u{2192}"),
+            "the modal must list modified components with version arrows:\n{text}"
+        );
+
+        // v2 -> v3 removes 9 components: the 5-entry sample must be marked.
+        state.selected_version = 1;
+        state.compare_version = Some(2);
+        let text = render_to_text(120, 40, |f| {
+            render_timeline(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            text.contains("... and 4 more"),
+            "elided removed list must carry an overflow marker:\n{text}"
+        );
+
+        let narrow = render_to_text(80, 24, |f| {
+            render_timeline(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            narrow.contains("Esc"),
+            "the key-hint footer must survive the 80x24 modal clip:\n{narrow}"
+        );
+        assert!(
+            narrow.contains("more lines"),
+            "clipped modal content must be explicitly marked:\n{narrow}"
+        );
+    }
 }

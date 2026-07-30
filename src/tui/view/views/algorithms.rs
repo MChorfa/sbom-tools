@@ -97,6 +97,7 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .split(area);
 
     // ── Left: algorithm list ──
+    let inner_width = panels[0].width.saturating_sub(2) as usize;
     let items: Vec<ListItem> = algorithms
         .iter()
         .enumerate()
@@ -118,14 +119,20 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default()
             };
 
+            // Ellipsize the name so the trailing [family] survives narrow
+            // widths instead of ratatui clipping the row mid-word.
+            let family_txt = format!("  [{family}]");
+            let name = crate::tui::widgets::truncate_str(
+                &comp.name,
+                inner_width
+                    .saturating_sub(2 + unicode_width::UnicodeWidthStr::width(family_txt.as_str())),
+            );
+
             ListItem::new(Line::from(vec![
                 qi,
                 Span::raw(" "),
-                Span::raw(&comp.name),
-                Span::styled(
-                    format!("  [{family}]"),
-                    Style::default().fg(scheme.text_muted),
-                ),
+                Span::raw(name),
+                Span::styled(family_txt, Style::default().fg(scheme.text_muted)),
             ]))
             .style(style)
         })
@@ -139,7 +146,9 @@ pub fn render_algorithms(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 algorithms.len(),
                 app.algorithm_sort_by.label()
             ))
-            .title_bottom(crate::tui::shared::crypto::quantum_legend()),
+            .title_bottom(crate::tui::shared::crypto::quantum_legend(
+                panels[0].width.saturating_sub(2),
+            )),
     );
     let mut list_state = ratatui::widgets::ListState::default();
     if !algorithms.is_empty() {

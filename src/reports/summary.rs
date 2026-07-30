@@ -384,8 +384,9 @@ impl ReportGenerator for SummaryReporter {
                 crypto_metrics.keys_count,
                 crypto_metrics.protocols_count,
             ));
-            if crypto_metrics.algorithms_count > 0 {
-                let readiness = crypto_metrics.quantum_readiness_score();
+            // `None` (no algorithms) omits the row — 0/0 readiness is absence
+            // of evidence, not a perfect score.
+            if let Some(readiness) = crypto_metrics.quantum_readiness_score() {
                 let color = if readiness >= 80.0 {
                     "green"
                 } else if readiness >= 40.0 {

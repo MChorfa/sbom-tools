@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 /// Render the Models tab (AI-BOM mode).
-pub fn render_models(frame: &mut Frame, area: Rect, app: &ViewApp) {
+pub fn render_models(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     let scheme = colors();
     let mut models: Vec<_> = app
         .sbom
@@ -24,7 +24,18 @@ pub fn render_models(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));
 
-    if models.is_empty() {
+    // Components whose model card parsed but whose CycloneDX `type` is not
+    // machine-learning-model: list them too (badged with the declared type)
+    // instead of silently denying the parsed modelCard data to the user.
+    let mut mistyped: Vec<_> = app
+        .sbom
+        .components
+        .values()
+        .filter(|c| c.component_type != ComponentType::MachineLearningModel && c.ml_model.is_some())
+        .collect();
+    mistyped.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if models.is_empty() && mistyped.is_empty() {
         crate::tui::widgets::render_empty_state_enhanced(
             frame,
             area,
@@ -35,6 +46,9 @@ pub fn render_models(frame: &mut Frame, area: Rect, app: &ViewApp) {
         );
         return;
     }
+
+    let typed_count = models.len();
+    models.extend(mistyped);
 
     let panels = Layout::default()
         .direction(Direction::Horizontal)
@@ -55,11 +69,17 @@ pub fn render_models(frame: &mut Frame, area: Rect, app: &ViewApp) {
                 Style::default()
             };
             let ver = comp.version.as_deref().unwrap_or("");
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(comp.name.clone(), Style::default().fg(scheme.text)),
                 Span::styled(format!("  {ver}"), Style::default().fg(scheme.text_muted)),
-            ]))
-            .style(style)
+            ];
+            if i >= typed_count {
+                spans.push(Span::styled(
+                    format!("  [typed: {}]", comp.component_type),
+                    Style::default().fg(scheme.warning),
+                ));
+            }
+            ListItem::new(Line::from(spans)).style(style)
         })
         .collect();
 
@@ -91,25 +111,73 @@ pub fn render_models(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ),
         ]),
     ];
+    // Mistyped carrier: say what the document declares and how to fix it.
+    if selected >= typed_count {
+        lines.push(Line::from(vec![
+            Span::styled("Type: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!(
+                    "{} — has a model card but is not typed machine-learning-model; fix the 'type' field",
+                    comp.component_type
+                ),
+                Style::default().fg(scheme.warning),
+            ),
+        ]));
+    }
     if let Some(purl) = &comp.identifiers.purl {
         lines.push(Line::from(vec![
             Span::styled("PURL: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(purl.clone(), Style::default().fg(scheme.text_muted)),
         ]));
     }
-    // Reuse the shared ML / Dataset metadata renderer.
-    lines.extend(render_ml_dataset_lines(
-        comp.ml_model.as_ref(),
-        comp.dataset.as_ref(),
-        panels[1].width,
-    ));
+    // Resolve training-dataset bom-refs to the referenced component's name
+    // ("product-reviews-1M (ref: data-reviews)") so the Models and Datasets
+    // tabs agree on identity; raw refs remain only when unresolvable.
+    let ml = comp.ml_model.as_ref().map(|ml| {
+        let mut ml = ml.clone();
+        for ds in &mut ml.training_datasets {
+            if ds.name.is_none()
+                && let Some(r) = ds.reference.clone()
+                && let Some(target) = app
+                    .sbom
+                    .components
+                    .values()
+                    .find(|c| c.identifiers.format_id == r)
+            {
+                ds.name = Some(format!("{} (ref: {})", target.name, r));
+            }
+        }
+        ml
+    });
+    let dataset = comp
+        .dataset
+        .as_ref()
+        .map(super::without_generic_dataset_type);
+    // Reuse the shared ML / Dataset metadata renderer, retitled for this tab.
+    let mut ml_lines = render_ml_dataset_lines(ml.as_ref(), dataset.as_ref(), panels[1].width);
+    super::relabel_ml_section_header(&mut ml_lines, "Model Card");
+    lines.extend(ml_lines);
 
+    // K/J detail scrolling (model cards routinely overflow 80x24).
+    let inner_width = panels[1].width.saturating_sub(2);
+    let visible_rows = panels[1].height.saturating_sub(2) as usize;
+    let total_rows = crate::tui::shared::text::wrapped_line_count(&lines, inner_width);
+    let max_scroll = total_rows.saturating_sub(visible_rows) as u16;
+    let scroll = app.models_detail_scroll.min(max_scroll);
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Model Detail ");
+    if max_scroll > 0 {
+        block = block.title_bottom(Line::styled(
+            " [K/J] scroll ",
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
     let detail = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Model Detail "),
-        )
-        .wrap(Wrap { trim: true });
+        .block(block)
+        .wrap(Wrap { trim: true })
+        .scroll((scroll, 0));
     frame.render_widget(detail, panels[1]);
+    app.models_detail_scroll = scroll;
 }

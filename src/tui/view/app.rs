@@ -3,7 +3,7 @@
 //! This provides a rich, purpose-built interface for SBOM analysis
 //! with hierarchical navigation, search, and deep inspection.
 
-use crate::model::{Component, NormalizedSbom, NormalizedSbomIndex, VulnerabilityRef};
+use crate::model::{Component, NormalizedSbom, NormalizedSbomIndex};
 use crate::quality::{ComplianceResult, QualityReport, QualityScorer};
 use crate::tui::app_states::SourcePanelState;
 use crate::tui::state::ListNavigation;
@@ -141,6 +141,10 @@ pub struct ViewApp {
     pub(crate) models_selected: usize,
     /// AI-BOM Datasets tab: selected index
     pub(crate) datasets_selected: usize,
+    /// AI-BOM Models tab: detail-pane scroll offset (K/J)
+    pub(crate) models_detail_scroll: u16,
+    /// AI-BOM Datasets tab: detail-pane scroll offset (K/J)
+    pub(crate) datasets_detail_scroll: u16,
     /// AI-BOM AI-Readiness tab: shared scroll offset for checks + recommendations
     pub(crate) ai_readiness_scroll: usize,
 
@@ -249,6 +253,8 @@ impl ViewApp {
             algorithm_sort_by: AlgorithmSortBy::default(),
             models_selected: 0,
             datasets_selected: 0,
+            models_detail_scroll: 0,
+            datasets_detail_scroll: 0,
             ai_readiness_scroll: 0,
             bookmarked: HashSet::new(),
             export_template: None,
@@ -345,6 +351,97 @@ impl ViewApp {
         }
     }
 
+    /// The crypto components exactly as the given CBOM tab renders them:
+    /// same asset-type filter, same sort order.
+    ///
+    /// KEEP IN LOCKSTEP with `views/{crypto,algorithms,certificates,keys,protocols}.rs`
+    /// — yank ('y') and the footer "[y] copy …" preview index THIS list with
+    /// the tab's selection index, so any drift copies the wrong asset.
+    pub fn visible_crypto_components(&self, tab: ViewTab) -> Vec<&Component> {
+        use crate::model::{ComponentType, CryptoAssetType};
+        let filter = match tab {
+            ViewTab::Algorithms => Some(CryptoAssetType::Algorithm),
+            ViewTab::Certificates => Some(CryptoAssetType::Certificate),
+            ViewTab::Keys => Some(CryptoAssetType::RelatedCryptoMaterial),
+            ViewTab::Protocols => Some(CryptoAssetType::Protocol),
+            // Unified Crypto tab: every crypto asset, document order.
+            _ => None,
+        };
+        let mut list: Vec<&Component> = self
+            .sbom
+            .components
+            .values()
+            .filter(|c| {
+                c.component_type == ComponentType::Cryptographic
+                    && filter.as_ref().is_none_or(|f| {
+                        c.crypto_properties
+                            .as_ref()
+                            .is_some_and(|cp| &cp.asset_type == f)
+                    })
+            })
+            .collect();
+        match tab {
+            // Mirrors views/algorithms.rs (sorted by the active sort mode).
+            ViewTab::Algorithms => {
+                list.sort_by(|a, b| match self.algorithm_sort_by {
+                    AlgorithmSortBy::Name => a.name.cmp(&b.name),
+                    AlgorithmSortBy::Family => {
+                        let fam = |c: &&Component| {
+                            c.crypto_properties
+                                .as_ref()
+                                .and_then(|cp| cp.algorithm_properties.as_ref())
+                                .and_then(|algo| algo.algorithm_family.clone())
+                                .unwrap_or_default()
+                        };
+                        fam(a).cmp(&fam(b))
+                    }
+                    AlgorithmSortBy::QuantumLevel => {
+                        let lvl = |c: &&Component| {
+                            c.crypto_properties
+                                .as_ref()
+                                .and_then(|cp| cp.algorithm_properties.as_ref())
+                                .and_then(|algo| algo.nist_quantum_security_level)
+                                .unwrap_or(0)
+                        };
+                        lvl(b).cmp(&lvl(a)) // descending: highest quantum level first
+                    }
+                    AlgorithmSortBy::Strength => {
+                        let strength = |c: &&Component| -> u8 {
+                            let Some(cp) = &c.crypto_properties else {
+                                return 1;
+                            };
+                            let Some(algo) = &cp.algorithm_properties else {
+                                return 1;
+                            };
+                            if algo.is_weak_by_name(&c.name) {
+                                return 0;
+                            }
+                            if algo.nist_quantum_security_level == Some(0) {
+                                return 1;
+                            }
+                            2
+                        };
+                        strength(a).cmp(&strength(b))
+                    }
+                });
+            }
+            // Mirrors views/certificates.rs (most urgent expiry first).
+            ViewTab::Certificates => {
+                let days_remaining = |c: &&Component| -> i64 {
+                    c.crypto_properties
+                        .as_ref()
+                        .and_then(|cp| cp.certificate_properties.as_ref())
+                        .and_then(|cert| cert.validity_days())
+                        .unwrap_or(i64::MAX)
+                };
+                list.sort_by_key(days_remaining);
+            }
+            // Keys / Protocols / Crypto render in document order.
+            _ => {}
+        }
+        list
+    }
+
     /// Count crypto components for the active tab (filtered by asset type).
     pub fn crypto_count_for_tab(&self) -> usize {
         use crate::model::{ComponentType, CryptoAssetType};
@@ -373,14 +470,19 @@ impl ViewApp {
     // AI-BOM per-tab selection helpers
     // ========================================================================
 
-    /// Count `MachineLearningModel` components (Models tab).
+    /// Count the components the Models tab lists: `MachineLearningModel`
+    /// components plus mistyped carriers (a parsed model card under a wrong
+    /// CycloneDX `type`, which the tab surfaces badged). Keeping this count
+    /// in sync with the tab keeps j/k selection and the status bar honest.
     #[must_use]
     pub fn ml_model_count(&self) -> usize {
         use crate::model::ComponentType;
         self.sbom
             .components
             .values()
-            .filter(|c| c.component_type == ComponentType::MachineLearningModel)
+            .filter(|c| {
+                c.component_type == ComponentType::MachineLearningModel || c.ml_model.is_some()
+            })
             .count()
     }
 
@@ -968,9 +1070,11 @@ impl ViewApp {
             }
             ViewTab::Models => {
                 self.models_selected = self.models_selected.saturating_sub(1);
+                self.models_detail_scroll = 0;
             }
             ViewTab::Datasets => {
                 self.datasets_selected = self.datasets_selected.saturating_sub(1);
+                self.datasets_detail_scroll = 0;
             }
             ViewTab::AiReadiness => {
                 self.ai_readiness_scroll = self.ai_readiness_scroll.saturating_sub(1);
@@ -1006,10 +1110,12 @@ impl ViewApp {
             ViewTab::Models => {
                 let max = self.ml_model_count().saturating_sub(1);
                 self.models_selected = self.models_selected.saturating_add(1).min(max);
+                self.models_detail_scroll = 0;
             }
             ViewTab::Datasets => {
                 let max = self.dataset_count().saturating_sub(1);
                 self.datasets_selected = self.datasets_selected.saturating_add(1).min(max);
+                self.datasets_detail_scroll = 0;
             }
             ViewTab::AiReadiness => {
                 self.ai_readiness_scroll = self
@@ -1482,7 +1588,7 @@ impl ViewApp {
     }
 
     /// Get the currently selected tree node.
-    fn get_selected_tree_node(&self) -> Option<SelectedTreeNode> {
+    pub(crate) fn get_selected_tree_node(&self) -> Option<SelectedTreeNode> {
         let nodes = self.build_tree_nodes();
         let mut flat_items = Vec::new();
         flatten_tree_for_selection(nodes, &self.tree_state, &mut flat_items);
@@ -1909,7 +2015,7 @@ fn get_max_severity(comp: &Component) -> Option<String> {
 
 /// Selected tree node for navigation.
 #[derive(Debug, Clone)]
-enum SelectedTreeNode {
+pub(crate) enum SelectedTreeNode {
     Group(String),
     Component(String),
 }
@@ -1992,13 +2098,15 @@ impl ViewTab {
             Self::Overview => "Overview",
             Self::Quality => "Quality",
             Self::Source => "Source",
+            // Full titles everywhere — the tab bar windows with «/» markers,
+            // so overflow is handled without lossy abbreviations.
             Self::Tree => "Components",
-            Self::Vulnerabilities => "Vulns",
+            Self::Vulnerabilities => "Vulnerabilities",
             Self::Licenses => "Licenses",
-            Self::Dependencies => "Deps",
+            Self::Dependencies => "Dependencies",
             Self::Compliance => "Compliance",
             Self::Algorithms => "Algorithms",
-            Self::Certificates => "Certs",
+            Self::Certificates => "Certificates",
             Self::Keys => "Keys",
             Self::Protocols => "Protocols",
             Self::PqcCompliance => "PQC Compliance",
@@ -2049,12 +2157,16 @@ impl ViewTab {
     #[must_use]
     pub const fn tabs_for_profile(profile: crate::model::BomProfile) -> &'static [ViewTab] {
         match profile {
+            // Ordinals for the tabs shared with the Diff app (Dependencies=3,
+            // Licenses=4, Vulnerabilities=5) deliberately match the Diff
+            // app's tab bar so digit-key muscle memory transfers between the
+            // two apps.
             crate::model::BomProfile::Sbom => &[
                 Self::Overview,
                 Self::Tree,
-                Self::Vulnerabilities,
-                Self::Licenses,
                 Self::Dependencies,
+                Self::Licenses,
+                Self::Vulnerabilities,
                 Self::Quality,
                 Self::Compliance,
                 Self::Source,
@@ -2493,6 +2605,19 @@ impl VulnExplorerState {
     /// diff-mode `VulnFilter::Kev`.
     pub fn toggle_kev_filter(&mut self) {
         self.filter_kev = !self.filter_kev;
+        // Only reset the cursor when narrowing to KEV; toggling OFF restores
+        // the full list, where keeping the position is less disruptive
+        // (clamp_selection still bounds it on the next render).
+        if self.filter_kev {
+            self.selected = 0;
+        }
+        self.invalidate_cache();
+    }
+
+    /// Clear the severity filter entirely (the no-results state's
+    /// "[Esc] to clear" recovery path).
+    pub fn clear_severity_filter(&mut self) {
+        self.filter_severity = None;
         self.selected = 0;
         self.invalidate_cache();
     }
@@ -2542,28 +2667,10 @@ impl VulnExplorerState {
         self.invalidate_cache();
     }
 
-    /// Get the selected vulnerability.
-    pub fn get_selected<'a>(
-        &self,
-        sbom: &'a NormalizedSbom,
-    ) -> Option<(String, &'a VulnerabilityRef)> {
-        let mut idx = 0;
-        for (comp_id, comp) in &sbom.components {
-            for vuln in &comp.vulnerabilities {
-                if let Some(ref filter) = self.filter_severity {
-                    let sev = vuln.severity.as_ref().map(|s| s.to_string().to_lowercase());
-                    if sev.as_deref() != Some(filter) {
-                        continue;
-                    }
-                }
-                if idx == self.selected {
-                    return Some((comp_id.value().to_string(), vuln));
-                }
-                idx += 1;
-            }
-        }
-        None
-    }
+    // NOTE: the old `get_selected` raw-component-walk helper was deleted on
+    // purpose: it ignored the grouped/sorted/deduped display list and made
+    // yank copy the wrong CVE. Resolve selections through
+    // `cached_display_items` / `get_selected_vuln_row` instead.
 }
 
 impl Default for VulnExplorerState {
@@ -3139,7 +3246,12 @@ impl SbomStats {
         Self {
             component_count: sbom.components.len(),
             vuln_count,
-            license_count: license_counts.len(),
+            // Real licenses only — the synthetic "Unknown" bucket (components
+            // with no license at all) must not count as a unique license.
+            license_count: license_counts
+                .keys()
+                .filter(|k| k.as_str() != "Unknown")
+                .count(),
             ecosystem_counts,
             vuln_by_severity,
             license_counts,
@@ -3294,7 +3406,7 @@ mod tests {
         assert_eq!(app.active_tab, ViewTab::Tree);
 
         app.next_tab();
-        assert_eq!(app.active_tab, ViewTab::Vulnerabilities);
+        assert_eq!(app.active_tab, ViewTab::Dependencies);
 
         app.prev_tab();
         assert_eq!(app.active_tab, ViewTab::Tree);
@@ -3399,6 +3511,11 @@ mod tests {
         assert_eq!(tabs.len(), 8);
         assert_eq!(tabs[0], ViewTab::Overview);
         assert_eq!(tabs[1], ViewTab::Tree);
+        // Shared-tab ordinals are pinned to the Diff app's tab bar so
+        // digit-key jumps behave identically across the two apps.
+        assert_eq!(tabs[2], ViewTab::Dependencies);
+        assert_eq!(tabs[3], ViewTab::Licenses);
+        assert_eq!(tabs[4], ViewTab::Vulnerabilities);
         assert_eq!(tabs[7], ViewTab::Source);
         assert!(!tabs.contains(&ViewTab::Algorithms));
     }

@@ -11,12 +11,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 /// Components tab view implementing the `ViewState` trait.
 pub struct ComponentsView {
     inner: ComponentsState,
+    /// Quick Filters picker modal ('Q'). While open, digits 1-8 toggle the
+    /// corresponding security quick filter and 0 clears all — bare digits
+    /// outside the modal always jump tabs, matching the tab bar.
+    pub(crate) quick_filter_picker_open: bool,
 }
 
 impl ComponentsView {
     pub(crate) fn new() -> Self {
         Self {
             inner: ComponentsState::new(0),
+            quick_filter_picker_open: false,
         }
     }
 
@@ -39,7 +44,33 @@ impl Default for ComponentsView {
 
 impl ViewState for ComponentsView {
     fn handle_key(&mut self, key: KeyEvent, _ctx: &mut ViewContext) -> EventResult {
+        // Quick Filters picker modal: digits toggle filters only while it is
+        // open, so the bare digit keys stay honest tab jumps everywhere else.
+        if self.quick_filter_picker_open {
+            return match key.code {
+                KeyCode::Char(c @ '1'..='8') => {
+                    let idx = (c as u8 - b'1') as usize;
+                    self.inner.security_filter.toggle_by_index(idx);
+                    EventResult::status(self.inner.security_filter.summary())
+                }
+                KeyCode::Char('0') => {
+                    self.inner.security_filter.clear_all();
+                    EventResult::status("All quick filters cleared")
+                }
+                KeyCode::Esc | KeyCode::Char('Q' | 'q') => {
+                    self.quick_filter_picker_open = false;
+                    EventResult::Consumed
+                }
+                // Modal: swallow everything else so no key leaks behind it.
+                _ => EventResult::Consumed,
+            };
+        }
+
         match key.code {
+            KeyCode::Char('Q') => {
+                self.quick_filter_picker_open = true;
+                EventResult::Consumed
+            }
             KeyCode::Char('f') => {
                 self.inner.toggle_filter();
                 EventResult::Consumed
@@ -73,16 +104,6 @@ impl ViewState for ComponentsView {
                 self.inner.toggle_multi_select_mode();
                 EventResult::Consumed
             }
-            // Security quick filter toggles (1-8)
-            KeyCode::Char(c @ '1'..='8') => {
-                let idx = (c as u8 - b'1') as usize;
-                self.inner.security_filter.toggle_by_index(idx);
-                EventResult::status(self.inner.security_filter.summary())
-            }
-            KeyCode::Char('0') => {
-                self.inner.security_filter.clear_all();
-                EventResult::status("All filters cleared")
-            }
             KeyCode::Char('d') => {
                 // Navigate to Dependencies tab for the selected component
                 EventResult::NavigateTo(TabTarget::Dependencies)
@@ -109,9 +130,10 @@ impl ViewState for ComponentsView {
             Shortcut::primary("o", "CVE"),
             Shortcut::primary("n", "note"),
             Shortcut::new("j/k", "Navigate"),
+            Shortcut::new("Enter", "Component deep dive"),
             Shortcut::new("d", "Dependencies"),
             Shortcut::new("v", "Multi-select"),
-            Shortcut::new("1-8", "Quick filters"),
+            Shortcut::new("Q", "Quick filters"),
             Shortcut::new("y", "Copy"),
         ]
     }
@@ -176,6 +198,52 @@ mod tests {
             view.handle_key(make_key(KeyCode::Char('F')), &mut ctx),
             EventResult::Ignored
         );
+    }
+
+    /// Bare digits must NOT be consumed by the Components tab: they fall
+    /// through to the global digit tab-select, matching the tab bar labels.
+    #[test]
+    fn digits_fall_through_to_tab_select() {
+        let mut view = ComponentsView::new();
+        let mut ctx = make_ctx(ViewMode::Diff);
+
+        for c in ['1', '5', '8', '0'] {
+            assert_eq!(
+                view.handle_key(make_key(KeyCode::Char(c)), &mut ctx),
+                EventResult::Ignored,
+                "'{c}' must fall through to the global tab-select"
+            );
+        }
+        assert!(!view.inner().security_filter.has_active_filters());
+    }
+
+    /// 'Q' opens the quick-filter picker; inside it digits toggle filters,
+    /// '0' clears all, and Esc/'Q' closes.
+    #[test]
+    fn quick_filter_picker_flow() {
+        let mut view = ComponentsView::new();
+        let mut ctx = make_ctx(ViewMode::Diff);
+
+        view.handle_key(make_key(KeyCode::Char('Q')), &mut ctx);
+        assert!(view.quick_filter_picker_open, "'Q' opens the picker");
+
+        let result = view.handle_key(make_key(KeyCode::Char('1')), &mut ctx);
+        assert!(matches!(result, EventResult::StatusMessage(_)));
+        assert!(
+            view.inner().security_filter.has_active_filters(),
+            "digit 1 toggles the first quick filter while the picker is open"
+        );
+
+        let result = view.handle_key(make_key(KeyCode::Char('0')), &mut ctx);
+        assert!(matches!(result, EventResult::StatusMessage(_)));
+        assert!(!view.inner().security_filter.has_active_filters());
+
+        view.handle_key(make_key(KeyCode::Esc), &mut ctx);
+        assert!(!view.quick_filter_picker_open, "Esc closes the picker");
+
+        view.handle_key(make_key(KeyCode::Char('Q')), &mut ctx);
+        view.handle_key(make_key(KeyCode::Char('Q')), &mut ctx);
+        assert!(!view.quick_filter_picker_open, "'Q' toggles closed too");
     }
 
     #[test]

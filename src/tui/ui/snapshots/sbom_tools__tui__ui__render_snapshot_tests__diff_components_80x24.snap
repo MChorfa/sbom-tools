@@ -7,22 +7,22 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 « [2] Components  │ [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  »
 
 ────────────────────────────────────────────────────────────────────────────────
-Filter:  All   Sort: Name  │  [f] filter  [s] sort  [1/2/3/4/5/6/7/8] quick  [v]
+Filter:  All   Sort: Name  │  [f] filter  [s] sort  [Q] quick filters  [v] multi
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌ Components (13) ─────────────────────────┐┌ Component Details ───────────────┐
-│               Name             Ol Ne E Ch▲│~ MODIFIED   Change Weight: 7     │
-│▶  ~ MODIFIED  acme-webapp      1. 2. - 1 █│                                  │
-│   ~ MODIFIED  axios            0. 1. n 1 █│Name: acme-webapp                 │
-│   + ADDED     dayjs            —  1. n - █│ID: acme-webapp                   │
-│   ~ MODIFIED  express          4. 4. n 1 █│Version: 1.0.0 → 2.0.0            │
-│   - REMOVED   jquery           3. —  n - █│                                  │
-│   ~ MODIFIED  lodash           4. 4. n 1 ║│━━━ Match ━━━                     │
-│   - REMOVED   moment           2. —  n - ║│Score: 1.00 via NameIdentity      │
-│   + ADDED     prisma           —  4. n - ║│CI: 0.97–1.00 (95%)               │
-│   ~ MODIFIED  react            17 18 n 1 ║│Reason: Identical component nam...│
-│   - REMOVED   request          2. —  n - ║│Normalized: case_insensitive_name │
-│   + ADDED     typescript       —  5. n - ▼│                                  │
+│      Name             Old Ver   New Ver  ▲│~ MODIFIED   Change Weight: 7     │
+│▶  ~  acme-webapp      1.0.0     2.0.0    █│                                  │
+│   ~  axios            0.21.1    1.4.0    █│Name: acme-webapp                 │
+│   +  dayjs            —         1.11.7   █│ID: acme-webapp                   │
+│   ~  express          4.17.1    4.18.2   █│Version: 1.0.0 → 2.0.0            │
+│   -  jquery           3.5.1     —        █│                                  │
+│   ~  lodash           4.17.20   4.17.21  ║│━━━ Match ━━━                     │
+│   -  moment           2.29.1    —        ║│Score: 1.00 via NameIdentity      │
+│   +  prisma           —         4.15.0   ║│CI: 0.97–1.00 (95%)               │
+│   ~  react            17.0.1    18.2.0   ║│Reason: Identical component nam...│
+│   -  request          2.88.2    —        ║│Normalized: case_insensitive_name │
+│   +  typescript       —         5.0.4    ▼│                                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
      …  Tab switch  / search  e export  ? help  q quit [y] copy acme-webapp

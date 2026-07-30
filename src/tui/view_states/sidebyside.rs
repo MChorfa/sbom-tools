@@ -184,8 +184,10 @@ impl ViewState for SideBySideView {
                     EventResult::status(format!("Change {}", self.inner.change_position()))
                 }
             }
-            // Filter toggles
-            KeyCode::Char('1') => {
+            // Filter toggles. Lettered keys, not digits: bare digits are
+            // reserved for the global tab jumps the tab bar advertises.
+            // 'a' was taken by the alignment toggle, so Added uses 'A'.
+            KeyCode::Char('A') => {
                 self.inner.filter.toggle_added();
                 let status = if self.inner.filter.show_added {
                     "Added: shown"
@@ -194,7 +196,7 @@ impl ViewState for SideBySideView {
                 };
                 EventResult::status(status)
             }
-            KeyCode::Char('2') => {
+            KeyCode::Char('r') => {
                 self.inner.filter.toggle_removed();
                 let status = if self.inner.filter.show_removed {
                     "Removed: shown"
@@ -203,7 +205,7 @@ impl ViewState for SideBySideView {
                 };
                 EventResult::status(status)
             }
-            KeyCode::Char('3') => {
+            KeyCode::Char('m') => {
                 self.inner.filter.toggle_modified();
                 let status = if self.inner.filter.show_modified {
                     "Modified: shown"
@@ -212,7 +214,7 @@ impl ViewState for SideBySideView {
                 };
                 EventResult::status(status)
             }
-            KeyCode::Char('0') => {
+            KeyCode::Char('x') => {
                 self.inner.filter.show_all();
                 EventResult::status("Showing all changes")
             }
@@ -266,7 +268,8 @@ impl ViewState for SideBySideView {
             Shortcut::new("j/k", "Scroll"),
             Shortcut::new("s", "Sync mode"),
             Shortcut::new("/", "Search"),
-            Shortcut::new("1-3", "Filter toggles"),
+            Shortcut::new("A/r/m", "Toggle added/removed/modified"),
+            Shortcut::new("x", "Show all changes"),
         ]
     }
 }
@@ -373,8 +376,34 @@ mod tests {
         let mut ctx = make_ctx();
 
         assert!(view.inner().filter.show_added);
-        view.handle_key(make_key(KeyCode::Char('1')), &mut ctx);
+        view.handle_key(make_key(KeyCode::Char('A')), &mut ctx);
         assert!(!view.inner().filter.show_added);
+
+        view.handle_key(make_key(KeyCode::Char('r')), &mut ctx);
+        assert!(!view.inner().filter.show_removed);
+        view.handle_key(make_key(KeyCode::Char('m')), &mut ctx);
+        assert!(!view.inner().filter.show_modified);
+
+        view.handle_key(make_key(KeyCode::Char('x')), &mut ctx);
+        assert!(view.inner().filter.show_added, "'x' resets to show all");
+        assert!(view.inner().filter.show_removed);
+        assert!(view.inner().filter.show_modified);
+    }
+
+    /// Bare digits must fall through to the global tab-select — the tab bar
+    /// advertises them as tab jumps on every tab.
+    #[test]
+    fn digits_fall_through_to_tab_select() {
+        let mut view = SideBySideView::new();
+        let mut ctx = make_ctx();
+        for c in ['1', '2', '3', '0'] {
+            assert_eq!(
+                view.handle_key(make_key(KeyCode::Char(c)), &mut ctx),
+                EventResult::Ignored,
+                "'{c}' must not be consumed as a filter toggle"
+            );
+        }
+        assert!(view.inner().filter.show_added);
     }
 
     #[test]
