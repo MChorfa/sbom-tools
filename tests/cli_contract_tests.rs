@@ -226,6 +226,9 @@ fn validate_help_enumerates_every_canonical_standard() {
         "eucc",
         "ai-act",
         "bsi-ai",
+        "cisa-2026",
+        "pci-dss",
+        "fsct",
     ] {
         assert!(
             help.contains(canonical),

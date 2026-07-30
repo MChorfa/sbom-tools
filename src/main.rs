@@ -562,7 +562,9 @@ struct ValidateArgs {
     /// tr-03183/tr03183/bsi-tr-03183-2,
     /// cra-oss-steward/cra-oss/cra-art24/art24,
     /// eucc-substantial/common-criteria, ai_act/aiact/eu-ai-act,
-    /// bsi_ai/bsiai/sbom-for-ai/ai-bom.
+    /// bsi_ai/bsiai/sbom-for-ai/ai-bom,
+    /// cisa/cisa2026/minimum-elements-2026,
+    /// pci/pci-dss-6-3-2/pci-dss-4, fsct-3/component-transparency.
     #[arg(
         long,
         value_parser = StandardSelectorParser,
@@ -852,7 +854,9 @@ struct QualityArgs {
     #[arg(long, value_enum, ignore_case = true, default_value = "standard")]
     profile: ScoringProfile,
 
-    /// Output format (summary, json, sarif; auto = summary)
+    /// Output format (summary, json, sarif, sbomqs-json; auto = summary).
+    /// sbomqs-json emits interlynk-io/sbomqs `score --json`-shaped 0-10
+    /// scores for side-by-side comparison with sbomqs output.
     #[arg(short, long, default_value = "auto")]
     output: ReportFormat,
 

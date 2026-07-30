@@ -24,6 +24,7 @@ mod json;
 mod markdown;
 pub mod oscal;
 mod sarif;
+pub mod sbomqs_compat;
 mod sidebyside;
 pub mod streaming;
 mod summary;
@@ -234,5 +235,10 @@ pub fn create_reporter_with_options(
         }
         ReportFormat::Csv => Box::new(CsvReporter::new()),
         ReportFormat::Ndjson => Box::new(NdjsonReportGenerator::new()),
+        // sbomqs-json is a `quality`-command format (rendered by
+        // `reports::sbomqs_compat`, gated by QUALITY_OUTPUT_FORMATS); the
+        // diff/view pipeline has no sbomqs renderer, so it takes the same
+        // structured-JSON fallback as OscalJson.
+        ReportFormat::SbomqsJson => Box::new(JsonReporter::new()),
     }
 }
