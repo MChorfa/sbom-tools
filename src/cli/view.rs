@@ -253,7 +253,7 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
             app.status_sticky = true;
         }
 
-        run_view_tui(&mut app)?;
+        run_view_tui(&mut app, config.output.no_color)?;
     } else {
         parsed.drop_raw_content();
         output_view_report(

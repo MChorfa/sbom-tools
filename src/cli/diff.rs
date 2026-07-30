@@ -249,7 +249,7 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
             app.status_sticky = true;
         }
 
-        run_tui(&mut app)?;
+        run_tui(&mut app, config.output.no_color)?;
     } else {
         old_parsed.drop_raw_content();
         new_parsed.drop_raw_content();

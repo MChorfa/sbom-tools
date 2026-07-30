@@ -21,10 +21,16 @@ mod frame_dump_tests;
 mod render_snapshot_tests;
 
 /// Run the `ViewApp` TUI.
-pub fn run_view_tui(app: &mut ViewApp) -> io::Result<()> {
+///
+/// `no_color` is the resolved `--no-color` flag; together with the `NO_COLOR`
+/// environment convention it forces the monochrome theme.
+pub fn run_view_tui(app: &mut ViewApp, no_color: bool) -> io::Result<()> {
     // Load theme preference
     let prefs = TuiPreferences::load();
-    set_theme(crate::tui::theme::startup_theme(prefs.theme.as_str()));
+    set_theme(crate::tui::theme::startup_theme(
+        no_color,
+        prefs.theme.as_str(),
+    ));
 
     // Setup terminal. The guard restores it on drop — covering normal exit, the
     // `?` early-return from the render loop, and panic unwinding. Declared before

@@ -198,7 +198,7 @@ pub fn run_diff_multi(config: MultiDiffConfig) -> Result<i32> {
             app.status_sticky = true;
         }
 
-        run_tui(&mut app)?;
+        run_tui(&mut app, config.output.no_color)?;
     }
 
     Ok(exit_code)
@@ -292,7 +292,7 @@ pub fn run_timeline(config: TimelineConfig) -> Result<i32> {
         write_output(&json, output_target, quiet)?;
     } else {
         let mut app = App::new_timeline(result);
-        run_tui(&mut app)?;
+        run_tui(&mut app, config.output.no_color)?;
     }
 
     Ok(exit_code)
@@ -370,7 +370,7 @@ pub fn run_matrix(config: MatrixConfig) -> Result<i32> {
         write_output(&json, output_target, quiet)?;
     } else {
         let mut app = App::new_matrix(result);
-        run_tui(&mut app)?;
+        run_tui(&mut app, config.output.no_color)?;
     }
 
     Ok(exit_code)

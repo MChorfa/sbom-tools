@@ -22,11 +22,15 @@ mod frame_dump_tests;
 #[cfg(test)]
 mod render_snapshot_tests;
 
-/// Run the TUI application
-pub fn run_tui(app: &mut App) -> io::Result<()> {
+/// Run the TUI application.
+///
+/// `no_color` is the resolved `--no-color` flag; together with the `NO_COLOR`
+/// environment convention it forces the monochrome theme, so an invocation
+/// cannot ask for no color and still get a colored TUI.
+pub fn run_tui(app: &mut App, no_color: bool) -> io::Result<()> {
     // Load saved theme preference
     let prefs = TuiPreferences::load();
-    set_theme(super::theme::startup_theme(prefs.theme.as_str()));
+    set_theme(super::theme::startup_theme(no_color, prefs.theme.as_str()));
 
     // Setup terminal. The guard restores it on drop — covering normal exit, the
     // `?` early-return from the render loop, and panic unwinding. Declared before
