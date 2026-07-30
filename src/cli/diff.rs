@@ -437,6 +437,7 @@ mod tests {
             old_version: None,
             new_version: None,
             ecosystem: None,
+            component_type: None,
             change_type: ChangeType::Modified,
             field_changes: vec![FieldChange {
                 field: format!("ml_metric:{metric}"),

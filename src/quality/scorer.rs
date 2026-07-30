@@ -649,15 +649,29 @@ impl QualityScorer {
         let is_cbom = self.profile == ScoringProfile::Cbom;
         let (available, scores) = if is_cbom && cryptography_metrics.has_data() {
             let cm = &cryptography_metrics;
+            // PQC readiness is `None` when no algorithms exist; its weight is
+            // proportionally redistributed (same treatment as
+            // `vulnerability_score` below) so a zero-algorithm CBOM neither
+            // earns a free 100-weighted category nor a punitive 0.
+            let pqc_score = cm.pqc_readiness_score();
             (
-                [true; 8], // all categories available for CBOM
+                [
+                    true,                // Crpt
+                    true,                // OIDs
+                    true,                // Algo
+                    true,                // Refs
+                    true,                // Life
+                    pqc_score.is_some(), // PQC
+                    true,                // Prov
+                    true,                // Lic
+                ],
                 [
                     cm.crypto_completeness_score(), // slot 1: Crpt
                     cm.crypto_identifier_score(),   // slot 2: OIDs
                     cm.algorithm_strength_score(),  // slot 3: Algo
                     cm.crypto_dependency_score(),   // slot 4: Refs
                     cm.crypto_lifecycle_score(),    // slot 5: Life
-                    cm.pqc_readiness_score(),       // slot 6: PQC
+                    pqc_score.unwrap_or(0.0),       // slot 6: PQC (N/A reweighted away)
                     provenance_score,               // slot 7: Prov (standard)
                     license_score,                  // slot 8: Lic  (standard)
                 ],
@@ -1579,6 +1593,82 @@ mod tests {
             report.overall_score <= 69.0,
             "weak algo should cap at D, got {}",
             report.overall_score
+        );
+    }
+
+    /// A CBOM with crypto assets but zero algorithms must not earn a free
+    /// 100-weighted PQC category (nor a punitive 0): `pqc_readiness_score()`
+    /// is `None` and its weight is proportionally redistributed across the
+    /// remaining categories, mirroring `vulnerability_score`.
+    #[test]
+    fn cbom_zero_algorithms_reweights_pqc_slot() {
+        use crate::model::{
+            CanonicalId, Component, ComponentType, CryptoAssetType, CryptoProperties,
+            NormalizedSbom,
+        };
+
+        let mut sbom = NormalizedSbom::default();
+        let mut comp = Component::new("tls-cert".to_string(), "cert-ref".to_string());
+        comp.component_type = ComponentType::Cryptographic;
+        comp.crypto_properties = Some(CryptoProperties::new(CryptoAssetType::Certificate));
+        sbom.components
+            .insert(CanonicalId::from_name_version("tls-cert", None), comp);
+
+        let report = QualityScorer::new(ScoringProfile::Cbom).score(&sbom);
+        let cm = &report.cryptography_metrics;
+        assert!(cm.has_data());
+        assert_eq!(cm.algorithms_count, 0);
+        assert!(
+            cm.pqc_readiness_score().is_none(),
+            "no algorithms → PQC N/A"
+        );
+
+        // Recompute the reweighted aggregate: PQC (index 5) excluded, its
+        // weight redistributed proportionally across the other seven slots.
+        let w = ScoringProfile::Cbom.weights().as_array();
+        let scores = [
+            cm.crypto_completeness_score(),
+            cm.crypto_identifier_score(),
+            cm.algorithm_strength_score(),
+            cm.crypto_dependency_score(),
+            cm.crypto_lifecycle_score(),
+            0.0, // PQC: N/A, excluded
+            report.provenance_score,
+            report.license_score,
+        ];
+        let available_weight: f32 = w
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != 5)
+            .map(|(_, wt)| wt)
+            .sum();
+        let expected: f32 = scores
+            .iter()
+            .zip(w.iter())
+            .enumerate()
+            .filter(|&(i, _)| i != 5)
+            .map(|(_, (s, wt))| s * (wt / available_weight))
+            .sum();
+        assert!(
+            (report.overall_score - expected.min(100.0)).abs() < 0.01,
+            "overall {} != reweighted aggregate {}",
+            report.overall_score,
+            expected
+        );
+
+        // Regression guard: not the pre-fix inflated value (a vacuous 100
+        // occupying the full PQC weight).
+        let inflated: f32 = scores
+            .iter()
+            .zip(w.iter())
+            .enumerate()
+            .map(|(i, (s, wt))| if i == 5 { 100.0 * wt } else { s * wt })
+            .sum();
+        assert!(
+            (report.overall_score - inflated).abs() > 0.5,
+            "overall {} still matches the vacuous-100 aggregate {}",
+            report.overall_score,
+            inflated
         );
     }
 

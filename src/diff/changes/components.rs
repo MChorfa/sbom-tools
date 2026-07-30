@@ -983,4 +983,97 @@ mod tests {
             "security profile should weight PII escalation higher (secure={secure_cost}, default={default_cost})"
         );
     }
+
+    /// The serialized `component_type` on every change entry resolves CBOM
+    /// crypto assets to their cryptoProperties assetType — an added
+    /// "algorithm" and a removed "certificate" must be distinguishable in
+    /// diff JSON — with related-crypto-material narrowed to its declared
+    /// material type. Plain components keep their CycloneDX type.
+    #[test]
+    fn component_type_is_resolved_on_change_entries() {
+        use crate::model::{
+            ComponentType, CryptoMaterialType, Ecosystem, RelatedCryptoMaterialProperties,
+        };
+
+        fn crypto_component(name: &str, asset_type: CryptoAssetType) -> Component {
+            let mut c = Component::new(name.to_string(), format!("crypto/{name}"));
+            c.component_type = ComponentType::Cryptographic;
+            c.crypto_properties = Some(CryptoProperties::new(asset_type));
+            c.calculate_content_hash();
+            c
+        }
+
+        // Old side: a certificate, a private key, and a library.
+        let cert = crypto_component("web-cert", CryptoAssetType::Certificate);
+        let mut key = crypto_component("tls-key", CryptoAssetType::RelatedCryptoMaterial);
+        key.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::RelatedCryptoMaterial)
+                .with_related_crypto_material_properties(RelatedCryptoMaterialProperties::new(
+                    CryptoMaterialType::PrivateKey,
+                )),
+        );
+        key.calculate_content_hash();
+        let mut lib_old = Component::new("lodash".to_string(), "pkg:npm/lodash@1".to_string());
+        lib_old.version = Some("1.0.0".to_string());
+        lib_old.ecosystem = Some(Ecosystem::Npm);
+        lib_old.calculate_content_hash();
+
+        // New side: an algorithm appears, the library gets a version bump.
+        let algo = crypto_component("AES-128-GCM", CryptoAssetType::Algorithm);
+        let mut lib_new = Component::new("lodash".to_string(), "pkg:npm/lodash@2".to_string());
+        lib_new.version = Some("2.0.0".to_string());
+        lib_new.ecosystem = Some(Ecosystem::Npm);
+        lib_new.calculate_content_hash();
+
+        let mut old_sbom = NormalizedSbom::default();
+        let mut new_sbom = NormalizedSbom::default();
+        let mut matches = ComponentMatches::new();
+        matches.insert(cert.canonical_id.clone(), None);
+        matches.insert(key.canonical_id.clone(), None);
+        matches.insert(
+            lib_old.canonical_id.clone(),
+            Some(lib_new.canonical_id.clone()),
+        );
+        old_sbom.add_component(cert);
+        old_sbom.add_component(key);
+        old_sbom.add_component(lib_old);
+        new_sbom.add_component(algo);
+        new_sbom.add_component(lib_new);
+
+        let result = ComponentChangeComputer::default().compute(&old_sbom, &new_sbom, &matches);
+
+        assert_eq!(result.added.len(), 1);
+        assert_eq!(
+            result.added[0].component_type.as_deref(),
+            Some("algorithm"),
+            "added CBOM algorithm must carry its assetType"
+        );
+
+        let type_of = |name: &str| {
+            result
+                .removed
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("expected a removed `{name}` entry"))
+                .component_type
+                .clone()
+        };
+        assert_eq!(
+            type_of("web-cert").as_deref(),
+            Some("certificate"),
+            "removed CBOM certificate must carry its assetType"
+        );
+        assert_eq!(
+            type_of("tls-key").as_deref(),
+            Some("private-key"),
+            "related-crypto-material must narrow to its material type"
+        );
+
+        assert_eq!(result.modified.len(), 1);
+        assert_eq!(
+            result.modified[0].component_type.as_deref(),
+            Some("library"),
+            "plain SBOM components keep their CycloneDX type"
+        );
+    }
 }
