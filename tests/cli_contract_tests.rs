@@ -805,3 +805,63 @@ fn side_by_side_honours_no_color_env() {
         stderr(&output)
     );
 }
+
+/// `-o sbomqs-json` is a `quality` renderer. `diff` and `view` used to accept
+/// it and silently emit ordinary JSON — the caller asked for one format and
+/// got another, the same defect the `oscal-json` guard beside it prevents.
+#[test]
+fn sbomqs_json_is_rejected_by_diff_and_view() {
+    let old = fixture_path("demo-old.cdx.json");
+    let new = fixture_path("demo-new.cdx.json");
+
+    let diff = base_command()
+        .arg("diff")
+        .arg(&old)
+        .arg(&new)
+        .args(["-o", "sbomqs-json"])
+        .output()
+        .expect("diff should run");
+    assert!(
+        !diff.status.success(),
+        "diff must reject sbomqs-json instead of emitting diff JSON: {}",
+        stdout(&diff)
+    );
+    assert!(
+        stderr(&diff).contains("quality -o sbomqs-json"),
+        "the error should point at the command that renders it: {}",
+        stderr(&diff)
+    );
+
+    let view = base_command()
+        .arg("view")
+        .arg(&new)
+        .args(["-o", "sbomqs-json"])
+        .output()
+        .expect("view should run");
+    assert!(
+        !view.status.success(),
+        "view must reject sbomqs-json: {}",
+        stdout(&view)
+    );
+}
+
+/// An empty `NO_COLOR=` means "not set" per the convention. Reports treated
+/// it as set and stripped color while logs and the TUI kept it, so a single
+/// invocation disagreed with itself.
+#[test]
+fn empty_no_color_env_is_treated_as_unset() {
+    // Colour also requires a TTY, which the test harness does not provide, so
+    // assert on the resolver rather than on rendered bytes.
+    unsafe { std::env::set_var("NO_COLOR", "") };
+    let empty = sbom_tools::pipeline::should_use_color(false);
+    unsafe { std::env::set_var("NO_COLOR", "1") };
+    let set = sbom_tools::pipeline::should_use_color(false);
+    unsafe { std::env::remove_var("NO_COLOR") };
+    let unset = sbom_tools::pipeline::should_use_color(false);
+
+    assert_eq!(
+        empty, unset,
+        "an empty NO_COLOR= must behave exactly like an unset one"
+    );
+    assert!(!set, "a non-empty NO_COLOR must disable colour");
+}
