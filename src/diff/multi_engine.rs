@@ -462,19 +462,34 @@ impl MultiDiffEngine {
             .map(|(sbom, name, path)| SbomInfo::from_sbom(sbom, name.to_string(), path.to_string()))
             .collect();
 
-        // Compute incremental diffs (adjacent pairs)
+        // Compute incremental diffs (adjacent pairs), labelling each with the
+        // pair it compares so consumers need not rely on array position.
         let mut incremental_diffs: Vec<DiffResult> = vec![];
+        let mut incremental_pairs: Vec<crate::diff::TimelinePair> = vec![];
         for i in 0..sboms.len().saturating_sub(1) {
             let diff = self.cached_diff(sboms[i].0, sboms[i + 1].0)?;
             incremental_diffs.push(diff);
+            incremental_pairs.push(crate::diff::TimelinePair {
+                from_index: i,
+                to_index: i + 1,
+                from_name: sbom_infos[i].name.clone(),
+                to_name: sbom_infos[i + 1].name.clone(),
+            });
         }
 
         // Compute cumulative diffs from first
         let mut cumulative_from_first: Vec<DiffResult> = vec![];
+        let mut cumulative_pairs: Vec<crate::diff::TimelinePair> = vec![];
         if !sboms.is_empty() {
             for i in 1..sboms.len() {
                 let diff = self.cached_diff(sboms[0].0, sboms[i].0)?;
                 cumulative_from_first.push(diff);
+                cumulative_pairs.push(crate::diff::TimelinePair {
+                    from_index: 0,
+                    to_index: i,
+                    from_name: sbom_infos[0].name.clone(),
+                    to_name: sbom_infos[i].name.clone(),
+                });
             }
         }
 
@@ -485,7 +500,9 @@ impl MultiDiffEngine {
         Ok(TimelineResult {
             sboms: sbom_infos,
             incremental_diffs,
+            incremental_pairs,
             cumulative_from_first,
+            cumulative_pairs,
             evolution_summary,
         })
     }
@@ -1306,6 +1323,55 @@ mod tests {
         }
         sbom.calculate_content_hash();
         sbom
+    }
+
+    /// The three similarity/deviation scales must stay in their documented
+    /// relationship: the embedded per-pair `DiffResult` keeps the 0-100
+    /// single-diff `semantic_score`, while the multi-SBOM layer exposes
+    /// 0-1 fractions (`similarity = semantic_score / 100`, `deviation =
+    /// 1 - similarity`). They drifted apart silently once already.
+    #[test]
+    fn similarity_and_deviation_scales_match_their_documented_contract() {
+        let a = purl_sbom(&[("lodash", "4.17.20"), ("react", "18.0.0")]);
+        let b = purl_sbom(&[("lodash", "4.17.21"), ("zod", "3.0.0")]);
+
+        let mut engine = MultiDiffEngine::new();
+        let matrix = engine
+            .matrix(&[(&a, "a", "a.json"), (&b, "b", "b.json")], None)
+            .expect("matrix must succeed");
+
+        let similarity = matrix.similarity_scores[0];
+        assert!(
+            (0.0..=1.0).contains(&similarity),
+            "matrix similarity must be a 0-1 fraction, got {similarity}"
+        );
+        let embedded = matrix.diffs[0]
+            .as_ref()
+            .expect("pair diff present")
+            .semantic_score;
+        assert!(
+            (0.0..=100.0).contains(&embedded),
+            "embedded semantic_score must stay on the 0-100 scale, got {embedded}"
+        );
+        assert!(
+            (similarity - embedded / 100.0).abs() < 1e-9,
+            "similarity ({similarity}) must equal semantic_score/100 ({})",
+            embedded / 100.0
+        );
+
+        let multi = engine
+            .diff_multi(&a, "a", "a.json", &[(&b, "b", "b.json")])
+            .expect("diff_multi must succeed");
+        let deviation = multi.summary.deviation_scores["b"];
+        assert!(
+            (0.0..=1.0).contains(&deviation),
+            "deviation must be a 0-1 fraction, got {deviation}"
+        );
+        let pair_score = multi.comparisons[0].diff.semantic_score;
+        assert!(
+            (deviation - (1.0 - pair_score / 100.0)).abs() < 1e-9,
+            "deviation ({deviation}) must equal 1 - semantic_score/100"
+        );
     }
 
     /// A version bump must be ONE variable component, never TWO inconsistent
