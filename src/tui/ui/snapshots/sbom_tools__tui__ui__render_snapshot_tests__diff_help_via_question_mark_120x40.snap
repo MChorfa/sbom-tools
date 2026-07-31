@@ -29,14 +29,14 @@ Filter:  All   Sort: Name┌─────────────────�
 │                        │e  Export dialog                                                    │                        │
 │                        │l  Color legend                                                     │                        │
 │                        │T  Toggle theme                                                     │                        │
-│                        │/  Search                                                           │                        │
 │                        │K  Keyboard shortcuts                                               │                        │
 │                        │D  Component deep dive                                              │                        │
-│                        │y/Ctrl+C  Copy selected to clipboard                                │                        │
+│                        │Ctrl+C  Copy selected to clipboard                                  │                        │
 │                        │Shift+drag  Select text with mouse                                  │                        │
 │                        │b/Backspace  Navigate back                                          │                        │
 │                        │                                                                    │                        │
-│                        └───────────────────────────────────────── ↓ 28 more — ↑↓/j/k scroll ┘                        │
+│                        │Navigation                                                          │                        │
+│                        └───────────────────────────────────────── ↓ 17 more — ↑↓/j/k scroll ┘                        │
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 └────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘

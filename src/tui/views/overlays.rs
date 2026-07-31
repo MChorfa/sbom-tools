@@ -98,8 +98,12 @@ pub fn render_shortcuts_overlay(f: &mut Frame, state: &mut ShortcutsOverlayState
     let scheme = colors();
     let area = f.area();
 
-    // Get shortcuts for the current context
-    let shortcuts = get_shortcuts_for_context(state.context, state.profile);
+    // Get shortcuts for the current context, minus anything the active tab
+    // has taken over (see `shadow_tab_claimed_keys`).
+    let shortcuts = shadow_tab_claimed_keys(
+        get_shortcuts_for_context(state.context, state.profile),
+        &state.tab_items,
+    );
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -518,6 +522,59 @@ fn item(key: &str, desc: &str) -> (String, String) {
     (key.to_string(), desc.to_string())
 }
 
+/// Split a shortcut label into the individual keys it advertises.
+///
+/// Labels are written as `j/k`, `g/G`, `!/@/#`, … — a slash-separated list of
+/// alternatives. Anything without a slash is a single key.
+fn shortcut_keys(label: &str) -> impl Iterator<Item = &str> {
+    label.split('/').map(str::trim).filter(|k| !k.is_empty())
+}
+
+/// Drop Global/Navigation rows for keys the active tab has taken over.
+///
+/// The dispatcher gives the active tab first refusal on every key, so a
+/// global row is only true where no tab handler consumes it. Listing them
+/// unconditionally let one frame assert both `l  Color legend` and
+/// `h/l  Collapse/expand` on a tab where `l` switches standards — the
+/// overlay contradicting the This-Tab section printed directly above it.
+///
+/// The active tab's own rows (`tab_items`, the same `ViewState::shortcuts()`
+/// the footer renders) are the authority for what it claims, so this needs no
+/// per-tab table: bind a key in a tab and the shadowed global row disappears
+/// on its own. Rows that advertise several keys keep the ones still free
+/// (`g/G` becomes `G` on a tab that binds `g`) and are dropped only when the
+/// tab claims all of them.
+fn shadow_tab_claimed_keys(
+    sections: Vec<ShortcutSection>,
+    tab_items: &[(String, String)],
+) -> Vec<ShortcutSection> {
+    if tab_items.is_empty() {
+        return sections;
+    }
+    let claimed: std::collections::HashSet<&str> = tab_items
+        .iter()
+        .flat_map(|(key, _)| shortcut_keys(key))
+        .collect();
+
+    sections
+        .into_iter()
+        .map(|mut section| {
+            section.items.retain_mut(|(key, _)| {
+                let free: Vec<&str> = shortcut_keys(key)
+                    .filter(|k| !claimed.contains(k))
+                    .collect();
+                if free.is_empty() {
+                    return false;
+                }
+                *key = free.join("/");
+                true
+            });
+            section
+        })
+        .filter(|section| !section.items.is_empty())
+        .collect()
+}
+
 fn get_shortcuts_for_context(
     context: ShortcutsContext,
     profile: Option<crate::model::BomProfile>,
@@ -927,6 +984,56 @@ pub fn render_threshold_tuning(f: &mut Frame, state: &ThresholdTuningState) {
 #[cfg(test)]
 mod tests {
     use super::{ShortcutsContext, get_shortcuts_for_context};
+
+    /// A Global/Navigation row must never contradict the This-Tab section
+    /// printed directly above it. The dispatcher gives the active tab first
+    /// refusal, so a key the tab binds is simply not global there.
+    ///
+    /// Four rows were false on specific tabs before this: `l Color legend`
+    /// (Compliance switches standards, Source expands), `h/l Collapse/expand`
+    /// (Dependencies toggles highlighting), `K Keyboard shortcuts`
+    /// (Side-by-Side scrolls), and `g/G First/Last` (Licenses, Vulnerabilities
+    /// and Compliance bind `g` to grouping).
+    #[test]
+    fn tab_claimed_keys_are_shadowed_from_global_rows() {
+        use super::shadow_tab_claimed_keys;
+
+        let tab_items = vec![
+            ("h".to_string(), "toggle highlighting".to_string()),
+            ("g".to_string(), "group".to_string()),
+            ("J/K".to_string(), "scroll".to_string()),
+        ];
+        let sections = shadow_tab_claimed_keys(
+            get_shortcuts_for_context(ShortcutsContext::Diff, None),
+            &tab_items,
+        );
+
+        let rows: Vec<&(String, String)> = sections.iter().flat_map(|s| s.items.iter()).collect();
+        for (key, desc) in &rows {
+            for k in key.split('/') {
+                assert!(
+                    !["h", "g", "J", "K"].contains(&k),
+                    "global row {key:?} ({desc}) advertises {k:?}, which the active tab binds"
+                );
+            }
+        }
+        // A multi-key row keeps the alternatives the tab did NOT claim.
+        assert!(
+            rows.iter().any(|(key, _)| key == "G"),
+            "`g/G` should survive as `G` when the tab binds only `g`: {rows:?}"
+        );
+    }
+
+    /// With no tab context (multi modes, or a tab that binds nothing) the
+    /// global rows are untouched.
+    #[test]
+    fn no_tab_items_leaves_global_rows_intact() {
+        use super::shadow_tab_claimed_keys;
+        let before = get_shortcuts_for_context(ShortcutsContext::Diff, None);
+        let count: usize = before.iter().map(|s| s.items.len()).sum();
+        let after = shadow_tab_claimed_keys(before, &[]);
+        assert_eq!(after.iter().map(|s| s.items.len()).sum::<usize>(), count);
+    }
     use crate::model::BomProfile;
 
     /// Collect every `(key, description)` pair across all sections.
