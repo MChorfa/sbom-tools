@@ -12,14 +12,14 @@ sbom-tools  VIEW  │ bsi-aibom-complete-app │ CycloneDX 1.6 │ [AI-BOM]
 │                                              ││Version: 1.0.0                                                        │
 │                                              ││PURL: pkg:huggingface/example/sentiment-classifier@1.0.0              │
 │                                              ││                                                                      │
-│                                              ││━━━ ML / Dataset ━━━                                                  │
+│                                              ││━━━ Model Card ━━━                                                    │
 │                                              ││Architecture: transformer / bert                                      │
 │                                              ││Approach: supervised                                                  │
 │                                              ││Task: nlp                                                             │
 │                                              ││Limitations: Optimized for English text; may not generalize to othe...│
 │                                              ││Model Card: https://example.test/model-cards/sentiment-classifier     │
 │                                              ││Datasets (1):                                                         │
-│                                              ││• data-reviews                                                        │
+│                                              ││• product-reviews-1M (ref: data-reviews)                              │
 │                                              ││Use Cases: Customer review sentiment analysis                         │
 │                                              ││Metrics (1): accuracy=0.97                                            │
 │                                              ││                                                                      │
@@ -40,5 +40,5 @@ sbom-tools  VIEW  │ bsi-aibom-complete-app │ CycloneDX 1.6 │ [AI-BOM]
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
- Components: 3 │ Vulns: 0 │ Licenses: 3
-           ↑↓ select │  Tab switch  / search  e export  ? help  q quit [y] copy pkg:huggingface/example/sen...
+ Components: 3 │ Models: 1 │ Datasets: 1
+  ↑↓ select  K/J scroll detail │  Tab switch  / search  e export  ? help  q quit [y] copy pkg:huggingface/example/sen...

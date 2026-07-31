@@ -14,6 +14,7 @@ expression: "render(&MarkdownReporter::new())"
 - [Metadata Changes](#metadata-changes)
 - [Component Changes](#component-changes)
 - [Dependency Changes](#dependency-changes)
+- [Vulnerability Changes](#vulnerability-changes)
 - [CRA Compliance](#cra-compliance)
 
 ## Summary
@@ -22,7 +23,7 @@ expression: "render(&MarkdownReporter::new())"
 |--------|----------|----------|
 | **Format** | CycloneDX | CycloneDX |
 | **Components** | 9 | 9 |
-| **Dependencies** | 0 | 0 |
+| **Dependencies** | 2 | 2 |
 
 ### Change Summary
 
@@ -31,15 +32,16 @@ expression: "render(&MarkdownReporter::new())"
 | Components Added | 4 |
 | Components Removed | 4 |
 | Components Modified | 5 |
-| Vulnerabilities Introduced | 0 |
-| Vulnerabilities Resolved | 0 |
-| **Semantic Score** | 53.5 |
+| Vulnerabilities Introduced | 2 |
+| Vulnerabilities Resolved | 3 |
+| **Semantic Score** | 57.7 |
 
 ## Metadata Changes
 
 | Field | Old | New |
 |-------|-----|-----|
 | created | [TIMESTAMP] | [TIMESTAMP] |
+| doc_version | 1 | 2 |
 | primary_component_version | 1.0.0 | 2.0.0 |
 
 ## Component Changes
@@ -72,14 +74,52 @@ expression: "render(&MarkdownReporter::new())"
 | lodash | 4.17.20 | 4.17.21 | version |
 | react | 17.0.1 | 18.2.0 | version |
 
+## Dependency Changes
+
+### Added Dependencies
+
+| From | To | Relationship |
+|------|----|--------------|
+| pkg:npm/prisma@4.15.0 | pkg:npm/typescript@5.0.4 | depends-on |
+
+### Removed Dependencies
+
+| From | To | Relationship |
+|------|----|--------------|
+| pkg:npm/request@2.88.2 | pkg:npm/lodash@4.17.20 | depends-on |
+
+## Vulnerability Changes
+
+### Introduced Vulnerabilities
+
+| ID | Severity | CVSS | KEV | EPSS | SLA | Type | Component | Version | VEX |
+|----|----------|------|-----|------|-----|------|-----------|---------|-----|
+| CVE-2023-45857 | Critical | 9.8 | - | - | - | Transitive | axios | 1.4.0 | - |
+| CVE-2023-26136 | High | 8.1 | - | - | - | Transitive | express | 4.18.2 | - |
+
+### Resolved Vulnerabilities
+
+| ID | Severity | SLA | Type | Component | VEX |
+|----|----------|-----|------|-----------|-----|
+| CVE-2020-28469 | High | - | Transitive | express | - |
+| CVE-2021-23337 | High | - | Direct | lodash | - |
+| CVE-2022-24999 | Medium | - | Transitive | express | - |
+
+### VEX Coverage
+
+| Metric | Value |
+|--------|-------|
+| Coverage | 0.0% (0/5) |
+| Actionable | 5 |
+
 ## CRA Compliance
 
 | | Old SBOM | New SBOM | Trend |
 |--|----------|----------|-------|
 | **Status** | Non-compliant | Non-compliant | |
-| **Score** | 5% | 5% |  |
+| **Score** | 4% | 4% |  |
 | **Level** | EU CRA Phase 2 (2027) | EU CRA Phase 2 (2027) | |
-| **Errors** | 3 | 3 |  |
+| **Errors** | 2 | 2 |  |
 | **Warnings** | [N] | [N] |  |
 
 ### Reporting Channels (CRA Art. 14)

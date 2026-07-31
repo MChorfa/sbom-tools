@@ -4,10 +4,10 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
-« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] SxS  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Mode: Aligned │ Focus:  ◄ Old │ New  │ Sync: Independent │ Change: -/13 │ [a]lign [/]search [n/N]ext/prev
+Mode: Aligned │ Focus:  ◄ Old │ New  │ Sync: Independent │ Change: -/13 │ [a]lign [/]search [A/r/m]filter [n/N]ext/prev
 
 ┌ acme-webapp (Old) ──────────────────────────────────────┐ ┬┌ acme-webapp (New) ──────────────────────────────────────┐
 │- jquery 3.5.1                                           │ ◄│  ...                                                    │
@@ -40,5 +40,5 @@ Mode: Aligned │ Focus:  ◄ Old │ New  │ Sync: Independent │ Change: -/1
 │                                                         │ ││                                                         │
 │                                                         │ ││                                                         │
 └─────────────────────────────────────────────────────────┘ ┴└─────────────────────────────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
      …  a align  n/N change  Enter detail │  Tab switch  / search  e export  ? help  q quit [y] copy - jquery 3.5.1

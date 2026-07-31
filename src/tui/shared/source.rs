@@ -205,8 +205,24 @@ fn render_source_tree(
         percent
     );
 
+    // Fit the title to the border width by dropping whole suffix parts
+    // (hint, then node count, then indicators) — ratatui otherwise clips it
+    // mid-word ("(135 nod").
+    let title_budget = area.width.saturating_sub(2) as usize;
+    let full_title = format!(" {title} [Tree]{node_info}{indicators}{mode_hint}");
+    let fitted_title = [
+        full_title.clone(),
+        format!(" {title} [Tree]{node_info}{indicators}"),
+        format!(" {title} [Tree]{indicators}"),
+        format!(" {title} [Tree]"),
+        format!(" {title}"),
+    ]
+    .into_iter()
+    .find(|t| UnicodeWidthStr::width(t.as_str()) <= title_budget)
+    .unwrap_or(full_title);
+
     let block = Block::default()
-        .title(format!(" {title} [Tree]{node_info}{indicators}{mode_hint}"))
+        .title(fitted_title)
         .title_style(Style::default().fg(border_color).bold())
         .title_bottom(
             Line::from(status_bar)
@@ -320,6 +336,15 @@ fn render_source_tree(
 
     // Scroll/viewport already adjusted by prepare_source_render()
     let visible_height = inner.height as usize;
+
+    // When the scrollbar will render it overdraws the last column AFTER the
+    // text pass — reserve it up front so row tails elide with '…' instead of
+    // being silently eaten ("4.17.21" reading as "4.17").
+    let text_right = if item_count > visible_height {
+        inner.x + inner.width.saturating_sub(1)
+    } else {
+        inner.x + inner.width
+    };
 
     // Render visible rows
     for (i, item) in state
@@ -504,7 +529,7 @@ fn render_source_tree(
             x += ind_width;
         }
 
-        let remaining = inner.x + inner.width;
+        let remaining = text_right;
 
         // Key name
         if !item.display_key.is_empty() && x < remaining {
@@ -909,7 +934,12 @@ fn render_source_raw(
         format!("{}", state.raw_lines.len()).len()
     };
 
-    let remaining = inner.x + inner.width;
+    // Reserve the scrollbar column (same overdraw hazard as the tree view).
+    let remaining = if state.raw_lines.len() > visible_height {
+        inner.x + inner.width.saturating_sub(1)
+    } else {
+        inner.x + inner.width
+    };
 
     // [Feature 2] Pre-compute matching bracket for selected line
     let match_line = state.matching_bracket(state.selected);
@@ -1909,14 +1939,27 @@ fn render_change_summary_bar(
 pub fn render_str(buf: &mut Buffer, x: u16, y: u16, s: &str, max_width: u16, style: Style) {
     let mut cx = x;
     let limit = x + max_width;
+    // When the text will not fully fit, reserve the last column for an
+    // explicit ellipsis: a silently clipped "4.17.20 → 4.17" reads as a
+    // plausible but wrong value, which is worse than visibly truncating.
+    let fits = UnicodeWidthStr::width(s) as u16 <= max_width;
+    let draw_limit = if fits { limit } else { limit.saturating_sub(1) };
+    let mut truncated = false;
     for ch in s.chars() {
         let w = UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
-        if cx + w > limit {
+        if cx + w > draw_limit {
+            truncated = true;
             break;
         }
         if let Some(cell) = buf.cell_mut((cx, y)) {
             cell.set_char(ch).set_style(style);
         }
         cx += w;
+    }
+    if truncated
+        && cx < limit
+        && let Some(cell) = buf.cell_mut((cx, y))
+    {
+        cell.set_char('\u{2026}').set_style(style);
     }
 }

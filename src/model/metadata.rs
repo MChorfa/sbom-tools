@@ -30,6 +30,12 @@ pub struct DocumentMetadata {
     pub spec_version: String,
     /// Serial number or document namespace
     pub serial_number: Option<String>,
+    /// Document revision counter (CycloneDX top-level `version`, bumped on
+    /// each BOM revision of the same `serialNumber`). `None` for formats
+    /// without a revision counter (SPDX) and for documents that omit it.
+    /// Additive: skipped in JSON when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_version: Option<u32>,
     /// Creation timestamp
     pub created: DateTime<Utc>,
     /// Creators/authors
@@ -120,6 +126,7 @@ impl Default for DocumentMetadata {
             format_version: String::new(),
             spec_version: String::new(),
             serial_number: None,
+            doc_version: None,
             created: Utc::now(),
             creators: Vec::new(),
             name: None,
@@ -344,7 +351,7 @@ impl std::fmt::Display for HashAlgorithm {
 }
 
 /// External reference
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExternalReference {
     /// Reference type
     pub ref_type: ExternalRefType,
@@ -557,6 +564,15 @@ pub struct FormatExtensions {
     pub cyclonedx: Option<serde_json::Value>,
     /// SPDX-specific extensions
     pub spdx: Option<serde_json::Value>,
+    /// CycloneDX 1.6 Attestations (CDXA): normalized `declarations` plus
+    /// `definitions.standards`. Populated only by the CycloneDX JSON parser
+    /// for `specVersion >= 1.6` documents that carry these sections; `None`
+    /// otherwise (SPDX, older CycloneDX, XML input). Additive: skipped in
+    /// serialized output when absent, so documents without declarations
+    /// serialize byte-identically to previous releases. Prefer the
+    /// [`crate::model::NormalizedSbom::declarations`] accessor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declarations: Option<crate::model::AttestationDeclarations>,
 }
 
 /// Component-level extensions

@@ -11,14 +11,15 @@ use serde_json::json;
 use std::path::PathBuf;
 
 /// Output formats the `quality` command has a real renderer for.
-/// `auto`/`summary` render the plain-text report; JSON and SARIF are
-/// dedicated emitters. All other [`ReportFormat`] values are rejected up
-/// front instead of silently falling back to text.
+/// `auto`/`summary` render the plain-text report; JSON, SARIF, and
+/// sbomqs-json are dedicated emitters. All other [`ReportFormat`] values are
+/// rejected up front instead of silently falling back to text.
 pub const QUALITY_OUTPUT_FORMATS: &[ReportFormat] = &[
     ReportFormat::Auto,
     ReportFormat::Summary,
     ReportFormat::Json,
     ReportFormat::Sarif,
+    ReportFormat::SbomqsJson,
 ];
 
 /// Quality command configuration
@@ -163,11 +164,28 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     }
     let report = scorer.score(parsed.sbom());
 
+    // sbomqs-compat table for the human summary. Computed straight from the
+    // NormalizedSbom (plus the raw document text for file-format /
+    // data-license detection) — deliberately NOT from `report`: the
+    // 0-100 pipeline and the sbomqs 0-10 model are not convertible, and the
+    // compat path must never read `QualityReport.overall_score`.
+    // The AI-readiness profile has its own dedicated layout and skips it.
+    let sbomqs_input = crate::reports::sbomqs_compat::SbomqsCompatInput {
+        sbom: parsed.sbom(),
+        file_name: &config.sbom_path.to_string_lossy(),
+        raw_content: Some(parsed.raw_content()),
+    };
+
     // Build output based on format
     let output_text = match config.output {
         ReportFormat::Json => format_quality_json(&report, &config),
         ReportFormat::Sarif => format_quality_sarif(&report, &config),
-        _ => format_quality_report(&report, &config),
+        ReportFormat::SbomqsJson => crate::reports::sbomqs_compat::render_json(&sbomqs_input),
+        _ => {
+            let sbomqs_table = (config.profile != ScoringProfile::AiReadiness)
+                .then(|| crate::reports::sbomqs_compat::render_summary_table(&sbomqs_input));
+            format_quality_report(&report, &config, sbomqs_table.as_deref())
+        }
     };
 
     // Write output
@@ -291,8 +309,16 @@ fn format_quality_sarif(report: &QualityReport, config: &QualityConfig) -> Strin
     })
 }
 
-/// Format quality report for output
-fn format_quality_report(report: &QualityReport, config: &QualityConfig) -> String {
+/// Format quality report for output.
+///
+/// `sbomqs_table` is the pre-rendered sbomqs-comparable score table (0-10),
+/// appended verbatim at the end of the report. `None` for profiles with a
+/// dedicated layout (AI-readiness) and for direct test callers.
+fn format_quality_report(
+    report: &QualityReport,
+    config: &QualityConfig,
+    sbomqs_table: Option<&str>,
+) -> String {
     let mut lines = Vec::new();
     let use_color = !config.no_color && std::env::var("NO_COLOR").is_err();
 
@@ -484,6 +510,13 @@ fn format_quality_report(report: &QualityReport, config: &QualityConfig) -> Stri
                 priority_indicator, rec.message, rec.affected_count, rec.impact
             ));
         }
+        lines.push(String::new());
+    }
+
+    // Compact sbomqs-comparable table (0-10 scores recomputed per-feature
+    // with sbomqs' formulas — never overall_score/10).
+    if let Some(table) = sbomqs_table {
+        lines.push(table.to_string());
         lines.push(String::new());
     }
 
@@ -679,6 +712,86 @@ mod tests {
                 "error must list the supported formats: {msg}"
             );
         }
+    }
+
+    #[test]
+    fn sbomqs_json_output_emits_sbomqs_shaped_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::write(
+            &sbom_path,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,
+                "components":[{"type":"library","name":"lodash","version":"4.17.21",
+                               "purl":"pkg:npm/lodash@4.17.21"}]}"#,
+        )
+        .unwrap();
+        let out_path = dir.path().join("out.json");
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::Standard,
+            ReportFormat::SbomqsJson,
+            Some(out_path.clone()),
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("sbomqs-json run must succeed");
+        assert_eq!(code, exit_codes::SUCCESS);
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out_path).unwrap())
+                .expect("sbomqs-json output must be valid JSON");
+        // Exact sbomqs score-report shape, honest identity.
+        assert!(value["run_id"].is_string());
+        assert_eq!(value["creation_info"]["name"], "sbom-tools");
+        let file = &value["files"][0];
+        assert_eq!(file["spec"], "cyclonedx");
+        assert_eq!(file["file_format"], "json");
+        assert!(file["avg_score"].is_number());
+        let scores = file["scores"].as_array().expect("scores array");
+        assert_eq!(scores.len(), 23);
+        assert!(
+            scores
+                .iter()
+                .any(|s| s["feature"] == "comp_with_name" && s["score"] == 10.0)
+        );
+    }
+
+    #[test]
+    fn summary_report_appends_sbomqs_compat_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = write_minimal_sbom(dir.path());
+        let out_path = dir.path().join("out.txt");
+        let code = run_quality(
+            sbom_path,
+            ScoringProfile::Standard,
+            ReportFormat::Summary,
+            Some(out_path.clone()),
+            false,
+            false,
+            None,
+            false,
+            true,
+            None,
+            None,
+            None,
+            EnrichmentConfig::default(),
+        )
+        .expect("summary run must succeed");
+        assert_eq!(code, exit_codes::SUCCESS);
+        let text = std::fs::read_to_string(&out_path).unwrap();
+        assert!(text.contains("sbomqs-Comparable Scores"));
+        assert!(text.contains("NTIA-minimum-elements"));
+        assert!(
+            text.contains("not convertible"),
+            "table must carry the non-convertibility note"
+        );
     }
 
     #[test]
@@ -920,7 +1033,7 @@ mod tests {
     fn test_format_quality_report_ai_readiness_shows_checks() {
         let sbom = fully_documented_ml_sbom();
         let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
-        let output = format_quality_report(&report, &ai_config(ReportFormat::Summary, None));
+        let output = format_quality_report(&report, &ai_config(ReportFormat::Summary, None), None);
         assert!(output.contains("AI Readiness Checks:"));
         assert!(output.contains("PASS AI-001"));
         assert!(!output.contains("Category Scores:"));
@@ -930,7 +1043,8 @@ mod tests {
     fn test_format_quality_report_ai_readiness_na_shows_na() {
         let sbom = NormalizedSbom::new(DocumentMetadata::default());
         let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
-        let output = format_quality_report(&report, &ai_config(ReportFormat::Summary, Some(70.0)));
+        let output =
+            format_quality_report(&report, &ai_config(ReportFormat::Summary, Some(70.0)), None);
         assert!(output.contains("Overall Score: N/A"));
         assert!(output.contains("No machine-learning-model components found"));
     }

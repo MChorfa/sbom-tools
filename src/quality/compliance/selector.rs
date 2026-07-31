@@ -80,6 +80,26 @@ pub enum StandardSelector {
         alias = "ai-bom"
     )]
     BsiAi,
+    /// CISA 2026 Minimum Elements for an SBOM (v2.1, July 2026; successor
+    /// to the NTIA 2021 Minimum Elements)
+    #[value(
+        name = "cisa-2026",
+        alias = "cisa",
+        alias = "cisa2026",
+        alias = "minimum-elements-2026"
+    )]
+    Cisa2026,
+    /// PCI DSS v4.0.1 Requirement 6.3.2 software-inventory profile
+    #[value(
+        name = "pci-dss",
+        alias = "pci",
+        alias = "pci-dss-6-3-2",
+        alias = "pci-dss-4"
+    )]
+    PciDss,
+    /// CISA Framing Software Component Transparency, 3rd ed. (2024)
+    #[value(name = "fsct", alias = "fsct-3", alias = "component-transparency")]
+    Fsct,
 }
 
 impl StandardSelector {
@@ -100,6 +120,9 @@ impl StandardSelector {
             Self::Eucc => ComplianceLevel::EuccSubstantial,
             Self::AiAct => ComplianceLevel::EuAiAct,
             Self::BsiAi => ComplianceLevel::BsiSbomForAi,
+            Self::Cisa2026 => ComplianceLevel::Cisa2026,
+            Self::PciDss => ComplianceLevel::PciDss632,
+            Self::Fsct => ComplianceLevel::Fsct,
         }
     }
 
@@ -120,6 +143,9 @@ impl StandardSelector {
             Self::Eucc => "eucc",
             Self::AiAct => "ai-act",
             Self::BsiAi => "bsi-ai",
+            Self::Cisa2026 => "cisa-2026",
+            Self::PciDss => "pci-dss",
+            Self::Fsct => "fsct",
         }
     }
 
@@ -214,6 +240,17 @@ mod tests {
             ("bsiai", ComplianceLevel::BsiSbomForAi),
             ("sbom-for-ai", ComplianceLevel::BsiSbomForAi),
             ("ai-bom", ComplianceLevel::BsiSbomForAi),
+            ("cisa-2026", ComplianceLevel::Cisa2026),
+            ("cisa", ComplianceLevel::Cisa2026),
+            ("cisa2026", ComplianceLevel::Cisa2026),
+            ("minimum-elements-2026", ComplianceLevel::Cisa2026),
+            ("pci-dss", ComplianceLevel::PciDss632),
+            ("pci", ComplianceLevel::PciDss632),
+            ("pci-dss-6-3-2", ComplianceLevel::PciDss632),
+            ("pci-dss-4", ComplianceLevel::PciDss632),
+            ("fsct", ComplianceLevel::Fsct),
+            ("fsct-3", ComplianceLevel::Fsct),
+            ("component-transparency", ComplianceLevel::Fsct),
         ];
         for (spelling, expected) in table {
             let parsed: StandardSelector = spelling
@@ -261,6 +298,9 @@ mod tests {
             "eucc",
             "ai-act",
             "bsi-ai",
+            "cisa-2026",
+            "pci-dss",
+            "fsct",
         ] {
             assert!(err.contains(canonical), "error must list '{canonical}'");
         }

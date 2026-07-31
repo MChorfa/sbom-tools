@@ -560,6 +560,7 @@ impl Spdx3Parser {
             format_version: spec_version.clone(),
             spec_version,
             serial_number: doc.spdx_id.clone(),
+            doc_version: None, // SPDX has no document revision counter
             created,
             creators,
             name: doc.name.clone(),

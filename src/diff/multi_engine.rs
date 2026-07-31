@@ -138,13 +138,16 @@ impl MultiDiffEngine {
 
         // Compute individual diffs
         let mut comparisons: Vec<ComparisonResult> = Vec::new();
-        let mut all_versions: HashMap<String, HashMap<String, String>> = HashMap::new(); // component_id -> (target_name -> version)
+        // logical component id (version-stripped) -> (sbom_name -> version).
+        // Keyed logically so a version bump is ONE component with two
+        // versions, not two half-present components (see strip_purl_version).
+        let mut all_versions: HashMap<String, HashMap<String, String>> = HashMap::new();
 
         // Collect baseline versions
         for (id, comp) in &baseline.components {
             let version = comp.version.clone().unwrap_or_default();
             all_versions
-                .entry(id.value().to_string())
+                .entry(strip_purl_version(id.value()).to_string())
                 .or_default()
                 .insert(baseline_name.to_string(), version);
         }
@@ -161,7 +164,7 @@ impl MultiDiffEngine {
             for (id, comp) in &target_sbom.components {
                 let version = comp.version.clone().unwrap_or_default();
                 all_versions
-                    .entry(id.value().to_string())
+                    .entry(strip_purl_version(id.value()).to_string())
                     .or_default()
                     .insert(target_name.to_string(), version);
             }
@@ -205,10 +208,13 @@ impl MultiDiffEngine {
         targets: &[(&NormalizedSbom, &str, &str)],
         all_versions: &HashMap<String, HashMap<String, String>>,
     ) -> MultiDiffSummary {
+        // All presence sets/maps below are keyed by LOGICAL (version-stripped)
+        // identity, matching `all_versions`, so universal/variable/inconsistent
+        // partition components rather than component@version strings.
         let baseline_components: HashSet<_> = baseline
             .components
             .keys()
-            .map(|k| k.value().to_string())
+            .map(|k| strip_purl_version(k.value()).to_string())
             .collect();
 
         // Per-SBOM component sets and name maps, built once — the loops below
@@ -216,12 +222,18 @@ impl MultiDiffEngine {
         // O(components² × SBOMs) overall.
         let target_component_sets: Vec<HashSet<&str>> = targets
             .iter()
-            .map(|(target_sbom, _, _)| target_sbom.components.keys().map(|k| k.value()).collect())
+            .map(|(target_sbom, _, _)| {
+                target_sbom
+                    .components
+                    .keys()
+                    .map(|k| strip_purl_version(k.value()))
+                    .collect()
+            })
             .collect();
         let baseline_names: HashMap<&str, &str> = baseline
             .components
             .iter()
-            .map(|(id, c)| (id.value(), c.name.as_str()))
+            .map(|(id, c)| (strip_purl_version(id.value()), c.name.as_str()))
             .collect();
         let target_names: Vec<HashMap<&str, &str>> = targets
             .iter()
@@ -229,7 +241,7 @@ impl MultiDiffEngine {
                 target_sbom
                     .components
                     .iter()
-                    .map(|(id, c)| (id.value(), c.name.as_str()))
+                    .map(|(id, c)| (strip_purl_version(id.value()), c.name.as_str()))
                     .collect()
             })
             .collect();
@@ -323,12 +335,16 @@ impl MultiDiffEngine {
             }
         }
 
-        // Compute deviation scores
+        // Compute deviation scores as 0-1 FRACTIONS (semantic_score is 0-100).
+        // Every consumer (TUI bands/gauges, CLI logging) multiplies by 100 for
+        // display; storing the 0-100 value here double-scaled every rendered
+        // percentage ("Max Deviation: 10000.0%") and saturated the deviation
+        // gauge/band thresholds, which are calibrated for 0-1 fractions.
         let mut deviation_scores: HashMap<String, f64> = HashMap::new();
         let mut max_deviation = 0.0f64;
 
         for comp in comparisons {
-            let score = 100.0 - comp.diff.semantic_score;
+            let score = ((100.0 - comp.diff.semantic_score) / 100.0).clamp(0.0, 1.0);
             deviation_scores.insert(comp.target.name.clone(), score);
             max_deviation = max_deviation.max(score);
         }
@@ -365,17 +381,24 @@ impl MultiDiffEngine {
     ) -> Vec<DivergentComponent> {
         let mut divergent = vec![];
 
-        // Hashed lookup tables; the loops below previously did a linear
+        // Hashed lookup tables keyed by LOGICAL (version-stripped) identity —
+        // matching a purl-versioned id verbatim classified every version bump
+        // as Added-in-target plus Removed-from-baseline instead of one
+        // VersionMismatch. The loops below previously also did a linear
         // find/any per component, O(components²) per target.
         let baseline_by_value: HashMap<&str, &crate::model::Component> = baseline
             .components
             .iter()
-            .map(|(id, c)| (id.value(), c))
+            .map(|(id, c)| (strip_purl_version(id.value()), c))
             .collect();
-        let target_ids: HashSet<&str> = target.components.keys().map(|k| k.value()).collect();
+        let target_ids: HashSet<&str> = target
+            .components
+            .keys()
+            .map(|k| strip_purl_version(k.value()))
+            .collect();
 
         for (id, comp) in &target.components {
-            let comp_id = id.value().to_string();
+            let comp_id = strip_purl_version(id.value()).to_string();
             let target_version = comp.version.clone().unwrap_or_default();
 
             // Presence and version availability are separate questions: a
@@ -403,9 +426,10 @@ impl MultiDiffEngine {
             });
         }
 
-        // Check for removed components
+        // Check for removed components (logically absent from the target, not
+        // merely present at another version)
         for (id, comp) in &baseline.components {
-            let comp_id = id.value().to_string();
+            let comp_id = strip_purl_version(id.value()).to_string();
             if !target_ids.contains(comp_id.as_str()) {
                 divergent.push(DivergentComponent {
                     id: comp_id.clone(),
@@ -480,17 +504,21 @@ impl MultiDiffEngine {
 
         // Collect all component IDs, and per-SBOM lookup maps — the history
         // loop below runs all_components × sboms and previously did a linear
-        // find per cell.
+        // find per cell. Keyed by LOGICAL (version-stripped) identity: keying
+        // on raw purl-with-version ids made every upgrade TWO evolutions (the
+        // old version "removed", the new one "added"), double-listing it in
+        // the evolution lists and hiding the actual version change from the
+        // per-component history.
         let mut sbom_maps: Vec<HashMap<&str, &crate::model::Component>> =
             Vec::with_capacity(sboms.len());
         for (sbom, _, _) in sboms {
             for (id, _) in &sbom.components {
-                all_components.insert(id.value().to_string());
+                all_components.insert(strip_purl_version(id.value()).to_string());
             }
             sbom_maps.push(
                 sbom.components
                     .iter()
-                    .map(|(id, c)| (id.value(), c))
+                    .map(|(id, c)| (strip_purl_version(id.value()), c))
                     .collect(),
             );
         }
@@ -794,6 +822,32 @@ impl MultiDiffEngine {
 impl Default for MultiDiffEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Version-independent component identity for cross-SBOM presence/version
+/// aggregation.
+///
+/// Purl-shaped canonical ids embed the version (`pkg:npm/lodash@4.17.20`), so
+/// keying presence sets on the raw id counted every version bump as TWO
+/// distinct components — one "missing" from the new SBOMs and one "missing"
+/// from the old ones — inflating the Inconsistent count past the number of
+/// packages in the fleet and hiding upgrades from the Variable list. Strips
+/// the `@version` suffix (and any qualifiers) from purl ids; non-purl ids are
+/// returned unchanged. Note: if one SBOM genuinely vendors two versions of the
+/// same purl, they intentionally aggregate as one logical component here.
+pub(crate) fn strip_purl_version(id: &str) -> &str {
+    if !id.starts_with("pkg:") {
+        return id;
+    }
+    // Version (if any) sits before qualifiers (`?`) / subpath (`#`).
+    let core_end = id.find(['?', '#']).unwrap_or(id.len());
+    let core = &id[..core_end];
+    match core.rfind('@') {
+        // An '@' directly after '/' is an npm scope ("pkg:npm/@scope/name"),
+        // not a version separator.
+        Some(pos) if pos > 0 && !core[..pos].ends_with('/') => &id[..pos],
+        _ => id,
     }
 }
 
@@ -1136,6 +1190,42 @@ mod tests {
         sbom
     }
 
+    /// A purl-versioned upgrade is ONE evolution with a version change, not a
+    /// Removed(old version) + Added(new version) pair.
+    #[test]
+    fn timeline_upgrade_is_one_evolution_not_added_plus_removed() {
+        let v1 = purl_sbom(&[("lodash", "4.17.20"), ("react", "18.0.0")]);
+        let v2 = purl_sbom(&[("lodash", "4.17.21"), ("react", "18.0.0")]);
+
+        let mut engine = MultiDiffEngine::new();
+        let sboms: Vec<(&NormalizedSbom, &str, &str)> =
+            vec![(&v1, "v1", "v1.json"), (&v2, "v2", "v2.json")];
+        let result = engine.timeline(&sboms).expect("timeline");
+        let summary = &result.evolution_summary;
+
+        assert!(
+            summary.components_added.is_empty(),
+            "nothing appeared after v1: {:?}",
+            summary.components_added
+        );
+        assert!(
+            summary.components_removed.is_empty(),
+            "nothing is absent from the latest version: {:?}",
+            summary.components_removed
+        );
+
+        let history = summary
+            .version_history
+            .get("pkg:npm/lodash")
+            .expect("logical lodash history");
+        let changes: Vec<_> = history.iter().map(|p| p.change_type.clone()).collect();
+        assert_eq!(
+            changes,
+            vec![VersionChangeType::Initial, VersionChangeType::PatchUpgrade],
+            "the upgrade must be visible as a version change in ONE history"
+        );
+    }
+
     /// Gap handling: Removed marks only the FIRST absent point; later gap
     /// points are Absent; a reappearing component re-enters as Initial
     /// rather than being version-compared against the stale pre-gap version
@@ -1176,6 +1266,151 @@ mod tests {
             ],
             "gap must be Removed-then-Absent and reappearance must be Initial"
         );
+    }
+
+    /// `strip_purl_version` removes only the version segment of purl-shaped
+    /// ids and leaves everything else alone.
+    #[test]
+    fn strip_purl_version_matrix() {
+        assert_eq!(
+            strip_purl_version("pkg:npm/lodash@4.17.20"),
+            "pkg:npm/lodash"
+        );
+        assert_eq!(
+            strip_purl_version("pkg:npm/@scope/name@1.2.3"),
+            "pkg:npm/@scope/name"
+        );
+        // Scoped purl WITHOUT a version: the scope '@' must survive.
+        assert_eq!(
+            strip_purl_version("pkg:npm/@scope/name"),
+            "pkg:npm/@scope/name"
+        );
+        assert_eq!(
+            strip_purl_version("pkg:maven/org.apache/log4j@2.17.0?type=jar"),
+            "pkg:maven/org.apache/log4j"
+        );
+        assert_eq!(strip_purl_version("pkg:npm/lodash"), "pkg:npm/lodash");
+        // Non-purl ids pass through untouched (even with embedded '@').
+        assert_eq!(strip_purl_version("acme-webapp"), "acme-webapp");
+        assert_eq!(strip_purl_version("SPDXRef-Package-a"), "SPDXRef-Package-a");
+        assert_eq!(strip_purl_version("name@1.0"), "name@1.0");
+    }
+
+    fn purl_sbom(entries: &[(&str, &str)]) -> NormalizedSbom {
+        let mut sbom = NormalizedSbom::new(DocumentMetadata::default());
+        for (name, version) in entries {
+            let mut c = Component::new((*name).to_string(), format!("pkg:npm/{name}@{version}"));
+            c.version = Some((*version).to_string());
+            c.calculate_content_hash();
+            sbom.add_component(c);
+        }
+        sbom.calculate_content_hash();
+        sbom
+    }
+
+    /// A version bump must be ONE variable component, never TWO inconsistent
+    /// ones (raw purl-with-version keying counted `lodash@1` missing from the
+    /// target and `lodash@2` missing from the baseline). Deviation scores must
+    /// be 0-1 fractions — consumers multiply by 100 for display.
+    #[test]
+    fn version_bump_is_variable_not_double_inconsistent_and_deviation_is_fraction() {
+        let baseline = purl_sbom(&[("lodash", "4.17.20"), ("react", "18.0.0")]);
+        let target = purl_sbom(&[("lodash", "4.17.21"), ("react", "18.0.0")]);
+
+        let mut engine = MultiDiffEngine::new();
+        let result = engine
+            .diff_multi(
+                &baseline,
+                "baseline",
+                "baseline.json",
+                &[(&target, "target", "target.json")],
+            )
+            .expect("diff_multi");
+
+        let summary = &result.summary;
+        assert!(
+            summary.inconsistent_components.is_empty(),
+            "a version bump is not a presence inconsistency: {:?}",
+            summary.inconsistent_components
+        );
+        assert_eq!(
+            summary
+                .variable_components
+                .iter()
+                .map(|vc| vc.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["lodash"],
+            "the bumped package must surface exactly once as variable"
+        );
+        let lodash = &summary.variable_components[0];
+        assert_eq!(lodash.id, "pkg:npm/lodash", "id must be version-stripped");
+        assert_eq!(
+            lodash.targets_with_component.len(),
+            2,
+            "present (at some version) in baseline and target"
+        );
+        // react is untouched and present everywhere -> universal, counted once.
+        assert_eq!(
+            summary.universal_components,
+            vec!["pkg:npm/lodash", "pkg:npm/react"]
+        );
+
+        // Deviation contract: 0-1 fraction, never the 0-100 semantic scale.
+        assert!(
+            summary.max_deviation >= 0.0 && summary.max_deviation <= 1.0,
+            "deviation must be a 0-1 fraction, got {}",
+            summary.max_deviation
+        );
+        for (name, dev) in &summary.deviation_scores {
+            assert!(
+                (0.0..=1.0).contains(dev),
+                "deviation for {name} must be a 0-1 fraction, got {dev}"
+            );
+        }
+
+        // Divergence: the bump is one VersionMismatch, not Added+Removed.
+        let divergent = &result.comparisons[0].divergent_components;
+        assert_eq!(divergent.len(), 1, "only lodash diverges: {divergent:?}");
+        assert_eq!(
+            divergent[0].divergence_type,
+            DivergenceType::VersionMismatch
+        );
+        assert_eq!(divergent[0].baseline_version.as_deref(), Some("4.17.20"));
+        assert_eq!(divergent[0].target_version, "4.17.21");
+    }
+
+    /// An identical target deviates 0.0; a fully disjoint target still stays
+    /// within the 0-1 fraction contract (the old code stored 100.0).
+    #[test]
+    fn deviation_bounds_identical_and_disjoint() {
+        let baseline = purl_sbom(&[("a", "1.0.0"), ("b", "1.0.0")]);
+        let same = purl_sbom(&[("a", "1.0.0"), ("b", "1.0.0")]);
+        let disjoint = purl_sbom(&[("x", "1.0.0"), ("y", "1.0.0")]);
+
+        let mut engine = MultiDiffEngine::new();
+        let result = engine
+            .diff_multi(
+                &baseline,
+                "baseline",
+                "baseline.json",
+                &[
+                    (&same, "same", "same.json"),
+                    (&disjoint, "disjoint", "disjoint.json"),
+                ],
+            )
+            .expect("diff_multi");
+
+        let same_dev = result.summary.deviation_scores["same"];
+        let disjoint_dev = result.summary.deviation_scores["disjoint"];
+        assert!(
+            same_dev.abs() < f64::EPSILON,
+            "identical target must deviate 0.0, got {same_dev}"
+        );
+        assert!(
+            disjoint_dev > same_dev && disjoint_dev <= 1.0,
+            "disjoint target deviation must be in (0, 1], got {disjoint_dev}"
+        );
+        assert!(result.summary.max_deviation <= 1.0);
     }
 
     /// A baseline component that is present but versionless (SPDX without

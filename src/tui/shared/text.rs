@@ -3,6 +3,19 @@
 use ratatui::text::Line;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// Count + noun with naive `s` pluralization: `"1 algorithm"`,
+/// `"3 algorithms"`. The one place count strings are built, so "1 items" /
+/// "[1 suites]"-style grammar bugs cannot recur. Irregular nouns are not
+/// needed by any current caller.
+#[must_use]
+pub(crate) fn count_noun(n: usize, singular: &str) -> String {
+    if n == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{n} {singular}s")
+    }
+}
+
 /// Number of terminal rows `lines` occupy when rendered with `Wrap { trim: false }`
 /// at `width` columns.
 ///
@@ -61,7 +74,7 @@ fn wrapped_rows(line: &Line<'_>, w: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::wrapped_line_count;
+    use super::{count_noun, wrapped_line_count};
     use ratatui::text::Line;
 
     #[test]
@@ -95,5 +108,13 @@ mod tests {
             wrapped_line_count(&[Line::from("a"), Line::from("b")], 0),
             2
         );
+    }
+
+    #[test]
+    fn count_noun_pluralizes_on_anything_but_one() {
+        assert_eq!(count_noun(1, "algorithm"), "1 algorithm");
+        assert_eq!(count_noun(3, "algorithm"), "3 algorithms");
+        assert_eq!(count_noun(0, "suite"), "0 suites");
+        assert_eq!(count_noun(1, "error"), "1 error");
     }
 }

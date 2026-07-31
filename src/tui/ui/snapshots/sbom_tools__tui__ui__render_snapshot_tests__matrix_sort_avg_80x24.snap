@@ -8,9 +8,9 @@ expression: text
 ┌ Similarity Matrix [z: focus, r: row, c: col, ┐┌ Pair Details ────────────────┐
 │          gamma  beta   alpha                 ││Comparing:                    │
 │                                              ││gamma ↔ beta                  │
-│gamma      -     0%     0%                    ││                              │
-│beta      0%      -     53%                   ││Similarity: 0.0%              │
-│alpha     0%     53%     -                    ││                              │
+│gamma      -     22%    30%                   ││                              │
+│beta      22%     -     58%                   ││Similarity: 21.8%             │
+│alpha     30%    58%     -                    ││                              │
 │                                              ││gamma: 3 components           │
 │                                              ││beta: 9 components            │
 │                                              ││                              │
@@ -20,9 +20,9 @@ expression: text
 │                                              ││~ Modified: 0                 │
 │                                              ││                              │
 └──────────────────────────────────────────────┘└──────────────────────────────┘
-┌ Clustering (1 clusters) [C: details] ────────────────────────────────────────┐
-│Algorithm: greedy  Threshold: 50%                                             │
+┌ Clustering (1 cluster) [C: details] ─────────────────────────────────────────┐
+│… and 2 more — C: details                                                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Pairs: 3  Avg: 18%  │  ℹ Sort: Avg Similarity ↑                               │
+│Pairs: 3  Avg: 37%  │  ℹ Sort: Avg Similarity ↑                               │
 └──────────────────────────────────────────────────────────────────────────────┘

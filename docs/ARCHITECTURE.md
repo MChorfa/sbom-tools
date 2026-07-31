@@ -134,6 +134,52 @@ Both app types share rendering utilities in `src/tui/shared/` (quality charts, c
 - **CBOM Scoring**: Add new crypto quality categories by extending `CryptographyMetrics` and adding scoring methods. New `ScoringProfile` variants can define custom weight distributions.
 - **BOM Profiles**: Add new profile types beyond SBOM/CBOM/AI-BOM by extending `BomProfile` enum and `tabs_for_profile()`.
 
+## Attestation Evidence Ingestion (CDXA, phase 1)
+
+CycloneDX 1.6 introduced Attestations (CDXA): a root-level `declarations` object
+(assessors, attestations, claims, evidence, targets, affirmation) plus
+`definitions.standards` — machine-readable standard encodings whose requirements
+attestations map claims onto. Phase 1 ingests this evidence from documents the
+tool already loads; no new I/O surface is involved.
+
+- **Parsing** (`src/parsers/cyclonedx.rs`): the JSON parser deserializes
+  `declarations` + `definitions.standards` on `specVersion >= 1.6` only (the
+  section is never probed on earlier documents, and its absence is never a
+  violation). All CDXA refLinks (`claim.target`, `map[].requirement`,
+  `claims[]/evidence[]` lists) are resolved at parse time against
+  declarations-local bom-refs, standard/requirement bom-refs,
+  `declarations.targets` entries, and the BOM inventory — through the same
+  id_map (bom-refs plus purl-fallback keys) used for dependencies and
+  vulnerability affects. Unresolvable refs are kept and marked `Dangling`
+  (parse never fails) and fail closed at query time. XML declarations are not
+  yet normalized.
+- **Model** (`src/model/attestation.rs`): normalized `AttestationDeclarations`
+  attached at `FormatExtensions::declarations` (accessor:
+  `NormalizedSbom::declarations()`). Additive: serialized output gains a
+  `declarations` key only when the source document carried the section, so
+  documents without declarations serialize byte-identically; when present, the
+  declarations are folded into the SBOM content hash so attestation changes are
+  visible to diff identity.
+- **Compliance exposure** (`src/quality/compliance/context.rs`):
+  `ComplianceContext::attestation_declarations()` and
+  `ComplianceContext::evidence_for(AttestationRuleFamily)` return requirements
+  fully supported by resolved evidence, evaluated at the checker's injectable
+  clock (`--as-of`): expired (`expires <= as_of`) or future-created evidence
+  never counts, partial conformance (`score < 1`) never auto-satisfies, counter
+  claims/evidence disqualify, and unknown (standard, requirement) pairs are
+  recorded but satisfy nothing. Known families: NIST SSDF practice identifiers,
+  EO 14028, EU CRA.
+- **Verification scope — structural only**: JSF signature objects are recorded
+  as PRESENCE (algorithm, keyId, signer count, signatory identity) and never
+  cryptographically verified. Evidence levels are ordered `SelfDeclared <
+  Structural < SignaturePresent < SignatureVerified`; phase 1 emits at most
+  `SignaturePresent`. `SignatureVerified` is reserved for a future JSF/DSSE
+  verification phase.
+- **Out of scope (phase 2)**: external in-toto attestation bundles
+  (`*.intoto.jsonl`, DSSE envelopes, SLSA provenance/VSA, test-result and vulns
+  predicates) — a later phase with its own strict-discovery loader; no CLI
+  surface exists for it today.
+
 ## Known Technical Debt
 
 - Multi-SBOM fleet commands (diff-multi, timeline, matrix) support enrichment but remain limited to JSON/TUI output.

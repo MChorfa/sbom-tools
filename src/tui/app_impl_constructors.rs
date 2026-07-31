@@ -216,8 +216,14 @@ impl App {
         let version_count = result.sboms.len();
         // Component filter defaults to All, so the unfiltered count is
         // correct at construction (the 'f' handler resyncs on filter change).
-        let component_count = result.evolution_summary.components_added.len()
-            + result.evolution_summary.components_removed.len();
+        // Must be the DISPLAY list's length: filtered_evolution_entries
+        // dedupes components the engine lists as both added and removed, so
+        // the raw list lengths would let the cursor walk past the end.
+        let component_count = crate::tui::views::filtered_evolution_entries(
+            &result,
+            crate::tui::app::TimelineComponentFilter::All,
+        )
+        .len();
 
         let mut app = Self::base(AppMode::Timeline);
         app.data.timeline_result = Some(result);

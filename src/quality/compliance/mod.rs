@@ -16,13 +16,16 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod ai_shared;
 mod bsi;
 mod bsi_sbom_for_ai;
+mod cisa2026;
 mod context;
 mod cra;
 mod crypto;
 mod eo14028;
 mod eu_ai_act;
 mod eucc;
+mod fsct;
 mod generic;
+mod pci_dss;
 mod registry;
 mod selector;
 mod shared;
@@ -30,8 +33,9 @@ mod ssdf;
 
 use context::{ComplianceContext, checker_for};
 pub use registry::{
-    CNSA2_SARIF_RULE_IDS, COMPLIANCE_SARIF_RULE_IDS, EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS,
-    NTIA_SARIF_RULE_IDS, PQC_SARIF_RULE_IDS, RuleMeta, SSDF_SARIF_RULE_IDS, all_rule_ids,
+    CISA2026_SARIF_RULE_IDS, CNSA2_SARIF_RULE_IDS, COMPLIANCE_SARIF_RULE_IDS,
+    EO14028_SARIF_RULE_IDS, FDA_SARIF_RULE_IDS, FSCT_SARIF_RULE_IDS, NTIA_SARIF_RULE_IDS,
+    PCIDSS_SARIF_RULE_IDS, PQC_SARIF_RULE_IDS, RuleMeta, SSDF_SARIF_RULE_IDS, all_rule_ids,
     rule_meta,
 };
 use registry::{REMEDIATION_GENERIC, lookup_static_rule_id};
@@ -128,6 +132,30 @@ pub enum ComplianceLevel {
     /// legal-conformity guarantee. Returns N/A for SBOMs with no ML-model or
     /// dataset metadata.
     BsiSbomForAi,
+    /// "2026 Minimum Elements for a Software Bill of Materials (SBOM)" v2.1
+    /// (CISA/NSA/FBI + 15 international partners, July 29, 2026) — the
+    /// finalized successor to the NTIA 2021 Minimum Elements. Adds SBOM
+    /// author signature, generation context, tool name/version, SBOM
+    /// version, component hashes + algorithms, and licenses to the 2021
+    /// data-field floor; renames Supplier Name to Component Producer.
+    /// Non-binding joint guidance (it creates no regulatory requirements).
+    Cisa2026,
+    /// PCI DSS v4.0.1 Requirement 6.3.2 — inventory of bespoke and custom
+    /// software and incorporated third-party components, maintained to
+    /// facilitate vulnerability and patch management (required in
+    /// assessments since 31 March 2025). PCI DSS prescribes no SBOM format;
+    /// a parseable CycloneDX/SPDX document is the industry-consensus
+    /// evidence, so no format gate applies. Companion controls 6.3.1 and
+    /// 11.3.1.1 are covered where the SBOM embeds vulnerability data.
+    PciDss632,
+    /// CISA "Framing Software Component Transparency: Establishing a Common
+    /// Software Bill of Materials (SBOM)", Third Edition (2024-09-03,
+    /// published 2024-10-15). Community-consensus baseline-attribute
+    /// guidance with three maturity tiers mapped onto severities:
+    /// Minimum Expected → Error, Recommended Practice → Warning,
+    /// Aspirational Goal → Info. Non-regulatory; Error here means "fails
+    /// the Minimum Expected tier", not a legal violation.
+    Fsct,
     /// Comprehensive compliance (all recommended fields)
     Comprehensive,
 }
@@ -152,6 +180,9 @@ impl ComplianceLevel {
             Self::EuccSubstantial => "EUCC Substantial (Reg. 2024/482)",
             Self::EuAiAct => "EU AI Act Annex IV Readiness",
             Self::BsiSbomForAi => "BSI/G7 SBOM-for-AI Minimum Elements Readiness",
+            Self::Cisa2026 => "CISA 2026 Minimum Elements",
+            Self::PciDss632 => "PCI DSS v4.0.1 Req. 6.3.2",
+            Self::Fsct => "CISA Framing Software Component Transparency (3rd ed.)",
             Self::Comprehensive => "Comprehensive",
         }
     }
@@ -175,6 +206,9 @@ impl ComplianceLevel {
             Self::EuccSubstantial => "EUCC",
             Self::EuAiAct => "AI-Act",
             Self::BsiSbomForAi => "BSI-AI",
+            Self::Cisa2026 => "CISA26",
+            Self::PciDss632 => "PCI",
+            Self::Fsct => "FSCT",
             Self::Comprehensive => "Full",
         }
     }
@@ -220,6 +254,15 @@ impl ComplianceLevel {
             Self::BsiSbomForAi => {
                 "BSI/G7 SBOM-for-AI Minimum Elements (joint G7 final, May 2026) READINESS — scores an AI-BOM element-by-element across the Metadata, System-Level, Models, Datasets, Infrastructure, and Security clusters (readiness only, not a legal-conformity guarantee; N/A for non-AI SBOMs)"
             }
+            Self::Cisa2026 => {
+                "2026 Minimum Elements for an SBOM (CISA et al., July 2026) — successor to NTIA 2021: author (person/org), signature, format name+version, generation context, timestamp, tool name+version, SBOM version, and per-component producer/name/version/identifiers/hash/license/dependencies. Frequency, distribution, and update accommodation are organizational practices with no in-document evidence and carry no rules."
+            }
+            Self::PciDss632 => {
+                "PCI DSS v4.0.1 Req. 6.3.2 software-inventory profile (required in assessments since 31 Mar 2025) — inventory completeness, per-component name/version/supplier/identifier, freshness, and vulnerability-management usability; 6.3.1/11.3.1.1 risk-ranking checks where vulnerability data is embedded. Assessor-side testing procedures (interviews, software comparison) are out of document reach."
+            }
+            Self::Fsct => {
+                "CISA Framing Software Component Transparency, 3rd ed. (2024) — baseline attributes (author, timestamp, primary component, name, version, supplier, identifiers, hashes, relationships, licenses, copyright) across the Minimum Expected (Error) / Recommended Practice (Warning) / Aspirational Goal (Info) maturity tiers"
+            }
             Self::Comprehensive => "All recommended fields and best practices",
         }
     }
@@ -243,6 +286,9 @@ impl ComplianceLevel {
             Self::EuccSubstantial,
             Self::EuAiAct,
             Self::BsiSbomForAi,
+            Self::Cisa2026,
+            Self::PciDss632,
+            Self::Fsct,
             Self::Comprehensive,
         ]
     }
@@ -308,6 +354,14 @@ pub enum StandardKind {
     /// EUCC — European cybersecurity certification scheme on Common Criteria,
     /// Implementing Regulation (EU) 2024/482
     Eucc,
+    /// "2026 Minimum Elements for a Software Bill of Materials (SBOM)" v2.1
+    /// (CISA/NSA/FBI et al., July 29, 2026)
+    CisaMinimum2026,
+    /// PCI DSS v4.0.1 (PCI Security Standards Council) — Requirement 6.3.2
+    /// and companion controls
+    PciDss4,
+    /// CISA "Framing Software Component Transparency", Third Edition (2024)
+    CisaFsct,
     /// Other / unrecognised standard
     Other,
 }
@@ -331,6 +385,9 @@ impl StandardKind {
             Self::EuAiAct => "EU AI Act",
             Self::BsiSbomForAi => "BSI/G7 AI-SBOM",
             Self::Eucc => "EUCC",
+            Self::CisaMinimum2026 => "CISA 2026",
+            Self::PciDss4 => "PCI DSS v4",
+            Self::CisaFsct => "CISA FSCT 3e",
             Self::Other => "Other",
         }
     }
@@ -429,6 +486,19 @@ impl StandardKind {
             // EUCC Implementing Regulation (EU) 2024/482 — EUR-Lex ELI is the
             // canonical home.
             Self::Eucc => "https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng",
+            // 2026 Minimum Elements for an SBOM — CISA's resource page is the
+            // stable handle (the PDF path under /sites/default/files churns).
+            Self::CisaMinimum2026 => {
+                "https://www.cisa.gov/resources-tools/resources/2026-minimum-elements-software-bill-materials-sbom"
+            }
+            // PCI DSS v4.0.1 — the standard PDF is license-gated behind a
+            // click-through; the document library is the stable public home.
+            Self::PciDss4 => "https://www.pcisecuritystandards.org/document_library/",
+            // CISA Framing Software Component Transparency (3rd ed., 2024) —
+            // resource page rather than the version-pinned PDF path.
+            Self::CisaFsct => {
+                "https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024"
+            }
             Self::Other => return None,
         };
         Some(url.to_string())
@@ -679,6 +749,9 @@ pub const fn generic_rule_id_for_level(level: ComplianceLevel) -> &'static str {
         ComplianceLevel::EuccSubstantial => "SBOM-EUCC-GENERAL",
         ComplianceLevel::EuAiAct => "SBOM-AIACT-GENERAL",
         ComplianceLevel::BsiSbomForAi => "SBOM-BSIAI-GENERAL",
+        ComplianceLevel::Cisa2026 => "SBOM-CISA2026-GENERAL",
+        ComplianceLevel::PciDss632 => "SBOM-PCI-GENERAL",
+        ComplianceLevel::Fsct => "SBOM-FSCT-GENERAL",
     }
 }
 
@@ -1136,7 +1209,7 @@ impl ComplianceChecker {
 
     /// Check an SBOM for compliance.
     ///
-    /// Selects the [`StandardChecker`] for the configured level (the seven
+    /// Selects the [`StandardChecker`] for the configured level (the
     /// dedicated profiles get their own checker; the rest take the generic
     /// path), runs it, then back-fills harmonised-standard references from the
     /// rule registry and attaches the CRA Annex VIII conformity summary when a
@@ -4683,12 +4756,15 @@ mod tests {
 
     #[test]
     fn bsi_tr_03183_2_in_compliance_level_all() {
-        assert_eq!(ComplianceLevel::all().len(), 16);
+        assert_eq!(ComplianceLevel::all().len(), 19);
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::BsiTr03183_2));
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::CraOssSteward));
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::EuccSubstantial));
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::EuAiAct));
         assert!(ComplianceLevel::all().contains(&ComplianceLevel::BsiSbomForAi));
+        assert!(ComplianceLevel::all().contains(&ComplianceLevel::Cisa2026));
+        assert!(ComplianceLevel::all().contains(&ComplianceLevel::PciDss632));
+        assert!(ComplianceLevel::all().contains(&ComplianceLevel::Fsct));
     }
 
     #[test]

@@ -970,6 +970,21 @@ fn rule_help_uri(rule_id: &str) -> Option<&'static str> {
         Some(
             "https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements",
         )
+    } else if rule_id.starts_with("SBOM-CISA2026-") {
+        // 2026 Minimum Elements for an SBOM — CISA's resource page is the
+        // stable handle (the PDF path under /sites/default/files churns).
+        Some(
+            "https://www.cisa.gov/resources-tools/resources/2026-minimum-elements-software-bill-materials-sbom",
+        )
+    } else if rule_id.starts_with("SBOM-PCI-") {
+        // PCI DSS v4.0.1 is license-gated; the document library is the
+        // stable public home.
+        Some("https://www.pcisecuritystandards.org/document_library/")
+    } else if rule_id.starts_with("SBOM-FSCT-") {
+        // CISA Framing Software Component Transparency (3rd ed., 2024).
+        Some(
+            "https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024",
+        )
     } else {
         None
     }
@@ -994,6 +1009,9 @@ fn sarif_standard_label(kind: crate::quality::StandardKind) -> &'static str {
         StandardKind::EuAiAct => "EU-AI-Act",
         StandardKind::BsiSbomForAi => "BSI-G7-SBOM-for-AI",
         StandardKind::Eucc => "EUCC",
+        StandardKind::CisaMinimum2026 => "CISA-2026",
+        StandardKind::PciDss4 => "PCI-DSS-v4",
+        StandardKind::CisaFsct => "CISA-FSCT-3e",
         StandardKind::Other => "Other",
     }
 }
@@ -1129,6 +1147,9 @@ fn get_sarif_rules_for_standard(level: ComplianceLevel) -> Vec<SarifRule> {
         ComplianceLevel::Eo14028 => get_sarif_eo14028_rules(),
         ComplianceLevel::Cnsa2 => get_sarif_cnsa2_rules(),
         ComplianceLevel::NistPqc => get_sarif_pqc_rules(),
+        ComplianceLevel::Cisa2026 => get_sarif_cisa2026_rules(),
+        ComplianceLevel::PciDss632 => get_sarif_pcidss_rules(),
+        ComplianceLevel::Fsct => get_sarif_fsct_rules(),
         // The remaining levels (Minimum/Standard/Comprehensive, the CRA
         // profiles, BSI TR-03183-2, EUCC, and the AI readiness profiles)
         // genuinely emit rules from the shared CRA-family catalogue.
@@ -1158,6 +1179,18 @@ fn get_sarif_cnsa2_rules() -> Vec<SarifRule> {
 
 fn get_sarif_pqc_rules() -> Vec<SarifRule> {
     registry_sarif_rules(crate::quality::PQC_SARIF_RULE_IDS)
+}
+
+fn get_sarif_cisa2026_rules() -> Vec<SarifRule> {
+    registry_sarif_rules(crate::quality::CISA2026_SARIF_RULE_IDS)
+}
+
+fn get_sarif_pcidss_rules() -> Vec<SarifRule> {
+    registry_sarif_rules(crate::quality::PCIDSS_SARIF_RULE_IDS)
+}
+
+fn get_sarif_fsct_rules() -> Vec<SarifRule> {
+    registry_sarif_rules(crate::quality::FSCT_SARIF_RULE_IDS)
 }
 
 fn get_sarif_compliance_rules() -> Vec<SarifRule> {

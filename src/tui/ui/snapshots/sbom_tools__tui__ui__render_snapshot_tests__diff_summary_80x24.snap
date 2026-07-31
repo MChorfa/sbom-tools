@@ -8,21 +8,21 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌ Summary ─────────────────────────────────────────────────────────────────────┐
-│ High Risk   Score: 53.5  │  15 changes, 3 major bumps                        │
-│Comp +4 -4 ~5 │ Deps +0 -0 │ Vuln ▲0 ▼0 │ Lic +0 -0                           │
+│ Critical Risk   Similarity: 58%  │  18 changes (13c, 2d, 3m), 3 major        │
+│Comp +4 -4 ~5 │ Deps +1 -1 │ Vuln ▲2 ▼3 │ Lic +0 -0                           │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ All Changes (15) — MAJOR:3 minor:1 patch:1 +4 -4 meta:2 [1-11/16 j/k] ───────┐
+┌ All Changes (18) — MAJOR:3 minor:1 patch:1 +4 -4 meta:3 [Ln 1-11/19 j/k] ────┐
 │── Metadata Changes ──                                                        ▲
 │ ~ META  created: 2024-01-15T10:00:00+00:00 → 2024-06-15T10:00:00+00:00       █
+│ ~ META  doc_version: 1 → 2                                                   █
 │ ~ META  primary_component_version: 1.0.0 → 2.0.0                             █
-│ ~ acme-webapp 1.0.0 → 2.0.0 MAJOR                                            █
-│ ~ axios 0.21.1 → 1.4.0 MAJOR                                                 █
+│ ⚠ CRITICAL  CVE-2023-45857 in axios - Axios SSRF vulnerability allowing ser..║
+│ ~ acme-webapp 1.0.0 → 2.0.0 MAJOR                                            ║
+│ ~ axios 0.21.1 → 1.4.0 MAJOR                                                 ║
 │ ~ react 17.0.1 → 18.2.0 MAJOR                                                ║
+│ ⚠ HIGH  CVE-2023-26136 in express                                            ║
 │ - jquery 3.5.1                                                               ║
-│ - moment 2.29.1                                                              ║
-│ - request 2.88.2                                                             ║
-│ - underscore 1.12.0                                                          ║
-│ + dayjs 1.11.7                                                               ▼
+│ - moment 2.29.1                                                              ▼
 └──────────────────────────────────────────────────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
            j/k scroll │  Tab switch  / search  e export  ? help  q quit

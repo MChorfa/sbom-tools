@@ -1,5 +1,6 @@
 ---
 source: tests/golden_reports.rs
+assertion_line: 210
 expression: output
 ---
 {
@@ -21,13 +22,13 @@ expression: output
     }
   },
   "summary": {
-    "total_changes": 15,
+    "total_changes": 18,
     "components_added": 4,
     "components_removed": 4,
     "components_modified": 5,
-    "vulnerabilities_introduced": 0,
-    "vulnerabilities_resolved": 0,
-    "semantic_score": 53.48837209302326
+    "vulnerabilities_introduced": 2,
+    "vulnerabilities_resolved": 3,
+    "semantic_score": 57.74193548387097
   },
   "components_added": [
     {
@@ -36,6 +37,7 @@ expression: output
       "old_version": null,
       "new_version": "1.11.7",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Added",
       "field_changes": [],
       "cost": 10
@@ -46,6 +48,7 @@ expression: output
       "old_version": null,
       "new_version": "5.0.4",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Added",
       "field_changes": [],
       "cost": 10
@@ -56,6 +59,7 @@ expression: output
       "old_version": null,
       "new_version": "3.21.4",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Added",
       "field_changes": [],
       "cost": 10
@@ -66,6 +70,7 @@ expression: output
       "old_version": null,
       "new_version": "4.15.0",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Added",
       "field_changes": [],
       "cost": 10
@@ -78,6 +83,7 @@ expression: output
       "old_version": "3.5.1",
       "new_version": null,
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Removed",
       "field_changes": [],
       "cost": 10
@@ -88,6 +94,7 @@ expression: output
       "old_version": "2.29.1",
       "new_version": null,
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Removed",
       "field_changes": [],
       "cost": 10
@@ -98,6 +105,7 @@ expression: output
       "old_version": "2.88.2",
       "new_version": null,
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Removed",
       "field_changes": [],
       "cost": 10
@@ -108,6 +116,7 @@ expression: output
       "old_version": "1.12.0",
       "new_version": null,
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Removed",
       "field_changes": [],
       "cost": 10
@@ -120,6 +129,7 @@ expression: output
       "old_version": "1.0.0",
       "new_version": "2.0.0",
       "ecosystem": null,
+      "component_type": "application",
       "change_type": "Modified",
       "field_changes": [
         {
@@ -149,6 +159,7 @@ expression: output
       "old_version": "0.21.1",
       "new_version": "1.4.0",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Modified",
       "field_changes": [
         {
@@ -178,6 +189,7 @@ expression: output
       "old_version": "4.17.1",
       "new_version": "4.18.2",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Modified",
       "field_changes": [
         {
@@ -207,6 +219,7 @@ expression: output
       "old_version": "4.17.20",
       "new_version": "4.17.21",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Modified",
       "field_changes": [
         {
@@ -236,6 +249,7 @@ expression: output
       "old_version": "17.0.1",
       "new_version": "18.2.0",
       "ecosystem": "npm",
+      "component_type": "library",
       "change_type": "Modified",
       "field_changes": [
         {
@@ -261,12 +275,119 @@ expression: output
     }
   ],
   "vulnerabilities_introduced": [
+    {
+      "id": "CVE-2023-45857",
+      "source": "NVD",
+      "severity": "Critical",
+      "cvss_score": 9.8,
+      "component_id": "pkg:npm/axios@1.4.0",
+      "component_name": "axios",
+      "version": "[VERSION]",
+      "cwes": [],
+      "description": "Axios SSRF vulnerability allowing server-side request forgery",
+      "remediation": null,
+      "is_kev": false,
+      "is_ransomware": false,
+      "component_depth": 0,
+      "published_date": null,
+      "kev_due_date": null,
+      "days_since_published": null,
+      "days_until_due": null
+    },
+    {
+      "id": "CVE-2023-26136",
+      "source": "NVD",
+      "severity": "High",
+      "cvss_score": 8.1,
+      "component_id": "pkg:npm/express@4.18.2",
+      "component_name": "express",
+      "version": "[VERSION]",
+      "cwes": [],
+      "description": "Tough-cookie prototype pollution",
+      "remediation": null,
+      "is_kev": false,
+      "is_ransomware": false,
+      "component_depth": 0,
+      "published_date": null,
+      "kev_due_date": null,
+      "days_since_published": null,
+      "days_until_due": null
+    }
   ],
   "vulnerabilities_resolved": [
+    {
+      "id": "CVE-2020-28469",
+      "source": "NVD",
+      "severity": "High",
+      "cvss_score": 7.5,
+      "component_id": "pkg:npm/express@4.17.1",
+      "component_name": "express",
+      "version": "[VERSION]",
+      "cwes": [],
+      "description": "Glob-parent ReDoS vulnerability",
+      "remediation": null,
+      "is_kev": false,
+      "is_ransomware": false,
+      "component_depth": 0,
+      "published_date": null,
+      "kev_due_date": null,
+      "days_since_published": null,
+      "days_until_due": null
+    },
+    {
+      "id": "CVE-2021-23337",
+      "source": "NVD",
+      "severity": "High",
+      "cvss_score": 7.2,
+      "component_id": "pkg:npm/lodash@4.17.20",
+      "component_name": "lodash",
+      "version": "[VERSION]",
+      "cwes": [],
+      "description": "Lodash prototype pollution vulnerability",
+      "remediation": null,
+      "is_kev": false,
+      "is_ransomware": false,
+      "component_depth": 1,
+      "published_date": null,
+      "kev_due_date": null,
+      "days_since_published": null,
+      "days_until_due": null
+    },
+    {
+      "id": "CVE-2022-24999",
+      "source": "NVD",
+      "severity": "Medium",
+      "cvss_score": 5.3,
+      "component_id": "pkg:npm/express@4.17.1",
+      "component_name": "express",
+      "version": "[VERSION]",
+      "cwes": [],
+      "description": "Express.js query parsing vulnerability",
+      "remediation": null,
+      "is_kev": false,
+      "is_ransomware": false,
+      "component_depth": 0,
+      "published_date": null,
+      "kev_due_date": null,
+      "days_since_published": null,
+      "days_until_due": null
+    }
   ],
   "dependencies_added": [
+    {
+      "from": "pkg:npm/prisma@4.15.0",
+      "to": "pkg:npm/typescript@5.0.4",
+      "relationship": "depends-on",
+      "change_type": "Added"
+    }
   ],
   "dependencies_removed": [
+    {
+      "from": "pkg:npm/request@2.88.2",
+      "to": "pkg:npm/lodash@4.17.20",
+      "relationship": "depends-on",
+      "change_type": "Removed"
+    }
   ],
   "licenses_new": [
   ],

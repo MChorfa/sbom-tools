@@ -4,11 +4,11 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License Details ───────────────────────────────────┐
-✓ 8  ⚠ 0  ? 1  │  3 total                                         │MIT                                                 │
+components: ✓ 8  ⚠ 0  ? 1  │  3 licenses                          │MIT                                                 │
                                                                   │                                                    │
 ┌ Licenses (3) ──────────────────────────────────────────────────┐│Category: Permissive                                │
 │  License                         Count          Category       ││Risk: Low                                           │
@@ -23,7 +23,7 @@ Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License 
 │                                                                ││✗ Copyleft/Share-alike                              │
 │                                                                ││                                                    │
 │                                                                ││Compatibility:                                      │
-│                                                                ││✓ No conflicts with 1 other licenses                │
+│                                                                ││✓ No conflicts with 1 other license                 │
 │                                                                ││                                                    │
 │                                                                ││Components: 6                                       │
 │                                                                ││[Enter] jump to component  [K/J] scroll             │
@@ -40,5 +40,5 @@ Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License 
 │                                                                ││                                                    │
 │                                                                ││                                                    │
 └────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3
-         g group  Enter inspect  K/J scroll │  Tab switch  / search  e export  ? help  q quit [y] copy Apache-2.0
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2
+            g group  Enter inspect  K/J scroll │  Tab switch  / search  e export  ? help  q quit [y] copy MIT

@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 
-« [2] Algorithms  │ [3] Certs  │ [4] Keys  │ [5] Protocols  │ [6] Quality  │ [7] PQC Compliance  │ [8] Source
+« [2] Algorithms  │ [3] Certificates  │ [4] Keys  │ [5] Protocols  │ [6] Quality  │ [7] PQC Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ Key Material (2) ──────────────────────────────────┐┌ Key Detail ────────────────────────────────────────────────────┐
@@ -14,11 +14,11 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │                                                    ││State:  active                                                  │
 │                                                    ││Size:   1568 bits                                               │
 │                                                    ││Format: DER                                                     │
-│                                                    ││Algo:   crypto/algorithm/ml-kem-1024                            │
+│                                                    ││Algo:   ML-KEM-1024                                             │
 │                                                    ││                                                                │
 │                                                    ││-- Secured By --                                                │
 │                                                    ││Mechanism: HSM                                                  │
-│                                                    ││Algorithm: crypto/algorithm/aes-256-gcm                         │
+│                                                    ││Algorithm: AES-256-GCM                                          │
 │                                                    ││                                                                │
 │                                                    ││Created:   2026-01-01                                           │
 │                                                    ││Activated: 2026-01-01                                           │
@@ -39,6 +39,6 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │                                                    ││                                                                │
 │                                                    ││                                                                │
 │                                                    ││                                                                │
-└ ● active  ! compromised  ○ deactivated  X destroyed┘└────────────────────────────────────────────────────────────────┘
+└ ● active  ! compromised  ○ deact  X destr ─────────┘└────────────────────────────────────────────────────────────────┘
  Algo: 11 │ Certs: 1 │ Keys: 2 │ Quantum: 82%
-              ↑↓ select  Enter detail │  Tab switch  / search  e export  ? help  q quit [y] copy ML-KEM-1024
+               ↑↓ select │  Tab switch  / search  e export  ? help  q quit [y] copy ml-kem-1024-public-key

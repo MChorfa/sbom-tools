@@ -8,21 +8,21 @@ expression: text
 ┌ Components Evolution (1-3/3) [m: metric, +/-: zoom, h/l: scroll] ────────────┐
 │▃▃▃9▃▃▃┌ Version Diff: v1 ↔ v3 ───────────────────────────────────────┐       │
 └───────│Comparing: v1 → v3  (chronological order)                     │───────┘
-┌ Versio│                                                              │, Enter┐
-│#    Ve│Components: 9 vs 3                                            │atus   │
+┌ Versio│                                                              │───────┐
+│#   Ver│Components: 9 vs 3                                            │atus   │
 │       │                                                              │       │
-│1.   v1│Changes:                                                      │ded    │
-│2.   v2│+ Added: 3                                                    │ded    │
-│3.   v3│- Removed: 9                                                  │ded    │
-│       │~ Modified: 0                                                 │ded    │
-│       │                                                              │ded    │
-│       │Added Components:                                             │ded    │
-│       │+ bsi-aibom-complete-app                                      │ded    │
-│       │+ sentiment-classifier                                        │ded    │
-│       │+ product-reviews-1M                                          │ded    │
-│       │                                                              │ded    │
-│       └──────────────────────────────────────────────────────────────┘ded    │
+│1.  v1 │Changes:                                                      │ded    │
+│2.  v2 │  + Added: 3                                                  │ded    │
+│3.  v3 │  - Removed: 9                                                │ded    │
+│       │  ~ Modified: 0                                               │moved  │
+│       │                                                              │moved  │
+│       │Added Components:                                             │moved  │
+│       │  + bsi-aibom-complete-app 1.0.0                              │moved  │
+│       │… 10 more lines — enlarge the terminal to see them            │moved  │
+│       │                                                              │moved  │
+│       │←/→: change compare version  Esc: close                       │moved  │
+│       └──────────────────────────────────────────────────────────────┘moved  │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Added: 7  Removed: 13  │  …  Tab panel  / search  V views  K keys  q quit     │
+│Changes across versions: +7 -13  │  ←/→ compare version  Esc close            │
 └──────────────────────────────────────────────────────────────────────────────┘

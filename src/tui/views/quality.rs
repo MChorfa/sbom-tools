@@ -223,55 +223,44 @@ fn render_category_bar_chart(
         return;
     };
 
-    let weights = shared::get_profile_weights(new.profile);
-
-    // Build categories (skip N/A with 0 weight)
-    let mut categories: Vec<(&str, f32, f32, f32)> = vec![
-        (
-            "Completeness",
-            old.completeness_score,
-            new.completeness_score,
-            weights.0,
-        ),
-        (
-            "Identifiers",
-            old.identifier_score,
-            new.identifier_score,
-            weights.1,
-        ),
-        ("Licenses", old.license_score, new.license_score, weights.2),
-        (
-            "Dependencies",
-            old.dependency_score,
-            new.dependency_score,
-            weights.4,
-        ),
-        (
-            "Integrity",
-            old.integrity_score,
-            new.integrity_score,
-            weights.5,
-        ),
-        (
-            "Provenance",
-            old.provenance_score,
-            new.provenance_score,
-            weights.6,
-        ),
-    ];
-    // Only add optional categories if they have data
-    if let (Some(ov), Some(nv)) = (old.vulnerability_score, new.vulnerability_score) {
-        categories.push(("VulnDocs", ov, nv, weights.3));
-    }
-    if let (Some(ol), Some(nl)) = (old.lifecycle_score, new.lifecycle_score) {
-        categories.push(("Lifecycle", ol, nl, weights.7));
+    // Profile-aware rows: CBOM diffs get the crypto category labels/scores
+    // the engine's weighted sum actually used (the generic labels paired
+    // with reinterpreted weight slots made the panel arithmetic impossible),
+    // and AI-readiness diffs get the per-check comparison instead of six
+    // vacuous "0% ×0%" rows.
+    let new_rows = shared::profile_category_rows(new);
+    let old_rows = shared::profile_category_rows(old);
+    let mut categories: Vec<(String, f32, f32, f32)> = new_rows
+        .into_iter()
+        .map(|(name, new_s, weight)| {
+            let old_s = old_rows
+                .iter()
+                .find(|(n, _, _)| *n == name)
+                .map_or(0.0, |(_, s, _)| *s);
+            (name, old_s, new_s, weight)
+        })
+        .collect();
+    if categories.is_empty() {
+        let paragraph = Paragraph::new(" No per-category data for this scoring profile").block(
+            Block::default()
+                .title(" Category Scores ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(scheme.border)),
+        );
+        frame.render_widget(paragraph, area);
+        return;
     }
 
     // Sort by new score DESCENDING (best at top, worst at bottom)
     categories.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
+    let title = if new.profile == crate::quality::ScoringProfile::AiReadiness {
+        " AI Readiness Checks (pass/fail) "
+    } else {
+        " Category Scores "
+    };
     let block = Block::default()
-        .title(" Category Scores ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.border));
     let inner = block.inner(area);
@@ -307,8 +296,29 @@ fn render_category_bar_chart(
         buf.set_string(x + col_wt, inner.y, " Weight", bold_muted);
     }
 
-    // Data rows
-    for (i, (name, old_s, new_s, weight)) in categories.iter().enumerate() {
+    // Data rows. At reduced heights, sacrifice the last visible row for an
+    // explicit "+N more" marker instead of silently hiding categories.
+    let visible_rows = inner.height.saturating_sub(1) as usize;
+    let shown = if categories.len() > visible_rows {
+        visible_rows.saturating_sub(1)
+    } else {
+        categories.len()
+    };
+    if shown < categories.len() {
+        let y = inner.y + 1 + shown as u16;
+        if y < inner.y + inner.height {
+            buf.set_string(
+                x + col_name,
+                y,
+                format!(
+                    "\u{2026} +{} more (enlarge terminal)",
+                    categories.len() - shown
+                ),
+                Style::default().fg(scheme.warning),
+            );
+        }
+    }
+    for (i, (name, old_s, new_s, weight)) in categories.iter().take(shown).enumerate() {
         let y = inner.y + 1 + i as u16;
         if y >= inner.y + inner.height {
             break;
@@ -325,11 +335,12 @@ fn render_category_bar_chart(
             scheme.text
         };
 
-        // Category name
+        // Category name (ellipsis-truncated: AI check names are prose-length
+        // and would otherwise run under the bar column)
         buf.set_string(
             x + col_name,
             y,
-            format!("{name:<14}"),
+            format!("{:<14}", widgets::truncate_str(name, 14)),
             Style::default().fg(name_color).bold(),
         );
 
@@ -777,7 +788,11 @@ fn render_combined_recommendations(
                 lines.push(Line::from(vec![
                     Span::styled(" Regressed: ", Style::default().fg(scheme.text_muted)),
                     Span::styled(
-                        qd.regressions.join(", "),
+                        qd.regressions
+                            .iter()
+                            .map(|c| shared::category_display_name(c))
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         Style::default().fg(scheme.removed).bold(),
                     ),
                 ]));
@@ -786,7 +801,11 @@ fn render_combined_recommendations(
                 lines.push(Line::from(vec![
                     Span::styled(" Improved: ", Style::default().fg(scheme.text_muted)),
                     Span::styled(
-                        qd.improvements.join(", "),
+                        qd.improvements
+                            .iter()
+                            .map(|c| shared::category_display_name(c))
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         Style::default().fg(scheme.added).bold(),
                     ),
                 ]));
@@ -824,6 +843,19 @@ fn render_combined_recommendations(
             Style::default().fg(scheme.primary).bold(),
         ));
 
+        // "(+Npts)" estimates come from the STANDARD category weights; for
+        // profiles whose overall score does not consume that category (CBOM
+        // crypto slots, AI readiness checks) the promised points are
+        // fictional, so suppress them there.
+        let profile = report.profile;
+        let pts_are_real = |cat: crate::quality::RecommendationCategory| -> bool {
+            use crate::quality::{RecommendationCategory as RC, ScoringProfile as SP};
+            match profile {
+                SP::AiReadiness => false,
+                SP::Cbom => matches!(cat, RC::Licenses | RC::Provenance),
+                _ => true,
+            }
+        };
         for (i, rec) in report.recommendations.iter().take(4).enumerate() {
             let is_selected = i == ctx.quality.selected_recommendation;
             let prefix = if is_selected { "▶ " } else { "  " };
@@ -833,22 +865,25 @@ fn render_combined_recommendations(
                 Style::default().fg(scheme.text)
             };
 
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(prefix, Style::default().fg(scheme.primary)),
                 Span::styled(
                     format!("[P{}] ", rec.priority),
                     shared::priority_style(rec.priority),
                 ),
                 Span::styled(&rec.message, style),
-                Span::styled(
+            ];
+            if pts_are_real(rec.category) {
+                spans.push(Span::styled(
                     format!(" (+{:.0}pts)", rec.impact),
                     Style::default().fg(scheme.success),
-                ),
-                Span::styled(
-                    format!("  {}", rec.category.name()),
-                    Style::default().fg(scheme.accent),
-                ),
-            ]));
+                ));
+            }
+            spans.push(Span::styled(
+                format!("  {}", rec.category.name()),
+                Style::default().fg(scheme.accent),
+            ));
+            lines.push(Line::from(spans));
         }
     }
 

@@ -3,6 +3,12 @@
 //! Supports `CycloneDX` versions 1.4, 1.5, 1.6, and 1.7 in JSON and XML formats.
 
 use crate::model::{
+    AffirmationSignatory, AttestationAssertion, AttestationDeclarations, AttestationMapEntry,
+    CdxaRef, CdxaResolution, Contact, DeclarationTarget, DeclarationTargets, DeclaredAffirmation,
+    DeclaredAssessor, DeclaredClaim, DeclaredEvidence, DefinedRequirement, DefinedStandard,
+    EvidenceDataItem, SignaturePresence,
+};
+use crate::model::{
     AlgorithmProperties, CanonicalId, CertificateProperties, CertificationLevel, CipherSuite,
     CompletenessDeclaration, Component, ComponentType, Creator, CreatorType, CryptoAssetType,
     CryptoFunction, CryptoMaterialState, CryptoMaterialType, CryptoMode, CryptoPadding,
@@ -101,6 +107,10 @@ impl CycloneDxParser {
             compositions: None,
             signature: None,
             citations: None,
+            // CDXA declarations exist in the 1.6 XML schema too, but their
+            // XML normalization is deferred: phase 1 ingests JSON only.
+            declarations: None,
+            definitions: None,
         };
 
         Ok(self.convert_to_normalized(bom))
@@ -113,6 +123,12 @@ impl CycloneDxParser {
 
         // Convert components
         let mut id_map: HashMap<String, CanonicalId> = HashMap::new();
+        // Secondary ref-resolution keys: real-world emitters frequently use a
+        // component's purl (not its bom-ref) in dependencies[].ref/dependsOn
+        // and vulnerabilities[].affects[].ref — especially when components
+        // declare no bom-ref at all. Collected during the component walk and
+        // merged into `id_map` afterwards so genuine bom-refs always win.
+        let mut purl_fallbacks: Vec<(String, CanonicalId)> = Vec::new();
 
         // Nested assemblies of the primary component join the component
         // walk below, parented to it.
@@ -134,6 +150,9 @@ impl CycloneDxParser {
                 .unwrap_or_else(|| comp.name.clone());
             let canonical_id = comp.canonical_id.clone();
             id_map.insert(bom_ref, canonical_id.clone());
+            if let Some(purl) = &meta_comp.purl {
+                purl_fallbacks.push((purl.clone(), canonical_id.clone()));
+            }
             primary_id = Some(canonical_id.clone());
 
             // Set as primary component
@@ -225,6 +244,9 @@ impl CycloneDxParser {
             }
             let canonical_id = comp.canonical_id.clone();
             id_map.insert(bom_ref, canonical_id.clone());
+            if let Some(purl) = &cdx_comp.purl {
+                purl_fallbacks.push((purl.clone(), canonical_id.clone()));
+            }
             if let Some(parent_id) = parent {
                 sbom.add_edge(DependencyEdge::new(
                     parent_id,
@@ -265,6 +287,36 @@ impl CycloneDxParser {
             for child in children.into_iter().flatten().rev() {
                 svc_stack.push((Some(canonical_id.clone()), child));
             }
+        }
+
+        // Merge purl fallback keys now that every bom-ref is registered:
+        // a purl key must never shadow a real bom-ref, and the earliest
+        // component wins among purl duplicates (deterministic walk order).
+        for (purl, cid) in purl_fallbacks {
+            id_map.entry(purl).or_insert(cid);
+        }
+
+        // CDXA (CycloneDX 1.6+): normalize `declarations` and
+        // `definitions.standards` into the typed attestation-evidence model.
+        // Gated on specVersion >= 1.6 — CDXA was introduced in 1.6 and
+        // parsers must not probe for it on earlier documents (its absence is
+        // never a violation; attestation evidence is additive). Runs after
+        // the purl-fallback merge so claim targets resolve through the same
+        // id_map as dependencies and vulnerability affects. Documents
+        // without these sections keep `extensions.declarations = None`, so
+        // their serialized output is unchanged.
+        if cdx_supports_cdxa(&cdx.spec_version)
+            && (cdx.declarations.is_some()
+                || cdx
+                    .definitions
+                    .as_ref()
+                    .is_some_and(|d| d.standards.as_ref().is_some_and(|s| !s.is_empty())))
+        {
+            sbom.extensions.declarations = Some(convert_declarations(
+                cdx.declarations.take(),
+                cdx.definitions.take(),
+                &id_map,
+            ));
         }
 
         // Convert dependencies, attaching scope from component metadata
@@ -494,6 +546,9 @@ impl CycloneDxParser {
             format_version: cdx.spec_version.clone(),
             spec_version: cdx.spec_version.clone(),
             serial_number: cdx.serial_number.clone(),
+            // Top-level `version`: the BOM revision counter (defaults to 1 in
+            // the spec, but absence is preserved as None rather than invented).
+            doc_version: cdx.version,
             created,
             creators,
             name: cdx
@@ -1618,6 +1673,11 @@ struct CycloneDxBom {
     signature: Option<CdxSignature>,
     /// Data provenance citations (1.7+)
     citations: Option<Vec<CdxCitation>>,
+    /// CDXA attestation declarations (1.6+)
+    declarations: Option<CdxDeclarations>,
+    /// Reusable definitions (1.6+) — carries the `standards` encodings that
+    /// CDXA attestations map their requirements into
+    definitions: Option<CdxDefinitions>,
 }
 
 /// CycloneDX composition entry (1.4+)
@@ -1661,6 +1721,501 @@ struct CdxCitation {
 struct CdxDistributionConstraints {
     /// Traffic Light Protocol classification
     tlp: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// CDXA (CycloneDX 1.6 Attestations): raw `declarations` / `definitions`
+// deserialization structures, coded from the frozen 1.6 schema tag
+// (https://raw.githubusercontent.com/CycloneDX/specification/1.6/schema/bom-1.6.schema.json).
+//
+// Verification scope (phase 1): STRUCTURAL ONLY. JSF signature slots are
+// captured as raw JSON so their presence and named signatory (algorithm,
+// keyId, signer count) can be recorded — the signatures are NEVER
+// cryptographically verified, and the normalized model caps the reported
+// evidence level at `EvidenceLevel::SignaturePresent`.
+// ---------------------------------------------------------------------------
+
+/// Root `declarations` object (1.6+, `additionalProperties: false` in the
+/// schema; unknown keys are ignored here per the parser's tolerance
+/// conventions).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxDeclarations {
+    assessors: Option<Vec<CdxAssessor>>,
+    attestations: Option<Vec<CdxAttestation>>,
+    claims: Option<Vec<CdxClaim>>,
+    evidence: Option<Vec<CdxDeclEvidence>>,
+    targets: Option<CdxDeclTargets>,
+    affirmation: Option<CdxAffirmation>,
+    signature: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxAssessor {
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    third_party: Option<bool>,
+    organization: Option<CdxOrgEntity>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxAttestation {
+    summary: Option<String>,
+    /// refLink into `declarations.assessors[]`
+    assessor: Option<String>,
+    map: Option<Vec<CdxAttestationMap>>,
+    signature: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxAttestationMap {
+    /// refLink to the requirement being attested to
+    requirement: Option<String>,
+    claims: Option<Vec<String>>,
+    counter_claims: Option<Vec<String>>,
+    conformance: Option<CdxConformance>,
+    confidence: Option<CdxConfidence>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxConformance {
+    /// `0..=1`, where 1 is 100% conformance
+    score: Option<f64>,
+    rationale: Option<String>,
+    mitigation_strategies: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxConfidence {
+    /// `0..=1`, where 1 is 100% confidence
+    score: Option<f64>,
+    rationale: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxClaim {
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    /// refLink to the claim's target
+    target: Option<String>,
+    predicate: Option<String>,
+    mitigation_strategies: Option<Vec<String>>,
+    reasoning: Option<String>,
+    evidence: Option<Vec<String>>,
+    counter_evidence: Option<Vec<String>>,
+    external_references: Option<Vec<CdxExternalReference>>,
+    signature: Option<serde_json::Value>,
+}
+
+/// `declarations.evidence[]` entry (distinct from component `evidence`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxDeclEvidence {
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    property_name: Option<String>,
+    description: Option<String>,
+    data: Option<Vec<CdxEvidenceData>>,
+    created: Option<String>,
+    expires: Option<String>,
+    author: Option<CdxOrgContact>,
+    reviewer: Option<CdxOrgContact>,
+    signature: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxEvidenceData {
+    name: Option<String>,
+    contents: Option<CdxEvidenceDataContents>,
+    classification: Option<String>,
+    sensitive_data: Option<Vec<String>>,
+    /// dataGovernance block — normalized to a presence bit in phase 1
+    governance: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxEvidenceDataContents {
+    /// Inline attachment — normalized to a presence bit in phase 1
+    attachment: Option<serde_json::Value>,
+    url: Option<String>,
+}
+
+/// Tolerant identity subset of the `declarations.targets` entries. The
+/// schema types them as full organizationalEntity / component / service
+/// objects; only bom-ref (for claim-target resolution) and name are
+/// normalized — the entries are claim targets, not BOM inventory.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxTargetEntry {
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxDeclTargets {
+    organizations: Option<Vec<CdxTargetEntry>>,
+    components: Option<Vec<CdxTargetEntry>>,
+    services: Option<Vec<CdxTargetEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxAffirmation {
+    statement: Option<String>,
+    signatories: Option<Vec<CdxSignatory>>,
+    signature: Option<serde_json::Value>,
+}
+
+/// Affirmation signatory. The schema's `oneOf` (signature XOR
+/// externalReference+organization) is not enforced at parse time — the
+/// normalized model records completeness via
+/// `AffirmationSignatory::has_complete_identity` so rules can flag it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxSignatory {
+    name: Option<String>,
+    role: Option<String>,
+    signature: Option<serde_json::Value>,
+    organization: Option<CdxOrgEntity>,
+    external_reference: Option<CdxExternalReference>,
+}
+
+/// Root `definitions` object (1.6+).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxDefinitions {
+    standards: Option<Vec<CdxStandard>>,
+}
+
+/// `definitions.standards[]` entry. `levels` and requirement `properties`
+/// are not normalized in phase 1.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxStandard {
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    name: Option<String>,
+    version: Option<String>,
+    description: Option<String>,
+    owner: Option<String>,
+    requirements: Option<Vec<CdxRequirementDef>>,
+    signature: Option<serde_json::Value>,
+}
+
+/// `definitions.standards[].requirements[]` entry. Per the frozen 1.6
+/// schema: `text` is a plain string and `descriptions` is a PLURAL array of
+/// supplemental strings.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxRequirementDef {
+    #[serde(alias = "bom-ref")]
+    bom_ref: Option<String>,
+    identifier: Option<String>,
+    title: Option<String>,
+    text: Option<String>,
+    descriptions: Option<Vec<String>>,
+    open_cre: Option<Vec<String>>,
+    parent: Option<String>,
+    external_references: Option<Vec<CdxExternalReference>>,
+}
+
+/// True when `specVersion` is 1.6 or later. CDXA `declarations` and
+/// `definitions` were introduced in CycloneDX 1.6; parsers must not probe
+/// for them on earlier documents (their absence is never a violation —
+/// attestation evidence is additive, not a new mandatory element).
+fn cdx_supports_cdxa(spec_version: &str) -> bool {
+    let mut parts = spec_version.trim().split('.');
+    let major: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    major > 1 || (major == 1 && minor >= 6)
+}
+
+/// Normalize CDXA `declarations` + `definitions.standards` into the typed
+/// attestation-evidence model.
+///
+/// Reference resolution reuses the id_map pattern established for
+/// `dependencies[].ref`/`dependsOn` and `vulnerabilities[].affects[].ref`:
+/// declarations-local bom-refs (claims, evidence, assessors, standards and
+/// their requirements, `declarations.targets` entries) are indexed first,
+/// then the BOM inventory `id_map` — whose purl-fallback keys already let a
+/// claim target name a component by purl, with genuine bom-refs always
+/// winning. Unresolvable refs are kept and marked `Dangling` (the parser's
+/// tolerance convention — never an error); the model fails closed on them
+/// at query time.
+///
+/// STRUCTURAL ONLY: JSF signatures become `SignaturePresence` records
+/// (algorithm, keyId, signer count) with no cryptographic verification.
+fn convert_declarations(
+    declarations: Option<CdxDeclarations>,
+    definitions: Option<CdxDefinitions>,
+    id_map: &HashMap<String, CanonicalId>,
+) -> AttestationDeclarations {
+    let decls = declarations.unwrap_or_default();
+    let standards_src: Vec<CdxStandard> = definitions.and_then(|d| d.standards).unwrap_or_default();
+
+    // Declarations-local ref universe, by kind.
+    let mut claim_refs: HashSet<&str> = HashSet::new();
+    for claim in decls.claims.iter().flatten() {
+        if let Some(r) = claim.bom_ref.as_deref() {
+            claim_refs.insert(r);
+        }
+    }
+    let mut evidence_refs: HashSet<&str> = HashSet::new();
+    for evidence in decls.evidence.iter().flatten() {
+        if let Some(r) = evidence.bom_ref.as_deref() {
+            evidence_refs.insert(r);
+        }
+    }
+    let mut assessor_refs: HashSet<&str> = HashSet::new();
+    for assessor in decls.assessors.iter().flatten() {
+        if let Some(r) = assessor.bom_ref.as_deref() {
+            assessor_refs.insert(r);
+        }
+    }
+    let mut requirement_refs: HashSet<&str> = HashSet::new();
+    for standard in &standards_src {
+        if let Some(r) = standard.bom_ref.as_deref() {
+            requirement_refs.insert(r);
+        }
+        for requirement in standard.requirements.iter().flatten() {
+            if let Some(r) = requirement.bom_ref.as_deref() {
+                requirement_refs.insert(r);
+            }
+        }
+    }
+    let mut target_refs: HashSet<&str> = HashSet::new();
+    if let Some(targets) = &decls.targets {
+        for entry in [
+            &targets.organizations,
+            &targets.components,
+            &targets.services,
+        ]
+        .into_iter()
+        .flat_map(|list| list.iter().flatten())
+        {
+            if let Some(r) = entry.bom_ref.as_deref() {
+                target_refs.insert(r);
+            }
+        }
+    }
+
+    let resolve = |raw: &str| -> CdxaResolution {
+        if claim_refs.contains(raw) {
+            CdxaResolution::Claim
+        } else if evidence_refs.contains(raw) {
+            CdxaResolution::Evidence
+        } else if assessor_refs.contains(raw) {
+            CdxaResolution::Assessor
+        } else if requirement_refs.contains(raw) {
+            CdxaResolution::Requirement
+        } else if target_refs.contains(raw) {
+            CdxaResolution::Target
+        } else if let Some(id) = id_map.get(raw) {
+            CdxaResolution::Inventory(id.clone())
+        } else {
+            CdxaResolution::Dangling
+        }
+    };
+    let mk_ref = |raw: &String| CdxaRef {
+        raw: raw.clone(),
+        resolution: resolve(raw),
+    };
+    let mk_refs = |list: &Option<Vec<String>>| -> Vec<CdxaRef> {
+        list.iter().flatten().map(mk_ref).collect()
+    };
+
+    let parse_dt = |value: &Option<String>| -> Option<DateTime<Utc>> {
+        value
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+    };
+    // Structural signature-presence only — never verifies the JSF signature.
+    let jsf = |value: &Option<serde_json::Value>| -> Option<SignaturePresence> {
+        value.as_ref().and_then(SignaturePresence::from_jsf)
+    };
+    let contact = |c: &CdxOrgContact| Contact {
+        name: c.name.clone(),
+        email: c.email.clone(),
+        phone: c.phone.clone(),
+    };
+    let org = |o: &CdxOrgEntity| {
+        let mut organization = Organization::new(o.name.clone().unwrap_or_default());
+        organization.urls = o.url.clone().unwrap_or_default();
+        organization.contacts = o.contact.iter().flatten().map(contact).collect();
+        organization
+    };
+    let ext_ref = |r: &CdxExternalReference| ExternalReference {
+        ref_type: map_cdx_external_ref_type(&r.ref_type),
+        url: r.url.clone(),
+        comment: r.comment.clone(),
+        hashes: Vec::new(),
+    };
+    let ext_refs = |list: &Option<Vec<CdxExternalReference>>| -> Vec<ExternalReference> {
+        list.iter().flatten().map(ext_ref).collect()
+    };
+    let target_entry = |t: &CdxTargetEntry| DeclarationTarget {
+        bom_ref: t.bom_ref.clone(),
+        name: t.name.clone(),
+    };
+
+    let assessors = decls
+        .assessors
+        .iter()
+        .flatten()
+        .map(|a| DeclaredAssessor {
+            bom_ref: a.bom_ref.clone(),
+            third_party: a.third_party,
+            organization: a.organization.as_ref().map(org),
+        })
+        .collect();
+
+    let attestations = decls
+        .attestations
+        .iter()
+        .flatten()
+        .map(|a| AttestationAssertion {
+            summary: a.summary.clone(),
+            assessor: a.assessor.as_ref().map(mk_ref),
+            map: a
+                .map
+                .iter()
+                .flatten()
+                .map(|m| AttestationMapEntry {
+                    requirement: m.requirement.as_ref().map(mk_ref),
+                    claims: mk_refs(&m.claims),
+                    counter_claims: mk_refs(&m.counter_claims),
+                    conformance_score: m.conformance.as_ref().and_then(|c| c.score),
+                    conformance_rationale: m.conformance.as_ref().and_then(|c| c.rationale.clone()),
+                    conformance_mitigation_strategies: mk_refs(
+                        &m.conformance
+                            .as_ref()
+                            .and_then(|c| c.mitigation_strategies.clone()),
+                    ),
+                    confidence_score: m.confidence.as_ref().and_then(|c| c.score),
+                    confidence_rationale: m.confidence.as_ref().and_then(|c| c.rationale.clone()),
+                })
+                .collect(),
+            signature: jsf(&a.signature),
+        })
+        .collect();
+
+    let claims = decls
+        .claims
+        .iter()
+        .flatten()
+        .map(|c| DeclaredClaim {
+            bom_ref: c.bom_ref.clone(),
+            target: c.target.as_ref().map(mk_ref),
+            predicate: c.predicate.clone(),
+            mitigation_strategies: mk_refs(&c.mitigation_strategies),
+            reasoning: c.reasoning.clone(),
+            evidence: mk_refs(&c.evidence),
+            counter_evidence: mk_refs(&c.counter_evidence),
+            external_refs: ext_refs(&c.external_references),
+            signature: jsf(&c.signature),
+        })
+        .collect();
+
+    let evidence = decls
+        .evidence
+        .iter()
+        .flatten()
+        .map(|e| DeclaredEvidence {
+            bom_ref: e.bom_ref.clone(),
+            property_name: e.property_name.clone(),
+            description: e.description.clone(),
+            data: e
+                .data
+                .iter()
+                .flatten()
+                .map(|d| EvidenceDataItem {
+                    name: d.name.clone(),
+                    url: d.contents.as_ref().and_then(|c| c.url.clone()),
+                    has_attachment: d.contents.as_ref().is_some_and(|c| c.attachment.is_some()),
+                    classification: d.classification.clone(),
+                    sensitive_data: d.sensitive_data.clone().unwrap_or_default(),
+                    has_governance: d.governance.is_some(),
+                })
+                .collect(),
+            created: parse_dt(&e.created),
+            expires: parse_dt(&e.expires),
+            author: e.author.as_ref().map(contact),
+            reviewer: e.reviewer.as_ref().map(contact),
+            signature: jsf(&e.signature),
+        })
+        .collect();
+
+    let targets = decls.targets.as_ref().map(|t| DeclarationTargets {
+        organizations: t.organizations.iter().flatten().map(target_entry).collect(),
+        components: t.components.iter().flatten().map(target_entry).collect(),
+        services: t.services.iter().flatten().map(target_entry).collect(),
+    });
+
+    let affirmation = decls.affirmation.as_ref().map(|a| DeclaredAffirmation {
+        statement: a.statement.clone(),
+        signatories: a
+            .signatories
+            .iter()
+            .flatten()
+            .map(|s| AffirmationSignatory {
+                name: s.name.clone(),
+                role: s.role.clone(),
+                signature: jsf(&s.signature),
+                organization: s.organization.as_ref().map(org),
+                external_reference: s.external_reference.as_ref().map(ext_ref),
+            })
+            .collect(),
+        signature: jsf(&a.signature),
+    });
+
+    let standards = standards_src
+        .iter()
+        .map(|s| DefinedStandard {
+            bom_ref: s.bom_ref.clone(),
+            name: s.name.clone(),
+            version: s.version.clone(),
+            description: s.description.clone(),
+            owner: s.owner.clone(),
+            requirements: s
+                .requirements
+                .iter()
+                .flatten()
+                .map(|r| DefinedRequirement {
+                    bom_ref: r.bom_ref.clone(),
+                    identifier: r.identifier.clone(),
+                    title: r.title.clone(),
+                    text: r.text.clone(),
+                    descriptions: r.descriptions.clone().unwrap_or_default(),
+                    open_cre: r.open_cre.clone().unwrap_or_default(),
+                    parent: r.parent.clone(),
+                    external_refs: ext_refs(&r.external_references),
+                })
+                .collect(),
+            signature: jsf(&s.signature),
+        })
+        .collect();
+
+    AttestationDeclarations {
+        assessors,
+        attestations,
+        claims,
+        evidence,
+        targets,
+        affirmation,
+        signature: jsf(&decls.signature),
+        standards,
+    }
 }
 
 /// CycloneDX JSF signature (JSON Signature Format)
@@ -3122,6 +3677,19 @@ mod tests {
             .expect("XML should parse")
     }
 
+    /// CDXA was introduced in 1.6: the gate must reject every earlier or
+    /// unparseable specVersion and accept 1.6+.
+    #[test]
+    fn cdxa_version_gate() {
+        assert!(!cdx_supports_cdxa("1.4"));
+        assert!(!cdx_supports_cdxa("1.5"));
+        assert!(cdx_supports_cdxa("1.6"));
+        assert!(cdx_supports_cdxa("1.7"));
+        assert!(cdx_supports_cdxa("2.0"));
+        assert!(!cdx_supports_cdxa(""));
+        assert!(!cdx_supports_cdxa("not-a-version"));
+    }
+
     fn component<'a>(sbom: &'a NormalizedSbom, name: &str) -> &'a Component {
         sbom.components
             .values()
@@ -3669,6 +4237,67 @@ mod tests {
         CycloneDxParser::new()
             .parse_str(json)
             .expect("JSON should parse")
+    }
+
+    /// Real-world emitters (and the repo's own demo fixtures) reference
+    /// components by purl in `dependencies[].ref`/`dependsOn` when components
+    /// declare no bom-ref. Those edges must resolve, not silently vanish.
+    #[test]
+    fn dependencies_resolve_by_purl_when_no_bom_ref() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[
+                    {"type":"library","name":"express","version":"4.18.2","purl":"pkg:npm/express@4.18.2"},
+                    {"type":"library","name":"body-parser","version":"1.20.1","purl":"pkg:npm/body-parser@1.20.1"}],
+                "dependencies":[{"ref":"pkg:npm/express@4.18.2","dependsOn":["pkg:npm/body-parser@1.20.1"]}]}"#,
+        );
+        let from = component(&sbom, "express").canonical_id.clone();
+        let to = component(&sbom, "body-parser").canonical_id.clone();
+        assert!(
+            sbom.edges.iter().any(|e| e.from == from && e.to == to),
+            "purl-shaped dependency refs must resolve to components: {:?}",
+            sbom.edges
+        );
+    }
+
+    /// `vulnerabilities[].affects[].ref` given as a purl must attach to the
+    /// matching component — a dropped critical CVE is a silent lie.
+    #[test]
+    fn vulnerability_affects_resolve_by_purl() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[{"type":"library","name":"axios","version":"1.4.0","purl":"pkg:npm/axios@1.4.0"}],
+                "vulnerabilities":[{"id":"CVE-2023-45857","affects":[{"ref":"pkg:npm/axios@1.4.0"}],
+                    "ratings":[{"method":"CVSSv31","score":9.8,"severity":"critical"}]}]}"#,
+        );
+        let comp = component(&sbom, "axios");
+        assert_eq!(comp.vulnerabilities.len(), 1);
+        assert_eq!(comp.vulnerabilities[0].id, "CVE-2023-45857");
+    }
+
+    /// A purl fallback key must never shadow a genuine bom-ref: when one
+    /// component's bom-ref equals another component's purl, the bom-ref wins.
+    #[test]
+    fn bom_ref_wins_over_colliding_purl() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.5",
+                "components":[
+                    {"type":"library","bom-ref":"pkg:npm/shared@1.0","name":"left","version":"1.0","purl":"pkg:npm/left@1.0"},
+                    {"type":"library","name":"impostor","version":"9.9","purl":"pkg:npm/shared@1.0"},
+                    {"type":"library","bom-ref":"t","name":"target","version":"1.0"}],
+                "dependencies":[{"ref":"pkg:npm/shared@1.0","dependsOn":["t"]}]}"#,
+        );
+        let left = component(&sbom, "left").canonical_id.clone();
+        let impostor = component(&sbom, "impostor").canonical_id.clone();
+        let target = component(&sbom, "target").canonical_id.clone();
+        assert!(
+            sbom.edges.iter().any(|e| e.from == left && e.to == target),
+            "edge must anchor at the bom-ref owner"
+        );
+        assert!(
+            !sbom.edges.iter().any(|e| e.from == impostor),
+            "purl fallback must not shadow a real bom-ref"
+        );
     }
 
     #[test]

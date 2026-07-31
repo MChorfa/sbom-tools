@@ -1,6 +1,8 @@
 //! EUCC Substantial (Reg. (EU) 2024/482) reference-only profile checks.
 
+use super::ssdf::{cdxa_note, standard_references_eucc};
 use super::*;
+use crate::model::AttestationRuleFamily;
 
 impl ComplianceChecker {
     // ════════════════════════════════════════════════════════════════════
@@ -126,22 +128,42 @@ impl ComplianceChecker {
 
         // 5. EUCC Certification external ref (recommended) — checked
         // structurally; satisfied when any component carries a Certification
-        // ref whose URL contains "eucc" or "common-criteria".
-        let eucc_ref_present = sbom.components.values().any(|c| {
-            c.external_refs.iter().any(|r| {
-                let url = r.url.to_lowercase();
-                matches!(
-                    r.ref_type,
-                    crate::model::ExternalRefType::Certification
-                        | crate::model::ExternalRefType::Attestation
-                ) && (url.contains("eucc") || url.contains("common-criteria"))
-            })
-        });
+        // ref whose URL contains "eucc" or "common-criteria", OR when the
+        // document carries fresh, fully-resolved CDXA attestation evidence
+        // for a CRA-classified standard naming EUCC / Common Criteria
+        // (Structural/SignaturePresent level; the URL-substring scan remains
+        // the SelfDeclared fallback).
+        let ctx = ComplianceContext::new(self, sbom);
+        let cdxa_eucc_attested = ctx
+            .evidence_for(AttestationRuleFamily::Cra)
+            .iter()
+            .any(|s| standard_references_eucc(s.standard));
+        let eucc_ref_present = cdxa_eucc_attested
+            || sbom.components.values().any(|c| {
+                c.external_refs.iter().any(|r| {
+                    let url = r.url.to_lowercase();
+                    matches!(
+                        r.ref_type,
+                        crate::model::ExternalRefType::Certification
+                            | crate::model::ExternalRefType::Attestation
+                    ) && (url.contains("eucc") || url.contains("common-criteria"))
+                })
+            });
         if !eucc_ref_present {
+            let mut message = "[EUCC] No Certification/Attestation external reference points at an EUCC URL (recommended)".to_string();
+            if let Some(note) = cdxa_note(
+                ctx.attestation_declarations(),
+                AttestationRuleFamily::Cra,
+                &|s, _| standard_references_eucc(s),
+                self.now(),
+                "an EUCC / Common Criteria certification",
+            ) {
+                message.push_str(&note);
+            }
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[EUCC] No Certification/Attestation external reference points at an EUCC URL (recommended)".to_string(),
+                message,
                 element: None,
                 requirement: "EUCC Substantial: Certification external reference".to_string(),
                 rule_id: "SBOM-EUCC-CERTREF",

@@ -2,6 +2,26 @@
 
 use crate::tui::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::cell::Cell;
+
+thread_local! {
+    /// Pair-diff modal scroll offset, in body lines. Thread-local rather than
+    /// a `MatrixState` field: only the render side knows the modal's real
+    /// line count, so it clamps and writes the offset back at draw time
+    /// (events and render share the TUI thread).
+    static PAIR_DIFF_SCROLL: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Current pair-diff modal scroll offset.
+pub(crate) fn pair_diff_scroll() -> usize {
+    PAIR_DIFF_SCROLL.with(Cell::get)
+}
+
+/// Store the pair-diff modal scroll offset (the render side calls this with
+/// the clamped value so the offset never drifts past the content).
+pub(crate) fn set_pair_diff_scroll(offset: usize) {
+    PAIR_DIFF_SCROLL.with(|c| c.set(offset));
+}
 
 pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
     // Handle search input mode
@@ -15,6 +35,15 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 app.tabs.matrix.close_pair_diff();
+                set_pair_diff_scroll(0);
+            }
+            // j/k scroll the modal body so entries beyond the visible window
+            // are reachable (#95); the render clamps against line count.
+            KeyCode::Down | KeyCode::Char('j') => {
+                set_pair_diff_scroll(pair_diff_scroll().saturating_add(1));
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                set_pair_diff_scroll(pair_diff_scroll().saturating_sub(1));
             }
             _ => {}
         }
@@ -168,12 +197,23 @@ pub(super) fn handle_matrix_keys(app: &mut App, key: KeyEvent) -> bool {
                 app.set_status_message("Cannot diff same SBOM".to_string());
             } else {
                 app.tabs.matrix.toggle_pair_diff();
+                // A fresh modal starts at the top.
+                set_pair_diff_scroll(0);
             }
         }
 
         // Export options
         KeyCode::Char('x') => {
             app.tabs.matrix.toggle_export_options();
+        }
+
+        // Matrix rows are SBOMs, not components — a component-shaped deep
+        // dive modal for an SBOM name would be nonsense. Explain instead of
+        // letting the global fallback open a hollow modal.
+        KeyCode::Char('D') => {
+            app.set_status_message(
+                "Deep dive applies to components — press Enter for pair diff".to_string(),
+            );
         }
 
         // Clustering details

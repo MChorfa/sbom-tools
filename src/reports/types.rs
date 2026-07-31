@@ -54,6 +54,11 @@ pub enum ReportFormat {
     /// Newline-delimited JSON (one record per line, streaming-friendly)
     #[serde(alias = "Ndjson")]
     Ndjson,
+    /// interlynk-io/sbomqs `score --json`-shaped quality scores (0-10),
+    /// recomputed per-feature for side-by-side comparison with sbomqs
+    /// output (`quality` command only)
+    #[serde(alias = "SbomqsJson")]
+    SbomqsJson,
 }
 
 impl std::fmt::Display for ReportFormat {
@@ -71,6 +76,7 @@ impl std::fmt::Display for ReportFormat {
             Self::Table => write!(f, "table"),
             Self::Csv => write!(f, "csv"),
             Self::Ndjson => write!(f, "ndjson"),
+            Self::SbomqsJson => write!(f, "sbomqs-json"),
         }
     }
 }
@@ -296,6 +302,8 @@ mod tests {
             ("SideBySide", ReportFormat::SideBySide),
             ("OscalJson", ReportFormat::OscalJson),
             ("Ndjson", ReportFormat::Ndjson),
+            ("sbomqs-json", ReportFormat::SbomqsJson),
+            ("SbomqsJson", ReportFormat::SbomqsJson),
         ] {
             let parsed: ReportFormat = serde_json::from_str(&format!("\"{raw}\""))
                 .unwrap_or_else(|e| panic!("'{raw}' must deserialize: {e}"));
@@ -320,6 +328,7 @@ mod tests {
             ReportFormat::Table,
             ReportFormat::Csv,
             ReportFormat::Ndjson,
+            ReportFormat::SbomqsJson,
         ] {
             let serialized = serde_json::to_string(&format).unwrap();
             assert_eq!(serialized, format!("\"{format}\""));

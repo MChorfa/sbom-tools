@@ -1939,13 +1939,15 @@ impl CryptographyMetrics {
     }
 
     /// Percentage of algorithms that are quantum-safe (0-100).
-    /// Returns 100 if no algorithms are present.
+    /// Returns `None` when no algorithms are present: a 0/0 readiness is
+    /// absence of evidence, not a perfect score, and every renderer shows
+    /// it as "n/a" rather than a vacuous 100.
     #[must_use]
-    pub fn quantum_readiness_score(&self) -> f32 {
+    pub fn quantum_readiness_score(&self) -> Option<f32> {
         if self.algorithms_count == 0 {
-            return 100.0;
+            return None;
         }
-        (self.quantum_safe_count as f32 / self.algorithms_count as f32) * 100.0
+        Some((self.quantum_safe_count as f32 / self.algorithms_count as f32) * 100.0)
     }
 
     /// Quality score (0-100) based on crypto hygiene. Returns `None` if no crypto data.
@@ -2085,10 +2087,13 @@ impl CryptographyMetrics {
     }
 
     /// PQC readiness: quantum migration preparedness.
+    /// Returns `None` when no algorithms are present — there is nothing to
+    /// be ready about, so the scorer redistributes this category's weight
+    /// (mirroring `vulnerability_score`) instead of granting a vacuous 100.
     #[must_use]
-    pub fn pqc_readiness_score(&self) -> f32 {
+    pub fn pqc_readiness_score(&self) -> Option<f32> {
         if self.algorithms_count == 0 {
-            return 100.0;
+            return None;
         }
         let mut score = 0.0_f32;
         let qs_pct = self.quantum_safe_count as f32 / self.algorithms_count as f32;
@@ -2101,7 +2106,7 @@ impl CryptographyMetrics {
         } else {
             score += (25.0 - self.weak_algorithm_count as f32 * 5.0).max(0.0);
         }
-        score.clamp(0.0, 100.0)
+        Some(score.clamp(0.0, 100.0))
     }
 
     /// Percentage of algorithms that are quantum-safe (for overview display).
@@ -2117,6 +2122,25 @@ impl CryptographyMetrics {
     #[must_use]
     pub const fn cbom_category_labels() -> [&'static str; 8] {
         ["Crpt", "OIDs", "Algo", "Refs", "Life", "PQC", "Prov", "Lic"]
+    }
+
+    /// Full category names for CBOM quality scoring, in the same slot order
+    /// as [`Self::cbom_category_labels`] (the short chart labels) and as the
+    /// scorer's CBOM slot substitution (`scorer.rs`). These are the names
+    /// serialized into diff `QualityDelta` categories for CBOM pairs and the
+    /// names the TUI's CBOM category rows display — one category, one name.
+    #[must_use]
+    pub const fn cbom_category_names() -> [&'static str; 8] {
+        [
+            "Crypto Compl",
+            "OIDs",
+            "Algo Strength",
+            "Crypto Refs",
+            "Crypto Life",
+            "PQC Readiness",
+            "Provenance",
+            "Licenses",
+        ]
     }
 }
 
@@ -3155,7 +3179,7 @@ mod tests {
             ..Default::default()
         };
         // (5/5)*60 + 15 + 25 = 100
-        let score = m.pqc_readiness_score();
+        let score = m.pqc_readiness_score().expect("algorithms present");
         assert!(
             (score - 100.0).abs() < 0.1,
             "all safe + hybrid → 100, got {score}"
@@ -3172,11 +3196,25 @@ mod tests {
             ..Default::default()
         };
         // 0*60 + 0 + 25 = 25
-        let score = m.pqc_readiness_score();
+        let score = m.pqc_readiness_score().expect("algorithms present");
         assert!(
             (score - 25.0).abs() < 0.1,
             "no safe, no weak → 25, got {score}"
         );
+    }
+
+    /// Zero algorithms is absence of evidence, not readiness: both quantum
+    /// readiness scores must be `None` so renderers show "n/a" and the CBOM
+    /// scorer redistributes the PQC weight instead of granting a free 100.
+    #[test]
+    fn readiness_scores_none_with_zero_algorithms() {
+        let m = CryptographyMetrics {
+            algorithms_count: 0,
+            certificates_count: 2, // crypto data exists, just no algorithms
+            ..Default::default()
+        };
+        assert!(m.quantum_readiness_score().is_none());
+        assert!(m.pqc_readiness_score().is_none());
     }
 
     #[test]

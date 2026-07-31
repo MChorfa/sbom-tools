@@ -463,8 +463,28 @@ impl App {
                     return;
                 }
             }
-            _ => {
-                self.set_status_message("Export not supported for this mode");
+            AppMode::MultiDiff => {
+                if let Some(ref result) = self.data.multi_diff_result {
+                    super::export::export_multi_diff(
+                        format,
+                        result,
+                        self.export_template.as_deref(),
+                    )
+                } else {
+                    self.set_status_message("No multi-diff data to export");
+                    return;
+                }
+            }
+            AppMode::Timeline => {
+                if let Some(ref result) = self.data.timeline_result {
+                    super::export::export_timeline(format, result, self.export_template.as_deref())
+                } else {
+                    self.set_status_message("No timeline data to export");
+                    return;
+                }
+            }
+            AppMode::Matrix => {
+                self.export_matrix(format);
                 return;
             }
         };
@@ -733,6 +753,13 @@ impl App {
         // Re-run check with new policy if already checked
         if self.compliance_state.checked {
             self.run_compliance_check();
+        } else {
+            // Never cycle silently: the preset is only visible on the
+            // Summary policy widget, and a mute keypress reads as a no-op.
+            self.set_status_message(format!(
+                "Policy preset: {} — press P to check",
+                self.compliance_state.policy_preset.label()
+            ));
         }
     }
 

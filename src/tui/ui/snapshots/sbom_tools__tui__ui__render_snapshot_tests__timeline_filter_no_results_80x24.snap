@@ -9,11 +9,11 @@ expression: text
 │▃▃▃9▃▃▃ ▃▃▃9▃▃▃ ▁▁▁3▁▁▁                                                       │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Versions [g: jump, d: diff] ─┐┌──────────────────────────────────────────────┐
-│#    Version    Comp Chan CRA ││                                              │
+│#   Version  Comps Changes CRA││                                              │
 │                              ││                    (empty)                   │
-│1.   v1         9    init ✗   ││                                              │
-│2.   v2         9    +4 - ✗   ││               No results found               │
-│3.   v3         3    +3 - ✗   ││                                              │
+│1.  v1       9     initial ✗  ││                                              │
+│2.  v2       9     +4 -4   ✗  ││               No results found               │
+│3.  v3       3     +3 -9   ✗  ││                                              │
 │                              ││             Filter: Filter = All             │
 │                              ││                                              │
 │                              ││ Press [f] to change filter or [Esc] to clear │
@@ -24,5 +24,5 @@ expression: text
 │                              ││                                              │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Added: 7  Removed: 13  │  …  Tab panel  / search  V views  K keys  q quit     │
+│Changes across versions: +7 -13  │  …  / search  V views  K keys  q quit      │
 └──────────────────────────────────────────────────────────────────────────────┘

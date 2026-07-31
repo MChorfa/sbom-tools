@@ -166,7 +166,7 @@ fn triage_summary_line(cache: &VulnCache) -> Line<'static> {
             format!("\u{26a1} KEV {}", cache.kev_count),
             on(cache.kev_count, scheme.kev()),
         ),
-        Span::styled(" [k]", Style::default().fg(scheme.accent)),
+        Span::styled(" [K]", Style::default().fg(scheme.accent)),
         Span::styled(" \u{b7} ", Style::default().fg(scheme.muted)),
         Span::styled(
             format!("Fixable {}", cache.fixable_count),
@@ -221,6 +221,16 @@ fn render_stats_compact(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .as_ref()
         .map_or(0, |c| c.affected_component_count);
 
+    // Width-aware noun: at 80 cols the 35% card clipped " vulnerabilities"
+    // mid-word ("2 vulnerabiliti"); fall back to the short form that fits.
+    let inner_w = chunks[0].width.saturating_sub(2) as usize;
+    let full_needed = dominant_label.len() + 3 + total_str.len() + " vulnerabilities".len();
+    let vuln_noun = if full_needed > inner_w {
+        " vulns"
+    } else {
+        " vulnerabilities"
+    };
+
     let summary_lines = vec![
         Line::from(vec![
             Span::styled(
@@ -232,7 +242,7 @@ fn render_stats_compact(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ),
             Span::raw(" "),
             Span::styled(total_str, Style::default().fg(dominant_color).bold()),
-            Span::styled(" vulnerabilities", Style::default().fg(scheme.text)),
+            Span::styled(vuln_noun, Style::default().fg(scheme.text)),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -488,12 +498,14 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
         ));
     }
 
-    // Hint row: 78 cols measured, so nothing clips at the 80-col minimum.
-    // "[/] search" lives in the global footer already.
+    // Hint row: 76 cols measured, so nothing clips at the 80-col minimum.
+    // "[/] search" lives in the global footer already. Keys are honest:
+    // KEV is capital K (plain k navigates); group jump is }/{ (Tab switches
+    // app tabs everywhere).
     let hint_spans = vec![
         Span::styled("[f]", Style::default().fg(scheme.accent)),
         Span::raw(" filter "),
-        Span::styled("[k]", Style::default().fg(scheme.accent)),
+        Span::styled("[K]", Style::default().fg(scheme.accent)),
         Span::raw(" kev "),
         Span::styled("[s]", Style::default().fg(scheme.accent)),
         Span::raw(" sort "),
@@ -503,8 +515,8 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp) {
         Span::raw(" group "),
         Span::styled("[E/C]", Style::default().fg(scheme.accent)),
         Span::raw(" fold "),
-        Span::styled("[Tab]", Style::default().fg(scheme.accent)),
-        Span::raw(" next group"),
+        Span::styled("[}/{]", Style::default().fg(scheme.accent)),
+        Span::raw(" group jump"),
     ];
 
     let para = Paragraph::new(vec![Line::from(state_spans), Line::from(hint_spans)]);
@@ -523,16 +535,24 @@ fn render_vuln_content(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     // Handle empty states
     if cache.vulns.is_empty() {
         if total_unfiltered == 0 {
+            // Neutral, actionable wording: absence of vulnerability DATA is
+            // not proof of absence of vulnerabilities.
             crate::tui::widgets::render_empty_state_enhanced(
                 frame,
                 area,
-                "✓",
-                "No vulnerabilities detected",
-                Some("Great news! No known vulnerabilities were found"),
-                None,
+                "\u{2139}",
+                "No vulnerability data in this document",
+                Some("Absence of data is not proof of absence of vulnerabilities"),
+                Some("Run 'sbom-tools enrich' or embed VEX data to check"),
             );
         } else if app.vuln_state.filter_kev && app.vuln_state.filter_severity.is_none() {
-            crate::tui::widgets::render_no_results_state(frame, area, "KEV Filter", "KEV only");
+            crate::tui::widgets::render_no_results_state_with_hint(
+                frame,
+                area,
+                "KEV Filter",
+                "KEV only",
+                "[K] shows all vulnerabilities again",
+            );
         } else {
             let filter_label = app
                 .vuln_state
@@ -1385,8 +1405,13 @@ fn render_vuln_table_panel(
                     cells.push(Cell::from(""));
                 }
                 cells.push(Cell::from(Line::from(header_spans)));
-                let first_col = if show_severity_badge { 2 } else { 1 };
-                for _ in first_col..num_columns {
+                // Max CVSS lives in the CVSS column (empty on group rows) —
+                // packed into the ID cell it clipped "max:10.0" to "max:1".
+                if show_cvss {
+                    cells.push(group_max_cvss_cell(severity_stats, &scheme));
+                }
+                let filled = cells.len();
+                for _ in filled..num_columns {
                     cells.push(Cell::from(""));
                 }
                 Row::new(cells)
@@ -1425,22 +1450,18 @@ fn render_vuln_table_panel(
                     format!(" ({count})"),
                     Style::default().fg(scheme.text_muted),
                 ));
-                if let Some(max_cvss) = severity_stats.max_cvss {
-                    header_spans.push(Span::raw("  "));
-                    let cvss_color = cvss_score_color(max_cvss, &scheme);
-                    header_spans.push(Span::styled(
-                        format!("{max_cvss:.1}"),
-                        Style::default().fg(cvss_color).bold(),
-                    ));
-                }
 
                 let mut cells: Vec<Cell> = Vec::new();
                 if show_severity_badge {
                     cells.push(Cell::from(""));
                 }
                 cells.push(Cell::from(Line::from(header_spans)));
-                let first_col = if show_severity_badge { 2 } else { 1 };
-                for _ in first_col..num_columns {
+                // Max CVSS in the CVSS column, never clipped inside the ID cell.
+                if show_cvss {
+                    cells.push(group_max_cvss_cell(severity_stats, &scheme));
+                }
+                let filled = cells.len();
+                for _ in filled..num_columns {
                     cells.push(Cell::from(""));
                 }
                 Row::new(cells)
@@ -1595,18 +1616,17 @@ fn render_vuln_table_panel(
                 }
 
                 if show_fix_version {
-                    // Merged Fix→Version column for grouped mode
+                    // Merged fix column for grouped mode. When no fix exists,
+                    // show an explicit em-dash — the old fallback printed the
+                    // AFFECTED version under the "Fix" header, contradicting
+                    // "Fixable 0" on the same screen.
                     let cell = if let Some(ref fix_ver) = v.fixed_version {
                         Cell::from(Span::styled(
                             format!("→{}", truncate_str(fix_ver, 12)),
                             Style::default().fg(scheme.success),
                         ))
                     } else {
-                        let ver_str = v.affected_versions.first().map_or("·", |v| v.as_str());
-                        Cell::from(Span::styled(
-                            truncate_str(ver_str, 14),
-                            Style::default().fg(scheme.muted),
-                        ))
+                        Cell::from(Span::styled("\u{2014}", Style::default().fg(scheme.muted)))
                     };
                     cells.push(cell);
                 }
@@ -1775,6 +1795,10 @@ fn render_vuln_table_panel(
 /// #2: Format severity mini-distribution as colored spans for group headers.
 /// Returns spans like: "2 crit" (red) " 5 high" (orange) " 10 unk" (gray).
 /// Returns empty when all vulns share the same severity (the count in parens suffices).
+///
+/// The group's max CVSS is intentionally NOT part of these spans: it renders
+/// in the table's CVSS column (see [`group_max_cvss_cell`]) where it can
+/// never be clipped mid-digit ("max:10.0" once truncated to "max:1").
 fn format_severity_mini_spans<'a>(
     stats: &GroupSeverityStats,
     scheme: &crate::tui::theme::ColorScheme,
@@ -1791,15 +1815,7 @@ fn format_severity_mini_spans<'a>(
     let distinct = items.iter().filter(|(_, c, _)| *c > 0).count();
     // If only 1 bucket, the suffix is redundant — the (count) already says it all
     if distinct <= 1 {
-        // Still show max CVSS if available
-        let mut spans = Vec::new();
-        if let Some(cvss) = stats.max_cvss {
-            spans.push(Span::styled(
-                format!("max:{cvss:.1}"),
-                Style::default().fg(cvss_score_color(cvss, scheme)),
-            ));
-        }
-        return spans;
+        return Vec::new();
     }
 
     let mut spans = Vec::new();
@@ -1814,16 +1830,25 @@ fn format_severity_mini_spans<'a>(
             ));
         }
     }
-    if let Some(cvss) = stats.max_cvss {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(Span::styled(
-            format!("max:{cvss:.1}"),
-            Style::default().fg(cvss_score_color(cvss, scheme)),
-        ));
-    }
     spans
+}
+
+/// The CVSS-column cell for a group/sub-group header row: the group's max
+/// CVSS score, or an empty cell when no score exists. The column is 5 wide,
+/// so "10.0" always fits — unlike the old in-label "max:{score}" suffix.
+fn group_max_cvss_cell(
+    stats: &GroupSeverityStats,
+    scheme: &crate::tui::theme::ColorScheme,
+) -> Cell<'static> {
+    stats.max_cvss.map_or_else(
+        || Cell::from(""),
+        |cvss| {
+            Cell::from(Span::styled(
+                format!("{cvss:.1}"),
+                Style::default().fg(cvss_score_color(cvss, scheme)).bold(),
+            ))
+        },
+    )
 }
 
 /// Return the color of the highest-severity non-zero bucket in the stats.
@@ -1884,11 +1909,17 @@ fn render_group_detail_panel(
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Group name with count
+    // Group name with count ("vulnerability" pluralizes irregularly, so the
+    // naive shared count_noun helper can't be used here).
+    let count_label = if count == 1 {
+        "1 vulnerability".to_string()
+    } else {
+        format!("{count} vulnerabilities")
+    };
     lines.push(Line::from(vec![
         Span::styled(label, Style::default().fg(scheme.accent).bold()),
         Span::styled(
-            format!("  ({count} vulnerabilities)"),
+            format!("  ({count_label})"),
             Style::default().fg(scheme.text_muted),
         ),
     ]));

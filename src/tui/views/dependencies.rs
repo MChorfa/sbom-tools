@@ -627,19 +627,23 @@ fn render_dependency_tree(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     frame.render_widget(paragraph, tree_area);
 
-    // Scrollbar reflects actual position in full list
-    let mut scrollbar_state = ScrollbarState::default()
-        .content_length(total_nodes)
-        .position(scroll_offset);
+    // Scrollbar reflects actual position in full list. Only render it when
+    // the content actually overflows the viewport — a full-height thumb next
+    // to two banner lines implied a long hidden list that doesn't exist.
+    if total_nodes > viewport_height {
+        let mut scrollbar_state = ScrollbarState::default()
+            .content_length(total_nodes)
+            .position(scroll_offset);
 
-    frame.render_stateful_widget(
-        Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight)
-            .thumb_style(Style::default().fg(scheme.primary))
-            .track_style(Style::default().fg(scheme.border)),
-        chunks[1],
-        &mut scrollbar_state,
-    );
+        frame.render_stateful_widget(
+            Scrollbar::default()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .thumb_style(Style::default().fg(scheme.primary))
+                .track_style(Style::default().fg(scheme.border)),
+            chunks[1],
+            &mut scrollbar_state,
+        );
+    }
 
     // Render detail panel for selected node
     render_detail_panel(frame, detail_area, ctx);

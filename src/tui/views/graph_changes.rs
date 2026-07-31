@@ -18,6 +18,14 @@ pub fn render_graph_changes(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
         return;
     };
 
+    // graph_summary is set (together with graph_changes) only when the graph
+    // diff actually ran. An empty vec without it means "analysis not run",
+    // which must never render as a verified "graphs are identical".
+    if result.graph_summary.is_none() {
+        render_no_data(frame, area);
+        return;
+    }
+
     if result.graph_changes.is_empty() {
         render_no_changes(frame, area);
         return;

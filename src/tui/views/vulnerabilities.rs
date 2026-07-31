@@ -26,6 +26,14 @@ struct GroupedItemsCache {
     items: Vec<VulnRenderItem>,
 }
 
+/// Whether the document itself carries any vulnerability entries — the
+/// "scanned (or VEX-embedded) but clean" vs "no data at all" distinction.
+fn has_embedded_vulns(sbom: &crate::model::NormalizedSbom) -> bool {
+    sbom.components
+        .values()
+        .any(|c| !c.vulnerabilities.is_empty())
+}
+
 /// Structured vulnerability detail for the detail panel.
 struct VulnDetailInfo {
     status: String,
@@ -441,14 +449,35 @@ fn render_vuln_table(
     // Handle empty states
     if rows.is_empty() {
         if total_unfiltered == 0 {
-            widgets::render_empty_state_enhanced(
-                frame,
-                area,
-                "✓",
-                "No vulnerabilities detected",
-                Some("Great news! No known vulnerabilities were found"),
-                None,
-            );
+            // Only celebrate when a scan actually happened: an un-enriched
+            // diff has no vulnerability data at all, which is not the same
+            // claim as "scanned and clean".
+            #[cfg(feature = "enrichment")]
+            let is_enriched =
+                ctx.enrichment_stats_old.is_some() || ctx.enrichment_stats_new.is_some();
+            #[cfg(not(feature = "enrichment"))]
+            let is_enriched = false;
+            let embedded_vulns = ctx.old_sbom.is_some_and(has_embedded_vulns)
+                || ctx.new_sbom.is_some_and(has_embedded_vulns);
+            if is_enriched || embedded_vulns {
+                widgets::render_empty_state_enhanced(
+                    frame,
+                    area,
+                    "✓",
+                    "No vulnerability changes",
+                    Some("Scanned: no known vulnerabilities found"),
+                    None,
+                );
+            } else {
+                widgets::render_empty_state_enhanced(
+                    frame,
+                    area,
+                    "--",
+                    "No vulnerability data",
+                    Some("Neither document carries vulnerability data"),
+                    Some("Run 'sbom-tools enrich' or embed VEX"),
+                );
+            }
         } else {
             // Contextual empty state: show unfiltered counts
             let hint = if total_unfiltered > 0 {
@@ -1192,7 +1221,8 @@ fn render_empty_detail(frame: &mut Frame, area: Rect) {
         area,
         " Vulnerability Details ",
         "⚠",
-        "Select a vulnerability to view details",
+        // Short enough to survive the half-width pane at 80x24 unclipped.
+        "Select a vulnerability",
         &[("[↑↓]", " navigate  "), ("[Enter]", " expand")],
         false,
     );

@@ -720,15 +720,13 @@ impl ReportGenerator for MarkdownReporter {
                     }
                 }
 
-                // Quantum readiness summary
+                // Quantum readiness summary (`None` = no algorithms, row omitted)
                 let metrics = crate::quality::CryptographyMetrics::from_sbom(sbom);
-                if metrics.algorithms_count > 0 {
+                if let Some(readiness) = metrics.quantum_readiness_score() {
                     writeln!(
                         md,
                         "\n**Quantum Readiness:** {:.0}% ({} safe / {} total algorithms)",
-                        metrics.quantum_readiness_score(),
-                        metrics.quantum_safe_count,
-                        metrics.algorithms_count,
+                        readiness, metrics.quantum_safe_count, metrics.algorithms_count,
                     )?;
                 }
                 if !metrics.weak_algorithm_names.is_empty() {

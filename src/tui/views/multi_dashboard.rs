@@ -164,7 +164,7 @@ fn render_baseline_info(f: &mut Frame, area: Rect, result: &MultiDiffResult) {
             Span::raw("  "),
             Span::styled("Max Deviation: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
-                format!("{:.1}%", result.summary.max_deviation * 100.0),
+                format_deviation(result.summary.max_deviation),
                 Style::default().fg(if result.summary.max_deviation > 0.3 {
                     scheme.removed
                 } else if result.summary.max_deviation > 0.1 {
@@ -183,6 +183,20 @@ fn render_baseline_info(f: &mut Frame, area: Rect, result: &MultiDiffResult) {
 
     let paragraph = Paragraph::new(text).block(block);
     f.render_widget(paragraph, area);
+}
+
+/// Render a 0-1 deviation fraction as a display percentage.
+///
+/// `{:.1}%` everywhere except the exact-saturation case, where "100%" beats
+/// "100.0%": in the 20%-wide Targets column at 80 cols the longer form clips
+/// to a dangling "100.0" and loses its unit.
+pub(crate) fn format_deviation(deviation: f64) -> String {
+    let pct = deviation * 100.0;
+    if pct >= 99.95 {
+        "100%".to_string()
+    } else {
+        format!("{pct:.1}%")
+    }
 }
 
 /// Deviation severity band: (severity name for `severity_bg_tint`, magnitude
@@ -353,8 +367,8 @@ fn render_targets_list(
                 // the magnitude cue, never the digits (a clipped "100.0" that
                 // reads "10" inverts the apparent magnitude).
                 Cell::from(format!(
-                    "{:.1}% {}",
-                    deviation * 100.0,
+                    "{} {}",
+                    format_deviation(deviation),
                     deviation_band(deviation).1
                 ))
                 .style(style.fg(deviation_color)),
@@ -363,7 +377,10 @@ fn render_targets_list(
         })
         .collect();
 
-    let header = Row::new(vec!["Target", "Components", "Deviation", "Changes"])
+    // Abbreviated headers: the full words clip even in the 120-col layout's
+    // 40-cell pane ("Componen", "Deviatio"), and at 80 cols they clipped
+    // mid-word against the values.
+    let header = Row::new(vec!["Target", "Comps", "Dev %", "Chg"])
         .style(
             Style::default()
                 .fg(scheme.primary)
@@ -460,7 +477,29 @@ fn render_comparison_details(
             Span::styled("~ Modified: ", Style::default().fg(scheme.modified)),
             Span::raw(summary.components_modified.to_string()),
         ]),
-        Line::from(""),
+        // Reconcile the Targets table's "Chg" column with the component
+        // breakdown above: total_changes also counts dependency/graph/
+        // metadata changes that no dashboard panel itemizes. (Kept compact —
+        // the panel has exactly 7 interior rows at 120x40.)
+        Line::from(vec![
+            Span::styled("Total Changes: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                summary.total_changes.to_string(),
+                Style::default().fg(scheme.primary),
+            ),
+            Span::styled(
+                format!(
+                    "  (comps {}, deps {}, graph {}, meta {})",
+                    summary.components_added
+                        + summary.components_removed
+                        + summary.components_modified,
+                    summary.dependencies_added + summary.dependencies_removed,
+                    summary.graph_changes_count,
+                    summary.metadata_changes_count,
+                ),
+                Style::default().fg(scheme.text_muted),
+            ),
+        ]),
         Line::from(vec![
             Span::styled("Vulnerabilities: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
@@ -474,10 +513,13 @@ fn render_comparison_details(
             ),
         ]),
         Line::from(""),
+        // Same metric, same name, same unit as the Matrix mode's
+        // "Similarity: NN.N%" (it was previously the unitless
+        // "Semantic Score: NN.N").
         Line::from(vec![
-            Span::styled("Semantic Score: ", Style::default().fg(scheme.text_muted)),
+            Span::styled("Similarity: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
-                format!("{:.1}", comp.diff.semantic_score),
+                format!("{:.1}%", comp.diff.semantic_score),
                 Style::default().fg(scheme.primary),
             ),
         ]),
@@ -508,8 +550,8 @@ fn render_comparison_details(
     let gauge = Gauge::default()
         .block(Block::default().title(" Deviation ").borders(Borders::ALL))
         .gauge_style(Style::default().fg(gauge_color))
-        .percent((deviation * 100.0).min(100.0) as u16)
-        .label(format!("{:.1}%", deviation * 100.0));
+        .percent((deviation * 100.0).clamp(0.0, 100.0) as u16)
+        .label(format_deviation(deviation));
 
     f.render_widget(gauge, gauge_area[1]);
 }
@@ -622,7 +664,7 @@ fn render_status_bar(
     f: &mut Frame,
     area: Rect,
     result: &MultiDiffResult,
-    _state: &MultiDiffState,
+    state: &MultiDiffState,
     status: Option<&str>,
 ) {
     let scheme = colors();
@@ -649,7 +691,20 @@ fn render_status_bar(
         ),
         Span::raw("  \u{2502}  "),
     ];
-    crate::tui::views::matrix_status_tail(&mut spans, area, status, "multi");
+    // An open modal swallows every key, so the mode hints would all be false
+    // advertising; show the modal's own keys instead (#198).
+    let modal_hints: Option<&[(&str, &str)]> = if state.show_detail_modal {
+        Some(&[("Esc", "close")])
+    } else if state.show_variable_drill_down {
+        Some(&[("j/k", "select"), ("Esc", "close")])
+    } else {
+        None
+    };
+    if let Some(hints) = modal_hints {
+        super::matrix::extend_with_modal_hints(&mut spans, hints);
+    } else {
+        crate::tui::views::matrix_status_tail(&mut spans, area, status, "multi");
+    }
 
     let block = Block::default().borders(Borders::ALL);
     let paragraph = Paragraph::new(Line::from(spans)).block(block);
@@ -822,7 +877,7 @@ fn render_detail_modal(
         Line::from(vec![
             Span::styled("Deviation: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
-                format!("{:.1}%", deviation * 100.0),
+                format_deviation(deviation),
                 Style::default().fg(if deviation > 0.3 {
                     scheme.removed
                 } else {
@@ -830,9 +885,9 @@ fn render_detail_modal(
                 }),
             ),
             Span::raw("  "),
-            Span::styled("Semantic Score: ", Style::default().fg(scheme.text_muted)),
+            Span::styled("Similarity: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
-                format!("{:.1}", comp.diff.semantic_score),
+                format!("{:.1}%", comp.diff.semantic_score),
                 Style::default().fg(scheme.primary),
             ),
         ]),
@@ -911,7 +966,7 @@ fn render_detail_modal(
         .title(format!(" {} Details ", comp.target.name))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     f.render_widget(paragraph, modal_area);
@@ -943,17 +998,9 @@ fn render_variable_drill_down(
         return;
     };
 
+    // The component name is already the modal's block title; repeating it as
+    // the first body line just costs a row.
     let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Component: ", Style::default().fg(scheme.text_muted)),
-            Span::styled(
-                &vc.name,
-                Style::default()
-                    .fg(scheme.primary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(""),
         Line::from(vec![
             Span::styled("Security Impact: ", Style::default().fg(scheme.text_muted)),
             Span::styled(
@@ -995,19 +1042,56 @@ fn render_variable_drill_down(
         Style::default().fg(scheme.text_muted),
     )]));
 
-    // Show which targets have which versions (sample)
-    for (_i, comp) in result.comparisons.iter().enumerate().take(10) {
-        // Check if this target has the component - use ID-based lookup
-        let has_component = comp.diff.components.added.iter().any(|c| c.id == vc.id)
-            || comp.diff.components.removed.iter().any(|c| c.id == vc.id)
-            || comp.diff.components.modified.iter().any(|c| c.id == vc.id);
+    // Presence comes from the engine's per-SBOM version map
+    // (targets_with_component), NOT from the pair-diff buckets: an id in
+    // `components.removed` means the target LACKS the component, and the old
+    // added||removed||modified test listed exactly those targets as having it.
+    // The version shown is the target's own: the pairwise change entry's new
+    // version when the pair diff touched it, else the baseline version
+    // (present and unchanged).
+    let present: Vec<(&str, String)> = result
+        .comparisons
+        .iter()
+        .filter(|comp| {
+            vc.targets_with_component
+                .iter()
+                .any(|t| t == &comp.target.name)
+        })
+        .map(|comp| {
+            let version = comp
+                .diff
+                .components
+                .modified
+                .iter()
+                .chain(comp.diff.components.added.iter())
+                .find(|c| crate::diff::strip_purl_version(&c.id) == vc.id)
+                .and_then(|c| c.new_version.clone())
+                .or_else(|| vc.version_spread.baseline.clone())
+                .unwrap_or_else(|| "version unknown".to_string());
+            (comp.target.name.as_str(), version)
+        })
+        .collect();
 
-        if has_component {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(&comp.target.name, Style::default().fg(scheme.text)),
-            ]));
-        }
+    if present.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "  (none — only the baseline has it)",
+            Style::default().fg(scheme.text_muted),
+        )]));
+    }
+    let shown = present.len().min(10);
+    for (name, version) in &present[..shown] {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled((*name).to_string(), Style::default().fg(scheme.text)),
+            Span::raw(": "),
+            Span::styled(version.clone(), Style::default().fg(scheme.accent)),
+        ]));
+    }
+    if present.len() > shown {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  … and {} more", present.len() - shown),
+            Style::default().fg(scheme.text_muted),
+        )]));
     }
 
     lines.push(Line::from(""));
@@ -1022,7 +1106,7 @@ fn render_variable_drill_down(
         .title(format!(" Variable Component: {} ", vc.name))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.warning))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     f.render_widget(paragraph, modal_area);
@@ -1130,6 +1214,132 @@ mod ordering_tests {
                     > 0
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod truthfulness_tests {
+    use super::*;
+    use crate::tui::test_support::{demo_multi_diff, pin_theme, render_to_text};
+
+    #[test]
+    fn format_deviation_is_percent_with_unit() {
+        assert_eq!(format_deviation(0.0), "0.0%");
+        assert_eq!(format_deviation(0.465), "46.5%");
+        // Rounds (never truncates), and exact saturation drops the decimal so
+        // the narrow column can't clip it to a unitless "100.0".
+        assert_eq!(format_deviation(0.4649), "46.5%");
+        assert_eq!(format_deviation(0.9996), "100%");
+        assert_eq!(format_deviation(1.0), "100%");
+    }
+
+    /// The dashboard renders deviations as real percentages (<= 100%), the
+    /// similarity metric carries the same name and unit as Matrix mode, and
+    /// the Total Changes line reconciles the Chg column with the component
+    /// breakdown.
+    #[test]
+    fn dashboard_renders_percentages_not_double_scaled_values() {
+        pin_theme();
+        let result = demo_multi_diff();
+        assert!(
+            result.summary.max_deviation <= 1.0,
+            "engine contract: deviation is a 0-1 fraction"
+        );
+        let mut state = MultiDiffState::new();
+        state.total_targets = result.comparisons.len();
+        state.total_variable_components = result.summary.variable_components.len();
+
+        let text = render_to_text(120, 40, |f| {
+            render_multi_dashboard(f, f.area(), &result, &state, None);
+        });
+
+        let expected_max = format!(
+            "Max Deviation: {}",
+            format_deviation(result.summary.max_deviation)
+        );
+        assert!(
+            text.contains(&expected_max),
+            "max deviation must render as a true percentage:\n{text}"
+        );
+        // The double-scaled artifacts (10000.0% / 7000.0% style values).
+        for bogus in ["10000", "7000.0%", "4651.2%", "4225.8%"] {
+            assert!(
+                !text.contains(bogus),
+                "no >100% deviation may render ({bogus}):\n{text}"
+            );
+        }
+        assert!(
+            text.contains("Similarity:") && !text.contains("Semantic Score"),
+            "the similarity metric must use the Matrix mode's name and % unit:\n{text}"
+        );
+        assert!(
+            text.contains("Total Changes:") && text.contains("comps "),
+            "the Chg column must be reconciled by the Total Changes breakdown:\n{text}"
+        );
+    }
+
+    /// Status-bar partition counts are per logical component: no package may
+    /// appear twice in Inconsistent because of a version bump, and a version
+    /// bump must surface in Variable.
+    #[test]
+    fn status_counts_are_logical_not_version_qualified() {
+        let result = demo_multi_diff();
+        let mut names: Vec<&str> = result
+            .summary
+            .inconsistent_components
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            total,
+            "a version-bumped package must not count twice in Inconsistent"
+        );
+        assert!(
+            result
+                .summary
+                .variable_components
+                .iter()
+                .any(|vc| vc.name == "lodash"),
+            "a purl-versioned upgrade (lodash 4.17.20 -> 4.17.21) must be Variable"
+        );
+    }
+
+    /// The drill-down's "Targets with this component" lists only targets that
+    /// actually contain the component (removed-from-target used to count as
+    /// presence) and shows each target's own version.
+    #[test]
+    fn variable_drilldown_lists_only_targets_that_have_the_component() {
+        pin_theme();
+        let result = demo_multi_diff();
+        let idx = result
+            .summary
+            .variable_components
+            .iter()
+            .position(|vc| vc.name == "acme-webapp")
+            .expect("demo fixture has the acme-webapp variable component");
+
+        let mut state = MultiDiffState::new();
+        state.total_targets = result.comparisons.len();
+        state.total_variable_components = result.summary.variable_components.len();
+        state.selected_variable_component = idx;
+        state.show_variable_drill_down = true;
+
+        let text = render_to_text(120, 40, |f| {
+            render_multi_dashboard(f, f.area(), &result, &state, None);
+        });
+
+        assert!(
+            text.contains("webapp: 2.0.0"),
+            "the target that has the component must list it with ITS version:\n{text}"
+        );
+        assert!(
+            !text.contains("ai-service:"),
+            "ai-service does not contain acme-webapp and must not be listed:\n{text}"
+        );
     }
 }
 

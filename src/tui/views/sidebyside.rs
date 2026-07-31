@@ -1032,6 +1032,8 @@ fn render_sidebyside_context_bar(frame: &mut Frame, area: Rect, ctx: &RenderCont
         Span::styled("lign ", Style::default().fg(scheme.text_muted)),
         Span::styled("[/]", Style::default().fg(scheme.accent)),
         Span::styled("search ", Style::default().fg(scheme.text_muted)),
+        Span::styled("[A/r/m]", Style::default().fg(scheme.accent)),
+        Span::styled("filter ", Style::default().fg(scheme.text_muted)),
     ];
     // n/N only navigate in row-selection modes; Grouped gates them behind a
     // hint, so don't advertise keys the same screen refuses to execute.

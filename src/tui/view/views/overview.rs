@@ -11,11 +11,8 @@ use ratatui::{
 pub fn render_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
     match app.bom_profile {
         crate::model::BomProfile::Cbom => render_cbom_overview(frame, area, app),
-        // AI-BOMs use the standard SBOM overview; AI-specific detail lives in
-        // the dedicated Models / Datasets / AI-Readiness tabs.
-        crate::model::BomProfile::Sbom | crate::model::BomProfile::AiBom => {
-            render_sbom_overview(frame, area, app);
-        }
+        crate::model::BomProfile::AiBom => render_aibom_overview(frame, area, app),
+        crate::model::BomProfile::Sbom => render_sbom_overview(frame, area, app),
     }
 }
 
@@ -43,44 +40,60 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .split(area);
 
     // ── Left: asset summary ──
-    // Gauge thresholds keep green/yellow/red semantics via the theme's
-    // success/warning/error slots (error, not critical, preserves the red hue).
-    let readiness = metrics.quantum_readiness_score();
-    let readiness_color = if readiness >= 80.0 {
-        scheme.success
-    } else if readiness >= 40.0 {
-        scheme.warning
-    } else {
-        scheme.error
-    };
+    // A zero denominator must read n/a: quantum_readiness_score() is `None`
+    // when there are no algorithms, and a full green gauge over zero crypto
+    // assets is a lie (mirrors the status bar's "Quantum: n/a").
+    let gauge_line = match metrics.quantum_readiness_score() {
+        None => Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "n/a — no cryptographic assets found",
+                Style::default().fg(scheme.text_muted),
+            ),
+        ]),
+        Some(readiness) => {
+            // Gauge thresholds keep green/yellow/red semantics via the theme's
+            // success/warning/error slots (error, not critical, preserves the
+            // red hue).
+            let readiness_color = if readiness >= 80.0 {
+                scheme.success
+            } else if readiness >= 40.0 {
+                scheme.warning
+            } else {
+                scheme.error
+            };
 
-    let bar_filled = ((readiness / 100.0) * 20.0) as usize;
-    let bar_empty = 20_usize.saturating_sub(bar_filled);
-    let bar = format!(
-        "{}{}",
-        "\u{2588}".repeat(bar_filled),
-        "\u{2591}".repeat(bar_empty)
-    );
+            let bar_filled = ((readiness / 100.0) * 20.0) as usize;
+            let bar_empty = 20_usize.saturating_sub(bar_filled);
+            let bar = format!(
+                "{}{}",
+                "\u{2588}".repeat(bar_filled),
+                "\u{2591}".repeat(bar_empty)
+            );
+
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(bar, Style::default().fg(readiness_color)),
+                Span::styled(
+                    format!(" {readiness:.0}%"),
+                    Style::default()
+                        .fg(readiness_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(
+                    "  ({}/{})",
+                    metrics.quantum_safe_count, metrics.algorithms_count
+                )),
+            ])
+        }
+    };
 
     let mut left_lines = vec![
         Line::from(vec![Span::styled(
             " Quantum Readiness  ",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled(&bar, Style::default().fg(readiness_color)),
-            Span::styled(
-                format!(" {readiness:.0}%"),
-                Style::default()
-                    .fg(readiness_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                "  ({}/{})",
-                metrics.quantum_safe_count, metrics.algorithms_count
-            )),
-        ]),
+        gauge_line,
         Line::raw(""),
         Line::styled(
             format!(" Algorithms:    {}", metrics.algorithms_count),
@@ -173,24 +186,14 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .collect();
 
     for comp in &algos {
-        let algo = comp
-            .crypto_properties
-            .as_ref()
-            .and_then(|cp| cp.algorithm_properties.as_ref());
-        let (icon, color) = if let Some(a) = algo {
-            if a.is_weak_by_name(&comp.name) {
-                ("!", scheme.critical)
-            } else if a.is_quantum_safe() {
-                ("\u{2713}", scheme.success)
-            } else {
-                ("\u{2717}", scheme.warning)
-            }
-        } else {
-            ("?", scheme.muted)
-        };
+        // Shared indicator (!/Q/V/?) — the same broken-practice predicate the
+        // Algorithms tab and PQC Compliance use, so AES-128-ECB can never
+        // show a blessing here while failing SBOM-PQC-008 one tab over.
+        let qi = crate::tui::shared::crypto::quantum_indicator(comp);
         right_lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(format!("{icon} "), Style::default().fg(color)),
+            qi,
+            Span::raw(" "),
             Span::raw(&comp.name),
         ]));
     }
@@ -216,10 +219,237 @@ fn render_cbom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Migration & Warnings "),
+                .title(" Migration & Warnings ")
+                // Explain the !/Q/V/? glyphs (same legend as the Algorithms tab).
+                .title_bottom(crate::tui::shared::crypto::quantum_legend(
+                    chunks[1].width.saturating_sub(2),
+                )),
         )
         .wrap(Wrap { trim: true });
     frame.render_widget(right_panel, chunks[1]);
+}
+
+/// AI-BOM overview: shared stat cards on top, then AI-tailored panels
+/// (model/dataset inventory + AI-readiness gauge). The generic
+/// vulnerability/ecosystem panels keep the remainder only when the terminal
+/// is tall enough to hold them whole.
+fn render_aibom_overview(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let compact = area.height < 20;
+    let cards_h: u16 = if compact { 5 } else { 8 };
+    let generic_h: u16 = 8;
+    // AI panels need at least ~10 rows to say anything useful; only spend
+    // rows on the generic panels beyond that.
+    let show_generic = area.height >= cards_h + 12 + generic_h;
+
+    let mut constraints = vec![Constraint::Length(cards_h), Constraint::Min(8)];
+    if show_generic {
+        constraints.push(Constraint::Length(generic_h));
+    }
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    render_summary_cards(frame, rows[0], app, compact);
+
+    let ai_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[1]);
+    render_ai_inventory_panel(frame, ai_cols[0], app);
+    render_ai_readiness_panel(frame, ai_cols[1], app);
+
+    if show_generic {
+        let generic_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[2]);
+        render_vuln_breakdown(frame, generic_cols[0], app);
+        render_ecosystem_dist(frame, generic_cols[1], app);
+    }
+}
+
+/// Left AI panel: model and dataset inventories by name, mirroring what the
+/// Models/Datasets tabs list (`MachineLearningModel` / `Data` components).
+fn render_ai_inventory_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    use crate::model::ComponentType;
+    use crate::tui::widgets::truncate_str;
+
+    let scheme = colors();
+    let name_width = area.width.saturating_sub(6) as usize;
+
+    let mut models: Vec<_> = app
+        .sbom
+        .components
+        .values()
+        .filter(|c| c.component_type == ComponentType::MachineLearningModel)
+        .collect();
+    models.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut datasets: Vec<_> = app
+        .sbom
+        .components
+        .values()
+        .filter(|c| c.component_type == ComponentType::Data)
+        .collect();
+    datasets.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Split the inner rows between the two sections: each gets its header
+    // plus an equal share of the remaining rows (min 1 name row each).
+    let inner_rows = area.height.saturating_sub(2) as usize;
+    let name_budget = inner_rows.saturating_sub(3) / 2; // 2 headers + 1 spacer
+    let per_section = name_budget.max(1);
+
+    let mut lines: Vec<Line> = Vec::new();
+    let push_section = |lines: &mut Vec<Line>, title: &str, comps: &[&crate::model::Component]| {
+        lines.push(Line::from(vec![Span::styled(
+            format!(" {}: {}", title, comps.len()),
+            Style::default().fg(scheme.accent).bold(),
+        )]));
+        // Reserve the last budgeted row for the rollup when overflowing.
+        let shown = if comps.len() > per_section {
+            per_section.saturating_sub(1)
+        } else {
+            comps.len()
+        };
+        for comp in comps.iter().take(shown) {
+            let ver = comp.version.as_deref().unwrap_or("");
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}", truncate_str(&comp.name, name_width)),
+                    Style::default().fg(scheme.text),
+                ),
+                Span::styled(format!("  {ver}"), Style::default().fg(scheme.text_muted)),
+            ]));
+        }
+        if comps.len() > shown {
+            lines.push(Line::styled(
+                format!("   ... and {} more", comps.len() - shown),
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
+        if comps.is_empty() {
+            lines.push(Line::styled("   none", Style::default().fg(scheme.muted)));
+        }
+    };
+
+    push_section(&mut lines, "Models", &models);
+    lines.push(Line::raw(""));
+    push_section(&mut lines, "Datasets", &datasets);
+
+    let panel = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" AI Inventory ")
+            .border_style(Style::default().fg(colors().primary)),
+    );
+    frame.render_widget(panel, area);
+}
+
+/// Right AI panel: the AI-readiness score the app already computed for this
+/// profile (`quality_report` is scored with the AiReadiness profile), plus
+/// model-card completeness — no new scoring, just the headline numbers with
+/// a pointer at the dedicated tab.
+fn render_ai_readiness_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
+    let scheme = colors();
+    let report = &app.quality_report;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    match report.ai_readiness_metrics.as_ref() {
+        None => {
+            lines.push(Line::styled(
+                " n/a — no AI readiness metrics for this document",
+                Style::default().fg(scheme.text_muted),
+            ));
+        }
+        Some(metrics) if metrics.is_not_applicable() => {
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!(
+                        "n/a — {}",
+                        metrics
+                            .na_reason
+                            .as_deref()
+                            .unwrap_or("no ML model components found")
+                    ),
+                    Style::default().fg(scheme.text_muted),
+                ),
+            ]));
+        }
+        Some(metrics) => {
+            // Same gauge semantics as the AI-Readiness tab header: rounded
+            // score, grade-colored 20-cell bar.
+            let score = report.overall_score.round() as u16;
+            let (grade_col, grade_word) =
+                crate::tui::shared::quality::grade_color_and_label(report.grade);
+            let bar_max = 20usize;
+            let filled = ((f32::from(score.min(100)) / 100.0) * bar_max as f32).round() as usize;
+            let bar = "\u{2588}".repeat(filled) + &"\u{2591}".repeat(bar_max - filled);
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(bar, Style::default().fg(grade_col)),
+                Span::styled(
+                    format!(" {score}/100"),
+                    Style::default().fg(scheme.text).bold(),
+                ),
+                Span::styled(
+                    format!("  {} {}", report.grade.letter(), grade_word),
+                    Style::default().fg(grade_col).bold(),
+                ),
+            ]));
+            lines.push(Line::raw(""));
+
+            let passed = metrics.checks.iter().filter(|c| c.passed).count();
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " Checks passed:    ",
+                    Style::default().fg(scheme.text_muted),
+                ),
+                Span::styled(
+                    format!("{passed}/{}", metrics.checks.len()),
+                    Style::default().fg(scheme.text).bold(),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " Fully documented: ",
+                    Style::default().fg(scheme.text_muted),
+                ),
+                Span::styled(
+                    format!(
+                        "{}/{} models",
+                        metrics.components_fully_documented, metrics.ml_component_count
+                    ),
+                    Style::default().fg(scheme.text).bold(),
+                ),
+            ]));
+        }
+    }
+
+    // Honest pointer at the dedicated tab, using its live ordinal.
+    if let Some(pos) =
+        crate::tui::view::app::ViewTab::AiReadiness.shortcut_for_profile(app.bom_profile)
+    {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled(format!(" [{pos}]"), Style::default().fg(scheme.accent)),
+            Span::styled(
+                " AI-Readiness tab: per-check detail",
+                Style::default().fg(scheme.muted),
+            ),
+        ]));
+    }
+
+    let panel = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" AI Readiness ")
+                .border_style(Style::default().fg(scheme.primary)),
+        )
+        .wrap(Wrap { trim: true });
+    frame.render_widget(panel, area);
 }
 
 fn render_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp) {
@@ -362,7 +592,7 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp, compact: b
         comp_content.push(Line::from(""));
     }
     comp_content.push(Line::from(vec![Span::styled(
-        format!("{} ecosystems", stats.ecosystem_counts.len()),
+        crate::tui::shared::text::count_noun(stats.ecosystem_counts.len(), "ecosystem"),
         Style::default().fg(scheme.muted),
     )]));
 
@@ -388,6 +618,14 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp, compact: b
         scheme.success
     };
 
+    // Width-aware label: at narrow card widths "Vulnerabilities" was hard-
+    // clipped to "Vulnerabili" — use a short form that stays a real word.
+    let vuln_narrow = card_chunks[1].width < 19;
+    let vuln_label = if vuln_narrow {
+        "Vulns"
+    } else {
+        "Vulnerabilities"
+    };
     let mut vuln_content = Vec::new();
     if !compact {
         vuln_content.push(Line::from(""));
@@ -399,10 +637,7 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp, compact: b
             .bold()
             .add_modifier(Modifier::BOLD),
     )]));
-    vuln_content.push(Line::styled(
-        "Vulnerabilities",
-        Style::default().fg(scheme.muted),
-    ));
+    vuln_content.push(Line::styled(vuln_label, Style::default().fg(scheme.muted)));
     if !compact {
         vuln_content.push(Line::from(""));
     }
@@ -417,7 +652,11 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp, compact: b
     let vuln_para = Paragraph::new(vuln_content)
         .block(
             Block::default()
-                .title(" Vulnerabilities ")
+                .title(if vuln_narrow {
+                    " Vulns "
+                } else {
+                    " Vulnerabilities "
+                })
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(vuln_color)),
         )
@@ -438,7 +677,12 @@ fn render_summary_cards(frame: &mut Frame, area: Rect, app: &ViewApp, compact: b
             .add_modifier(Modifier::BOLD),
     )]));
     lic_content.push(Line::styled(
-        "Unique Licenses",
+        // Width-aware: "Unique Licenses" hard-clipped to "Unique Licens".
+        if card_chunks[2].width < 17 {
+            "Licenses"
+        } else {
+            "Unique Licenses"
+        },
         Style::default().fg(scheme.muted),
     ));
     if !compact {
@@ -593,8 +837,11 @@ fn eol_breakdown_lines(app: &ViewApp) -> Vec<Line<'static>> {
 
 fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let scheme = colors();
-    // Dynamic row count based on available area height
-    let max_eco_rows = area.height.saturating_sub(3) as usize; // subtract borders + "Other" line
+    // Line budget = inner height (borders only). ecosystem_dist_lines
+    // reserves the "Other" rollup row itself, and only when rows overflow —
+    // the old extra -1 here demoted the last ecosystem into "Other" even
+    // when it fit, and rendered NOTHING for a 1-ecosystem SBOM.
+    let max_eco_rows = area.height.saturating_sub(2) as usize;
     let para = Paragraph::new(ecosystem_dist_lines(app, max_eco_rows)).block(
         Block::default()
             .title(" Ecosystem Distribution ")
@@ -605,13 +852,18 @@ fn render_ecosystem_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
     frame.render_widget(para, area);
 }
 
-fn ecosystem_dist_lines(app: &ViewApp, max_eco_rows: usize) -> Vec<Line<'static>> {
+/// Ecosystem bars fitted into `max_rows` total lines. When the ecosystems
+/// overflow the budget, the LAST line becomes a rollup that labels its units
+/// explicitly ("Other: 2 ecosystems (5 components)") — rows count ecosystems
+/// while the sums count components, and unlabeled mixing misled readers.
+fn ecosystem_dist_lines(app: &ViewApp, max_rows: usize) -> Vec<Line<'static>> {
+    use crate::tui::shared::text::count_noun;
     let scheme = colors();
     let stats = &app.stats;
 
     // Sort ecosystems by count
     let mut ecosystems: Vec<_> = stats.ecosystem_counts.iter().collect();
-    ecosystems.sort_by(|a, b| b.1.cmp(a.1));
+    ecosystems.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
 
     let total = stats.component_count.max(1);
 
@@ -619,7 +871,14 @@ fn ecosystem_dist_lines(app: &ViewApp, max_eco_rows: usize) -> Vec<Line<'static>
 
     let palette = scheme.chart_palette();
 
-    for (i, (eco, count)) in ecosystems.iter().take(max_eco_rows).enumerate() {
+    // Reserve one row for the rollup ONLY when the entries overflow.
+    let shown = if ecosystems.len() > max_rows {
+        max_rows.saturating_sub(1)
+    } else {
+        ecosystems.len()
+    };
+
+    for (i, (eco, count)) in ecosystems.iter().take(shown).enumerate() {
         let pct = (**count as f64 / total as f64 * 100.0) as usize;
         let bar_width = 25;
         let filled = (**count * bar_width / total).max(usize::from(**count > 0));
@@ -627,15 +886,7 @@ fn ecosystem_dist_lines(app: &ViewApp, max_eco_rows: usize) -> Vec<Line<'static>
 
         lines.push(Line::from(vec![
             Span::styled(
-                {
-                    use crate::tui::shared::floor_char_boundary;
-                    let e = if eco.len() > 12 {
-                        &eco[..floor_char_boundary(eco, 12)]
-                    } else {
-                        eco
-                    };
-                    format!("{e:>12} ")
-                },
+                format!("{:>12} ", crate::tui::widgets::truncate_str(eco, 12)),
                 Style::default().fg(color).bold(),
             ),
             Span::styled("█".repeat(filled), Style::default().fg(color)),
@@ -650,15 +901,20 @@ fn ecosystem_dist_lines(app: &ViewApp, max_eco_rows: usize) -> Vec<Line<'static>
         ]));
     }
 
-    if ecosystems.len() > max_eco_rows {
-        let remaining: usize = ecosystems.iter().skip(max_eco_rows).map(|(_, c)| *c).sum();
+    if ecosystems.len() > shown {
+        let hidden = ecosystems.len() - shown;
+        let hidden_components: usize = ecosystems.iter().skip(shown).map(|(_, c)| *c).sum();
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{:>12} ", "Other"),
+                format!("{:>12} ", "Other:"),
                 Style::default().fg(scheme.muted),
             ),
             Span::styled(
-                format!("{remaining} more"),
+                format!(
+                    "{} ({})",
+                    count_noun(hidden, "ecosystem"),
+                    count_noun(hidden_components, "component")
+                ),
                 Style::default().fg(scheme.muted),
             ),
         ]));
@@ -669,7 +925,9 @@ fn ecosystem_dist_lines(app: &ViewApp, max_eco_rows: usize) -> Vec<Line<'static>
 
 fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
     let scheme = colors();
-    let max_rows = area.height.saturating_sub(3) as usize; // borders + possible "Other" line
+    // Line budget = inner height; license_dist_lines reserves its own
+    // rollup/unlicensed rows only when needed.
+    let max_rows = area.height.saturating_sub(2) as usize;
     let para = Paragraph::new(license_dist_lines(app, max_rows)).block(
         Block::default()
             .title(" License Distribution ")
@@ -680,11 +938,16 @@ fn render_license_dist(frame: &mut Frame, area: Rect, app: &ViewApp) {
     frame.render_widget(para, area);
 }
 
+/// License bars fitted into `max_rows` total lines. Overflowing licenses
+/// roll up into an explicitly-labelled line ("Other: 2 licenses (5
+/// components)"), and unlicensed components get their own labelled line
+/// instead of being folded into an ambiguous "N more (N unknown)".
 fn license_dist_lines(app: &ViewApp, max_rows: usize) -> Vec<Line<'static>> {
+    use crate::tui::shared::text::count_noun;
     let scheme = colors();
     let stats = &app.stats;
 
-    // Sort licenses by count, exclude "Unknown"
+    // Sort licenses by count, exclude the synthetic "Unknown" bucket
     let mut licenses: Vec<_> = stats
         .license_counts
         .iter()
@@ -699,20 +962,26 @@ fn license_dist_lines(app: &ViewApp, max_rows: usize) -> Vec<Line<'static>> {
 
     let palette = scheme.chart_palette();
 
-    for (i, (lic, count)) in licenses.iter().take(max_rows).enumerate() {
+    // Reserve rows: one for the unlicensed line (when any), and one for the
+    // rollup ONLY when the license entries overflow what remains.
+    let reserved_unlicensed = usize::from(unknown_count > 0);
+    let bar_budget = max_rows.saturating_sub(reserved_unlicensed);
+    let shown = if licenses.len() > bar_budget {
+        bar_budget.saturating_sub(1)
+    } else {
+        licenses.len()
+    };
+
+    for (i, (lic, count)) in licenses.iter().take(shown).enumerate() {
         let pct = (**count as f64 / total as f64 * 100.0) as usize;
         let bar_width = 25;
         let filled = (**count * bar_width / total).max(usize::from(**count > 0));
         let color = palette[i % palette.len()];
 
-        let display_name = if lic.len() > 12 {
-            &lic[..crate::tui::shared::floor_char_boundary(lic, 12)]
-        } else {
-            lic.as_str()
-        };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{display_name:>12} "),
+                // Ellipsized, never silently sliced ("(Apache-2.0").
+                format!("{:>12} ", crate::tui::widgets::truncate_str(lic, 12)),
                 Style::default().fg(color).bold(),
             ),
             Span::styled("\u{2588}".repeat(filled), Style::default().fg(color)),
@@ -727,23 +996,36 @@ fn license_dist_lines(app: &ViewApp, max_rows: usize) -> Vec<Line<'static>> {
         ]));
     }
 
-    // Show "Other" line for remaining + unknown
-    let shown_count: usize = licenses.iter().take(max_rows).map(|(_, c)| *c).sum();
-    let remaining = stats.component_count.saturating_sub(shown_count);
-    if remaining > 0 || unknown_count > 0 {
-        let other_total = remaining;
-        if other_total > 0 {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{:>12} ", "Other"),
-                    Style::default().fg(scheme.muted),
+    if licenses.len() > shown {
+        let hidden = licenses.len() - shown;
+        let hidden_components: usize = licenses.iter().skip(shown).map(|(_, c)| *c).sum();
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:>12} ", "Other:"),
+                Style::default().fg(scheme.muted),
+            ),
+            Span::styled(
+                format!(
+                    "{} ({})",
+                    count_noun(hidden, "license"),
+                    count_noun(hidden_components, "component")
                 ),
-                Span::styled(
-                    format!("{other_total} more ({unknown_count} unknown)"),
-                    Style::default().fg(scheme.muted),
-                ),
-            ]));
-        }
+                Style::default().fg(scheme.muted),
+            ),
+        ]));
+    }
+
+    if unknown_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:>12} ", "unlicensed:"),
+                Style::default().fg(scheme.muted),
+            ),
+            Span::styled(
+                count_noun(unknown_count, "component"),
+                Style::default().fg(scheme.muted),
+            ),
+        ]));
     }
 
     lines
@@ -876,11 +1158,17 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
     // don't render a fabricated "~56 years ago" for it.
     if doc.has_known_timestamp() {
         let (age_str, age_color) = format_age(doc.created);
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled("Created: ", label_style),
             Span::raw(doc.created.format("%Y-%m-%d %H:%M:%S").to_string()),
-            Span::styled(format!("  ({age_str})"), Style::default().fg(age_color)),
-        ]));
+        ];
+        // Append the relative age only when it fits whole — narrow panels
+        // clipped it to a meaningless "(2 y".
+        let age_suffix = format!("  ({age_str})");
+        if 9 + 19 + age_suffix.len() <= area.width.saturating_sub(2) as usize {
+            spans.push(Span::styled(age_suffix, Style::default().fg(age_color)));
+        }
+        lines.push(Line::from(spans));
     } else {
         lines.push(Line::from(vec![
             Span::styled("Created: ", label_style),
@@ -1067,12 +1355,21 @@ fn render_document_info(frame: &mut Frame, area: Rect, app: &ViewApp) {
         }
     }
 
-    // Export hint
-    lines.push(Line::from(""));
+    // Export hint (width-aware: the format list hard-clipped at 80 cols).
+    // Only spend a spacer row when the panel still has room for it plus the
+    // hint — tight layouts shrink this panel and silently dropped the hint.
+    if lines.len() as u16 + 4 <= area.height {
+        lines.push(Line::from(""));
+    }
+    let export_label = " Export (JSON, SARIF, Markdown, HTML, CSV)";
     lines.push(Line::from(vec![
         Span::styled("[e]", Style::default().fg(scheme.accent)),
         Span::styled(
-            " Export (JSON, SARIF, Markdown, HTML, CSV)",
+            if area.width as usize >= export_label.len() + 5 {
+                export_label.to_string()
+            } else {
+                " Export…".to_string()
+            },
             Style::default().fg(scheme.muted),
         ),
     ]));
@@ -1161,13 +1458,15 @@ fn render_top_vulnerable(frame: &mut Frame, area: Rect, app: &ViewApp) {
         })
         .collect();
 
-    let header = Row::new(vec!["Component", "CVEs", "Max Severity"])
+    // "Max Sev" + Length(8) fits "Critical" and survives 80-col layouts where
+    // "Max Severity" degraded to a meaningless single letter.
+    let header = Row::new(vec!["Component", "CVEs", "Max Sev"])
         .style(Style::default().fg(scheme.accent).bold());
 
     let widths = [
-        Constraint::Min(30),
-        Constraint::Length(6),
-        Constraint::Length(12),
+        Constraint::Min(20),
+        Constraint::Length(4),
+        Constraint::Length(8),
     ];
 
     let table = Table::new(rows, widths).header(header).block(

@@ -946,7 +946,7 @@ fn section_badge(key: &str, stats: &SbomStats, sbom: &NormalizedSbom, max_len: u
         "dependencies" | "relationships" => {
             let edge_count = sbom.edges.len();
             if edge_count > 0 {
-                let label = format!("{edge_count} edges");
+                let label = crate::tui::shared::text::count_noun(edge_count, "edge");
                 truncate_map_str(&label, max_len)
             } else {
                 String::new()
@@ -1508,7 +1508,10 @@ fn render_context(
         buf,
         x,
         y,
-        &format!(" {} licenses", app.stats.license_count),
+        &format!(
+            " {}",
+            crate::tui::shared::text::count_noun(app.stats.license_count, "license")
+        ),
         width,
         Style::default().fg(scheme.text_muted),
     );
@@ -1523,7 +1526,10 @@ fn render_context(
             buf,
             x,
             y,
-            &format!(" {edge_count} dependency edges"),
+            &format!(
+                " {}",
+                crate::tui::shared::text::count_noun(edge_count, "dependency edge")
+            ),
             width,
             Style::default().fg(scheme.text_muted),
         );

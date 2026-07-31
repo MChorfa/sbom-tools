@@ -45,6 +45,22 @@ const REMEDIATION_PQC: &str = "Migrate quantum-vulnerable algorithms per NIST IR
 /// Generic fallback remediation, shared by rules with no bespoke guidance.
 pub(crate) const REMEDIATION_GENERIC: &str = "Review the requirement and update the SBOM accordingly. Consult the EU CRA regulation (EU 2024/2847) for detailed guidance.";
 
+/// Standard-appropriate generic fallbacks: a rule's remediation must cite the
+/// regulation it belongs to, never default to the CRA (see the CNSA precedent).
+const REMEDIATION_GENERIC_NTIA: &str = "Review the requirement and update the SBOM accordingly. Consult the NTIA \"Minimum Elements for an SBOM\" (July 2021) for detailed guidance.";
+
+const REMEDIATION_GENERIC_FDA: &str = "Review the requirement and update the SBOM accordingly. Consult the FDA premarket cybersecurity guidance (2023) / FD&C \u{a7}524B for detailed guidance.";
+
+const REMEDIATION_GENERIC_AIACT: &str = "Review the requirement and update the SBOM accordingly. Consult the EU AI Act (Regulation (EU) 2024/1689) Annex IV technical-documentation requirements for detailed guidance.";
+
+const REMEDIATION_GENERIC_BSI: &str = "Review the requirement and update the SBOM accordingly. Consult BSI TR-03183-2 v2.1.0 for detailed guidance.";
+
+const REMEDIATION_GENERIC_CISA2026: &str = "Review the requirement and update the SBOM accordingly. Consult the 2026 Minimum Elements for an SBOM (CISA et al., July 2026) for detailed guidance.";
+
+const REMEDIATION_GENERIC_PCI: &str = "Review the requirement and update the SBOM accordingly. Consult PCI DSS v4.0.1 Requirement 6.3.2 and its testing procedures for detailed guidance.";
+
+const REMEDIATION_GENERIC_FSCT: &str = "Review the requirement and update the SBOM accordingly. Consult CISA Framing Software Component Transparency, 3rd ed. (2024) for detailed guidance.";
+
 /// SSDF practices share one remediation paragraph.
 const REMEDIATION_SSDF: &str = "Follow NIST SP 800-218 SSDF practices: include tool provenance, source VCS references, build metadata, and cryptographic hashes for all components.";
 
@@ -515,7 +531,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "EU AI Act Annex IV §1: general description of the AI system (architecture, intended purpose)",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::EuAiAct, "Annex IV §1")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_AIACT,
         },
         "SBOM-AIACT-ANNEX-IV-2D" => RuleMeta {
             sarif_id: "SBOM-AIACT-ANNEX-IV-2D",
@@ -523,7 +539,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "EU AI Act Annex IV §2(d): training-data characteristics, provenance, and sensitivity classification",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::EuAiAct, "Annex IV §2(d)")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_AIACT,
         },
         "SBOM-AIACT-ANNEX-IV-2G" => RuleMeta {
             sarif_id: "SBOM-AIACT-ANNEX-IV-2G",
@@ -531,7 +547,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "EU AI Act Annex IV §2(g): validation/testing metrics (accuracy, robustness)",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::EuAiAct, "Annex IV §2(g)")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_AIACT,
         },
         "SBOM-AIACT-ANNEX-IV-2C" => RuleMeta {
             sarif_id: "SBOM-AIACT-ANNEX-IV-2C",
@@ -539,7 +555,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "EU AI Act Annex IV §2(c): computational resources / training-energy disclosure",
             default_severity: ViolationSeverity::Info,
             refs: &[(K::EuAiAct, "Annex IV §2(c)")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_AIACT,
         },
         "SBOM-AIACT-ANNEX-IV-3" => RuleMeta {
             sarif_id: "SBOM-AIACT-ANNEX-IV-3",
@@ -547,7 +563,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "EU AI Act Annex IV §3: foreseeable limitations and risks",
             default_severity: ViolationSeverity::Info,
             refs: &[(K::EuAiAct, "Annex IV §3")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_AIACT,
         },
         "SBOM-AIACT-NA" => RuleMeta {
             sarif_id: "SBOM-AIACT-NA",
@@ -951,7 +967,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: Component version string",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         "SBOM-NTIA-TIMESTAMP" => RuleMeta {
             sarif_id: "SBOM-NTIA-TIMESTAMP",
@@ -959,7 +975,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: Creation timestamp",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         "SBOM-NTIA-SUPPLIER" => RuleMeta {
             sarif_id: "SBOM-NTIA-SUPPLIER",
@@ -967,7 +983,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: Supplier name",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         "SBOM-NTIA-DEPENDENCY" => RuleMeta {
             sarif_id: "SBOM-NTIA-DEPENDENCY",
@@ -975,7 +991,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: Dependency relationship",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         // ---- FDA ---------------------------------------------------------
         "SBOM-FDA-SUPPLIER" => RuleMeta {
@@ -984,7 +1000,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: Component supplier/manufacturer information",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-SUPPORT" => RuleMeta {
             sarif_id: "SBOM-FDA-SUPPORT",
@@ -992,7 +1008,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: Component support/contact information",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-NAME" => RuleMeta {
             sarif_id: "SBOM-FDA-GENERAL",
@@ -1000,7 +1016,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: General SBOM requirement",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-VERSION" => RuleMeta {
             sarif_id: "SBOM-FDA-VERSION",
@@ -1008,7 +1024,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: Component version information",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-IDENTIFIER" => RuleMeta {
             sarif_id: "SBOM-FDA-IDENTIFIER",
@@ -1016,7 +1032,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: Component unique identifier (PURL/CPE/SWID)",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-HASH" => RuleMeta {
             sarif_id: "SBOM-FDA-HASH",
@@ -1024,7 +1040,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: Component cryptographic hash",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         // FDA rules emitted by the `validate` NTIA/FDA fast-path
         // (`cli::validate`), which builds violations directly without
@@ -1035,7 +1051,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: SBOM creator/manufacturer information",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-NAMESPACE" => RuleMeta {
             sarif_id: "SBOM-FDA-NAMESPACE",
@@ -1043,7 +1059,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: SBOM serial number or document namespace",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-DEPENDENCY" => RuleMeta {
             sarif_id: "SBOM-FDA-DEPENDENCY",
@@ -1051,7 +1067,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: Dependency relationships",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-SECURITY" => RuleMeta {
             sarif_id: "SBOM-FDA-SECURITY",
@@ -1059,7 +1075,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: Security vulnerability information",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         "SBOM-FDA-GENERAL" => RuleMeta {
             sarif_id: "SBOM-FDA-GENERAL",
@@ -1067,7 +1083,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "FDA Medical Device: General SBOM requirement",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::FdaPremarket, "FDA Premarket")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_FDA,
         },
         // NTIA rules emitted by the `validate` fast-path.
         "SBOM-NTIA-AUTHOR" => RuleMeta {
@@ -1076,7 +1092,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: Author/creator information",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         "SBOM-NTIA-NAME" => RuleMeta {
             sarif_id: "SBOM-NTIA-NAME",
@@ -1084,7 +1100,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: Component name",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         "SBOM-NTIA-IDENTIFIER" => RuleMeta {
             sarif_id: "SBOM-NTIA-IDENTIFIER",
@@ -1092,7 +1108,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: Unique identifier (PURL/CPE/SWID)",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         "SBOM-NTIA-GENERAL" => RuleMeta {
             sarif_id: "SBOM-NTIA-GENERAL",
@@ -1100,7 +1116,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "NTIA Minimum Elements: General requirement",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::NtiaMinimum, "NTIA Minimum Elements")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_NTIA,
         },
         // Catch-all rule keys for the SSDF / EO 14028 profiles; not currently
         // emitted by any check site but kept so the registry mirrors the full
@@ -1408,7 +1424,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "BSI TR-03183-2 general SBOM requirement",
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::BsiTr03183_2, "TR-03183-2")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_GENERIC_BSI,
         },
         // ---- CNSA 2.0 ----------------------------------------------------
         "SBOM-CNSA2-000" => RuleMeta {
@@ -1417,7 +1433,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: cryptographic inventory (CBOM) with evaluable assets required — compliance cannot be verified without one",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         "SBOM-CNSA2-ALG-001" => RuleMeta {
             sarif_id: "SBOM-CNSA2-ALG-001",
@@ -1425,7 +1441,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: symmetric encryption must be AES-256",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         "SBOM-CNSA2-ALG-002" => RuleMeta {
             sarif_id: "SBOM-CNSA2-ALG-002",
@@ -1433,7 +1449,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: hashing must be SHA-384 or SHA-512",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         "SBOM-CNSA2-ALG-003" => RuleMeta {
             sarif_id: "SBOM-CNSA2-ALG-003",
@@ -1441,7 +1457,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: key establishment must be ML-KEM-1024",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         "SBOM-CNSA2-ALG-004" => RuleMeta {
             sarif_id: "SBOM-CNSA2-ALG-004",
@@ -1449,7 +1465,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: digital signatures must be ML-DSA-87 or SP 800-208 stateful hash-based signatures",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         "SBOM-CNSA2-ALG-006" => RuleMeta {
             sarif_id: "SBOM-CNSA2-ALG-006",
@@ -1457,7 +1473,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: quantum-vulnerable classical algorithm must migrate to the CNSA 2.0 suite",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         "SBOM-CNSA2-ALG-007" => RuleMeta {
             sarif_id: "SBOM-CNSA2-ALG-007",
@@ -1465,7 +1481,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: declared quantum security level below Level 5",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         // Broken/legacy algorithm (SHA-1, MD5, DES, RC4, ...) under the CNSA
         // 2.0 allowlist.
@@ -1503,7 +1519,7 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             short_description: "CNSA 2.0: certificate signature algorithm must be CNSA 2.0 approved",
             default_severity: ViolationSeverity::Error,
             refs: &[(K::Cnsa2, "CNSA 2.0")],
-            remediation: REMEDIATION_GENERIC,
+            remediation: REMEDIATION_CNSA2,
         },
         // Certificate signature-algorithm ref cannot be resolved/classified —
         // CNSA 2.0 compliance cannot be verified (Warning, never a silent
@@ -1682,6 +1698,482 @@ pub fn rule_meta(rule_id: &str) -> Option<RuleMeta> {
             default_severity: ViolationSeverity::Warning,
             refs: &[(K::NistPqc, "IR 8547 ipd")],
             remediation: REMEDIATION_PQC,
+        },
+        // ---- CISA 2026 Minimum Elements (v2.1, July 29, 2026) --------------
+        // Successor to the NTIA 2021 Minimum Elements. Severity convention
+        // mirrors the NTIA profile: required data fields = Error;
+        // evidence-limited / practice checks = Warning (CISA assigns none).
+        "SBOM-CISA2026-AUTHOR" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-AUTHOR",
+            name: "Cisa2026SbomAuthor",
+            short_description: "CISA 2026: SBOM Author — a person or organization (not tool-only) created the SBOM data",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "SBOM Author")],
+            remediation: "Add a Person or Organization creator naming the entity that created the SBOM data — the entity operating the generation tool, not the tool itself, so tool-only creator lists do not satisfy the element. Use full names, no acronyms. CycloneDX: metadata.authors; SPDX: Creator: Person/Organization.",
+        },
+        "SBOM-CISA2026-SIGNATURE" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-SIGNATURE",
+            name: "Cisa2026AuthorSignature",
+            short_description: "CISA 2026: SBOM Author Signature — digital signature attributable to the SBOM author",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaMinimum2026, "SBOM Author Signature")],
+            remediation: "Sign the SBOM with a digital signature attributable to the SBOM author, using an algorithm approved per NIST DSS, ISO/IEC 14888-4:2024, or the ENISA Agreed Cryptographic Mechanisms. In-document evidence is read from CycloneDX JSF signatures and SPDX 3 verifiedUsing signature entries; SPDX 2.x has no in-document signature field and detached signatures are invisible to this check — hence Warning, not Error.",
+        },
+        "SBOM-CISA2026-FORMAT" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-FORMAT",
+            name: "Cisa2026DataFormat",
+            short_description: "CISA 2026: SBOM Data Format Name/Version — machine-processable format, no deprecated format versions",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[
+                (K::CisaMinimum2026, "SBOM Data Format Name"),
+                (K::CisaMinimum2026, "SBOM Data Format Version"),
+                (K::CisaMinimum2026, "Machine-Processable Data"),
+            ],
+            remediation: "Produce the SBOM in a widely used machine-processable format — SPDX (ISO/IEC 5962:2021) or CycloneDX (ECMA-424); SWID tags were dropped from the 2026 format list — and avoid format versions declared deprecated by the format maintainers. CISA names no deprecated versions: the enforced floor (CycloneDX 1.4+ / SPDX 2.2+, mirroring the repo's EO 14028 gate) is tool policy, not CISA text. Unparseable spec versions skip the gate rather than false-failing.",
+        },
+        "SBOM-CISA2026-GENERATION-CONTEXT" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-GENERATION-CONTEXT",
+            name: "Cisa2026GenerationContext",
+            short_description: "CISA 2026: SBOM Generation Context — software lifecycle phase at SBOM generation",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaMinimum2026, "SBOM Generation Context")],
+            remediation: "Declare the lifecycle phase the SBOM was generated in — 'before build', 'build', 'after build', or a more specific identifier. CycloneDX 1.5+: metadata.lifecycles. SPDX 2.x has no standard field (parsers yield no phase for it), hence Warning severity.",
+        },
+        "SBOM-CISA2026-TIMESTAMP" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-TIMESTAMP",
+            name: "Cisa2026Timestamp",
+            short_description: "CISA 2026: SBOM Timestamp — date and time of the most recent update to the SBOM data",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "SBOM Timestamp")],
+            remediation: "Record the date and time of the most recent update to the SBOM data; the 2026 element targets RFC 9557 syntax (source-syntax conformance is not verified by this check — parsers normalize timestamps). CycloneDX: metadata.timestamp; SPDX: Created.",
+        },
+        "SBOM-CISA2026-TOOL" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-TOOL",
+            name: "Cisa2026ToolName",
+            short_description: "CISA 2026: SBOM Tool Name — tool used to generate or amend the SBOM",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "SBOM Tool Name")],
+            remediation: "Identify the tool used by the SBOM author to generate or amend the SBOM (full name, no acronyms unless official). CycloneDX: metadata.tools; SPDX: 'Creator: Tool:'.",
+        },
+        "SBOM-CISA2026-TOOL-VERSION" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-TOOL-VERSION",
+            name: "Cisa2026ToolVersion",
+            short_description: "CISA 2026: SBOM Tool Version — version of the SBOM generation tool (or explicit unknown)",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaMinimum2026, "SBOM Tool Version")],
+            remediation: "Declare the version of the tool named in SBOM Tool Name, or explicitly indicate it is unknown. Parsers concatenate tool name and version into one creator name, so the check is heuristic (a trailing version-like token or explicit unknown marker satisfies it) until the model grows a dedicated tool-version field.",
+        },
+        "SBOM-CISA2026-SBOM-VERSION" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-SBOM-VERSION",
+            name: "Cisa2026SbomVersion",
+            short_description: "CISA 2026: SBOM Version — the document declares its own version",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaMinimum2026, "SBOM Version")],
+            remediation: "Declare the SBOM document's own version: CycloneDX bom.version (an omitted bom.version is treated as undeclared, not backfilled with the spec default of 1) or a version-distinguishing serial identifier (CycloneDX serialNumber / SPDX documentNamespace; RFC 9562-style UUIDs). Warning because SPDX 2.x has no dedicated document-version field.",
+        },
+        "SBOM-CISA2026-PRODUCER" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-PRODUCER",
+            name: "Cisa2026ComponentProducer",
+            short_description: "CISA 2026: Component Producer — entity that creates, defines, and identifies the component",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "Component Producer")],
+            remediation: "Identify each component's producer (the 2026 rename of the ambiguous Supplier Name): SPDX PackageOriginator / component author is preferred as the entity that created the component, supplier is accepted; if no clear producer exists, explicitly mark the component as of unknown provenance. File-type entries are exempt.",
+        },
+        "SBOM-CISA2026-NAME" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-NAME",
+            name: "Cisa2026ComponentName",
+            short_description: "CISA 2026: Component Name — name assigned by the component producer",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "Component Name")],
+            remediation: "Give every enumerated component the name assigned by its producer (full names, no acronyms); alternate names belong in alias/identifier fields, which the 2026 element allows as multiple entries.",
+        },
+        "SBOM-CISA2026-VERSION" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-VERSION",
+            name: "Cisa2026ComponentVersion",
+            short_description: "CISA 2026: Component Version — version present or explicitly marked unknown",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "Component Version")],
+            remediation: "Declare each component's version; when the producer provides none, explicitly indicate the version is unknown (NOASSERTION/'unknown') per the 2026 escape hatch. An explicit unknown passes this rule — silent absence fails.",
+        },
+        "SBOM-CISA2026-IDENTIFIER" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-IDENTIFIER",
+            name: "Cisa2026ComponentIdentifiers",
+            short_description: "CISA 2026: Component Identifiers — at least one machine-processable identifier (PURL/CPE/SWHID/SWID)",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "Component Identifiers")],
+            remediation: "Add at least one common machine-processable identifier per component — the document names CPE and PURL (ECMA-427); UUIDs, organization-specific identifiers, commit hashes, and intrinsic identifiers (OmniBOR, SWHID / ISO/IEC 18670:2025) also qualify. Include all known identifiers.",
+        },
+        "SBOM-CISA2026-HASH" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-HASH",
+            name: "Cisa2026ComponentHash",
+            short_description: "CISA 2026: Component Hash Value — cryptographic hash of the executable component artifact",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "Component Hash Value")],
+            remediation: "Provide an ASCII-hexadecimal cryptographic hash of each executable component artifact; when the SBOM author lacks access to the artifact, explicitly indicate the value is unknown.",
+        },
+        "SBOM-CISA2026-HASH-ALGO" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-HASH-ALGO",
+            name: "Cisa2026HashAlgorithm",
+            short_description: "CISA 2026: Component Hash Algorithm — recognized, authority-approved hash algorithm",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaMinimum2026, "Component Hash Algorithm")],
+            remediation: "Identify hash algorithms using IANA Hash Function Textual Names, and use algorithms approved by a relevant authority such as NIST: MD5 is not NIST-approved; SHA-1 is deprecated and slated for withdrawal by 2030 — use SHA-256 or stronger.",
+        },
+        "SBOM-CISA2026-LICENSE" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-LICENSE",
+            name: "Cisa2026ComponentLicense",
+            short_description: "CISA 2026: Component License — license identifier, license pointer, or explicit unknown",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "Component License")],
+            remediation: "Declare each component's license(s), preferring machine-processable SPDX license identifiers; a LicenseRef-* expression or a pointer to where the full license details are available also satisfies the element, and an explicit unknown (NOASSERTION) is required when the author is unaware. Silent absence fails.",
+        },
+        "SBOM-CISA2026-DEPENDENCY" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-DEPENDENCY",
+            name: "Cisa2026DependencyRelationship",
+            short_description: "CISA 2026: Component Dependency Relationship — dependency graph or external SBOM links",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaMinimum2026, "Component Dependency Relationship")],
+            remediation: "Declare the relationships where one component is necessary for the operation of the other (CycloneDX: dependencies array; SPDX: DEPENDS_ON). Links to separate SBOM documents per dependency are acceptable alternative evidence.",
+        },
+        "SBOM-CISA2026-COVERAGE" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-COVERAGE",
+            name: "Cisa2026Coverage",
+            short_description: "CISA 2026: Coverage / Explicitly Identifying Unknown Information — completeness declaration present",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[
+                (K::CisaMinimum2026, "Coverage"),
+                (
+                    K::CisaMinimum2026,
+                    "Explicitly Identifying Unknown Information",
+                ),
+            ],
+            remediation: "Declare the SBOM's completeness (CycloneDX compositions aggregate): the 2026 Coverage element expects all components including transitive dependencies, and information gaps must be explicitly stated as unknown or deliberately withheld. This rule verifies the declaration, not actual completeness — the document itself points to external repositories / binary analysis for that.",
+        },
+        // Generic bucket for CISA-2026-run findings whose check site has no
+        // specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-CISA2026-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-CISA2026-GENERAL",
+            name: "Cisa2026GeneralRequirement",
+            short_description: "CISA 2026 Minimum Elements: general requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaMinimum2026, "Minimum Elements")],
+            remediation: REMEDIATION_GENERIC_CISA2026,
+        },
+        "SBOM-PCI-6-3-2-INVENTORY" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-INVENTORY",
+            name: "PciDssInventory",
+            short_description: "PCI DSS Req. 6.3.2: SBOM is a non-empty inventory with a resolvable primary component",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::PciDss4, "Req. 6.3.2"), (K::PciDss4, "TP 6.3.2.b")],
+            remediation: "The SBOM must inventory at least one component and identify the bespoke/custom application it describes (CycloneDX: metadata.component; SPDX: documentDescribes). An empty or headless document cannot serve as the Req. 6.3.2 inventory.",
+        },
+        "SBOM-PCI-6-3-2-NAME" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-NAME",
+            name: "PciDssComponentName",
+            short_description: "PCI DSS Req. 6.3.2: every inventoried (non-file) component has a name",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::PciDss4, "Req. 6.3.2")],
+            remediation: "Name every inventoried component — an unnamed entry cannot be correlated with vendor advisories or patches. File/snippet inventory records are exempt, so a file-cataloguing SBOM does not auto-fail the profile.",
+        },
+        "SBOM-PCI-6-3-2-VERSION" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-VERSION",
+            name: "PciDssComponentVersion",
+            short_description: "PCI DSS Req. 6.3.2: every inventoried (non-file) component has a concrete version",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::PciDss4, "Req. 6.3.2")],
+            remediation: "Declare a concrete release version for every inventoried component (a version range is acceptable only for external components) — patch management, the requirement's stated purpose, is impossible without versions. File/snippet inventory records are exempt.",
+        },
+        "SBOM-PCI-6-3-2-SUPPLIER" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-SUPPLIER",
+            name: "PciDssComponentSupplier",
+            short_description: "PCI DSS Req. 6.3.2: third-party components identify their supplier/source",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::PciDss4, "Req. 6.3.2")],
+            remediation: "Identify each third-party component's supplier (CycloneDX: component.supplier; SPDX: PackageSupplier) — or fall back to author / group / ecosystem-bearing PURL evidence — so vendor security-patch availability can be monitored.",
+        },
+        "SBOM-PCI-6-3-2-IDENTIFIER" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-IDENTIFIER",
+            name: "PciDssComponentIdentifier",
+            short_description: "PCI DSS Req. 6.3.2: components carry a stable unique identifier for vulnerability correlation",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::PciDss4, "Req. 6.3.2"), (K::PciDss4, "TP 6.3.2.a")],
+            remediation: "Add a stable unique identifier (PURL preferred, else CPE/SWID) so the inventory can be machine-correlated with vulnerability sources per the 'facilitate vulnerability and patch management' clause. PCI DSS prescribes no identifier scheme — this is enabling evidence, not a mandated field.",
+        },
+        "SBOM-PCI-6-3-2-THIRD-PARTY" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-THIRD-PARTY",
+            name: "PciDssThirdPartyComponents",
+            short_description: "PCI DSS TP 6.3.2.b: inventory enumerates incorporated third-party components, not just the application",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::PciDss4, "Req. 6.3.2"), (K::PciDss4, "TP 6.3.2.b")],
+            remediation: "Enumerate the third-party components incorporated into the bespoke/custom software, not only the application itself; a primary-only SBOM passes only when its completeness declaration is Complete (a genuinely dependency-free application). This is an inference — TP 6.3.2.b's real comparison against the software is assessor work.",
+        },
+        "SBOM-PCI-6-3-2-COMPLETENESS" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-COMPLETENESS",
+            name: "PciDssCompleteness",
+            short_description: "PCI DSS TP 6.3.2.b: completeness declaration — self-declared inventory gaps flagged",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::PciDss4, "TP 6.3.2.b")],
+            remediation: "Declare the inventory Complete (CycloneDX compositions aggregate). Explicit Incomplete* declarations warn as self-declared gaps against TP 6.3.2.b; Unknown (no declaration made / explicitly unknown) and NotSpecified (declared but unrecognized, or a no-assertion value) are informational.",
+        },
+        "SBOM-PCI-6-3-2-FRESHNESS" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-FRESHNESS",
+            name: "PciDssFreshness",
+            short_description: "PCI DSS Req. 6.3.2: 'is maintained' — the SBOM carries a creation timestamp",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::PciDss4, "Req. 6.3.2"), (K::PciDss4, "TP 6.3.2.a")],
+            remediation: "Carry a creation timestamp so the inventory's maintenance can be evidenced. The SBOM proves generation time, not the inventory process — a stale timestamp is advisory only.",
+        },
+        "SBOM-PCI-6-3-2-VULN-EVIDENCE" => RuleMeta {
+            sarif_id: "SBOM-PCI-6-3-2-VULN-EVIDENCE",
+            name: "PciDssVulnerabilityEvidence",
+            short_description: "PCI DSS TP 6.3.2.a: vulnerability-management hooks (embedded data, advisory refs, or security contact)",
+            default_severity: ViolationSeverity::Info,
+            refs: &[(K::PciDss4, "TP 6.3.2.a")],
+            remediation: "Surface vulnerability-management hooks: embedded vulnerability entries, an Advisories / vulnerability-assertion / linked-VDR external reference, a security contact, or a disclosure URL. Absence is not a Req. 6.3.2 failure — the inventory may feed an external scanner; actual use of the inventory is assessor-verified.",
+        },
+        "SBOM-PCI-11-3-1-1-SEVERITY" => RuleMeta {
+            sarif_id: "SBOM-PCI-11-3-1-1-SEVERITY",
+            name: "PciDssVulnerabilityRiskRanking",
+            short_description: "PCI DSS Req. 6.3.1 / 11.3.1.1: embedded vulnerability entries carry a risk ranking",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::PciDss4, "Req. 11.3.1.1"), (K::PciDss4, "Req. 6.3.1")],
+            remediation: "Give every embedded vulnerability entry a risk ranking — a Critical/High/Medium/Low severity or a CVSS score (an entry with only Info/None/Unknown severity and no CVSS is unranked) — so non-high-risk findings can be managed per the entity's Req. 6.3.1 rankings and the 11.3.1.1 targeted risk analysis. Emitted only when vulnerability data is present (no vacuous pass/fail).",
+        },
+        // Generic bucket for PCI-DSS-run findings whose check site has no
+        // specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-PCI-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-PCI-GENERAL",
+            name: "PciDssGeneralRequirement",
+            short_description: "PCI DSS v4.0.1 Req. 6.3.2: general software-inventory requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::PciDss4, "Req. 6.3.2")],
+            remediation: REMEDIATION_GENERIC_PCI,
+        },
+        "SBOM-FSCT-AUTHOR" => RuleMeta {
+            sarif_id: "SBOM-FSCT-AUTHOR",
+            name: "FsctAuthorName",
+            short_description: "CISA FSCT 3e §2.2.1.1 (Minimum): Author Name — person/organization author, not tool-only",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.1.1")],
+            remediation: "Name the entity that prompted the SBOM's creation (organization, project team, or individual) with unique identification (email address or website) where possible — a tool-only creator list does not satisfy the element. CycloneDX: metadata.authors; SPDX: Creator: Person/Organization.",
+        },
+        "SBOM-FSCT-AUTHOR-TOOL" => RuleMeta {
+            sarif_id: "SBOM-FSCT-AUTHOR-TOOL",
+            name: "FsctAuthorTool",
+            short_description: "CISA FSCT 3e §2.2.1.1 (Recommended): tool(s) and version(s) that assisted SBOM creation",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.1.1")],
+            remediation: "In addition to the authoring entity, identify the tool(s) and version(s) that assisted in creating the SBOM. CycloneDX: metadata.tools (name + version); SPDX: 'Creator: Tool: name-version'.",
+        },
+        "SBOM-FSCT-TIMESTAMP" => RuleMeta {
+            sarif_id: "SBOM-FSCT-TIMESTAMP",
+            name: "FsctTimestamp",
+            short_description: "CISA FSCT 3e §2.2.1.2 (Minimum): creation timestamp in a common international format (ISO 8601)",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.1.2")],
+            remediation: "Record the date and time the SBOM was produced in a common international format such as ISO 8601 (e.g., 2024-05-23T13:51:37Z), consistent across time zones and locales.",
+        },
+        "SBOM-FSCT-SBOM-TYPE" => RuleMeta {
+            sarif_id: "SBOM-FSCT-SBOM-TYPE",
+            name: "FsctSbomType",
+            short_description: "CISA FSCT 3e §2.2.1.3 (optional/aspirational): SBOM Type declared (design/source/build/analyzed/deployed/runtime)",
+            default_severity: ViolationSeverity::Info,
+            refs: &[(K::CisaFsct, "§2.2.1.3")],
+            remediation: "Declare how/why the SBOM was created per the 'Types of SBOM' taxonomy. CycloneDX 1.5+: metadata.lifecycles; SPDX 3.0: Software.Sbom.sbomType. This tool currently parses neither SPDX 2.x CreatorComment type mapping nor SPDX 3.0 sbomType, so the check is gated to CycloneDX input rather than failing SPDX documents.",
+        },
+        "SBOM-FSCT-PRIMARY" => RuleMeta {
+            sarif_id: "SBOM-FSCT-PRIMARY",
+            name: "FsctPrimaryComponent",
+            short_description: "CISA FSCT 3e §2.2.1.4: Primary Component (root of dependencies) identified as the subject of the SBOM",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.1.4")],
+            remediation: "Identify the Primary Component the SBOM is about. CycloneDX: metadata.component; SPDX 2.x: documentDescribes / DESCRIBES relationship; SPDX 3.0: Software.Sbom.rootElement.",
+        },
+        "SBOM-FSCT-DIRECT-DEPS" => RuleMeta {
+            sarif_id: "SBOM-FSCT-DIRECT-DEPS",
+            name: "FsctDirectDependencies",
+            short_description: "CISA FSCT 3e §2.2.2 / §2.3.3 (Minimum): all static direct dependencies of the Primary Component identified",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2"), (K::CisaFsct, "§2.3.3")],
+            remediation: "Identify all static, direct dependencies of the Primary Component (or carry an explicit completeness declaration covering their absence), and indicate when the dependency list is incomplete. 'All' is not verifiable from the document alone — the check uses dependency edges from the primary plus the completeness declaration as its evidence.",
+        },
+        "SBOM-FSCT-TRANSITIVE-DEPS" => RuleMeta {
+            sarif_id: "SBOM-FSCT-TRANSITIVE-DEPS",
+            name: "FsctTransitiveDependencies",
+            short_description: "CISA FSCT 3e §2.2.2 (Recommended): subcomponent levels beyond direct dependencies identified",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.2")],
+            remediation: "Identify as many levels of subcomponents beyond the direct dependencies as possible, or declare their absence via the completeness declaration. Heuristic: 'as many as possible' is not crisply verifiable — the depth>=2 threshold is profile policy.",
+        },
+        "SBOM-FSCT-DYNAMIC-DEPS" => RuleMeta {
+            sarif_id: "SBOM-FSCT-DYNAMIC-DEPS",
+            name: "FsctDynamicDependencies",
+            short_description: "CISA FSCT 3e §2.2.2 / §2.2.2.6 (Aspirational): dynamic and/or remote dependencies uniquely identified",
+            default_severity: ViolationSeverity::Info,
+            refs: &[(K::CisaFsct, "§2.2.2"), (K::CisaFsct, "§2.2.2.6")],
+            remediation: "Make efforts to uniquely and unambiguously identify dependencies that are dynamic and/or remote. The positive signal is SPDX relationship types DYNAMIC_LINK / RUNTIME_DEPENDENCY_OF / PROVIDED_DEPENDENCY_OF (CycloneDX's parsed model cannot express it, so the check is SPDX-gated). Absence surfaces as an informational readiness note, never a failure.",
+        },
+        "SBOM-FSCT-COMPONENT-NAME" => RuleMeta {
+            sarif_id: "SBOM-FSCT-COMPONENT-NAME",
+            name: "FsctComponentName",
+            short_description: "CISA FSCT 3e §2.2.2.1 (Minimum): commonly used public name declared for every component",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.1")],
+            remediation: "Declare the commonly used public name for every component (a namespace:name construct is acceptable for conveying the supplier); placeholder values do not satisfy the element.",
+        },
+        "SBOM-FSCT-VERSION" => RuleMeta {
+            sarif_id: "SBOM-FSCT-VERSION",
+            name: "FsctComponentVersion",
+            short_description: "CISA FSCT 3e §2.2.2.2 (Minimum): supplier-provided version string (or authored hash as the documented fallback)",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.2")],
+            remediation: "Record the version string as provided by the Supplier (semantic versioning preferred; accurate transcription is the primary goal). A component without a unique version passes only when an author-provided cryptographic hash is present — the element's documented fallback.",
+        },
+        "SBOM-FSCT-SUPPLIER" => RuleMeta {
+            sarif_id: "SBOM-FSCT-SUPPLIER",
+            name: "FsctSupplierName",
+            short_description: "CISA FSCT 3e §2.2.2.3 (Minimum): Supplier Name declared for all components (explicit 'unknown' permitted)",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.3")],
+            remediation: "Declare the Supplier Name for all components: the upstream supplier's legal-entity name (commercial) or project name (OSS); the domain URL / PURL namespace or an explicit 'unknown' are permitted last resorts. Silent absence fails; an explicit 'unknown' declaration satisfies the letter of the clause.",
+        },
+        "SBOM-FSCT-IDENTIFIER" => RuleMeta {
+            sarif_id: "SBOM-FSCT-IDENTIFIER",
+            name: "FsctUniqueIdentifier",
+            short_description: "CISA FSCT 3e §2.2.2.4 (Minimum): globally unique identifier per component (PURL/CPE/SWID/SWHID; hash accepted)",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.4")],
+            remediation: "Declare a globally unique identifier for each component — PURL, CPE, SWID, SWHID, UUID/GUID, or OmniBOR Artifact ID; a cryptographic hash also functions as an intrinsic identifier. Profile policy: the document's letter is satisfied by format-native IDs (SPDX namespace + SPDXID, CycloneDX serialNumber + version) and only 'prefers' global uniqueness — this profile deliberately enforces the preferred clause.",
+        },
+        "SBOM-FSCT-IDENTIFIER-MULTI" => RuleMeta {
+            sarif_id: "SBOM-FSCT-IDENTIFIER-MULTI",
+            name: "FsctIdentifierMultiplicity",
+            short_description: "CISA FSCT 3e §2.2.2.4 (Recommended): as many globally unique identifiers as available",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.2.4")],
+            remediation: "List as many globally unique identifiers as are available for the component. Heuristic: the >=2-distinct-identifier-kinds (PURL/CPE/SWHID/SWID) threshold is profile policy — 'as available' is unverifiable from the document alone.",
+        },
+        "SBOM-FSCT-HASH" => RuleMeta {
+            sarif_id: "SBOM-FSCT-HASH",
+            name: "FsctCryptographicHash",
+            short_description: "CISA FSCT 3e §2.2.2.5 (Minimum): author-provided cryptographic hash with algorithm, or explicit unknown",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.5")],
+            remediation: "Provide a hash (with its algorithm, for reproducibility) for any component whose hash was provided or can be generated; otherwise indicate it as unknown. Accepted at this tier: MD5, SHA1, and SHA2 families — MD5/SHA1 are no longer recommended and are formally discontinued in 2030. Only author-provided hashes count; tool-enriched hashes are not author evidence.",
+        },
+        "SBOM-FSCT-HASH-PRIMARY-SHA2" => RuleMeta {
+            sarif_id: "SBOM-FSCT-HASH-PRIMARY-SHA2",
+            name: "FsctPrimaryHashSha2",
+            short_description: "CISA FSCT 3e §2.2.2.5 (Recommended): Primary Component hashed; SHA-256-or-stronger SHA-2 hash on hashed components",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.2.5")],
+            remediation: "Provide at least one hash of the Primary Component, and use the cryptographically secure SHA-2 family (SHA-256 and higher) for hashed components; wherever less-secure hashes (MD5/SHA1) appear, add an additional cryptographically secure hash.",
+        },
+        "SBOM-FSCT-RELATIONSHIP" => RuleMeta {
+            sarif_id: "SBOM-FSCT-RELATIONSHIP",
+            name: "FsctRelationship",
+            short_description: "CISA FSCT 3e §2.2.2.6 (Minimum): relationships declared for the Primary Component and its direct dependencies",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.6")],
+            remediation: "Declare relationships (primary, included-in/includes) and relationship completeness for the Primary Component and its direct dependencies — the primary must be identified and connected to its direct dependencies in the edge set.",
+        },
+        "SBOM-FSCT-RELATIONSHIP-ALL" => RuleMeta {
+            sarif_id: "SBOM-FSCT-RELATIONSHIP-ALL",
+            name: "FsctRelationshipAll",
+            short_description: "CISA FSCT 3e §2.2.2.6 (Recommended): relationships declared for ALL included components (no orphans)",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.2.6")],
+            remediation: "Declare relationships and relationship completeness for all included components — components that appear in the inventory but in no dependency edge are orphans.",
+        },
+        "SBOM-FSCT-COMPLETENESS" => RuleMeta {
+            sarif_id: "SBOM-FSCT-COMPLETENESS",
+            name: "FsctRelationshipCompleteness",
+            short_description: "CISA FSCT 3e §2.2.2.6.4 (supplemental/optional): relationship-completeness assertion recorded",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.2.6.4"), (K::CisaFsct, "§2.3.3")],
+            remediation: "Record a relationship-completeness assertion (Unknown/None/Partial/Known) — mapped to the document-level completeness declaration (CycloneDX compositions). Warning, not Error: the document labels the attribute supplemental and optional, with Unknown as the open-world default.",
+        },
+        "SBOM-FSCT-LICENSE-PRIMARY" => RuleMeta {
+            sarif_id: "SBOM-FSCT-LICENSE-PRIMARY",
+            name: "FsctLicensePrimary",
+            short_description: "CISA FSCT 3e §2.2.2.7 (Minimum): license information for the Primary Component",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.7")],
+            remediation: "Provide license information for the Primary Component, using SPDX license identifiers in standard form where available; NOASSERTION placeholders do not satisfy this check.",
+        },
+        "SBOM-FSCT-LICENSE-COVERAGE" => RuleMeta {
+            sarif_id: "SBOM-FSCT-LICENSE-COVERAGE",
+            name: "FsctLicenseCoverage",
+            short_description: "CISA FSCT 3e §2.2.2.7 (Recommended): license information for as many components as possible",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.2.7")],
+            remediation: "Provide license information for as many components as possible. The coverage threshold is profile policy — 'as possible' is unverifiable from the document alone.",
+        },
+        "SBOM-FSCT-LICENSE-ALL" => RuleMeta {
+            sarif_id: "SBOM-FSCT-LICENSE-ALL",
+            name: "FsctLicenseAll",
+            short_description: "CISA FSCT 3e §2.2.2.7 (Aspirational): license information incl. concluded-license attestation for ALL components",
+            default_severity: ViolationSeverity::Info,
+            refs: &[(K::CisaFsct, "§2.2.2.7")],
+            remediation: "Provide license information for all listed components, including concluded-license attestation (SPDX PackageLicenseConcluded; the CycloneDX licenses[].acknowledgement field is not currently parsed, so the concluded prong is SPDX-gated).",
+        },
+        "SBOM-FSCT-COPYRIGHT-PRIMARY" => RuleMeta {
+            sarif_id: "SBOM-FSCT-COPYRIGHT-PRIMARY",
+            name: "FsctCopyrightPrimary",
+            short_description: "CISA FSCT 3e §2.2.2.8 (Minimum): copyright notice for the Primary Component",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.2.2.8")],
+            remediation: "Provide the copyright notice for the Primary Component — it identifies the legal rights holder, and conveying notices is a standard condition of many OSS licenses. SPDX: PackageCopyrightText; CycloneDX: component copyright.",
+        },
+        "SBOM-FSCT-COPYRIGHT-COVERAGE" => RuleMeta {
+            sarif_id: "SBOM-FSCT-COPYRIGHT-COVERAGE",
+            name: "FsctCopyrightCoverage",
+            short_description: "CISA FSCT 3e §2.2.2.8 (Recommended): copyright notices for as many components as possible",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.2.2.8")],
+            remediation: "Provide copyright notices for as many components as possible. The coverage threshold is profile policy — 'as possible' is unverifiable from the document alone.",
+        },
+        "SBOM-FSCT-COPYRIGHT-ALL" => RuleMeta {
+            sarif_id: "SBOM-FSCT-COPYRIGHT-ALL",
+            name: "FsctCopyrightAll",
+            short_description: "CISA FSCT 3e §2.2.2.8 (Aspirational): copyright notice on every listed component",
+            default_severity: ViolationSeverity::Info,
+            refs: &[(K::CisaFsct, "§2.2.2.8")],
+            remediation: "Provide a copyright notice for every listed SBOM component.",
+        },
+        "SBOM-FSCT-NOASSERTION" => RuleMeta {
+            sarif_id: "SBOM-FSCT-NOASSERTION",
+            name: "FsctNoAssertion",
+            short_description: "CISA FSCT 3e §2.3.1 (Minimum): baseline attributes populated or explicitly declared no-assertion/no-value",
+            default_severity: ViolationSeverity::Error,
+            refs: &[(K::CisaFsct, "§2.3.1")],
+            remediation: "Provide every baseline attribute, or explicitly differentiate 'no assertion' (data missing) from 'no value' (not applicable). This rule fires only where an attribute is neither populated nor explicitly (or format-default) declared — the document sanctions explicit declarations as the recommended graceful handling and lets formats treat missing attributes as default no-assertion. Placeholders never satisfy the other SBOM-FSCT-* checks.",
+        },
+        "SBOM-FSCT-UPSTREAM-SBOM" => RuleMeta {
+            sarif_id: "SBOM-FSCT-UPSTREAM-SBOM",
+            name: "FsctUpstreamSbom",
+            short_description: "CISA FSCT 3e §2.3.3 (Recommended): upstream supplier SBOM data provided or linked for third-party direct dependencies",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "§2.3.3")],
+            remediation: "Obtain the upstream Supplier's SBOM and provide the component data nested within the Primary Component's SBOM or linked separately (BOM-type external references on third-party direct dependencies are the positive evidence). Advisory heuristic — contacting suppliers is unobservable in the document.",
+        },
+        "SBOM-FSCT-SIGNATURE" => RuleMeta {
+            sarif_id: "SBOM-FSCT-SIGNATURE",
+            name: "FsctSignature",
+            short_description: "CISA FSCT 3e §2.4 (supplemental): SBOM carries a verifiable digital signature",
+            default_severity: ViolationSeverity::Info,
+            refs: &[(K::CisaFsct, "§2.4")],
+            remediation: "Digitally sign the SBOM so consumers can verify authenticity and integrity (requires a digital signature plus PKI). Info severity: §2.4 is a supplemental element, not a Baseline Attribute, and SPDX has no in-band signature field.",
+        },
+        // Generic bucket for FSCT-run findings whose check site has no
+        // specific registry mapping (SARIF fallback re-bucketing).
+        "SBOM-FSCT-GENERAL" => RuleMeta {
+            sarif_id: "SBOM-FSCT-GENERAL",
+            name: "FsctGeneralRequirement",
+            short_description: "CISA FSCT 3e: general baseline-attribute requirement",
+            default_severity: ViolationSeverity::Warning,
+            refs: &[(K::CisaFsct, "Baseline Attributes")],
+            remediation: REMEDIATION_GENERIC_FSCT,
         },
         _ => return None,
     };
@@ -1871,6 +2363,63 @@ const ALL_RULE_IDS: &[&str] = &[
     "SBOM-PQC-PROTO-002",
     "SBOM-PQC-PROTO-UNKNOWN",
     "SBOM-PQC-GENERAL",
+    "SBOM-CISA2026-AUTHOR",
+    "SBOM-CISA2026-SIGNATURE",
+    "SBOM-CISA2026-FORMAT",
+    "SBOM-CISA2026-GENERATION-CONTEXT",
+    "SBOM-CISA2026-TIMESTAMP",
+    "SBOM-CISA2026-TOOL",
+    "SBOM-CISA2026-TOOL-VERSION",
+    "SBOM-CISA2026-SBOM-VERSION",
+    "SBOM-CISA2026-PRODUCER",
+    "SBOM-CISA2026-NAME",
+    "SBOM-CISA2026-VERSION",
+    "SBOM-CISA2026-IDENTIFIER",
+    "SBOM-CISA2026-HASH",
+    "SBOM-CISA2026-HASH-ALGO",
+    "SBOM-CISA2026-LICENSE",
+    "SBOM-CISA2026-DEPENDENCY",
+    "SBOM-CISA2026-COVERAGE",
+    "SBOM-CISA2026-GENERAL",
+    "SBOM-PCI-6-3-2-INVENTORY",
+    "SBOM-PCI-6-3-2-NAME",
+    "SBOM-PCI-6-3-2-VERSION",
+    "SBOM-PCI-6-3-2-SUPPLIER",
+    "SBOM-PCI-6-3-2-IDENTIFIER",
+    "SBOM-PCI-6-3-2-THIRD-PARTY",
+    "SBOM-PCI-6-3-2-COMPLETENESS",
+    "SBOM-PCI-6-3-2-FRESHNESS",
+    "SBOM-PCI-6-3-2-VULN-EVIDENCE",
+    "SBOM-PCI-11-3-1-1-SEVERITY",
+    "SBOM-PCI-GENERAL",
+    "SBOM-FSCT-AUTHOR",
+    "SBOM-FSCT-AUTHOR-TOOL",
+    "SBOM-FSCT-TIMESTAMP",
+    "SBOM-FSCT-SBOM-TYPE",
+    "SBOM-FSCT-PRIMARY",
+    "SBOM-FSCT-DIRECT-DEPS",
+    "SBOM-FSCT-TRANSITIVE-DEPS",
+    "SBOM-FSCT-DYNAMIC-DEPS",
+    "SBOM-FSCT-COMPONENT-NAME",
+    "SBOM-FSCT-VERSION",
+    "SBOM-FSCT-SUPPLIER",
+    "SBOM-FSCT-IDENTIFIER",
+    "SBOM-FSCT-IDENTIFIER-MULTI",
+    "SBOM-FSCT-HASH",
+    "SBOM-FSCT-HASH-PRIMARY-SHA2",
+    "SBOM-FSCT-RELATIONSHIP",
+    "SBOM-FSCT-RELATIONSHIP-ALL",
+    "SBOM-FSCT-COMPLETENESS",
+    "SBOM-FSCT-LICENSE-PRIMARY",
+    "SBOM-FSCT-LICENSE-COVERAGE",
+    "SBOM-FSCT-LICENSE-ALL",
+    "SBOM-FSCT-COPYRIGHT-PRIMARY",
+    "SBOM-FSCT-COPYRIGHT-COVERAGE",
+    "SBOM-FSCT-COPYRIGHT-ALL",
+    "SBOM-FSCT-NOASSERTION",
+    "SBOM-FSCT-UPSTREAM-SBOM",
+    "SBOM-FSCT-SIGNATURE",
+    "SBOM-FSCT-GENERAL",
 ];
 
 /// Enumerate every registered internal rule key, in registry order.
@@ -2062,6 +2611,82 @@ pub const PQC_SARIF_RULE_IDS: &[&str] = &[
     "SBOM-PQC-GENERAL",
 ];
 
+/// CISA 2026 Minimum Elements SARIF rule catalogue: every `SBOM-CISA2026-*`
+/// self-descriptor in the registry. The
+/// `p4_profile_slices_cover_their_rule_families` test keeps this slice in
+/// lockstep with the registry.
+pub const CISA2026_SARIF_RULE_IDS: &[&str] = &[
+    "SBOM-CISA2026-AUTHOR",
+    "SBOM-CISA2026-SIGNATURE",
+    "SBOM-CISA2026-FORMAT",
+    "SBOM-CISA2026-GENERATION-CONTEXT",
+    "SBOM-CISA2026-TIMESTAMP",
+    "SBOM-CISA2026-TOOL",
+    "SBOM-CISA2026-TOOL-VERSION",
+    "SBOM-CISA2026-SBOM-VERSION",
+    "SBOM-CISA2026-PRODUCER",
+    "SBOM-CISA2026-NAME",
+    "SBOM-CISA2026-VERSION",
+    "SBOM-CISA2026-IDENTIFIER",
+    "SBOM-CISA2026-HASH",
+    "SBOM-CISA2026-HASH-ALGO",
+    "SBOM-CISA2026-LICENSE",
+    "SBOM-CISA2026-DEPENDENCY",
+    "SBOM-CISA2026-COVERAGE",
+    "SBOM-CISA2026-GENERAL",
+];
+
+/// PCI DSS v4.0.1 Req. 6.3.2 SARIF rule catalogue: every `SBOM-PCI-*`
+/// self-descriptor in the registry. Same lockstep guarantee as
+/// [`CISA2026_SARIF_RULE_IDS`].
+pub const PCIDSS_SARIF_RULE_IDS: &[&str] = &[
+    "SBOM-PCI-6-3-2-INVENTORY",
+    "SBOM-PCI-6-3-2-NAME",
+    "SBOM-PCI-6-3-2-VERSION",
+    "SBOM-PCI-6-3-2-SUPPLIER",
+    "SBOM-PCI-6-3-2-IDENTIFIER",
+    "SBOM-PCI-6-3-2-THIRD-PARTY",
+    "SBOM-PCI-6-3-2-COMPLETENESS",
+    "SBOM-PCI-6-3-2-FRESHNESS",
+    "SBOM-PCI-6-3-2-VULN-EVIDENCE",
+    "SBOM-PCI-11-3-1-1-SEVERITY",
+    "SBOM-PCI-GENERAL",
+];
+
+/// CISA FSCT 3rd-edition SARIF rule catalogue: every `SBOM-FSCT-*`
+/// self-descriptor in the registry. Same lockstep guarantee as
+/// [`CISA2026_SARIF_RULE_IDS`].
+pub const FSCT_SARIF_RULE_IDS: &[&str] = &[
+    "SBOM-FSCT-AUTHOR",
+    "SBOM-FSCT-AUTHOR-TOOL",
+    "SBOM-FSCT-TIMESTAMP",
+    "SBOM-FSCT-SBOM-TYPE",
+    "SBOM-FSCT-PRIMARY",
+    "SBOM-FSCT-DIRECT-DEPS",
+    "SBOM-FSCT-TRANSITIVE-DEPS",
+    "SBOM-FSCT-DYNAMIC-DEPS",
+    "SBOM-FSCT-COMPONENT-NAME",
+    "SBOM-FSCT-VERSION",
+    "SBOM-FSCT-SUPPLIER",
+    "SBOM-FSCT-IDENTIFIER",
+    "SBOM-FSCT-IDENTIFIER-MULTI",
+    "SBOM-FSCT-HASH",
+    "SBOM-FSCT-HASH-PRIMARY-SHA2",
+    "SBOM-FSCT-RELATIONSHIP",
+    "SBOM-FSCT-RELATIONSHIP-ALL",
+    "SBOM-FSCT-COMPLETENESS",
+    "SBOM-FSCT-LICENSE-PRIMARY",
+    "SBOM-FSCT-LICENSE-COVERAGE",
+    "SBOM-FSCT-LICENSE-ALL",
+    "SBOM-FSCT-COPYRIGHT-PRIMARY",
+    "SBOM-FSCT-COPYRIGHT-COVERAGE",
+    "SBOM-FSCT-COPYRIGHT-ALL",
+    "SBOM-FSCT-NOASSERTION",
+    "SBOM-FSCT-UPSTREAM-SBOM",
+    "SBOM-FSCT-SIGNATURE",
+    "SBOM-FSCT-GENERAL",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2100,6 +2725,49 @@ mod tests {
         }
     }
 
+    /// CNSA 2.0 rules must remediate with CNSA 2.0 guidance, not the generic
+    /// fallback: SBOM-CNSA2-ALG-001..004/006/007, -000 and -CERT-001 used
+    /// `REMEDIATION_GENERIC`, which cites the EU CRA (EU 2024/2847) — a US
+    /// NSA CNSA 2.0 finding pointed the user at an EU regulation.
+    #[test]
+    fn cnsa2_rules_cite_cnsa_not_eu_cra() {
+        for id in all_rule_ids().iter().filter(|id| id.contains("CNSA2")) {
+            let meta = rule_meta(id).expect("listed id resolves");
+            assert!(
+                !meta.remediation.contains("EU CRA"),
+                "{id}: a CNSA 2.0 rule must not cite the EU CRA as its remediation source"
+            );
+            assert!(
+                meta.remediation.contains("CNSA 2.0"),
+                "{id}: CNSA 2.0 rules should carry CNSA 2.0 migration guidance"
+            );
+        }
+    }
+
+    /// Non-CRA standards must not fall back to the CRA-citing generic
+    /// remediation: an NTIA/FDA/AI-Act/BSI finding that points the user at
+    /// EU 2024/2847 cites the wrong regulation (same defect class as the
+    /// CNSA case above). CRA rules keep the CRA citation.
+    #[test]
+    fn non_cra_rules_do_not_cite_eu_cra_as_generic_fallback() {
+        for id in all_rule_ids()
+            .iter()
+            .filter(|id| id.contains("NTIA") || id.contains("FDA") || id.contains("AIACT"))
+        {
+            let meta = rule_meta(id).expect("listed id resolves");
+            assert!(
+                !meta.remediation.contains("EU CRA regulation"),
+                "{id}: a non-CRA rule must not cite the EU CRA as its generic remediation"
+            );
+        }
+        let bsi = rule_meta("SBOM-BSI-TR-03183-2-GENERAL").expect("BSI general rule resolves");
+        assert!(
+            bsi.remediation.contains("TR-03183-2"),
+            "BSI general rule should cite TR-03183-2, got: {}",
+            bsi.remediation
+        );
+    }
+
     /// Every id in a per-standard SARIF slice must be a self-descriptor:
     /// a registry key whose `sarif_id` is the key itself. The SARIF
     /// generator relies on this to render descriptors without aliasing.
@@ -2113,6 +2781,9 @@ mod tests {
             ("compliance", COMPLIANCE_SARIF_RULE_IDS),
             ("cnsa2", CNSA2_SARIF_RULE_IDS),
             ("pqc", PQC_SARIF_RULE_IDS),
+            ("cisa2026", CISA2026_SARIF_RULE_IDS),
+            ("pci-dss", PCIDSS_SARIF_RULE_IDS),
+            ("fsct", FSCT_SARIF_RULE_IDS),
         ] {
             let mut seen = std::collections::BTreeSet::new();
             for id in slice {
@@ -2138,6 +2809,31 @@ mod tests {
         for (prefix, slice) in [
             ("SBOM-CNSA2-", CNSA2_SARIF_RULE_IDS),
             ("SBOM-PQC-", PQC_SARIF_RULE_IDS),
+        ] {
+            let expected: std::collections::BTreeSet<&str> = all_rule_ids()
+                .iter()
+                .copied()
+                .filter(|id| id.starts_with(prefix))
+                .collect();
+            let actual: std::collections::BTreeSet<&str> = slice.iter().copied().collect();
+            assert_eq!(
+                actual, expected,
+                "{prefix}* SARIF slice drifted from the registry"
+            );
+        }
+    }
+
+    /// The CISA 2026 / PCI DSS / FSCT catalogues must enumerate their entire
+    /// rule family (same guarantee as the CNSA 2.0 / PQC test above): the
+    /// parallel checker wave adds check sites but may not touch this file,
+    /// so a family rule missing from its slice would silently fall off the
+    /// upfront-declared SARIF catalogue.
+    #[test]
+    fn p4_profile_slices_cover_their_rule_families() {
+        for (prefix, slice) in [
+            ("SBOM-CISA2026-", CISA2026_SARIF_RULE_IDS),
+            ("SBOM-PCI-", PCIDSS_SARIF_RULE_IDS),
+            ("SBOM-FSCT-", FSCT_SARIF_RULE_IDS),
         ] {
             let expected: std::collections::BTreeSet<&str> = all_rule_ids()
                 .iter()

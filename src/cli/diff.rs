@@ -249,7 +249,7 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
             app.status_sticky = true;
         }
 
-        run_tui(&mut app)?;
+        run_tui(&mut app, config.output.no_color)?;
     } else {
         old_parsed.drop_raw_content();
         new_parsed.drop_raw_content();
@@ -437,6 +437,7 @@ mod tests {
             old_version: None,
             new_version: None,
             ecosystem: None,
+            component_type: None,
             change_type: ChangeType::Modified,
             field_changes: vec![FieldChange {
                 field: format!("ml_metric:{metric}"),

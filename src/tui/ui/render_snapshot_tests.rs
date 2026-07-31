@@ -217,6 +217,10 @@ fn diff_vuln_detail_shows_ransomware_badge() {
 
     let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
     app.active_tab = TabKind::Vulnerabilities;
+    // The injected severity-less vuln sorts last behind the demo fixture's
+    // own introduced vulns; select it so the detail panel shows it.
+    app.prepare_render();
+    handle_key_event(&mut app, key(KeyCode::End));
     let text = render_to_text(120, 40, |frame| {
         app.prepare_render();
         render(frame, &mut app);
@@ -251,6 +255,11 @@ fn graph_details_column_gated_by_width() {
             },
             impact: crate::diff::GraphChangeImpact::Medium,
         });
+        // graph_summary marks "graph analysis actually ran" — without it the
+        // tab honestly renders the not-run empty state instead of the table.
+        diff.graph_summary = Some(crate::diff::GraphChangeSummary::from_changes(
+            &diff.graph_changes,
+        ));
         let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
         app.active_tab = TabKind::GraphChanges;
         render_to_text(width, height, |frame| {
@@ -744,6 +753,50 @@ mod diff_alignment {
         );
     }
 
+    /// #76: a point score outside its own displayed confidence interval must
+    /// be annotated — 'Score: 1.00' must not sit unexplained beside a CI
+    /// that excludes it.
+    #[test]
+    fn match_panel_annotates_score_outside_ci() {
+        let old = Component::new("fuzzy-lib".to_string(), "fuzzy-lib".to_string())
+            .with_version("1.0".to_string());
+        let new = old.clone();
+        let mi = crate::diff::MatchInfo::simple(1.0, "Fuzzy", "name similarity")
+            .with_confidence_interval(crate::diff::ConfidenceInterval::new(0.83, 0.99, 0.95));
+        let change =
+            crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 0).with_match_info(mi);
+        let mut result = DiffResult::new();
+        result.components.modified.push(change);
+        result.calculate_summary();
+
+        let mut app = app_with_result(result, TabKind::Components);
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("score outside CI"),
+            "a score excluded by its CI must be annotated:\n{text}"
+        );
+
+        // Sanity: an in-interval score stays unannotated.
+        let old = Component::new("fuzzy-lib".to_string(), "fuzzy-lib".to_string())
+            .with_version("1.0".to_string());
+        let new = old.clone();
+        let mi = crate::diff::MatchInfo::simple(0.9, "Fuzzy", "name similarity")
+            .with_confidence_interval(crate::diff::ConfidenceInterval::new(0.83, 0.99, 0.95));
+        let change =
+            crate::diff::ComponentChange::modified(&old, &new, Vec::new(), 0).with_match_info(mi);
+        let mut result = DiffResult::new();
+        result.components.modified.push(change);
+        result.calculate_summary();
+        let mut app = app_with_result(result, TabKind::Components);
+        app.prepare_render();
+        let text = render_tab_text(&mut app, 120, 40);
+        assert!(
+            text.contains("CI: 0.83\u{2013}0.99 (95%)") && !text.contains("score outside CI"),
+            "an in-interval score must not be annotated:\n{text}"
+        );
+    }
+
     fn vuln_detail(
         id: &str,
         vex: Option<crate::model::VexState>,
@@ -877,8 +930,10 @@ mod diff_alignment {
         let mut app = app_with_result(result, TabKind::Quality);
         let text = render_tab_text(&mut app, 120, 40);
         assert!(
-            text.contains("Regressed: Provenance, Integrity"),
-            "regression chips must render:\n{text}"
+            // The engine's "Integrity" category displays as "Hashes" — one
+            // name per category across the header, chart, and chips.
+            text.contains("Regressed: Provenance, Hashes"),
+            "regression chips must render (Integrity displayed as Hashes):\n{text}"
         );
         assert!(
             text.contains("Improved: Licenses"),
@@ -1492,9 +1547,11 @@ fn summary_all_changes_scrolls_below_the_fold() {
 #[test]
 fn all_changes_line_count_matches_fixture() {
     let (diff, _, _) = demo_diff();
-    // Demo fixture: 5 modified + 4 removed + 4 added, 0 introduced
-    // Critical/High vulns, 2 metadata changes (+1 section header).
-    assert_eq!(crate::tui::views::all_changes_line_count(&diff), 16);
+    // Demo fixture: 5 modified + 4 removed + 4 added, 1 introduced Critical
+    // + 1 introduced High vuln, 3 metadata changes (+1 section header) — the
+    // document revision counter (top-level `version` 1 -> 2) now joins the
+    // created-timestamp and primary-component-version entries.
+    assert_eq!(crate::tui::views::all_changes_line_count(&diff), 19);
 
     let empty = crate::diff::DiffResult::default();
     assert_eq!(
@@ -1525,6 +1582,10 @@ fn diff_vuln_detail_shows_kev_deadline_and_affected_version() {
 
     let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
     app.active_tab = TabKind::Vulnerabilities;
+    // The injected severity-less vuln sorts last behind the demo fixture's
+    // own introduced vulns; select it so the detail panel shows it.
+    app.prepare_render();
+    handle_key_event(&mut app, key(KeyCode::End));
     let text = render_to_text(120, 40, |frame| {
         app.prepare_render();
         render(frame, &mut app);
@@ -3211,6 +3272,18 @@ fn footer_drops_yank_preview_before_global_tail_overflows() {
 
     let mut app = App::new_diff(diff, old, new, DEMO_OLD, DEMO_NEW);
     app.active_tab = TabKind::Vulnerabilities;
+    // Point the selection at the injected long-id vuln (the demo fixture now
+    // carries its own shorter introduced CVEs at the front of the list).
+    let long_idx = app
+        .data
+        .diff_result
+        .as_ref()
+        .unwrap()
+        .vulnerabilities
+        .introduced
+        .len()
+        - 1;
+    app.vulnerabilities_state_mut().selected = long_idx;
 
     let narrow = render_to_text(80, 24, |frame| {
         app.prepare_render();
@@ -3257,7 +3330,7 @@ fn summary_wheel_scrolls_all_changes_list() {
         render(frame, &mut app);
     });
     assert!(
-        first.contains("[1-"),
+        first.contains("[Ln 1-"),
         "precondition: the All Changes list must overflow and show its window indicator:\n{first}"
     );
     assert_eq!(app.summary_state().scroll_offset, 0);
@@ -3281,7 +3354,7 @@ fn summary_wheel_scrolls_all_changes_list() {
         render(frame, &mut app);
     });
     assert!(
-        scrolled.contains("[2-"),
+        scrolled.contains("[Ln 2-"),
         "the panel's window indicator must reflect the wheel scroll:\n{scrolled}"
     );
 
@@ -3489,14 +3562,19 @@ fn matrix_modal_and_deep_dive_resolve_through_sort_permutation() {
     handle_key_event(&mut app, key(KeyCode::Esc));
     assert!(!app.tabs.matrix.show_pair_diff, "Esc must close the modal");
 
+    // 'D' is disabled in Matrix: rows are SBOMs, not components, so the
+    // component-shaped modal would be nonsense. It explains itself instead.
     handle_key_event(&mut app, key(KeyCode::Char('D')));
     assert!(
-        app.overlays.component_deep_dive.visible,
-        "'D' must open the deep dive in matrix mode"
+        !app.overlays.component_deep_dive.visible,
+        "'D' must NOT open the component deep dive in matrix mode"
     );
-    assert_eq!(
-        app.overlays.component_deep_dive.component_name, "gamma",
-        "deep dive must name the display-first SBOM (raw index 0 is alpha)"
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("press Enter for pair diff")),
+        "'D' in Matrix must explain the alternative, got {:?}",
+        app.status_message
     );
 }
 
@@ -5113,4 +5191,249 @@ fn match_score_color_bands_on_ci_lower_bound() {
         scheme.error, scheme.warning,
         "theme sanity: the two bands must be visually distinguishable"
     );
+}
+
+// ============================================================================
+// Diff TUI polish residuals (#165/#142, #80, #203, #76, #198, #95)
+// ============================================================================
+
+mod polish_residuals {
+    use super::{App, TabKind, demo_app, key, render};
+    use crate::tui::events::handle_key_event;
+    use crate::tui::test_support::{demo_matrix, demo_multi_diff, demo_timeline, render_to_text};
+    use crossterm::event::KeyCode;
+
+    const CBOM_OLD: &str = include_str!("../../../tests/fixtures/cyclonedx/cbom-1.6.cdx.json");
+    const CBOM_NEW: &str = include_str!("../../../tests/fixtures/cyclonedx/cbom-1.7.cdx.json");
+
+    fn render_app(app: &mut App, w: u16, h: u16) -> String {
+        render_to_text(w, h, |frame| {
+            app.prepare_render();
+            render(frame, app);
+        })
+    }
+
+    fn cbom_diff_app(tab: TabKind) -> App {
+        crate::tui::test_support::pin_theme();
+        let old = crate::parsers::parse_sbom_str(CBOM_OLD).expect("old cbom fixture must parse");
+        let new = crate::parsers::parse_sbom_str(CBOM_NEW).expect("new cbom fixture must parse");
+        let diff = crate::diff::DiffEngine::new()
+            .diff(&old, &new)
+            .expect("diff must succeed");
+        let mut app = App::new_diff(diff, old, new, CBOM_OLD, CBOM_NEW);
+        app.active_tab = tab;
+        app
+    }
+
+    /// #165 + #142: the compliance help bar drops whole key+label pairs with
+    /// a trailing '…' when width runs out (no more bare 'E' at 80 cols), and
+    /// the grouping hint reads "g group [Flat]" — same verb and capitalized
+    /// state vocabulary as the View app.
+    #[test]
+    fn compliance_help_bar_elides_whole_hints() {
+        let mut app = demo_app(TabKind::Compliance);
+        let text = render_app(&mut app, 80, 24);
+        assert!(
+            text.contains("g group [Flat]"),
+            "grouping hint must read 'g group [Flat]':\n{text}"
+        );
+        assert!(
+            !text.contains("export report"),
+            "at 80 cols the E hint does not fit and must be dropped whole:\n{text}"
+        );
+        assert!(
+            text.contains("[Overview] \u{2026}"),
+            "dropped hints must be marked with a trailing ellipsis:\n{text}"
+        );
+
+        let mut app = demo_app(TabKind::Compliance);
+        let text = render_app(&mut app, 120, 40);
+        assert!(
+            text.contains("E export report (JSON)"),
+            "at 120 cols the E hint fits and must render whole:\n{text}"
+        );
+    }
+
+    /// #80: CBOM diffs surface the component TYPE (from cryptoProperties
+    /// assetType) as a Components-table column and a detail field, and the
+    /// Summary chart groups by asset type instead of (absent) ecosystems.
+    #[test]
+    fn cbom_diff_shows_asset_types() {
+        let mut app = cbom_diff_app(TabKind::Components);
+        let text = render_app(&mut app, 120, 40);
+        assert!(
+            text.contains("Type"),
+            "Components table must have a Type column for CBOM diffs:\n{text}"
+        );
+        assert!(
+            text.contains("algorithm"),
+            "crypto assets must show their assetType in the table:\n{text}"
+        );
+        assert!(
+            text.contains("Type: certificate"),
+            "the detail panel must name the selected asset's type:\n{text}"
+        );
+
+        let mut app = cbom_diff_app(TabKind::Summary);
+        let text = render_app(&mut app, 120, 40);
+        assert!(
+            text.contains("Changes by Asset Type"),
+            "CBOM summary must group changes by asset type:\n{text}"
+        );
+        assert!(
+            !text.contains("Changes by Ecosystem"),
+            "the ecosystem grouping (all 'unknown' for crypto assets) must be replaced:\n{text}"
+        );
+
+        // Plain SBOM diffs keep the ecosystem grouping (120x50: the demo's
+        // taller header drops the charts row at 40 rows).
+        let mut app = demo_app(TabKind::Summary);
+        let text = render_app(&mut app, 120, 50);
+        assert!(
+            text.contains("Changes by Ecosystem"),
+            "SBOM diffs keep the ecosystem chart:\n{text}"
+        );
+    }
+
+    /// #203: 'D' resolves the deep-dive target from the ACTIVE tab. Tabs
+    /// without a component-shaped selection explain themselves instead of
+    /// silently opening the hidden Components-tab selection.
+    #[test]
+    fn deep_dive_resolves_from_active_tab() {
+        // Licenses: no component context -> status message, no overlay.
+        let mut app = demo_app(TabKind::Licenses);
+        app.prepare_render();
+        handle_key_event(&mut app, key(KeyCode::Char('D')));
+        assert!(
+            !app.overlays.component_deep_dive.visible,
+            "'D' on Licenses must not open the hidden Components selection"
+        );
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Deep dive: select a component on the Components tab"),
+        );
+
+        // Vulnerabilities: the selected row's component is the target.
+        let mut app = demo_app(TabKind::Vulnerabilities);
+        app.prepare_render();
+        app.ensure_vulnerability_cache();
+        let expected = app.diff_vulnerability_items_from_cache()[0]
+            .vuln
+            .component_name
+            .clone();
+        handle_key_event(&mut app, key(KeyCode::Char('D')));
+        assert!(
+            app.overlays.component_deep_dive.visible,
+            "'D' on Vulnerabilities opens the deep dive for the selected row's component \
+             (status: {:?})",
+            app.status_message
+        );
+        assert_eq!(app.overlays.component_deep_dive.component_name, expected);
+    }
+
+    /// #198: while a multi-mode modal is open (and swallowing every key), the
+    /// status bar advertises the MODAL's keys, not the dead mode hints.
+    #[test]
+    fn modal_status_bars_show_modal_keys() {
+        crate::tui::test_support::pin_theme();
+
+        // Matrix pair-diff modal.
+        let mut app = App::new_matrix(demo_matrix());
+        handle_key_event(&mut app, key(KeyCode::Char('l'))); // col 1: distinct pair
+        handle_key_event(&mut app, key(KeyCode::Enter));
+        assert!(app.tabs.matrix.show_pair_diff, "Enter opens the pair diff");
+        let text = render_app(&mut app, 120, 40);
+        assert!(
+            text.contains("j/k scroll") && text.contains("Esc close"),
+            "matrix status bar must show the modal's keys:\n{text}"
+        );
+        assert!(
+            !text.contains("q quit"),
+            "'q quit' is false while the modal is open (q closes it):\n{text}"
+        );
+
+        // Multi-diff variable drill-down.
+        let mut app = App::new_multi_diff(demo_multi_diff());
+        handle_key_event(&mut app, key(KeyCode::Char('v')));
+        assert!(app.tabs.multi_diff.show_variable_drill_down);
+        let text = render_app(&mut app, 120, 40);
+        assert!(
+            text.contains("j/k select") && text.contains("Esc close"),
+            "multi status bar must show the drill-down's keys:\n{text}"
+        );
+        assert!(!text.contains("q quit"), "mode hints are dead:\n{text}");
+
+        // Timeline version-diff modal ('d').
+        let mut app = App::new_timeline(demo_timeline());
+        handle_key_event(&mut app, key(KeyCode::Char('d')));
+        assert!(app.tabs.timeline.show_version_diff_modal);
+        let text = render_app(&mut app, 120, 40);
+        assert!(
+            text.contains("\u{2190}/\u{2192} compare version") && text.contains("Esc close"),
+            "timeline status bar must show the modal's keys:\n{text}"
+        );
+        assert!(!text.contains("q quit"), "mode hints are dead:\n{text}");
+    }
+
+    /// #95: the matrix pair-diff modal scrolls with j/k, so entries beyond
+    /// the visible window are reachable, with row-exact hidden-line markers.
+    #[test]
+    fn matrix_pair_diff_modal_scrolls() {
+        crate::tui::test_support::pin_theme();
+        let mut app = App::new_matrix(demo_matrix());
+        // beta ↔ gamma: the most changes (9 removed) => overflows at 80x24.
+        handle_key_event(&mut app, key(KeyCode::Char('j')));
+        handle_key_event(&mut app, key(KeyCode::Char('l')));
+        handle_key_event(&mut app, key(KeyCode::Char('l')));
+        handle_key_event(&mut app, key(KeyCode::Enter));
+        assert!(app.tabs.matrix.show_pair_diff);
+
+        let text = render_app(&mut app, 80, 24);
+        assert!(
+            text.contains("\u{2014} j/k to scroll"),
+            "overflow marker must advertise scrolling:\n{text}"
+        );
+        assert!(
+            !text.contains("above"),
+            "unscrolled modal has nothing hidden above:\n{text}"
+        );
+
+        // Scroll two lines: the above-marker must count exactly 2.
+        handle_key_event(&mut app, key(KeyCode::Char('j')));
+        handle_key_event(&mut app, key(KeyCode::Char('j')));
+        let text = render_app(&mut app, 80, 24);
+        assert!(
+            text.contains("\u{2191} 2 more lines above"),
+            "after jj the above-marker must count 2:\n{text}"
+        );
+
+        // Scroll far past the end: the offset clamps, the bottom marker
+        // disappears, and the LAST body line (previously unreachable beyond
+        // the per-section cap) is now visible.
+        for _ in 0..100 {
+            handle_key_event(&mut app, key(KeyCode::Char('j')));
+        }
+        let text = render_app(&mut app, 80, 24);
+        assert!(
+            !text.contains("\u{2014} j/k to scroll"),
+            "fully scrolled: nothing hidden below:\n{text}"
+        );
+        assert!(
+            text.contains("above"),
+            "fully scrolled: hidden lines are above:\n{text}"
+        );
+
+        // 'k' scrolls back up (the bottom marker returns).
+        handle_key_event(&mut app, key(KeyCode::Char('k')));
+        let text = render_app(&mut app, 80, 24);
+        assert!(
+            text.contains("\u{2014} j/k to scroll"),
+            "'k' scrolls back up:\n{text}"
+        );
+
+        // Esc still closes and resets the scroll.
+        handle_key_event(&mut app, key(KeyCode::Esc));
+        assert!(!app.tabs.matrix.show_pair_diff);
+        assert_eq!(crate::tui::events::pair_diff_scroll(), 0);
+    }
 }

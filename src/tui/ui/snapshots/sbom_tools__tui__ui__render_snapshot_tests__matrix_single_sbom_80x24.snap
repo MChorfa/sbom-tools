@@ -3,7 +3,7 @@ source: src/tui/ui/render_snapshot_tests.rs
 expression: text
 ---
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ Matrix: 1×1 SBOMs (0 pairs)  │ Sort: Name ↑ │ Threshold: All │ Highlight     │
+│ Matrix: 1×1 SBOMs (0 pairs)  │ Sort: Name ↑ │ Threshold: All │ Highlight: on │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────┐┌ Pair Details ────────────────┐
 │                                              ││Comparing:                    │

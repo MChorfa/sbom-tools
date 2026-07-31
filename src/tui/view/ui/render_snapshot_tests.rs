@@ -85,7 +85,7 @@ fn tab_switch_cycles_within_profile() {
     assert_eq!(app.active_tab, ViewTab::Tree);
 
     handle_key_event(&mut app, key(KeyCode::Tab));
-    assert_eq!(app.active_tab, ViewTab::Vulnerabilities);
+    assert_eq!(app.active_tab, ViewTab::Dependencies);
 
     handle_key_event(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
     assert_eq!(app.active_tab, ViewTab::Tree);
@@ -94,8 +94,11 @@ fn tab_switch_cycles_within_profile() {
 #[test]
 fn numeric_keys_jump_to_view_tab() {
     let mut app = demo_view_app(ViewTab::Overview);
-    // Position 3 in the SBOM profile is Vulnerabilities.
+    // Positions 3/4/5 in the SBOM profile mirror the Diff app's tab bar:
+    // Dependencies=3, Licenses=4, Vulnerabilities=5.
     handle_key_event(&mut app, key(KeyCode::Char('3')));
+    assert_eq!(app.active_tab, ViewTab::Dependencies);
+    handle_key_event(&mut app, key(KeyCode::Char('5')));
     assert_eq!(app.active_tab, ViewTab::Vulnerabilities);
     handle_key_event(&mut app, key(KeyCode::Char('1')));
     assert_eq!(app.active_tab, ViewTab::Overview);
@@ -108,6 +111,21 @@ fn help_overlay_toggles() {
     assert!(app.show_help);
     handle_key_event(&mut app, key(KeyCode::Char('?')));
     assert!(!app.show_help);
+}
+
+/// The overlay footer promises "Press Esc, ? or K to close" — 'K' must
+/// actually close it in View mode too (KEV filtering only applies while no
+/// overlay is open).
+#[test]
+fn help_overlay_closes_on_capital_k() {
+    let mut app = demo_view_app(ViewTab::Overview);
+    handle_key_event(&mut app, key(KeyCode::Char('?')));
+    assert!(app.show_help);
+    handle_key_event(&mut app, key(KeyCode::Char('K')));
+    assert!(
+        !app.show_help,
+        "'K' must close the help overlay as advertised"
+    );
 }
 
 #[test]
@@ -184,6 +202,159 @@ fn snapshot_aibom_tabs() {
 }
 
 // ============================================================================
+// Residual polish behavior (profile label, AI overview, mistyped ML,
+// compliance hints/truncation, tree filter labels)
+// ============================================================================
+
+/// The AI-Readiness header must use the humanized profile label, never the
+/// raw enum name (siblings render "Profile: CBOM" / "Profile: Standard").
+#[test]
+fn ai_readiness_header_uses_humanized_profile_label() {
+    let mut app = aibom_view_app(ViewTab::AiReadiness);
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Profile: AI Readiness"),
+        "header must humanize the profile name:\n{text}"
+    );
+    assert!(
+        !text.contains("Profile: AiReadiness"),
+        "raw enum literal must not leak into the header:\n{text}"
+    );
+}
+
+/// The AI-BOM Overview renders AI-tailored panels (model/dataset inventory +
+/// readiness gauge) instead of only the generic SBOM panels.
+#[test]
+fn aibom_overview_renders_ai_panels() {
+    let mut app = aibom_view_app(ViewTab::Overview);
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("AI Inventory"),
+        "AI inventory panel missing:\n{text}"
+    );
+    assert!(
+        text.contains("Models: 1") && text.contains("Datasets: 1"),
+        "model/dataset counts missing:\n{text}"
+    );
+    assert!(
+        text.contains("AI Readiness"),
+        "AI readiness panel missing:\n{text}"
+    );
+    assert!(
+        text.contains("Checks passed:"),
+        "readiness summary missing:\n{text}"
+    );
+    // The shared stat cards stay on top.
+    assert!(text.contains("Components"), "stat cards missing:\n{text}");
+}
+
+/// A CycloneDX doc whose only model card sits on a wrongly-typed component
+/// (`type: application`).
+const MISTYPED_MLBOM: &str =
+    include_str!("../../../../tests/fixtures/cyclonedx/mistyped-mlbom.cdx.json");
+
+/// Components carrying a parsed model card under a wrong CycloneDX type are
+/// listed on the Models tab, badged with the declared type, with a fix hint
+/// in the detail panel — not silently hidden behind the empty state.
+#[test]
+fn models_tab_surfaces_mistyped_model_card_carriers() {
+    pin_theme();
+    let sbom = crate::parsers::parse_sbom_str(MISTYPED_MLBOM).expect("fixture must parse");
+    // Forced AI-BOM profile: the doc detects as plain SBOM precisely because
+    // its model is mistyped — that is the situation being surfaced.
+    let mut app = ViewApp::new(sbom, MISTYPED_MLBOM, crate::model::BomProfile::AiBom);
+    app.active_tab = ViewTab::Models;
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        !text.contains("No machine-learning models found"),
+        "model-card carrier must not be hidden behind the empty state:\n{text}"
+    );
+    assert!(
+        text.contains("sentiment-model"),
+        "mistyped model missing from the list:\n{text}"
+    );
+    assert!(
+        text.contains("[typed: application]"),
+        "declared-type badge missing:\n{text}"
+    );
+    assert!(
+        text.contains("fix the 'type' field"),
+        "detail panel fix hint missing:\n{text}"
+    );
+}
+
+/// Compliance help bar: the grouping toggle is labeled with the verb "group"
+/// (shared vocabulary with the Diff app) and a capitalized state.
+#[test]
+fn compliance_help_bar_labels_grouping_toggle() {
+    let mut app = demo_view_app(ViewTab::Compliance);
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("g group [Grouped]"),
+        "grouping hint must read 'g group [Grouped]':\n{text}"
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('g')));
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("g group [Flat]"),
+        "toggled grouping hint must read 'g group [Flat]':\n{text}"
+    );
+}
+
+/// Compliance grouped table: overlong Issue Pattern cells end in a visible
+/// ellipsis instead of being hard-clipped mid-word at the column edge.
+#[test]
+fn compliance_grouped_pattern_cells_elide() {
+    let mut app = demo_view_app(ViewTab::Compliance);
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("supplier/manufa..."),
+        "clipped pattern cell must end in '...':\n{text}"
+    );
+}
+
+/// The Tree tab's '/' is an inline list filter, not the jump-search palette —
+/// footer hint and inline bar must both say "filter".
+#[test]
+fn tree_slash_is_labeled_filter() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("/ filter"),
+        "Tree footer must advertise '/ filter':\n{text}"
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('/')));
+    for c in "ssl".chars() {
+        handle_key_event(&mut app, key(KeyCode::Char(c)));
+    }
+    let text = render_to_text(120, 40, |frame| {
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Filter: ssl"),
+        "inline bar must be labeled 'Filter:':\n{text}"
+    );
+    assert!(
+        !text.contains("Search: ssl"),
+        "inline bar must not be labeled 'Search:':\n{text}"
+    );
+}
+
+// ============================================================================
 // View-mode vuln explorer parity (EPSS + KEV filter) and compliance selector
 // ============================================================================
 
@@ -228,9 +399,9 @@ fn vuln_explorer_renders_epss_badge() {
 fn kev_filter_key_toggles_and_renders_state() {
     let mut app = epss_kev_view_app();
     assert!(!app.vuln_state.filter_kev);
-    // 'k' on the Vulnerabilities tab toggles the KEV-only filter.
-    handle_key_event(&mut app, key(KeyCode::Char('k')));
-    assert!(app.vuln_state.filter_kev, "'k' enables the KEV-only filter");
+    // Capital 'K' toggles the KEV-only filter; plain 'k' must stay navigation.
+    handle_key_event(&mut app, key(KeyCode::Char('K')));
+    assert!(app.vuln_state.filter_kev, "'K' enables the KEV-only filter");
 
     let text = render_to_text(120, 40, |frame| {
         render(frame, &mut app);
@@ -239,15 +410,20 @@ fn kev_filter_key_toggles_and_renders_state() {
     assert!(text.contains("CVE-2024-9999"), "KEV vuln survives filter");
     assert!(text.contains("KEV:"), "filter bar shows KEV state");
     assert!(
-        text.contains("[k]"),
-        "footer hint advertises the [k] toggle"
+        text.contains("[K]"),
+        "toolbar hint advertises the [K] toggle:\n{text}"
     );
 
-    handle_key_event(&mut app, key(KeyCode::Char('k')));
+    handle_key_event(&mut app, key(KeyCode::Char('K')));
     assert!(
         !app.vuln_state.filter_kev,
-        "'k' toggles the filter back off"
+        "'K' toggles the filter back off"
     );
+
+    // Plain 'k' navigates and must NOT touch the filter (the old binding
+    // hijacked vim navigation and blanked the list on 0-KEV documents).
+    handle_key_event(&mut app, key(KeyCode::Char('k')));
+    assert!(!app.vuln_state.filter_kev, "'k' must never toggle KEV");
 }
 
 #[test]
@@ -687,7 +863,7 @@ fn filter_bar_hints_all_visible_at_80_cols() {
         render(frame, &mut app);
     });
     assert!(
-        text.contains("[Tab] next group"),
+        text.contains("[}/{] group jump"),
         "the tail of the hint row must render at 80 cols:\n{text}"
     );
     assert!(
@@ -902,8 +1078,10 @@ fn all_critical_sbom_uses_compact_stats() {
         "compact path must not render the empty MEDIUM card:\n{text}"
     );
     assert!(
-        text.contains("vulnerabilities"),
-        "compact summary must render:\n{text}"
+        text.contains("2 vulns") || text.contains("2 vulnerabilities"),
+        "compact summary must render UN-CLIPPED (the old assertion was \
+         satisfied by an unrelated '(1 vulnerabilities)' grammar bug while \
+         the card clipped '2 vulnerabiliti' mid-word):\n{text}"
     );
 }
 
@@ -1365,8 +1543,10 @@ fn pqc_detail_pane_overflow_marker_and_compliant_branch() {
         "detail pane must be titled for the selected algorithm (fixture index drift?):\n{text}"
     );
     assert!(
-        text.contains("more lines \u{2014} see the Compliance tab"),
-        "overflowing violation detail must render the explicit truncation marker instead of clipping silently:\n{text}"
+        text.contains("more lines \u{2014} press e to export the full report"),
+        "overflowing violation detail must render the explicit truncation marker \
+         (pointing at export — the CBOM profile has no Compliance tab) instead of \
+         clipping silently:\n{text}"
     );
 
     // AES-256-GCM (index 5) has ZERO violations of any severity (CNSA emits
@@ -1586,4 +1766,351 @@ fn crypto_header_renders_all_clear_when_no_danger_metrics() {
         text.contains("Quantum:"),
         "the neutral counts line must still render under the all-clear line:\n{text}"
     );
+}
+
+// ============================================================================
+// Yank correctness + key-policy regression tests (findings 3/20/119/157,
+// 2/135, 105/190, 106, 109, 147): 'y' must copy the item the user SEES, and
+// j/k/e/y/l/digits keep their app-wide meanings on every tab.
+// ============================================================================
+
+use crate::tui::view::events::get_yank_text;
+
+/// Two components, one vuln each (Critical 10.0 / High 7.2) — renders as two
+/// collapsed component groups on the Vulnerabilities tab.
+fn two_group_vuln_app() -> ViewApp {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    for (name, cve, score, sev) in [
+        ("log4j", "CVE-2021-44228", 10.0_f32, Severity::Critical),
+        ("lodash", "CVE-2021-23337", 7.2_f32, Severity::High),
+    ] {
+        let mut comp =
+            Component::new(name.to_string(), format!("{name}-ref")).with_version("1.0.0".into());
+        let mut vuln = VulnerabilityRef::new(cve.to_string(), VulnerabilitySource::Nvd);
+        vuln.severity = Some(sev);
+        vuln.cvss.push(crate::model::CvssScore::new(
+            crate::model::CvssVersion::V31,
+            score,
+        ));
+        vuln.affected_versions.push("1.0.0".to_string());
+        comp.vulnerabilities.push(vuln);
+        sbom.components
+            .insert(CanonicalId::from_name_version(name, None), comp);
+    }
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Vulnerabilities;
+    app
+}
+
+/// Licenses yank must resolve through the SAME count-desc display list the
+/// table renders (old code re-sorted alphabetically and dropped "Unknown",
+/// so the footer offered Apache-2.0 while MIT was selected).
+#[test]
+fn yank_follows_displayed_selection_on_licenses() {
+    let mut app = demo_view_app(ViewTab::Licenses);
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+
+    // Display order (count-desc): MIT(6), Apache-2.0(2), Unknown(1).
+    assert_eq!(get_yank_text(&app).as_deref(), Some("MIT"));
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(get_yank_text(&app).as_deref(), Some("Apache-2.0"));
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        get_yank_text(&app).as_deref(),
+        Some("Unknown"),
+        "the synthetic Unknown bucket is part of the display list and must be yankable"
+    );
+}
+
+/// Vulnerabilities yank must resolve through the grouped display list: group
+/// headers copy the group label, vuln rows copy that row's CVE id.
+#[test]
+fn yank_follows_displayed_selection_on_vulnerabilities() {
+    let mut app = two_group_vuln_app();
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+
+    // Row 0 is the first (Critical) group header — copying it yields the label.
+    let first = get_yank_text(&app).expect("group header row must be yankable");
+    assert!(
+        first.contains("log4j"),
+        "group-header yank must be the group label, got {first:?}"
+    );
+
+    // Expand all groups, move onto the vuln row, and yank the CVE id.
+    handle_key_event(&mut app, key(KeyCode::Char('E')));
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        get_yank_text(&app).as_deref(),
+        Some("CVE-2021-44228"),
+        "vuln-row yank must be the displayed row's CVE id"
+    );
+}
+
+/// CBOM tabs: yank must index the per-tab filtered+sorted list, not the raw
+/// mixed crypto-component walk (which offered "ML-KEM-1024" on every tab).
+#[test]
+fn yank_follows_displayed_selection_on_cbom_tabs() {
+    let (sbom, profile) = crate::tui::test_support::cbom_single();
+    let mut app = ViewApp::new(sbom, crate::tui::test_support::CBOM, profile);
+
+    // Algorithms tab: default sort is by name — expected order derived
+    // independently of the code under test.
+    use crate::model::{ComponentType, CryptoAssetType};
+    let mut algo_names: Vec<String> = app
+        .sbom
+        .components
+        .values()
+        .filter(|c| {
+            c.component_type == ComponentType::Cryptographic
+                && c.crypto_properties
+                    .as_ref()
+                    .is_some_and(|cp| cp.asset_type == CryptoAssetType::Algorithm)
+        })
+        .map(|c| c.name.clone())
+        .collect();
+    algo_names.sort();
+    assert!(
+        algo_names.len() >= 2,
+        "fixture must have several algorithms"
+    );
+
+    app.active_tab = ViewTab::Algorithms;
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert_eq!(get_yank_text(&app).as_deref(), Some(algo_names[0].as_str()));
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(get_yank_text(&app).as_deref(), Some(algo_names[1].as_str()));
+
+    // Keys tab: the yanked item must actually BE key material, not an
+    // algorithm that happens to share the raw-list index.
+    app.active_tab = ViewTab::Keys;
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+    let yanked = get_yank_text(&app).expect("keys tab has a selection");
+    let is_key_material = app.sbom.components.values().any(|c| {
+        c.name == yanked
+            && c.crypto_properties
+                .as_ref()
+                .is_some_and(|cp| cp.asset_type == CryptoAssetType::RelatedCryptoMaterial)
+    });
+    assert!(
+        is_key_material,
+        "Keys-tab yank must name key material, got {yanked:?}"
+    );
+}
+
+/// A selected tree GROUP row must yank its label instead of reporting
+/// "Nothing selected to copy" (finding 147).
+#[test]
+fn yank_on_tree_group_row_copies_group_label() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+    // Row 0 in the demo fixture is the "npm" ecosystem group.
+    assert_eq!(get_yank_text(&app).as_deref(), Some("npm"));
+}
+
+/// 'e' must open the export dialog on EVERY tab; Dependencies fold-all moved
+/// to x/X (finding 106).
+#[test]
+fn e_exports_and_x_folds_on_dependencies() {
+    let mut app = demo_view_app(ViewTab::Dependencies);
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+
+    handle_key_event(&mut app, key(KeyCode::Char('e')));
+    assert!(app.show_export, "'e' on Dependencies must open export");
+    handle_key_event(&mut app, key(KeyCode::Esc));
+    assert!(!app.show_export);
+
+    handle_key_event(&mut app, key(KeyCode::Char('x')));
+    assert!(
+        !app.dependency_state.expanded.is_empty(),
+        "'x' expands all dependency nodes"
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('X')));
+    assert!(
+        app.dependency_state.expanded.is_empty(),
+        "'X' collapses all dependency nodes"
+    );
+}
+
+/// }/{ jump between vuln group headers; Tab keeps switching app tabs
+/// (the old Tab-guarded group-jump arms were unreachable dead code).
+#[test]
+fn group_jump_keys_work_and_tab_still_switches_tabs() {
+    let mut app = two_group_vuln_app();
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+
+    assert_eq!(app.vuln_state.selected, 0);
+    handle_key_event(&mut app, key(KeyCode::Char('}')));
+    assert_eq!(
+        app.vuln_state.selected, 1,
+        "}} jumps to the next group header"
+    );
+    handle_key_event(&mut app, key(KeyCode::Char('{')));
+    assert_eq!(app.vuln_state.selected, 0, "{{ jumps back");
+
+    handle_key_event(&mut app, key(KeyCode::Tab));
+    assert_ne!(
+        app.active_tab,
+        ViewTab::Vulnerabilities,
+        "Tab must still switch app tabs on the Vulnerabilities tab"
+    );
+}
+
+/// The legend's "Press any key to close" must be literally true (finding 109).
+#[test]
+fn legend_closes_on_any_key() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    handle_key_event(&mut app, key(KeyCode::Char('l')));
+    assert!(app.show_legend);
+    handle_key_event(&mut app, key(KeyCode::Char('z')));
+    assert!(!app.show_legend, "any key must close the legend");
+}
+
+/// The zero-data empty state must be neutral and actionable, not a
+/// celebration: absence of data is not proof of absence of vulnerabilities.
+#[test]
+fn vuln_empty_state_is_neutral_not_celebratory() {
+    pin_theme();
+    let mut sbom = NormalizedSbom::default();
+    let comp = Component::new("leftpad".to_string(), "leftpad-ref".to_string())
+        .with_version("1.0.0".to_string());
+    sbom.components
+        .insert(CanonicalId::from_name_version("leftpad", None), comp);
+    let mut app = ViewApp::new(sbom, "", crate::model::BomProfile::Sbom);
+    app.active_tab = ViewTab::Vulnerabilities;
+
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("No vulnerability data in this document"),
+        "empty state must describe missing DATA:\n{text}"
+    );
+    assert!(
+        text.contains("enrich"),
+        "empty state must point at the enrich/VEX remedy:\n{text}"
+    );
+    assert!(
+        !text.contains("Great news"),
+        "celebratory wording must be gone:\n{text}"
+    );
+}
+
+/// Group rows must show their max CVSS in the CVSS column — never a clipped
+/// "max:1" for a 10.0 inside the ID cell (findings 5/140/182) — and a vuln
+/// without a fix must show an em-dash under "Fix", not its affected version
+/// (finding 6).
+#[test]
+fn group_max_cvss_and_fix_column_are_honest() {
+    let mut app = two_group_vuln_app();
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+
+    assert!(
+        !text.contains("max:"),
+        "the clipped-prone 'max:' suffix must not render:\n{text}"
+    );
+    assert!(
+        text.contains("10.0"),
+        "the group's max CVSS must render in the CVSS column:\n{text}"
+    );
+
+    // Expand groups and check the vuln row's Fix cell.
+    handle_key_event(&mut app, key(KeyCode::Char('E')));
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    let row = text
+        .lines()
+        .find(|l| l.contains("CVE-2021-44228") && l.contains('\u{2500}'))
+        .unwrap_or_else(|| panic!("expanded vuln row must render:\n{text}"));
+    assert!(
+        row.contains('\u{2014}'),
+        "no-fix vulns must show an em-dash under Fix, got: {row}"
+    );
+    assert!(
+        !row.contains("1.0.0"),
+        "the AFFECTED version must not masquerade as a fix: {row}"
+    );
+}
+
+/// The Licenses summary strip must label its units (components vs licenses).
+#[test]
+fn licenses_summary_strip_labels_units() {
+    let mut app = demo_view_app(ViewTab::Licenses);
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("components: "),
+        "risk glyphs must be labelled as component counts:\n{text}"
+    );
+    assert!(
+        text.contains("3 licenses"),
+        "the right side must be labelled as a license count:\n{text}"
+    );
+}
+
+/// Overview "By Type" must respect declared CycloneDX types: the npm demo
+/// fixture is libraries + an application, not "Other Files 100%".
+#[test]
+fn tree_stats_by_type_uses_declared_types() {
+    let mut app = demo_view_app(ViewTab::Tree);
+    render_to_text(120, 40, |frame| render(frame, &mut app));
+    // Move off the group header: the Component Statistics panel (with the
+    // "By Type" chart) renders while the cursor is on a component row with
+    // no component inspected.
+    handle_key_event(&mut app, key(KeyCode::Char('j')));
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("Libraries"),
+        "declared library components must bucket as Libraries:\n{text}"
+    );
+    assert!(
+        !text.contains("Other Files"),
+        "npm components must not fall into the filename heuristic:\n{text}"
+    );
+}
+
+/// One-ecosystem SBOMs must show that ecosystem's bar — not a lone
+/// "Other N more" rollup (findings 10/44) — and the Unknown license bucket
+/// must not count as a unique license (finding 52).
+#[test]
+fn overview_distributions_are_labelled_and_complete() {
+    let mut app = demo_view_app(ViewTab::Overview);
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("npm"),
+        "the only ecosystem must render its own bar:\n{text}"
+    );
+    // demo fixture: MIT + Apache-2.0 declared, 1 unlicensed component.
+    assert!(
+        text.contains("2") && text.contains("Unique Licenses"),
+        "unique-license count must exclude the Unknown bucket:\n{text}"
+    );
+    assert!(
+        text.contains("unlicensed:"),
+        "unlicensed components get their own labelled line:\n{text}"
+    );
+}
+
+/// Models tab: training datasets referenced by bom-ref must resolve to the
+/// referenced component's name (findings 39/189), the section header must
+/// say what it is, and K/J must scroll the detail pane (finding 46).
+#[test]
+fn model_detail_resolves_dataset_refs_and_scrolls() {
+    let mut app = aibom_view_app(ViewTab::Models);
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("product-reviews-1M"),
+        "dataset bom-ref must resolve to the component name:\n{text}"
+    );
+    assert!(
+        text.contains("Model Card"),
+        "section header must be contextual, not 'ML / Dataset':\n{text}"
+    );
+    assert!(
+        !text.contains("ML / Dataset"),
+        "generic section header must be gone:\n{text}"
+    );
+
+    // K/J scrolling: at 80x24 the model card overflows; J must reveal content.
+    let before = render_to_text(80, 24, |frame| render(frame, &mut app));
+    handle_key_event(&mut app, key(KeyCode::Char('J')));
+    let after = render_to_text(80, 24, |frame| render(frame, &mut app));
+    assert_ne!(before, after, "J must scroll the model detail pane");
 }

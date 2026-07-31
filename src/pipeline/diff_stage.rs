@@ -201,11 +201,22 @@ pub fn compute_diff(
         print_threshold_recommendation(old_sbom, new_sbom, fuzzy_config);
     }
 
-    // Compute quality delta
+    // Compute quality delta. Profile-aware: a CBOM side is scored by the CBOM
+    // engine so the delta's categories are the crypto categories the scorer
+    // actually used (matching the TUI's per-side detection in
+    // `App::new_diff`). AI-BOMs deliberately stay on Standard here — the
+    // AI-readiness scoring path zeroes all 8 standard category scores, which
+    // would make every per-category delta vacuous.
     {
-        let scorer = crate::quality::QualityScorer::new(crate::quality::ScoringProfile::Standard);
-        let old_report = scorer.score(old_sbom);
-        let new_report = scorer.score(new_sbom);
+        let profile_for = |sbom: &crate::model::NormalizedSbom| {
+            if crate::model::BomProfile::detect(sbom) == crate::model::BomProfile::Cbom {
+                crate::quality::ScoringProfile::Cbom
+            } else {
+                crate::quality::ScoringProfile::Standard
+            }
+        };
+        let old_report = crate::quality::QualityScorer::new(profile_for(old_sbom)).score(old_sbom);
+        let new_report = crate::quality::QualityScorer::new(profile_for(new_sbom)).score(new_sbom);
         result.quality_delta = Some(crate::diff::QualityDelta::from_reports(
             &old_report,
             &new_report,

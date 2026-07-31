@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 /// Render the Datasets tab (AI-BOM mode).
-pub fn render_datasets(frame: &mut Frame, area: Rect, app: &ViewApp) {
+pub fn render_datasets(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     let scheme = colors();
     let mut datasets: Vec<_> = app
         .sbom
@@ -97,19 +97,38 @@ pub fn render_datasets(frame: &mut Frame, area: Rect, app: &ViewApp) {
             ),
         ]));
     }
-    // Reuse the shared ML / Dataset metadata renderer (dataset governance, etc.).
-    lines.extend(render_ml_dataset_lines(
-        comp.ml_model.as_ref(),
-        comp.dataset.as_ref(),
-        panels[1].width,
-    ));
+    // Reuse the shared ML / Dataset metadata renderer (dataset governance,
+    // etc.), retitled for this tab and with the tautological
+    // "Dataset Type: dataset" row dropped.
+    let dataset = comp
+        .dataset
+        .as_ref()
+        .map(super::without_generic_dataset_type);
+    let mut ml_lines =
+        render_ml_dataset_lines(comp.ml_model.as_ref(), dataset.as_ref(), panels[1].width);
+    super::relabel_ml_section_header(&mut ml_lines, "Dataset");
+    lines.extend(ml_lines);
 
+    // K/J detail scrolling (governance metadata can overflow 80x24).
+    let inner_width = panels[1].width.saturating_sub(2);
+    let visible_rows = panels[1].height.saturating_sub(2) as usize;
+    let total_rows = crate::tui::shared::text::wrapped_line_count(&lines, inner_width);
+    let max_scroll = total_rows.saturating_sub(visible_rows) as u16;
+    let scroll = app.datasets_detail_scroll.min(max_scroll);
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Dataset Detail ");
+    if max_scroll > 0 {
+        block = block.title_bottom(Line::styled(
+            " [K/J] scroll ",
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
     let detail = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Dataset Detail "),
-        )
-        .wrap(Wrap { trim: true });
+        .block(block)
+        .wrap(Wrap { trim: true })
+        .scroll((scroll, 0));
     frame.render_widget(detail, panels[1]);
+    app.datasets_detail_scroll = scroll;
 }

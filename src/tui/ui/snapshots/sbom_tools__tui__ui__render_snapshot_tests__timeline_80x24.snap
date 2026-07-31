@@ -8,21 +8,21 @@ expression: text
 ┌ Components Evolution (1-3/3) [m: metric, +/-: zoom, h/l: scroll] ────────────┐
 │▃▃▃9▃▃▃ ▃▃▃9▃▃▃ ▁▁▁3▁▁▁                                                       │
 └──────────────────────────────────────────────────────────────────────────────┘
-┌ Versions [g: jump, d: diff] ─┐┌ Component Evolution (28/28) [f: filter, Enter┐
-│#    Version    Comp Chan CRA ││Component       Version      Since   Status   │
+┌ Versions [g: jump, d: diff] ─┐┌ Component Evolution (16/16) ─────────────────┐
+│#   Version  Comps Changes CRA││Component       Version      Seen    Status   │
 │                              ││                                              │
-│1.   v1         9    init ✗   ││product-reviews              v3      Added    │
-│2.   v2         9    +4 - ✗   ││sentiment-class 1.0.0        v3      Added    │
-│3.   v3         3    +3 - ✗   ││axios           1.4.0        v2      Added    │
-│                              ││dayjs           1.11.7       v2      Added    │
-│                              ││express         4.18.2       v2      Added    │
-│                              ││lodash          4.17.21      v2      Added    │
-│                              ││prisma          4.15.0       v2      Added    │
-│                              ││react           18.2.0       v2      Added    │
-│                              ││typescript      5.0.4        v2      Added    │
-│                              ││zod             3.21.4       v2      Added    │
-│                              ││bsi-aibom-compl 1.0.0        v3      Added    │
+│1.  v1       9     initial ✗  ││product-review…              v3+     Added    │
+│2.  v2       9     +4 -4   ✗  ││sentiment-clas… 1.0.0        v3+     Added    │
+│3.  v3       3     +3 -9   ✗  ││bsi-aibom-comp… 1.0.0        v3+     Added    │
+│                              ││acme-webapp     2.0.0        v1-v2   Removed  │
+│                              ││axios           1.4.0        v1-v2   Removed  │
+│                              ││dayjs           1.11.7       v2      Removed  │
+│                              ││express         4.18.2       v1-v2   Removed  │
+│                              ││jquery          3.5.1        v1      Removed  │
+│                              ││lodash          4.17.21      v1-v2   Removed  │
+│                              ││moment          2.29.1       v1      Removed  │
+│                              ││prisma          4.15.0       v2      Removed  │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Added: 7  Removed: 13  │  …  Tab panel  / search  V views  K keys  q quit     │
+│Changes across versions: +7 -13  │  …  / search  V views  K keys  q quit      │
 └──────────────────────────────────────────────────────────────────────────────┘
