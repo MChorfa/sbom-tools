@@ -51,5 +51,12 @@ memory/
 
 # Swift Package Manager build directories (all nested .build/ dirs)
 **/.build/
-.parsers-audit-findings.json
-.enrichment-audit-maps.json
+
+# Audit/review scratch artifacts. These are working notes from analysis
+# sessions, not deliverables: they are large, unreferenced by any code, CI
+# or doc, and embed local absolute paths. Two were listed individually and
+# three others still reached main anyway, so match the shape instead.
+.*-findings.json
+.*-research.json
+.*-audit-map.json
+.*-audit-maps.json
