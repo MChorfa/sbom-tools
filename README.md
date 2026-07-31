@@ -10,14 +10,17 @@
 
 <p align="center">
   <a href="https://github.com/sbom-tool/sbom-tools/actions/workflows/rust.yml"><img src="https://github.com/sbom-tool/sbom-tools/actions/workflows/rust.yml/badge.svg" alt="build"></a>
-  <a href="https://crates.io/crates/sbom-tools"><img src="https://img.shields.io/crates/v/sbom-tools" alt="crates.io"></a>
+  <a href="https://crates.io/crates/sbom-tools"><img src="https://shieldcn.dev/crates/v/sbom-tools.svg" alt="crates.io"></a>
   <a href="https://docs.rs/sbom-tools"><img src="https://docs.rs/sbom-tools/badge.svg" alt="docs.rs"></a>
-  <a href="https://crates.io/crates/sbom-tools"><img src="https://img.shields.io/crates/d/sbom-tools" alt="downloads"></a>
+  <a href="https://crates.io/crates/sbom-tools"><img src="https://shieldcn.dev/crates/d/sbom-tools.svg" alt="downloads"></a>
   <a href="https://deps.rs/repo/github/sbom-tool/sbom-tools"><img src="https://deps.rs/repo/github/sbom-tool/sbom-tools/status.svg" alt="dependency status"></a>
-  <a href="https://github.com/sbom-tool/sbom-tools"><img src="https://img.shields.io/crates/l/sbom-tools" alt="license"></a>
-  <a href="https://github.com/sbom-tool/sbom-tools"><img src="https://img.shields.io/badge/MSRV-1.88-blue" alt="MSRV"></a>
+  <a href="https://github.com/sbom-tool/sbom-tools"><img src="https://shieldcn.dev/crates/license/sbom-tools.svg" alt="license"></a>
+  <a href="https://github.com/sbom-tool/sbom-tools"><img src="https://shieldcn.dev/badge/MSRV-1.88-blue.svg" alt="MSRV"></a>
   <a href="https://www.bestpractices.dev/projects/11992"><img src="https://www.bestpractices.dev/projects/11992/badge" alt="OpenSSF Best Practices"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/sbom-tool/sbom-tools"><img src="https://api.scorecard.dev/projects/github.com/sbom-tool/sbom-tools/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://github.com/sbom-tool/sbom-tools/stargazers"><img src="https://shieldcn.dev/github/stars/sbom-tool/sbom-tools.svg" alt="GitHub stars"></a>
+  <a href="https://github.com/sbom-tool/sbom-tools/releases"><img src="https://shieldcn.dev/github/release/sbom-tool/sbom-tools.svg" alt="GitHub release"></a>
+  <a href="https://github.com/sbom-tool/sbom-tools/issues"><img src="https://shieldcn.dev/github/issues/sbom-tool/sbom-tools.svg" alt="GitHub issues"></a>
 </p>
 
 Semantic SBOM/CBOM diff, quality scoring, and analysis tool. Compare, validate, and grade software and cryptographic bills of materials across CycloneDX and SPDX formats.
