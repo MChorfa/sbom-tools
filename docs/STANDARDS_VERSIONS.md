@@ -7,6 +7,10 @@ items expected to move. Update this file whenever a checker is rebased onto
 a new edition.
 
 Last full verification: **2026-07-12** (primary sources fetched directly).
+Rows added after that date carry their own edition dates: the CISA 2026,
+PCI DSS 6.3.2 and FSCT profiles and the sbomqs interoperability section
+landed 2026-07-30 (commits `b0e533b`, `b283320`); their rule catalogues and
+aliases were re-checked against the binary on 2026-07-31.
 
 ## Pinned editions
 
@@ -15,7 +19,7 @@ Last full verification: **2026-07-12** (primary sources fetched directly).
 | EU CRA (`cra`, `oss-steward`) | Regulation (EU) 2024/2847 (OJ L, 2024-11-20) | <https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng> | Art. 14 applies from 2026-09-11; full application 2027-12-11 (Art. 71(2)). No 2029 milestone exists. |
 | BSI TR-03183-2 (`bsi`) | v2.1.0 (2025-08-20) | <https://bsi.bund.de/dok/TR-03183-en> | CycloneDX ≥ 1.6 / SPDX ≥ 3.0.1; SHA-512 hash of the deployable component; the §7 six-month grace for v2.0.0 ended 2026-02-20. |
 | NTIA minimum elements (`ntia`) | July 2021 report | <https://www.ntia.gov/report/2021/minimum-elements-software-bill-materials-sbom> | Canonical host is ntia.gov (ntia.doc.gov survives via redirect). Superseded by the CISA 2026 Minimum Elements (below) but retained as the 2021 baseline many regulations still cite. |
-| CISA 2026 Minimum Elements (`cisa-2026`) | v2.1 final, 2026-07-29 (TLP:CLEAR; CISA/NSA/FBI + 15 international agencies) | <https://www.cisa.gov/resources-tools/resources/2026-minimum-elements-software-bill-materials-sbom> | "Updates and replaces" the NTIA 2021 elements (the Aug 2025 CISA draft was v2.0 of this document). 17 data fields + document-checkable practices as `SBOM-CISA2026-*`; explicit-unknown markers (NOASSERTION) satisfy the 2026 escape hatches; Author Signature / Generation Context / SBOM Version / Coverage are evidence-limited (Warning); the format-version floor (CycloneDX 1.4+ / SPDX 2.2+) is tool policy — CISA names no deprecated versions. Frequency, Distribution and Delivery, and Accommodation of Updates are organizational practices with no in-document evidence and carry no rules. Non-binding joint guidance. |
+| CISA 2026 Minimum Elements (`cisa-2026`) | v2.1 final, 2026-07-29 (TLP:CLEAR; CISA/NSA/FBI + 15 international agencies) | <https://www.cisa.gov/resources-tools/resources/2026-minimum-elements-software-bill-materials-sbom> | "Updates and replaces" the NTIA 2021 elements (the Aug 2025 CISA draft was v2.0 of this document). Aliases `cisa`, `cisa2026`, `minimum-elements-2026`. 17 data fields + document-checkable practices, implemented as 17 `SBOM-CISA2026-*` rules (plus the `SBOM-CISA2026-GENERAL` fallback id); explicit-unknown markers (NOASSERTION) satisfy the 2026 escape hatches; required data fields fail as Error, evidence-limited or heuristic checks only Warn (Author Signature / Generation Context / SBOM Version / Coverage, plus Data Format Version, Tool Version and Hash Algorithm); the format-version floor (CycloneDX 1.4+ / SPDX 2.2+) is tool policy — CISA names no deprecated versions. Frequency, Distribution and Delivery, and Accommodation of Updates are organizational practices with no in-document evidence and carry no rules. Non-binding joint guidance. |
 | FDA premarket cybersecurity (`fda`) | Final, 2026-02-03 — "Quality **Management** System Considerations…" | <https://www.fda.gov/media/119933/download> | Supersedes the June 2025 and Sept 2023 finals. SBOM elements (NTIA baseline + level of support + end-of-support date) unchanged. |
 | NIST SSDF (`ssdf`) | SP 800-218 v1.1 | <https://doi.org/10.6028/NIST.SP.800-218> | |
 | EO 14028 (`eo14028`) | May 2021 + NTIA elements | <https://www.federalregister.gov/d/2021-10460> | |
@@ -24,17 +28,50 @@ Last full verification: **2026-07-12** (primary sources fetched directly).
 | EUCC (`eucc`) | Implementing Regulation (EU) 2024/482 | <https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng> | Reference-only profile. |
 | EU AI Act (`ai-act`) | Regulation (EU) 2024/1689 Annex IV | <https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng> | Readiness profile. |
 | BSI/G7 SBOM for AI (`bsi-ai`) | Final joint G7 guidance, 2026-05-12 | <https://www.cisa.gov/resources-tools/resources/software-bill-materials-ai-minimum-elements> | Supersedes the Feb 2026 BSI draft the profile was first built against; element clusters unchanged at the level we check. |
-| PCI DSS Req. 6.3.2 (`pci-dss`) | v4.0.1 (2024-06-11); Req. 6.3.2 with companion controls 6.3.1 / 11.3.1.1 | <https://www.pcisecuritystandards.org/document_library/> | Required in assessments since 2025-03-31 (v4.0 retired 2024-12-31); citations target v4.0.1 only. The standard PDF is license-gated, so the 6.3.2 requirement/testing-procedure text is secondary-sourced (consistent across independent sources). PCI DSS prescribes no SBOM format or field schema — no format gate; the SBOM-as-inventory mapping is guidance-derived, so a passing run evidences that the inventory exists and is usable, **not** PCI DSS compliance (interviews, inventory *use*, and the software-vs-inventory comparison are assessor work). The 365-day staleness advisory is tool policy, not standard text. |
-| CISA Framing Software Component Transparency (`fsct`) | Third Edition (document date 2024-09-03, published 2024-10-15) | <https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024> | Attribute-maturity profile: Minimum Expected → Error, Recommended Practice → Warning, Aspirational Goal → Info (Error means "fails the Minimum Expected tier" — the document is non-regulatory community guidance, distinct from the Minimum Elements line; no 4th edition exists as of 2026-07). The tier structure is asymmetric and preserved as-is; §2.3.2 Redacted Components has no rule (redaction markers are not modeled). Coverage floors (≥50% license/copyright), the ≥2-identifier-kinds threshold, the depth≥2 transitive proxy, and strict global-identifier enforcement (§2.2.2.4 only "prefers" it) are documented profile policy. SBOM Type, signature, concluded-license, and dynamic-dependency checks are evidence-gated by format (see `src/quality/compliance/fsct.rs` module docs). |
+| PCI DSS Req. 6.3.2 (`pci-dss`) | v4.0.1 (2024-06-11); Req. 6.3.2 with companion controls 6.3.1 / 11.3.1.1 | <https://www.pcisecuritystandards.org/document_library/> | Aliases `pci`, `pci-dss-6-3-2`, `pci-dss-4`. 10 rules: 9 × `SBOM-PCI-6-3-2-*` plus `SBOM-PCI-11-3-1-1-SEVERITY` (and the `SBOM-PCI-GENERAL` fallback id). Required in assessments since 2025-03-31 (v4.0 retired 2024-12-31); citations target v4.0.1 only. The standard PDF is license-gated, so the 6.3.2 requirement/testing-procedure text is secondary-sourced (consistent across independent sources). PCI DSS prescribes no SBOM format or field schema — no format gate; the SBOM-as-inventory mapping is guidance-derived, so a passing run evidences that the inventory exists and is usable, **not** PCI DSS compliance (interviews, inventory *use*, and the software-vs-inventory comparison are assessor work). The 365-day staleness advisory is tool policy, not standard text. |
+| CISA Framing Software Component Transparency (`fsct`) | Third Edition (document date 2024-09-03, published 2024-10-15) | <https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024> | Aliases `fsct-3`, `component-transparency`. 27 `SBOM-FSCT-*` rules (plus the `SBOM-FSCT-GENERAL` fallback id). Attribute-maturity profile: Minimum Expected → Error, Recommended Practice → Warning, Aspirational Goal → Info (Error means "fails the Minimum Expected tier" — the document is non-regulatory community guidance, distinct from the Minimum Elements line; no 4th edition exists as of 2026-07). The tier structure is asymmetric and preserved as-is; §2.3.2 Redacted Components has no rule (redaction markers are not modeled). Coverage floors (≥50% license/copyright), the ≥2-identifier-kinds threshold, the depth≥2 transitive proxy, and strict global-identifier enforcement (§2.2.2.4 only "prefers" it) are documented profile policy. SBOM Type, signature, concluded-license, and dynamic-dependency checks are evidence-gated by format (see `src/quality/compliance/fsct.rs` module docs). |
 | CSAF | v2.0 (OASIS Standard, 2022; ISO/IEC 20153:2025) | <https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html> | |
+
+## Attestation evidence (CycloneDX 1.6 `declarations`)
+
+CycloneDX 1.6 CDXA `declarations` (assessors, attestations, claims, evidence,
+targets, affirmation/signatories) plus `definitions.standards` are parsed into
+a normalized evidence model (`src/model/attestation.rs`) and consumed by the
+existing profiles: an attestation covering an SSDF practice (e.g. PS.1, PO.3),
+a CRA conformity route, an EUCC certificate reference or an EO 14028
+provenance claim can satisfy that rule
+(`src/quality/compliance/{ssdf,cra,eucc,eo14028}.rs`). Two limits are
+load-bearing when reading a passing verdict:
+
+- **Structural verification only.** JSF signature objects are recorded as
+  *present* — algorithm, named signatories, signer count — and are **never
+  cryptographically verified**. The evidence ladder is
+  `SelfDeclared < Structural < SignaturePresent < SignatureVerified`, and
+  phase 1 can never emit `SignatureVerified` (the variant exists only for
+  output-schema stability). "Attested" here means "the document says so, in
+  the schema's shape".
+- **In-document declarations only.** Ingestion of external in-toto / DSSE
+  attestation bundles (SLSA provenance/VSA, test-result, vulns predicates) is
+  a later phase with no surface today.
+
+Parsing is gated on `specVersion >= 1.6`; unresolvable CDXA refLinks are kept
+as dangling and fail closed (a dangling ref can never help satisfy a
+requirement). Every pre-existing satisfaction path remains valid as a
+self-declared fallback, so a document without `declarations` scores exactly as
+before. Verified 2026-07-31 on the SSDF path: stripping `declarations` from
+`tests/fixtures/cyclonedx/declarations-cdxa-ssdf-delta.cdx.json` re-fires
+`SBOM-SSDF-PS1` and `SBOM-SSDF-PO3`, while that document's `cra`, `eucc` and
+`eo14028` verdicts are identical with and without the section (those three
+consume the same evidence accessor, but need a claim that maps onto their own
+requirements before a rule changes).
 
 ## Watch list (expected to move)
 
-| Item | Status (2026-07-12) | Action when it lands |
+| Item | Status (2026-07-12 unless dated otherwise) | Action when it lands |
 |---|---|---|
 | CEN/CENELEC prEN 40000-1-3 (CRA vulnerability handling / SBOM) | Enquiry closed 2026-02-09; comment resolution before Formal Vote; publication expected H2 2026, may slip to 2027 | The `PRE-*-RQ-*` ids hardcoded in registry refs must be re-verified against the published EN; revisit `Pren40000_1_3` help-URI (currently None — draft is paywalled). |
 | NIST IR 8547 | Initial Public Draft only (comment period closed 2025-01-10) | Change "IR 8547 ipd" citations to final; re-check 2030/2035 timeline wording. |
-| CISA 2026 SBOM Minimum Elements | Final v2.1 published 2026-07-29; profile implemented as `cisa-2026` (plan P4) | Registry cleanup: retire the `SBOM-CISA2026-SCAFFOLD` marker (no longer emitted); watch cisa.gov for errata to the 2026-07-29 v2.1. |
+| CISA 2026 SBOM Minimum Elements | Final v2.1 published 2026-07-29; profile shipped 2026-07-30 as `cisa-2026` (plan P4); the `SBOM-CISA2026-SCAFFOLD` marker is gone from the registry (verified 2026-07-31) | Watch cisa.gov for errata to the 2026-07-29 v2.1; re-verify the 17 rules if an erratum moves a data field. |
 | OASIS CSAF 2.1 | Committee Specification Draft 02 (2026-02-25) | Update `Csaf2` references when it reaches OASIS Standard. |
 | NIST SP 800-131A Rev. 3 | Draft only (ipd 2024-10-21) | Update PQC registry refs from Rev. 2. |
 | BSI TR-03183-2 | v2.1.0 current; no v2.2.0 exists (the `_v2_2_0.pdf` URL on bsi.bund.de serves the archived v1.1 — do not trust the filename) | Rebase `bsi` checker; §7 gives a six-month transition from publication of the next edition. |

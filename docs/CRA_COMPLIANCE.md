@@ -7,8 +7,9 @@ ENISA / industry guidance. Use it to:
 
 - **Auditors / notified bodies**: locate the regulatory text behind each
   finding by Article number or Annex reference.
-- **Engineers**: see which sidecar field (`CraSidecarMetadata`) or SBOM
-  field clears each violation.
+- **Engineers**: see which sidecar field (`CraSidecarMetadata`), SBOM
+  field, or CycloneDX 1.6 [attestation](#attestation-evidence-cyclonedx-16-declarations)
+  clears each violation.
 - **GRC / dashboards**: cross-reference SARIF `properties.standardIds`
   and `properties.standardHelpUris` to produce control-mapping reports.
 
@@ -84,10 +85,15 @@ that ends up in SARIF `properties.standardHelpUris`.
 | `CRA Art. 14(2)(b): 72-hour notification channel`           | Art. 14(2)(b) / 14(4)(b) | RLS-2-RQ-03 | `incidentReportContact`               |
 | `CRA Art. 14(7): ENISA single reporting platform`           | Art. 14(7)     | RLS-2-RQ-03-RE      | `enisaReportingPlatformId`            |
 
-Pre-deadline (`Utc::now() < 2026-09-11`) findings are emitted as `Info`;
-post-deadline they become `Warning` (or `Error` at
-`ImportantClass2`/`Critical` per the
+Pre-deadline findings are emitted as `Info`; post-deadline they become
+`Warning` (or `Error` at `ImportantClass2`/`Critical` per the
 [product-class calibration](#cra-p32-product-class-severity-calibration)).
+The 2026-09-11 deadline is compared against the *evaluation instant* — the
+wall clock by default, or `--as-of <RFC 3339>` for reproducible CI runs.
+
+Art. 14(7) is the exception: the ENISA single reporting platform has no
+published endpoint yet, so the missing-`enisaReportingPlatformId` finding
+stays `Info` on both sides of the deadline.
 
 ### CRA Annexes
 
@@ -98,7 +104,7 @@ post-deadline they become `Warning` (or `Error` at
 | `CRA Annex I Part II: Supply chain transparency`            | Annex I Part II          | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
 | `CRA Annex I Part I (2)(f): Document signature/integrity`   | Annex I Part I (2)(f)    | —                   | serial number / digital signature / attestation hash    |
 | `CRA Annex I Part I (2)(f): Component integrity information (hash)` | Annex I Part I (2)(f) | —                | cryptographic hash (SHA-256+) per component             |
-| `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | `Certification` external ref with `eucc`/`common-criteria` URL |
+| `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | sidecar EUCC evidence fields, a `Certification`/`Attestation` external ref with `eucc`/`common-criteria` URL, or a [CDXA attestation](#attestation-evidence-cyclonedx-16-declarations) naming EUCC / Common Criteria |
 | `CRA Annex VII: Technical documentation`                    | Annex VII                | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
 | `CRA Annex V: EU Declaration of Conformity reference`       | Annex V                  | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
 | `CRA Annex VIII: <Module> attestation reference`            | Annex VIII (Module B+C/H/EUCC) | —             | Module-specific `Attestation`/`Certification` external ref |
@@ -142,6 +148,94 @@ Default conformity routes per class:
 | ImportantClass2   | Module B+C          |
 | Critical          | EUCC                |
 
+## Attestation evidence (CycloneDX 1.6 `declarations`)
+
+Added 2026-07: the CRA checks also read machine-readable CDXA evidence.
+On a CycloneDX document with `specVersion >= 1.6` carrying a root-level
+`declarations` block plus `definitions.standards`, a standard whose
+name/description/owner mentions the *Cyber Resilience Act* (or carries the
+bare token `cra`) is classified into the CRA rule family, and an
+attestation that fully supports one of its requirements can clear a CRA
+check on its own. The EUCC-specific rows need the stricter subset: a
+CRA-family standard that *also* names EUCC / Common Criteria.
+
+Every sidecar field and external-reference path listed in the reverse map
+above remains valid as the self-declared fallback, and a document with no
+`declarations` behaves exactly as before — including byte-identical
+violation messages.
+
+### What attestation evidence reaches
+
+| Surface                                                          | CDXA can satisfy it | Evidence needed                                     |
+|------------------------------------------------------------------|---------------------|-----------------------------------------------------|
+| `SBOM-CRA-ANNEX-IV` — EUCC / Common Criteria reference (only fires at Important-2 / Critical) | yes | CRA-family standard that also names EUCC / Common Criteria |
+| `SBOM-EUCC-CERTREF` (under `--standard eucc`)                      | yes                 | same as above                                       |
+| `conformity_summary` → "EU Declaration of Conformity" row          | yes                 | any CRA-family attestation                          |
+| `conformity_summary` → Module B / Module C / Module H rows          | yes                 | any CRA-family attestation                          |
+| `conformity_summary` → EUCC certificate + Target-of-Evaluation rows | yes                 | CRA-family standard that also names EUCC / Common Criteria |
+| `SBOM-CRA-ANNEX-V` — Annex V DoC violation                         | no                  | `Attestation`/`Certification` external ref or sidecar `ceMarkingReference` |
+| `SBOM-CRA-ANNEX-VIII` — module attestation violation               | no                  | `Attestation`/`Certification` external ref          |
+| `SBOM-EUCC-PP` / `-TOE` / `-ITSEF` / `-VALIDITY`                   | no                  | dedicated sidecar EUCC fields                       |
+| `SBOM-CRA-ART-14` channels + the `conformity_summary` PSIRT row     | no                  | sidecar fields                                      |
+
+The `conformity_summary` block is the Annex VIII checklist emitted next to
+`violations` by `validate --standard cra -o json`. It only appears once a
+product class is pinned — via `--cra-product-class` or the sidecar
+`productClass` — since the class picks the conformity route whose rows are
+listed. A row strengthened by attestation names the level it was satisfied
+at:
+
+```text
+Annex V — manufacturer's signed declaration. Provide via Attestation/Certification
+external ref or sidecar ceMarkingReference. Satisfied by machine-readable CDXA
+attestation (signature-present evidence); external-reference/sidecar presence
+remains the self-declared fallback.
+```
+
+### When an attestation counts (fail-closed)
+
+All of the following must hold at the evaluation instant (wall clock, or
+`--as-of`):
+
+- the attestation map entry declares a full `conformance.score` (`1.0`) —
+  any score below 1.0 is partial and never auto-satisfies, and a missing
+  score fails closed too;
+- the entry carries no counter-claims and cites at least one claim;
+- a cited claim resolves, targets a resolvable element, carries no
+  counter-evidence, and cites at least one resolvable evidence item that is
+  fresh (created at or before the instant, and not past its `expires`).
+
+Unresolvable refLinks are kept as dangling and can never help satisfy a
+requirement. When a matching attestation exists but trips one of these
+gates, the violation still fires and the message names the reason:
+
+```text
+[CRA Annex IV / EUCC] Product class Critical requires (or strongly recommends)
+a reference to a Common Criteria / EUCC certificate or Target of Evaluation
+— CDXA attestation covering an EUCC / Common Criteria certification found but
+rejected: declared conformance is partial (score 0.5); partial conformance
+never auto-satisfies
+```
+
+### Structural verification only
+
+**No signature is ever cryptographically verified.** JSF signature objects
+on the declarations, attestations, claims, evidence, affirmation, and
+signatories are parsed for *presence* — algorithm, `keyId`, signer count,
+signatory identity — and nothing more. The evidence ladder is
+`SelfDeclared < Structural < SignaturePresent < SignatureVerified`; a
+satisfied row reports `SignaturePresent` when the declarations block, the
+attestation, or a supporting claim/evidence item carries a signature
+object, and `Structural` otherwise. `SignatureVerified` exists only for
+output-schema stability and is unreachable today.
+
+For a notified body this means an attestation-satisfied row asserts *"the
+document says so, in the schema's shape, and nobody in the document
+contradicts it"* — not that a signature, a certificate chain, or the
+underlying claim was validated. Ingestion of external in-toto / DSSE
+attestation bundles (SLSA provenance/VSA and friends) is a later phase with
+no surface today; only in-document `declarations` are read.
+
 ## BSI TR-03183-2 — quick mapping
 
 `ComplianceLevel::BsiTr03183_2` implements **v2.1.0 (2025-08-20)**: the §4
@@ -173,8 +267,8 @@ signature** in any tier.
 
 CSAF advisories ingest into `VexEnricher` alongside OpenVEX and
 CycloneDX VEX. Format auto-detection: `document.csaf_version` starts
-with `2.`. CSAF emit support: see
-[`vex export --format csaf`](#csaf-emit) (P4.2).
+with `2.`. CSAF emit support: `sbom-tools vex export --format csaf`
+(see the [CLI cheat sheet](#cli-cheat-sheet)).
 
 | CSAF field                                | Internal mapping                              |
 |-------------------------------------------|-----------------------------------------------|
@@ -202,14 +296,24 @@ sbom-tools validate sbom.json --standard cra --cra-product-class important-class
 # Article 24 steward profile
 sbom-tools validate sbom.json --standard oss-steward
 
+# Pin the evaluation clock (Art. 14 deadline, SBOM age, EUCC / attestation
+# expiry) so CI runs are reproducible
+sbom-tools validate sbom.json --standard cra --as-of 2027-01-01
+
 # SARIF output for CI (with helpUri populated)
 sbom-tools validate sbom.json --standard cra -o sarif -O compliance.sarif
 
 # Generate CRA conformity dossier (Annex V DoC + Annex VII technical documentation)
 sbom-tools cra-docs sbom.json --output dossier/ --cra-sidecar sbom.cra.yaml
 
+# Curated standards-watch catalogue (prEN, BSI, CSAF, EUCC, …)
+sbom-tools cra-standards-watch --format json
+
 # Apply CSAF advisories to enrich SBOM with VEX data
 sbom-tools vex apply sbom.json --vex advisory.csaf.json
+
+# Emit the SBOM's VEX state as a CSAF v2.0 advisory
+sbom-tools vex export sbom.json --format csaf -O advisory.csaf.json
 ```
 
 ## Sidecar example
@@ -259,6 +363,7 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
 | CISA KEV                           | https://www.cisa.gov/known-exploited-vulnerabilities-catalog                                                                                       |
 | OSV.dev                            | https://osv.dev                                                                                                                                    |
 | EUCC (Reg. (EU) 2024/482)          | https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng                                                                                             |
+| CycloneDX Attestations (CDXA)      | https://cyclonedx.org/capabilities/attestations/                                                                                                   |
 
 ## Where this map lives in the code
 
@@ -274,3 +379,14 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
   P3.2 calibration table.
 - `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V DoC + Annex VII tech-doc dossier
   generator.
+- `AttestationRuleFamily::classify()` in `src/model/attestation.rs` —
+  `definitions.standards` entry → CRA / SSDF / EO 14028 rule family;
+  `AttestationDeclarations::supported_requirements()` — the fail-closed
+  filter behind "when an attestation counts".
+- `ComplianceContext::evidence_for()` in `src/quality/compliance/context.rs` —
+  the query the CRA / EUCC checks call.
+- `ComplianceChecker::build_conformity_summary()` and
+  `check_class_eucc_reference()` in `src/quality/compliance/cra.rs`,
+  `standard_references_eucc()` / `cdxa_note()` in
+  `src/quality/compliance/ssdf.rs` — the CRA-side attestation integration
+  points.
