@@ -11,7 +11,7 @@ them is listed under **Upgrade notes** for its release.
 
 ---
 
-## v0.2.0 — unreleased
+## v0.2.0 — 2026-08-01
 
 ### Highlights
 
@@ -119,12 +119,6 @@ These behaviors changed in this release:
 - **The compliance verdict is tri-state** — compliant / non-compliant / not-applicable, the last surfaced as `"compliant": null` — with one honest compliance score shared across the TUI, reports and exports; N/A findings are surfaced rather than counted as passes. (#320)
 - **The TUI keymap changed.** Digits always jump tabs in diff mode; Components' quick filters moved to a `Q` picker, Side-by-Side filters to `A`/`r`/`m`/`x`, the KEV filter from `k` to `K`, vulnerability group jump to `}`/`{`, Dependencies fold to `x`/`X`, the cycles toggle to `C`, and the threshold overlay to `t`. `e` is export on every tab. `docs/TUI_SHORTCUTS.md` is the full reference; `?` in the app is context-aware. Recorded demos, scripts and third-party docs referencing the old keys are stale. (#333, #334)
 
-### Known gaps
-
-- Attestation-satisfied compliance checks are not surfaced positively in `validate` output; the effect is visible only by comparing against a declarations-stripped document.
-- CDXA ingestion reads CycloneDX **JSON** only — the XML path does not parse `declarations`, and `convert` does not round-trip them.
-- Attestation phase 2 (external in-toto / DSSE bundles) is not implemented.
-
 ---
 
 ## v0.1.22 — 2026-06-15
@@ -153,5 +147,5 @@ enrichment with an offline/air-gapped mode, and broad CLI/TUI alignment.
 Earlier releases: [`RELEASE_NOTES_v0.1.21.md`](RELEASE_NOTES_v0.1.21.md) and the
 [GitHub Releases page](https://github.com/sbom-tool/sbom-tools/releases).
 
-[Unreleased]: https://github.com/sbom-tool/sbom-tools/compare/v0.1.22...HEAD
+[0.2.0]: https://github.com/sbom-tool/sbom-tools/releases/tag/v0.2.0
 [0.1.22]: https://github.com/sbom-tool/sbom-tools/releases/tag/v0.1.22
