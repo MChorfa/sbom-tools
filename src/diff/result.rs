@@ -32,7 +32,11 @@ pub struct DiffResult {
     pub licenses: LicenseChanges,
     /// Vulnerability changes
     pub vulnerabilities: VulnerabilityChanges,
-    /// Total semantic score
+    /// Overall semantic similarity of the two documents, **0.0-100.0**
+    /// (100 = identical). This is the single-diff scale used by every
+    /// `diff` output; the multi-SBOM commands rescale it to a 0.0-1.0
+    /// fraction (`MatrixResult::similarity_scores`, and `1 - similarity`
+    /// for `MultiDiffSummary::deviation_scores`).
     pub semantic_score: f64,
     /// Document-level metadata changes (author, tool, timestamp, spec version,
     /// lifecycle phase, signature, document/primary-component version)

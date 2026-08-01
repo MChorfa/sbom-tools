@@ -610,6 +610,35 @@ struct ValidateArgs {
     as_of: Option<String>,
 }
 
+/// Output formats the multi-SBOM commands actually render.
+///
+/// `diff-multi`, `timeline` and `matrix` have no summary/markdown/SARIF
+/// renderers — offering the full [`ReportFormat`] list in `--help` advertised
+/// formats that failed at runtime. Restricting the parser here makes `--help`
+/// honest and turns a bad value into a clap usage error (exit 2) listing the
+/// real choices, instead of an operational error (exit 3) after the SBOMs are
+/// parsed. `cli::multi` still gates at runtime, which also covers a format
+/// arriving from the config file.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum MultiOutputFormat {
+    /// TUI on a TTY, JSON when piped
+    Auto,
+    /// Interactive TUI display
+    Tui,
+    /// Structured JSON output
+    Json,
+}
+
+impl From<MultiOutputFormat> for ReportFormat {
+    fn from(value: MultiOutputFormat) -> Self {
+        match value {
+            MultiOutputFormat::Auto => Self::Auto,
+            MultiOutputFormat::Tui => Self::Tui,
+            MultiOutputFormat::Json => Self::Json,
+        }
+    }
+}
+
 /// Arguments for the `diff-multi` subcommand
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
@@ -629,8 +658,8 @@ struct DiffMultiArgs {
     targets: Vec<PathBuf>,
 
     /// Output format: tui (interactive, default on a TTY) or json (default when piped)
-    #[arg(short, long, default_value = "auto")]
-    output: ReportFormat,
+    #[arg(short, long, value_enum, default_value_t = MultiOutputFormat::Auto)]
+    output: MultiOutputFormat,
 
     /// Output file path (stdout if not specified)
     #[arg(short = 'O', long)]
@@ -700,8 +729,8 @@ struct TimelineArgs {
     sboms: Vec<PathBuf>,
 
     /// Output format: tui (interactive, default on a TTY) or json (default when piped)
-    #[arg(short, long, default_value = "auto")]
-    output: ReportFormat,
+    #[arg(short, long, value_enum, default_value_t = MultiOutputFormat::Auto)]
+    output: MultiOutputFormat,
 
     /// Output file path (stdout if not specified)
     #[arg(short = 'O', long)]
@@ -767,8 +796,8 @@ struct MatrixArgs {
     sboms: Vec<PathBuf>,
 
     /// Output format: tui (interactive, default on a TTY) or json (default when piped)
-    #[arg(short, long, default_value = "auto")]
-    output: ReportFormat,
+    #[arg(short, long, value_enum, default_value_t = MultiOutputFormat::Auto)]
+    output: MultiOutputFormat,
 
     /// Output file path (stdout if not specified)
     #[arg(short = 'O', long)]
@@ -2003,7 +2032,7 @@ fn run() -> Result<()> {
                 targets: args.targets,
                 output: OutputConfig {
                     format: resolve(
-                        args.output,
+                        args.output.into(),
                         arg_was_set_sub(sm, "output"),
                         Some(app.output.format),
                     ),
@@ -2080,7 +2109,7 @@ fn run() -> Result<()> {
                 sbom_paths: args.sboms,
                 output: OutputConfig {
                     format: resolve(
-                        args.output,
+                        args.output.into(),
                         arg_was_set_sub(sm, "output"),
                         Some(app.output.format),
                     ),
@@ -2154,7 +2183,7 @@ fn run() -> Result<()> {
                 sbom_paths: args.sboms,
                 output: OutputConfig {
                     format: resolve(
-                        args.output,
+                        args.output.into(),
                         arg_was_set_sub(sm, "output"),
                         Some(app.output.format),
                     ),

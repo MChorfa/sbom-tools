@@ -119,17 +119,23 @@ fn diff_multi_rejects_unsupported_output_format() {
         .output()
         .expect("diff-multi should run");
 
-    assert!(
-        !output.status.success(),
-        "an unsupported -o value should fail rather than emit JSON"
+    // Rejected by the parser now, not at runtime: the multi commands declare
+    // a restricted value enum, so `--help` only advertises what they render
+    // and a bad value is a usage error (exit 2) naming the real choices --
+    // it no longer parses every SBOM first only to fail with exit 3.
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unsupported -o value should be a usage error: {}",
+        stderr(&output)
     );
     let err = stderr(&output);
     assert!(
-        err.contains("not supported for multi-SBOM commands"),
-        "error should name the limitation: {err}"
+        err.contains("invalid value 'table'"),
+        "error should name the rejected value: {err}"
     );
     assert!(
-        err.contains("tui, json"),
+        err.contains("auto, tui, json"),
         "error should list the supported formats: {err}"
     );
 }
@@ -147,13 +153,15 @@ fn matrix_rejects_unsupported_output_format() {
         .output()
         .expect("matrix should run");
 
-    assert!(
-        !output.status.success(),
-        "an unsupported -o value should fail rather than emit JSON"
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unsupported -o value should be a usage error: {}",
+        stderr(&output)
     );
     assert!(
-        stderr(&output).contains("not supported for multi-SBOM commands"),
-        "error should name the limitation: {}",
+        stderr(&output).contains("auto, tui, json"),
+        "error should list the supported formats: {}",
         stderr(&output)
     );
 }

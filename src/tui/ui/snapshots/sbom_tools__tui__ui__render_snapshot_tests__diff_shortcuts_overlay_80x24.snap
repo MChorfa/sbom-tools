@@ -17,12 +17,12 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │ ~ M│e  Export dialog                                                    │    █
 │ ~ M│l  Color legend                                                     │    █
 │ ⚠ C│T  Toggle theme                                                     │er..║
-│ ~ a│/  Search                                                           │    ║
 │ ~ a│K  Keyboard shortcuts                                               │    ║
-│ ~ r│D  Component deep dive                                              │    ║
-│ ⚠ H│y/Ctrl+C  Copy selected to clipboard                                │    ║
-│ - j│Shift+drag  Select text with mouse                                  │    ║
-│ - m│b/Backspace  Navigate back                                          │    ▼
-└────└───────────────────────────────────────── ↓ 29 more — ↑↓/j/k scroll ┘────┘
+│ ~ a│D  Component deep dive                                              │    ║
+│ ~ r│y/Ctrl+C  Copy selected to clipboard                                │    ║
+│ ⚠ H│Shift+drag  Select text with mouse                                  │    ║
+│ - j│b/Backspace  Navigate back                                          │    ║
+│ - m│                                                                    │    ▼
+└────└───────────────────────────────────────── ↓ 26 more — ↑↓/j/k scroll ┘────┘
  Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
            j/k scroll │  Tab switch  / search  e export  ? help  q quit

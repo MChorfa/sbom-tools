@@ -57,8 +57,8 @@ pub use multi::{
     DependencySnapshot, DivergenceType, DivergentComponent, EvolutionSummary,
     InconsistentComponent, IncrementalChange, LicenseChange as TimelineLicenseChange,
     LicenseChangeType, MatrixResult, MultiDiffResult, MultiDiffSummary, SbomCluster,
-    SbomClustering, SbomInfo, SecurityImpact, TimelineResult, VariableComponent, VersionAtPoint,
-    VersionChangeType, VersionSpread, VulnerabilityMatrix, VulnerabilitySnapshot,
+    SbomClustering, SbomInfo, SecurityImpact, TimelinePair, TimelineResult, VariableComponent,
+    VersionAtPoint, VersionChangeType, VersionSpread, VulnerabilityMatrix, VulnerabilitySnapshot,
 };
 pub use multi_engine::MultiDiffEngine;
 // Only consumer is the TUI Summary tab; gate so `--no-default-features`

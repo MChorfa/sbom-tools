@@ -53,7 +53,12 @@ pub fn auto_detect_format(format: ReportFormat, target: &OutputTarget) -> Report
 #[must_use]
 pub fn should_use_color(no_color_flag: bool) -> bool {
     use std::io::IsTerminal;
-    !no_color_flag && std::env::var("NO_COLOR").is_err() && std::io::stdout().is_terminal()
+    // Per the NO_COLOR convention the variable counts only when present AND
+    // non-empty, which is what the log setup and the TUI theme already do.
+    // `var(..).is_err()` treated `NO_COLOR=` as "set" and stripped color from
+    // reports while the same invocation kept it in logs and the TUI.
+    let no_color_env = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    !no_color_flag && !no_color_env && std::io::stdout().is_terminal()
 }
 
 /// Write output to the target (stdout or file)
@@ -126,9 +131,13 @@ mod tests {
     fn test_should_use_color_without_flag() {
         // Depends on NO_COLOR and whether the test harness stdout is a
         // terminal — under `cargo test` stdout is captured (not a TTY), so
-        // color must be off regardless of env.
+        // color must be off regardless of env. The expectation mirrors the
+        // convention the function implements (present AND non-empty), rather
+        // than re-deriving it with `var(..).is_err()`, which would disagree
+        // whenever the suite runs with an empty `NO_COLOR=`.
         use std::io::IsTerminal;
-        let expected = std::env::var("NO_COLOR").is_err() && std::io::stdout().is_terminal();
+        let no_color_env = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+        let expected = !no_color_env && std::io::stdout().is_terminal();
         assert_eq!(should_use_color(false), expected);
     }
 }
