@@ -72,12 +72,6 @@ These behaviors changed in this release. `CHANGELOG.md` carries the full list wi
 - **Exit codes fail closed.** Operational errors exit `3`, command-line parse errors exit `2`, and a nonzero exit is a gate verdict only when the expected report was produced.
 - **The TUI keymap changed.** Digits always jump tabs; Components' quick filters moved to a `Q` picker, Side-by-Side filters to `A`/`r`/`m`/`x`, the KEV filter to `K`, vulnerability group jump to `}`/`{`, Dependencies fold to `x`/`X`, the cycles toggle to `C`, and the threshold overlay — previously unreachable — to `t`. `docs/TUI_SHORTCUTS.md` is the full reference; `?` in the app is context-aware.
 
-## Known gaps
-
-- Attestation-satisfied compliance checks are not surfaced positively in `validate` output; the effect is visible only by comparing against a declarations-stripped document.
-- CDXA ingestion reads CycloneDX **JSON** only — the XML path does not yet parse `declarations`, and `convert` does not round-trip them.
-- Attestation phase 2 (external in-toto / DSSE bundles) is not implemented.
-
 ---
 
 Install: `cargo install sbom-tools`
