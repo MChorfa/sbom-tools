@@ -1852,6 +1852,11 @@ struct Spdx3Package {
     #[serde(alias = "software_copyrightText")]
     copyright_text: Option<String>,
     description: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "de_string_or_seq_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
     supplied_by: Option<Vec<String>>,
     originated_by: Option<Vec<String>>,
     verified_using: Option<Vec<Spdx3IntegrityMethod>>,
@@ -2026,6 +2031,26 @@ where
         }
         _ => None,
     }))
+}
+
+/// Deserialize an optional `Vec<String>` field that may be supplied as
+/// either a single string (cardinality 0..1) or a JSON array of strings.
+fn de_string_or_seq_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
+        None => None,
+        Some(OneOrMany::One(s)) => Some(vec![s]),
+        Some(OneOrMany::Many(v)) => Some(v),
+    })
 }
 
 /// Normalize one SPDX 3.0 `ai_metric` value into the typed `MetricEntry`.
