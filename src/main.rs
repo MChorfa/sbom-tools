@@ -1343,6 +1343,14 @@ enum VerifyAction {
         )]
         format: TableJsonFormat,
     },
+    /// Validate a versioned pipeline shard receipt
+    Receipt { file: PathBuf },
+    /// Aggregate receipts from a JSON file or directory using a strict policy JSON file.
+    ReceiptAggregate {
+        receipts: PathBuf,
+        #[arg(long)]
+        policy: PathBuf,
+    },
 }
 
 /// Arguments for the `license-check` subcommand
@@ -2610,6 +2618,10 @@ fn run() -> Result<()> {
                     model_dir,
                     format: format.as_str().to_string(),
                 },
+                VerifyAction::Receipt { file } => cli::VerifyAction::Receipt { file },
+                VerifyAction::ReceiptAggregate { receipts, policy } => {
+                    cli::VerifyAction::ReceiptAggregate { receipts, policy }
+                }
             };
 
             let exit_code = cli::run_verify(cli_action, cli.quiet)?;
