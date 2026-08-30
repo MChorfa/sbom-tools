@@ -152,7 +152,7 @@ fn validate_descriptor(descriptor: &ReceiptGenerationInput) -> Result<(), Receip
     Ok(())
 }
 
-fn canonical_target(
+pub(crate) fn canonical_target(
     mut target: super::pipeline_receipt::TargetIdentity,
 ) -> Result<super::pipeline_receipt::TargetIdentity, ReceiptError> {
     target.features.sort();
@@ -163,10 +163,11 @@ fn canonical_target(
             "target features must be unique and nonempty".into(),
         ));
     }
+    super::pipeline_receipt::validate_target(&target)?;
     Ok(target)
 }
 
-fn hash_artifacts(
+pub(crate) fn hash_artifacts(
     root: &Path,
     inputs: &[ReceiptArtifactInput],
 ) -> Result<Vec<ReceiptArtifact>, ReceiptError> {

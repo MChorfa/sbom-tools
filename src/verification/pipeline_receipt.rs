@@ -228,6 +228,7 @@ pub struct TrustedArtifact {
     pub size: u64,
     pub sha256: Sha256Digest,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AggregateVerification {
     pub receipt_count: usize,
@@ -292,7 +293,7 @@ fn validate_receipt_checks(r: &PipelineShardReceipt) -> Result<(), ReceiptError>
     }
     Ok(())
 }
-fn validate_target(target: &TargetIdentity) -> Result<(), ReceiptError> {
+pub(crate) fn validate_target(target: &TargetIdentity) -> Result<(), ReceiptError> {
     if !is_portable_scope(&target.verification_scope)
         || target.os.is_empty()
         || target.architecture.is_empty()

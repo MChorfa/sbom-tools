@@ -11,6 +11,8 @@ Validate one locally with:
 sbom-tools verify receipt path/to/receipt.json
 sbom-tools verify receipt-aggregate receipts/ --policy aggregate-policy.json
 sbom-tools verify receipt-generate --input receipt-input.json --output receipt.json
+sbom-tools verify receipt-policy-generate --manifest policy-manifest.json \
+  --context policy-context.json --output aggregate-policy.json
 ```
 
 The generator input is the strict JSON contract in
@@ -60,3 +62,12 @@ operational errors; a readable receipt or policy that violates the contract is
 a gate verdict and exits 1. Aggregate success, including an explicitly expected
 `trust_context: "local"`, is verification only and never a promotion decision
 in v1.
+
+Policy generation takes two strict versioned inputs. The static
+`aggregate-policy-manifest/v1` owns workflow, source and lock roots, expected
+target topology, required check names, and trusted artifact name/path inputs.
+The runtime `aggregate-policy-context/v1` owns repository, commit SHA, and
+hosted or explicit local metadata. Source and lock fingerprints plus artifact
+sizes and digests are computed from disk. Generated policies are always
+non-promotable, deterministically ordered, and written with create-new
+semantics.

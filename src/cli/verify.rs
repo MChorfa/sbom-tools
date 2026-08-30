@@ -71,6 +71,15 @@ pub enum VerifyAction {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Generate an unsigned aggregate policy from static and runtime contracts.
+    ReceiptPolicyGenerate {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        context: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 /// Run the verify command.
@@ -308,7 +317,70 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
             }
             Ok(exit_codes::SUCCESS)
         }
+        VerifyAction::ReceiptPolicyGenerate {
+            manifest,
+            context,
+            output,
+        } => {
+            let manifest =
+                match read_json_contract::<crate::verification::AggregatePolicyManifest>(&manifest)
+                {
+                    Ok(value) => value,
+                    Err(crate::verification::ReceiptError::Contract(message)) => {
+                        eprintln!("receipt policy generation failed: {message}");
+                        return Ok(exit_codes::CHANGES_DETECTED);
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+            let context = match read_json_contract::<crate::verification::AggregatePolicyContextInput>(
+                &context,
+            ) {
+                Ok(value) => value,
+                Err(crate::verification::ReceiptError::Contract(message)) => {
+                    eprintln!("receipt policy generation failed: {message}");
+                    return Ok(exit_codes::CHANGES_DETECTED);
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let policy = match crate::verification::generate_policy(manifest, context) {
+                Ok(value) => value,
+                Err(crate::verification::ReceiptError::Contract(message)) => {
+                    eprintln!("receipt policy generation failed: {message}");
+                    return Ok(exit_codes::CHANGES_DETECTED);
+                }
+                Err(error) => return Err(error.into()),
+            };
+            match crate::verification::write_policy(&output, &policy) {
+                Ok(()) => {}
+                Err(crate::verification::ReceiptError::Contract(message)) => {
+                    eprintln!("receipt policy generation failed: {message}");
+                    return Ok(exit_codes::CHANGES_DETECTED);
+                }
+                Err(error) => return Err(error.into()),
+            }
+            if !quiet {
+                println!("Receipt policy generated: {}", output.display());
+            }
+            Ok(exit_codes::SUCCESS)
+        }
     }
+}
+
+fn read_json_contract<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+) -> Result<T, crate::verification::ReceiptError> {
+    let bytes = std::fs::read(path).map_err(|source| crate::verification::ReceiptError::Io {
+        path: path.into(),
+        source,
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|source| {
+        crate::verification::ReceiptError::Json {
+            path: path.into(),
+            source,
+        }
+    })?;
+    serde_json::from_value(value)
+        .map_err(|source| crate::verification::ReceiptError::Contract(source.to_string()))
 }
 
 fn read_policy(path: &std::path::Path) -> Result<crate::verification::AggregatePolicy> {

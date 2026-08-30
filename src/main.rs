@@ -1358,6 +1358,15 @@ enum VerifyAction {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Generate an unsigned aggregate policy from strict manifest and context JSON.
+    ReceiptPolicyGenerate {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        context: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 /// Arguments for the `license-check` subcommand
@@ -2632,6 +2641,15 @@ fn run() -> Result<()> {
                 VerifyAction::ReceiptGenerate { input, output } => {
                     cli::VerifyAction::ReceiptGenerate { input, output }
                 }
+                VerifyAction::ReceiptPolicyGenerate {
+                    manifest,
+                    context,
+                    output,
+                } => cli::VerifyAction::ReceiptPolicyGenerate {
+                    manifest,
+                    context,
+                    output,
+                },
             };
 
             let exit_code = cli::run_verify(cli_action, cli.quiet)?;

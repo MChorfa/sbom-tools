@@ -12,6 +12,7 @@ mod pipeline_receipt_generator;
 mod pipeline_receipt_io;
 mod pipeline_receipt_paths;
 mod pipeline_receipt_policy;
+mod pipeline_receipt_policy_generator;
 
 pub use audit::{HashAuditReport, HashAuditResult, audit_component_hashes};
 pub use hash::{
@@ -32,3 +33,7 @@ pub use pipeline_receipt_generator::{
     derive_trust_context, generate_receipt, generate_receipt_from_descriptor,
 };
 pub use pipeline_receipt_io::{check_receipt, read_receipt, write_receipt};
+pub use pipeline_receipt_policy_generator::{
+    AGGREGATE_POLICY_CONTEXT_SCHEMA, AGGREGATE_POLICY_MANIFEST_SCHEMA, AggregatePolicyContextInput,
+    AggregatePolicyManifest, generate_policy, write_policy,
+};
