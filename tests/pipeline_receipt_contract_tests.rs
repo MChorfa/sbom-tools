@@ -10,6 +10,7 @@ fn digest(byte: u8) -> Sha256Digest {
 }
 fn target() -> TargetIdentity {
     TargetIdentity {
+        verification_scope: "unit".into(),
         os: "linux".into(),
         architecture: "x86_64".into(),
         toolchain: "stable".into(),
@@ -217,6 +218,36 @@ fn receipt_rejects_empty_artifact_name() {
         sha256: digest(b'c'),
     });
     assert!(validate_receipt(&r).is_err());
+}
+
+#[test]
+fn fixture_and_scope_segments_validate() {
+    let fixture = include_str!("fixtures/pipeline-shard-receipt-v1.json");
+    let receipt: PipelineShardReceipt = serde_json::from_str(fixture).unwrap();
+    validate_receipt(&receipt).unwrap();
+    for scope in ["a//b", ".", "..", "a/./b", "a/../b", "/a", "a\\b"] {
+        let mut receipt = receipt.clone();
+        receipt.target.verification_scope = scope.into();
+        assert!(validate_receipt(&receipt).is_err(), "accepted {scope}");
+    }
+}
+
+#[test]
+fn receipt_output_does_not_overwrite_existing_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("receipt.json");
+    let receipt = receipt(digest(b'a'), digest(b'b'));
+    fs::write(&path, b"original").unwrap();
+    assert!(write_receipt(&path, &receipt).is_err());
+    #[cfg(unix)]
+    {
+        let target = dir.path().join("target");
+        fs::write(&target, b"target").unwrap();
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(write_receipt(&link, &receipt).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"target");
+    }
 }
 
 #[test]

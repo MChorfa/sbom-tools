@@ -1351,6 +1351,13 @@ enum VerifyAction {
         #[arg(long)]
         policy: PathBuf,
     },
+    /// Generate an unsigned receipt from a strict, digest-free JSON descriptor.
+    ReceiptGenerate {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 /// Arguments for the `license-check` subcommand
@@ -2621,6 +2628,9 @@ fn run() -> Result<()> {
                 VerifyAction::Receipt { file } => cli::VerifyAction::Receipt { file },
                 VerifyAction::ReceiptAggregate { receipts, policy } => {
                     cli::VerifyAction::ReceiptAggregate { receipts, policy }
+                }
+                VerifyAction::ReceiptGenerate { input, output } => {
+                    cli::VerifyAction::ReceiptGenerate { input, output }
                 }
             };
 

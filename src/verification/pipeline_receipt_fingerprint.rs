@@ -4,12 +4,21 @@ use std::{
 };
 
 use super::{
-    path_validation::validate_relative_path,
     pipeline_receipt::{ReceiptError, Sha256Digest},
+    pipeline_receipt_paths::validate_relative_path,
 };
 
 /// Compute a deterministic digest of source files, excluding generated and receipt directories.
 pub fn source_fingerprint(root: &Path) -> Result<Sha256Digest, ReceiptError> {
+    let metadata = fs::symlink_metadata(root).map_err(|source| ReceiptError::Io {
+        path: root.into(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ReceiptError::Contract(
+            "source root must be a regular directory".into(),
+        ));
+    }
     let mut files = Vec::new();
     collect_source_files(root, root, &mut files)?;
     fingerprint_files(root, files)

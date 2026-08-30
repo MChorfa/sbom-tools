@@ -1,19 +1,18 @@
 //! Unsigned, target-scoped verification receipts.
 use super::{
-    fingerprint::{lock_fingerprint, source_fingerprint},
-    path_validation::validate_relative_path,
-    policy::validate_policy,
+    pipeline_receipt_paths::validate_relative_path,
+    pipeline_receipt_policy::{compare_artifacts, validate_policy},
 };
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 use thiserror::Error;
 pub const PIPELINE_SHARD_RECEIPT_SCHEMA: &str = "pipeline-shard-receipt/v1";
+pub const PIPELINE_SHARD_RECEIPT_INPUT_SCHEMA: &str = "pipeline-shard-receipt-input/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sha256Digest(String);
@@ -82,6 +81,7 @@ pub enum TrustContext {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetIdentity {
+    pub verification_scope: String,
     pub os: String,
     pub architecture: String,
     pub toolchain: String,
@@ -159,6 +159,48 @@ pub struct ReceiptInput {
     pub failure_classification: Option<String>,
 }
 
+/// Strict, digest-free descriptor consumed by the CI receipt generator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptGenerationInput {
+    pub schema: String,
+    pub repository: String,
+    pub workflow: String,
+    pub commit_sha: String,
+    pub source_root: PathBuf,
+    pub lock_paths: Vec<PathBuf>,
+    pub artifact_root: PathBuf,
+    pub artifacts: Vec<ReceiptArtifactInput>,
+    pub target: TargetIdentity,
+    pub versions: BTreeMap<String, String>,
+    pub checks: Vec<VerificationCheck>,
+    pub started_at: String,
+    pub completed_at: String,
+    pub run_id: Option<String>,
+    pub dagger_trace: Option<String>,
+    pub failure_classification: Option<String>,
+    pub hosted: Option<HostedReceiptMetadata>,
+    pub local: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptArtifactInput {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostedReceiptMetadata {
+    pub event_name: String,
+    pub ref_name: String,
+    pub repository: String,
+    pub default_branch: String,
+    pub sha: String,
+    pub head_repository: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpectedContext {
@@ -196,13 +238,12 @@ pub fn validate_receipt(r: &PipelineShardReceipt) -> Result<(), ReceiptError> {
     if r.schema != PIPELINE_SHARD_RECEIPT_SCHEMA {
         return Err(ReceiptError::Contract("unsupported schema".into()));
     }
-    if r.repository.is_empty()
-        || r.workflow.is_empty()
-        || r.target.os.is_empty()
-        || r.target.architecture.is_empty()
-        || r.target.toolchain.is_empty()
-        || r.target.profile.is_empty()
-    {
+    validate_receipt_identity(r)?;
+    validate_receipt_checks(r)?;
+    Ok(())
+}
+fn validate_receipt_identity(r: &PipelineShardReceipt) -> Result<(), ReceiptError> {
+    if r.repository.is_empty() || r.workflow.is_empty() {
         return Err(ReceiptError::Contract(
             "required identity field is empty".into(),
         ));
@@ -223,6 +264,9 @@ pub fn validate_receipt(r: &PipelineShardReceipt) -> Result<(), ReceiptError> {
             "unsigned receipts cannot be promotable; signed promotion authority is deferred".into(),
         ));
     }
+    Ok(())
+}
+fn validate_receipt_checks(r: &PipelineShardReceipt) -> Result<(), ReceiptError> {
     let mut names = BTreeSet::new();
     for check in &r.checks {
         if check.name.is_empty() || !names.insert(&check.name) {
@@ -249,16 +293,32 @@ pub fn validate_receipt(r: &PipelineShardReceipt) -> Result<(), ReceiptError> {
     Ok(())
 }
 fn validate_target(target: &TargetIdentity) -> Result<(), ReceiptError> {
-    if target.os.is_empty()
+    if !is_portable_scope(&target.verification_scope)
+        || target.os.is_empty()
         || target.architecture.is_empty()
         || target.toolchain.is_empty()
         || target.profile.is_empty()
     {
         return Err(ReceiptError::Contract(
-            "target identity fields must be nonempty".into(),
+            "target identity fields must be nonempty and verification_scope must be portable"
+                .into(),
         ));
     }
     Ok(())
+}
+
+fn is_portable_scope(value: &str) -> bool {
+    !value.is_empty()
+        && value.is_ascii()
+        && !value.contains(char::is_whitespace)
+        && !value.contains('\\')
+        && !value.starts_with('/')
+        && !value
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
 }
 fn validate_commit(value: &str) -> Result<(), ReceiptError> {
     if !(40..=64).contains(&value.len())
@@ -316,57 +376,6 @@ fn validate_check(c: &VerificationCheck) -> Result<(), ReceiptError> {
         _ => {}
     }
     Ok(())
-}
-
-pub fn write_receipt(path: &Path, receipt: &PipelineShardReceipt) -> Result<(), ReceiptError> {
-    validate_receipt(receipt)?;
-    let bytes = serde_json::to_vec_pretty(receipt).map_err(|source| ReceiptError::Json {
-        path: path.into(),
-        source,
-    })?;
-    fs::write(path, bytes).map_err(|source| ReceiptError::Io {
-        path: path.into(),
-        source,
-    })
-}
-pub fn read_receipt(path: &Path) -> Result<PipelineShardReceipt, ReceiptError> {
-    let bytes = fs::read(path).map_err(|source| ReceiptError::Io {
-        path: path.into(),
-        source,
-    })?;
-    let r = serde_json::from_slice(&bytes).map_err(|source| ReceiptError::Json {
-        path: path.into(),
-        source,
-    })?;
-    validate_receipt(&r)?;
-    Ok(r)
-}
-pub fn check_receipt(path: &Path) -> Result<(), ReceiptError> {
-    read_receipt(path).map(|_| ())
-}
-
-pub fn generate_receipt(input: ReceiptInput) -> Result<PipelineShardReceipt, ReceiptError> {
-    let receipt = PipelineShardReceipt {
-        schema: PIPELINE_SHARD_RECEIPT_SCHEMA.into(),
-        repository: input.repository,
-        workflow: input.workflow,
-        run_id: input.run_id,
-        commit_sha: input.commit_sha,
-        source_fingerprint: source_fingerprint(&input.source_root)?,
-        trust_context: input.trust_context,
-        promotable: input.promotable,
-        target: input.target,
-        lock_digest: lock_fingerprint(&input.source_root, &input.lock_paths)?,
-        versions: input.versions,
-        checks: input.checks,
-        artifacts: input.artifacts,
-        dagger_trace: input.dagger_trace,
-        started_at: input.started_at,
-        completed_at: input.completed_at,
-        failure_classification: input.failure_classification,
-    };
-    validate_receipt(&receipt)?;
-    Ok(receipt)
 }
 
 pub fn aggregate_receipts(
@@ -472,28 +481,6 @@ fn verify_checks(r: &PipelineShardReceipt, required: &[String]) -> Result<(), Re
             return Err(ReceiptError::Contract(format!(
                 "required check {name} did not pass"
             )));
-        }
-    }
-    Ok(())
-}
-fn compare_artifacts(
-    r: &PipelineShardReceipt,
-    trusted: &[TrustedArtifact],
-    ids: &mut BTreeSet<String>,
-    trusted_ids: &mut BTreeSet<String>,
-) -> Result<(), ReceiptError> {
-    for claim in &r.artifacts {
-        let id = format!("{}:{}", claim.name, claim.path);
-        if !ids.insert(id.clone()) {
-            return Err(ReceiptError::Contract("duplicate artifact identity".into()));
-        }
-        let expected = trusted
-            .iter()
-            .find(|a| a.name == claim.name && a.path == claim.path)
-            .ok_or_else(|| ReceiptError::Contract("unexpected artifact".into()))?;
-        trusted_ids.insert(id.clone());
-        if expected.size != claim.size || expected.sha256 != claim.sha256 {
-            return Err(ReceiptError::Contract("artifact manifest mismatch".into()));
         }
     }
     Ok(())

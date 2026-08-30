@@ -10,7 +10,19 @@ Validate one locally with:
 ```text
 sbom-tools verify receipt path/to/receipt.json
 sbom-tools verify receipt-aggregate receipts/ --policy aggregate-policy.json
+sbom-tools verify receipt-generate --input receipt-input.json --output receipt.json
 ```
+
+The generator input is the strict JSON contract in
+`schemas/pipeline-shard-receipt/input-v1.schema.json` (schema identifier
+`pipeline-shard-receipt-input/v1`). It contains repository/workflow and commit
+metadata, source and lock paths, an artifact root plus name/path artifact
+descriptors, target identity, checks, timestamps, and either explicit
+`local: true` or hosted event metadata. It contains no digest fields: source,
+lock, and artifact digests are computed by the generator. Unknown fields are
+rejected. Hosted metadata is self-asserted and unsigned in v1; its `sha` is
+authoritative for consistency checking and must equal `commit_sha`, and its
+repository must equal `repository`. The generator cannot authorize promotion.
 
 Receipts are unsigned and are non-promotion evidence; this slice rejects
 `promotable: true`. Slice 5 must introduce signed promotion authority.
@@ -33,9 +45,10 @@ explicitly deferred until later slices. Workflow integrations should eventually
 emit receipts with `if: always()` while preserving native OS execution and
 existing status guards.
 
-Fingerprinting reads ordinary filesystem paths and has a documented local
-mutation race: a file changed between directory enumeration and reading can
-produce a fingerprint that does not describe one atomic filesystem snapshot.
+Fingerprinting reads ordinary filesystem paths and is non-atomic: a file can
+change between enumeration and reading, so this is subject to local TOCTOU
+races and does not describe an atomic filesystem snapshot. Artifact containment
+checks have the same bounded local race.
 The generator is deliberately local/non-promotable; aggregation trusts only
 the externally supplied expected digests (they are policy inputs, not
 recomputed by the aggregate command).

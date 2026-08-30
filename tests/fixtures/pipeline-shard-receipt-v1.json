@@ -7,7 +7,7 @@
   "source_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "trust_context": "local",
   "promotable": false,
-  "target": {"os":"linux","architecture":"x86_64","toolchain":"1.88","profile":"debug","features":[],"binding_runtime":null},
+  "target": {"verification_scope":"linux-x86_64","os":"linux","architecture":"x86_64","toolchain":"1.88","profile":"debug","features":[],"binding_runtime":null},
   "lock_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "versions": {"rust":"1.88"},
   "checks": [{"name":"cargo-test","outcome":"passed","passed":1,"failed":0,"ignored":0}],

@@ -64,6 +64,13 @@ pub enum VerifyAction {
         #[arg(long)]
         policy: PathBuf,
     },
+    /// Generate an unsigned receipt from a strict, digest-free JSON descriptor.
+    ReceiptGenerate {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 /// Run the verify command.
@@ -271,6 +278,38 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
                 }
                 Err(error) => Err(error.into()),
             }
+        }
+        VerifyAction::ReceiptGenerate { input, output } => {
+            let bytes = std::fs::read(&input)?;
+            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+            let descriptor: crate::verification::ReceiptGenerationInput =
+                match serde_json::from_value(value) {
+                    Ok(descriptor) => descriptor,
+                    Err(error) => {
+                        eprintln!("receipt generation failed: {error}");
+                        return Ok(exit_codes::CHANGES_DETECTED);
+                    }
+                };
+            let receipt = match crate::verification::generate_receipt_from_descriptor(descriptor) {
+                Ok(receipt) => receipt,
+                Err(crate::verification::ReceiptError::Contract(message)) => {
+                    eprintln!("receipt generation failed: {message}");
+                    return Ok(exit_codes::CHANGES_DETECTED);
+                }
+                Err(error) => return Err(error.into()),
+            };
+            match crate::verification::write_receipt(&output, &receipt) {
+                Ok(()) => {}
+                Err(crate::verification::ReceiptError::Contract(message)) => {
+                    eprintln!("receipt generation failed: {message}");
+                    return Ok(exit_codes::CHANGES_DETECTED);
+                }
+                Err(error) => return Err(error.into()),
+            }
+            if !quiet {
+                println!("Receipt generated: {}", output.display());
+            }
+            Ok(exit_codes::SUCCESS)
         }
     }
 }
