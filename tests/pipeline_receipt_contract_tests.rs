@@ -359,6 +359,7 @@ fn cli_aggregate_help_file_and_sorted_directory() {
         policy.to_str().unwrap(),
     ]);
     assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"Receipts valid\n");
     assert_eq!(
         cli_run(&[
             "verify",

@@ -263,12 +263,9 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
                 }
             }
             match crate::verification::aggregate_receipts(&loaded, &policy) {
-                Ok(result) => {
+                Ok(_) => {
                     if !quiet {
-                        println!(
-                            "Receipts valid: {} ({} artifacts)",
-                            result.receipt_count, result.artifact_count
-                        );
+                        println!("Receipts valid");
                     }
                     Ok(exit_codes::SUCCESS)
                 }
