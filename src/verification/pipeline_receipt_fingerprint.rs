@@ -98,18 +98,16 @@ fn collect_source_files(
 }
 
 fn fingerprint_files(root: &Path, mut files: Vec<PathBuf>) -> Result<Sha256Digest, ReceiptError> {
-    files.sort_by(|a, b| {
-        a.strip_prefix(root)
-            .map_or(Path::new(""), |path| path)
-            .cmp(b.strip_prefix(root).map_or(Path::new(""), |path| path))
-    });
+    let mut files = files
+        .drain(..)
+        .map(|path| {
+            let identity = relative_path_identity(root, &path)?;
+            Ok((identity, path))
+        })
+        .collect::<Result<Vec<_>, ReceiptError>>()?;
+    files.sort_by(|(a, _), (b, _)| a.cmp(b));
     let mut input = Vec::new();
-    for path in files {
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|_| ReceiptError::Contract("path escaped root".into()))?
-            .to_str()
-            .ok_or_else(|| ReceiptError::Contract("non-UTF8 source path".into()))?;
+    for (rel, path) in files {
         let bytes = fs::read(&path).map_err(|source| ReceiptError::Io {
             path: path.clone(),
             source,
@@ -120,4 +118,38 @@ fn fingerprint_files(root: &Path, mut files: Vec<PathBuf>) -> Result<Sha256Diges
         input.extend_from_slice(&bytes);
     }
     Ok(Sha256Digest::from_bytes(&input))
+}
+
+fn relative_path_identity(root: &Path, path: &Path) -> Result<String, ReceiptError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| ReceiptError::Contract("path escaped root".into()))?;
+    let components = relative
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| ReceiptError::Contract("non-UTF8 source path".into()))
+        })
+        .collect::<Result<Vec<_>, ReceiptError>>()?;
+    if components.is_empty() {
+        return Err(ReceiptError::Contract("empty relative path".into()));
+    }
+    Ok(components.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relative_path_identity;
+    use std::path::Path;
+
+    #[test]
+    fn relative_path_identity_uses_forward_slashes() {
+        assert_eq!(
+            relative_path_identity(Path::new("/workspace"), Path::new("/workspace/nested/file"))
+                .unwrap(),
+            "nested/file"
+        );
+    }
 }
