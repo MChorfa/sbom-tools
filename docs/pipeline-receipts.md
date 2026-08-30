@@ -42,10 +42,15 @@ invalid artifacts, and duplicate artifact identities.
 
 The receipt is an action result, not a dependency cache. Cache keys must remain
 separate from receipt and artifact identities; cache contents are never accepted
-as verification evidence. Workflow wiring and cryptographic signatures are
-explicitly deferred until later slices. Workflow integrations should eventually
-emit receipts with `if: always()` while preserving native OS execution and
-existing status guards.
+as verification evidence. Rust and Bindings workflows now emit one unsigned
+receipt per producer target with `if: always()`, preserving native OS execution
+and the existing Rust CI check name. Bindings fan-in is additive and validates
+all producer receipts without filename collisions. Cargo advisories intentionally
+transition from informational to fail-closed under issue #350.
+
+Hosted failure/cancel and native cross-platform proof remain pending acceptance
+gates. The wiring adds 21 extra CLI builds (one per producer), which is
+unmeasured overhead; no acceleration or savings claim is made.
 
 Fingerprinting reads ordinary filesystem paths and is non-atomic: a file can
 change between enumeration and reading, so this is subject to local TOCTOU
