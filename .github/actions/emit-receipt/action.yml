@@ -38,7 +38,9 @@ runs:
         target="$runner_temp/sbom-receipt-source"
         test ! -e "$target"
         mkdir -p "$target"
-        git archive "$RECEIPT_SHA" | tar -x -C "$target"
+        # Keep the source snapshot identical on GitHub-hosted Windows and Unix
+        # runners; checkout autocrlf settings must not alter receipt digests.
+        git -c core.autocrlf=false -c core.eol=lf archive "$RECEIPT_SHA" | tar -x -C "$target"
         mkdir -p "$runner_temp/sbom-receipts"
         target="$runner_temp/sbom-receipts/$RECEIPT_ID.json"
         bin=target/debug/sbom-tools; [[ -x "$bin.exe" ]] && bin="$bin.exe"
