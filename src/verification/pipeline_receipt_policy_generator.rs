@@ -40,6 +40,11 @@ pub fn generate_policy(
     mut manifest: AggregatePolicyManifest,
     context: AggregatePolicyContextInput,
 ) -> Result<AggregatePolicy, ReceiptError> {
+    expand_runtime_paths(
+        &mut manifest.source_root,
+        &mut manifest.artifact_root,
+        &mut manifest.lock_paths,
+    )?;
     for target in &mut manifest.expected_targets {
         *target = canonical_target(target.clone())?;
     }
@@ -85,6 +90,25 @@ pub fn generate_policy(
         required_checks: checks,
         artifacts,
     })
+}
+
+fn expand_runtime_paths(
+    source_root: &mut std::path::PathBuf,
+    artifact_root: &mut std::path::PathBuf,
+    lock_paths: &mut [std::path::PathBuf],
+) -> Result<(), ReceiptError> {
+    let replace = |path: &mut std::path::PathBuf| {
+        if path.as_os_str() == "$RUNNER_TEMP/sbom-receipt-source" {
+            let temp = std::env::var("RUNNER_TEMP")
+                .map_err(|_| ReceiptError::Contract("RUNNER_TEMP is required".into()))?;
+            *path = std::path::PathBuf::from(&temp).join("sbom-receipt-source");
+        }
+        Ok::<(), ReceiptError>(())
+    };
+    replace(source_root)?;
+    replace(artifact_root)?;
+    let _ = lock_paths;
+    Ok(())
 }
 
 fn validate_manifest(manifest: &AggregatePolicyManifest) -> Result<(), ReceiptError> {
@@ -139,7 +163,7 @@ fn validate_manifest(manifest: &AggregatePolicyManifest) -> Result<(), ReceiptEr
     Ok(())
 }
 
-fn validate_context(context: &AggregatePolicyContextInput) -> Result<(), ReceiptError> {
+pub(crate) fn validate_context(context: &AggregatePolicyContextInput) -> Result<(), ReceiptError> {
     if context.schema != AGGREGATE_POLICY_CONTEXT_SCHEMA || context.repository.is_empty() {
         return Err(ReceiptError::Contract(
             "invalid runtime policy context".into(),
@@ -158,6 +182,33 @@ fn validate_context(context: &AggregatePolicyContextInput) -> Result<(), Receipt
 
 pub fn write_policy(path: &Path, policy: &AggregatePolicy) -> Result<(), ReceiptError> {
     let bytes = serde_json::to_vec_pretty(policy).map_err(|source| ReceiptError::Json {
+        path: path.into(),
+        source,
+    })?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|source| ReceiptError::Io {
+            path: path.into(),
+            source,
+        })?;
+    std::io::Write::write_all(&mut file, &bytes).map_err(|source| ReceiptError::Io {
+        path: path.into(),
+        source,
+    })
+}
+
+pub fn write_context(
+    path: &Path,
+    context: &AggregatePolicyContextInput,
+) -> Result<(), ReceiptError> {
+    validate_context(context)?;
+    super::pipeline_receipt_generator::derive_trust_context(
+        context.hosted.as_ref(),
+        context.local,
+    )?;
+    let bytes = serde_json::to_vec_pretty(context).map_err(|source| ReceiptError::Json {
         path: path.into(),
         source,
     })?;

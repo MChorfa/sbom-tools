@@ -1367,6 +1367,38 @@ enum VerifyAction {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Generate a target-scoped receipt from a checked-in job manifest and CI outcomes.
+    ReceiptJob {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        context: PathBuf,
+        #[arg(long)]
+        outcome: Vec<String>,
+        #[arg(long)]
+        runner_os: Option<String>,
+        #[arg(long)]
+        runner_arch: Option<String>,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Write a strict hosted receipt context from CI-provided values.
+    ReceiptContext {
+        #[arg(long)]
+        repository: String,
+        #[arg(long)]
+        commit_sha: String,
+        #[arg(long)]
+        event_name: String,
+        #[arg(long)]
+        ref_name: String,
+        #[arg(long)]
+        default_branch: String,
+        #[arg(long)]
+        head_repository: Option<String>,
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 /// Arguments for the `license-check` subcommand
@@ -2648,6 +2680,38 @@ fn run() -> Result<()> {
                 } => cli::VerifyAction::ReceiptPolicyGenerate {
                     manifest,
                     context,
+                    output,
+                },
+                VerifyAction::ReceiptJob {
+                    manifest,
+                    context,
+                    outcome,
+                    runner_os,
+                    runner_arch,
+                    output,
+                } => cli::VerifyAction::ReceiptJob {
+                    manifest,
+                    context,
+                    outcome,
+                    runner_os,
+                    runner_arch,
+                    output,
+                },
+                VerifyAction::ReceiptContext {
+                    repository,
+                    commit_sha,
+                    event_name,
+                    ref_name,
+                    default_branch,
+                    head_repository,
+                    output,
+                } => cli::VerifyAction::ReceiptContext {
+                    repository,
+                    commit_sha,
+                    event_name,
+                    ref_name,
+                    default_branch,
+                    head_repository,
                     output,
                 },
             };

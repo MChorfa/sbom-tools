@@ -13,6 +13,7 @@ use std::{
 use thiserror::Error;
 pub const PIPELINE_SHARD_RECEIPT_SCHEMA: &str = "pipeline-shard-receipt/v1";
 pub const PIPELINE_SHARD_RECEIPT_INPUT_SCHEMA: &str = "pipeline-shard-receipt-input/v1";
+pub const PIPELINE_SHARD_JOB_MANIFEST_SCHEMA: &str = "pipeline-shard-job-manifest/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sha256Digest(String);
