@@ -4,6 +4,11 @@ use super::pipeline_receipt::{
 use std::collections::BTreeSet;
 
 pub(crate) fn validate_policy(policy: &AggregatePolicy) -> Result<(), ReceiptError> {
+    if policy.schema != super::pipeline_receipt::AGGREGATE_POLICY_SCHEMA {
+        return Err(ReceiptError::Contract(
+            "unsupported aggregate policy schema".into(),
+        ));
+    }
     if policy.expected_targets.is_empty() || policy.required_checks.is_empty() {
         return Err(ReceiptError::Contract(
             "aggregate policy targets and required checks must be nonempty".into(),

@@ -90,6 +90,9 @@ fn hosted_contexts_cover_pr_fork_main_and_release() {
         ),
         ("push", "refs/heads/main", TrustContext::ProtectedMain),
         ("push", "refs/tags/v1.0.0", TrustContext::Release),
+        // github.ref_name short forms, accepted where unambiguous.
+        ("pull_request", "7/merge", TrustContext::PullRequest),
+        ("push", "main", TrustContext::ProtectedMain),
     ] {
         let receipt = generate_receipt_from_descriptor(descriptor(
             dir.path(),
@@ -122,6 +125,17 @@ fn hosted_metadata_is_authoritative_and_rejects_mismatch_or_ambiguity() {
         false,
     );
     assert!(generate_receipt_from_descriptor(unsupported).is_err());
+    // A bare github.ref_name for a tag push is indistinguishable from a
+    // non-default branch name and must fail closed.
+    let bare_tag = descriptor(dir.path(), Some(hosted("push", "v1.0.0")), false);
+    assert!(generate_receipt_from_descriptor(bare_tag).is_err());
+    // A merge-suffixed but non-numeric short ref is not a PR ref.
+    let fake_pr = descriptor(
+        dir.path(),
+        Some(hosted("pull_request", "feature/merge")),
+        false,
+    );
+    assert!(generate_receipt_from_descriptor(fake_pr).is_err());
 }
 
 #[test]

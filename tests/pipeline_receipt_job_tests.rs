@@ -149,29 +149,38 @@ fn cli_root_dispatches_receipt_context() {
 
 #[test]
 fn source_token_resolves_from_runner_temp() {
+    // RUNNER_TEMP is injected into a child process instead of set_var in this
+    // one: libtest runs sibling tests on other threads, and mutating the
+    // process environment races their getenv calls (tempfile reads TMPDIR).
     let dir = fixture();
-    let source = dir.path().join("source");
+    let source = dir.path().join("sbom-receipt-source");
     fs::create_dir(&source).unwrap();
     fs::write(source.join("Cargo.lock"), b"lock").unwrap();
-    // SAFETY: this test runs single-threaded with a private temporary directory.
-    unsafe { std::env::set_var("RUNNER_TEMP", dir.path()) };
-    fs::rename(
-        dir.path().join("source"),
-        dir.path().join("sbom-receipt-source"),
-    )
-    .unwrap();
     let mut m = manifest("$RUNNER_TEMP/sbom-receipt-source".into());
     m.artifact_root = m.source_root.clone();
-    assert!(
-        generate_job_receipt(
-            m,
-            context(),
-            &[("producer".into(), "success".into())],
-            None,
-            None
-        )
-        .is_ok()
-    );
+    let manifest_path = dir.path().join("manifest.json");
+    let context_path = dir.path().join("context.json");
+    let output_path = dir.path().join("receipt.json");
+    fs::write(&manifest_path, serde_json::to_vec(&m).unwrap()).unwrap();
+    fs::write(&context_path, serde_json::to_vec(&context()).unwrap()).unwrap();
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_sbom-tools"))
+        .env("RUNNER_TEMP", dir.path())
+        .args([
+            "verify",
+            "receipt-job",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+            "--context",
+            context_path.to_str().unwrap(),
+            "--outcome",
+            "producer=success",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(read_receipt(&output_path).is_ok());
 }
 
 #[test]

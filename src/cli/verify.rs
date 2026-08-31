@@ -290,7 +290,16 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
             Ok(exit_codes::SUCCESS)
         }
         VerifyAction::ReceiptAggregate { receipts, policy } => {
-            let policy = read_policy(&policy)?;
+            // Same exit contract as receipts: unreadable/malformed policy is
+            // operational (3), readable-but-violating policy is a verdict (1).
+            let policy = match read_json_contract::<crate::verification::AggregatePolicy>(&policy) {
+                Ok(value) => value,
+                Err(crate::verification::ReceiptError::Contract(message)) => {
+                    eprintln!("receipt aggregation failed: {message}");
+                    return Ok(exit_codes::CHANGES_DETECTED);
+                }
+                Err(error) => return Err(error.into()),
+            };
             let receipt_paths = receipt_paths(&receipts)?;
             let mut loaded = Vec::with_capacity(receipt_paths.len());
             for path in receipt_paths {
@@ -507,11 +516,6 @@ fn read_json_contract<T: serde::de::DeserializeOwned>(
     })?;
     serde_json::from_value(value)
         .map_err(|source| crate::verification::ReceiptError::Contract(source.to_string()))
-}
-
-fn read_policy(path: &std::path::Path) -> Result<crate::verification::AggregatePolicy> {
-    let bytes = std::fs::read(path)?;
-    Ok(serde_json::from_slice(&bytes)?)
 }
 
 fn receipt_paths(path: &std::path::Path) -> Result<Vec<PathBuf>> {

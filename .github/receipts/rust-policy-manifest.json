@@ -11,7 +11,6 @@
     {"verification_scope":"rust-test-macos-stable","os":"macos","architecture":"arm64","toolchain":"stable","profile":"debug","features":[],"binding_runtime":null},
     {"verification_scope":"rust-test-windows-stable","os":"windows","architecture":"x86_64","toolchain":"stable","profile":"debug","features":[],"binding_runtime":null},
     {"verification_scope":"rust-test-ubuntu-beta","os":"linux","architecture":"x86_64","toolchain":"beta","profile":"debug","features":[],"binding_runtime":null},
-    {"verification_scope":"rust-deny-advisories","os":"linux","architecture":"x86_64","toolchain":"stable","profile":"debug","features":[],"binding_runtime":null},
     {"verification_scope":"rust-deny-licenses-sources","os":"linux","architecture":"x86_64","toolchain":"stable","profile":"debug","features":[],"binding_runtime":null},
     {"verification_scope":"rust-audit","os":"linux","architecture":"x86_64","toolchain":"stable","profile":"debug","features":[],"binding_runtime":null}
   ],

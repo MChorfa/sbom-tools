@@ -27,10 +27,16 @@ pub fn read_receipt(path: &Path) -> Result<PipelineShardReceipt, ReceiptError> {
         path: path.into(),
         source,
     })?;
-    let receipt = serde_json::from_slice(&bytes).map_err(|source| ReceiptError::Json {
-        path: path.into(),
-        source,
-    })?;
+    // Two-phase parse keeps the documented exit split intact: bytes that are
+    // not JSON are an operational error (Json -> exit 3), while readable JSON
+    // that violates the receipt shape is a gate verdict (Contract -> exit 1).
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|source| ReceiptError::Json {
+            path: path.into(),
+            source,
+        })?;
+    let receipt: PipelineShardReceipt = serde_json::from_value(value)
+        .map_err(|source| ReceiptError::Contract(source.to_string()))?;
     validate_receipt(&receipt)?;
     Ok(receipt)
 }

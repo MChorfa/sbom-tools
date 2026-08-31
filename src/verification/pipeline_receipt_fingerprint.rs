@@ -70,20 +70,27 @@ fn collect_source_files(
         let rel = path
             .strip_prefix(root)
             .map_err(|_| ReceiptError::Contract("path escaped root".into()))?;
-        if rel.components().any(|component| {
-            matches!(
-                component.as_os_str().to_str(),
-                Some(".git" | "target" | "receipts")
-            )
-        }) {
-            continue;
-        }
+        // Symlinks are rejected before any exclusion so a symlink named after
+        // an excluded directory cannot slip past the fail-closed check.
         let metadata = fs::symlink_metadata(&path).map_err(|source| ReceiptError::Io {
             path: path.clone(),
             source,
         })?;
         if metadata.file_type().is_symlink() {
             return Err(ReceiptError::Contract("symlink in source tree".into()));
+        }
+        // Exclusions are root-anchored and directory-only: only the top-level
+        // .git/, target/, and receipts/ directories are generated state. A
+        // nested vendored `foo/target/` or a source FILE named `receipts` is
+        // evidence and must stay in the fingerprint.
+        if metadata.is_dir()
+            && rel.components().count() == 1
+            && matches!(
+                rel.as_os_str().to_str(),
+                Some(".git" | "target" | "receipts")
+            )
+        {
+            continue;
         }
         if rel.to_str().is_none_or(|value| value.is_empty()) {
             return Err(ReceiptError::Contract("non-UTF8 source path".into()));

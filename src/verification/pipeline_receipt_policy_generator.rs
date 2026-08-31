@@ -77,6 +77,7 @@ pub fn generate_policy(
     let mut artifacts = artifacts;
     artifacts.sort_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
     Ok(AggregatePolicy {
+        schema: super::pipeline_receipt::AGGREGATE_POLICY_SCHEMA.into(),
         expected_targets: targets,
         context: ExpectedContext {
             repository: context.repository,

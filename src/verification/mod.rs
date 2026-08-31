@@ -23,8 +23,8 @@ pub use model_dir::{
     ComponentModelVerification, ModelVerifyReport, ModelVerifyResult, verify_model_dir,
 };
 pub use pipeline_receipt::{
-    AggregatePolicy, AggregateVerification, CheckOutcome, ExpectedContext, HostedReceiptMetadata,
-    PIPELINE_SHARD_JOB_MANIFEST_SCHEMA, PIPELINE_SHARD_RECEIPT_INPUT_SCHEMA,
+    AGGREGATE_POLICY_SCHEMA, AggregatePolicy, AggregateVerification, CheckOutcome, ExpectedContext,
+    HostedReceiptMetadata, PIPELINE_SHARD_JOB_MANIFEST_SCHEMA, PIPELINE_SHARD_RECEIPT_INPUT_SCHEMA,
     PIPELINE_SHARD_RECEIPT_SCHEMA, PipelineShardReceipt, ReceiptArtifact, ReceiptArtifactInput,
     ReceiptError, ReceiptGenerationInput, ReceiptInput, Sha256Digest, TargetIdentity, TrustContext,
     TrustedArtifact, VerificationCheck, aggregate_receipts, validate_receipt,

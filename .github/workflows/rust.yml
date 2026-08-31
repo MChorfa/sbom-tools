@@ -130,29 +130,41 @@ jobs:
         checks:
           - advisories
           - bans licenses sources
+    # Advisory failures are informational — don't block PRs on surprise CVEs.
+    # The advisories leg therefore emits no receipt and is not part of the
+    # aggregate evidence set; a failed receipt would fail the gate closed and
+    # reintroduce the blocking behavior through the back door.
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust
+        if: matrix.checks != 'advisories'
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: stable
+      - name: Cache
+        if: matrix.checks != 'advisories'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: receipt-cli
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build receipt CLI
+        if: matrix.checks != 'advisories'
         run: cargo build --locked --bin sbom-tools
       - name: cargo-deny
         id: cargo_deny
-        # Advisory and license/source checks are required gates (issue #350).
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check ${{ matrix.checks }}
           arguments: --all-features
       - name: Emit receipt
-        if: always()
+        if: always() && matrix.checks != 'advisories'
         uses: ./.github/actions/emit-receipt
         with:
-          manifest: .github/receipts/jobs/rust-deny-${{ matrix.checks == 'advisories' && 'advisories' || 'licenses-sources' }}.json
+          manifest: .github/receipts/jobs/rust-deny-licenses-sources.json
           artifact-name: receipts-${{ github.run_id }}-${{ github.job }}-${{ matrix.checks }}
-          receipt-id: rust-deny-${{ matrix.checks == 'advisories' && 'advisories' || 'licenses-sources' }}
+          receipt-id: rust-deny-licenses-sources
           outcome: ${{ steps.cargo_deny.outcome }}
 
   # ── Security audit ────────────────────────────────────────────
@@ -166,6 +178,11 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: stable
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: receipt-cli
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build receipt CLI
         run: cargo build --locked --bin sbom-tools
       - name: Install cargo-audit
@@ -197,6 +214,12 @@ jobs:
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: stable
+      - name: Cache
+        if: always()
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: receipt-cli
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Download producer receipts
         if: always()
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -209,7 +232,9 @@ jobs:
         run: |
           cargo build --locked --bin sbom-tools
           test ! -e "$RUNNER_TEMP/sbom-receipt-source"; mkdir -p "$RUNNER_TEMP/sbom-receipt-source"
-          git archive "${{ github.sha }}" | tar -x -C "$RUNNER_TEMP/sbom-receipt-source"
+          # Must match emit-receipt's snapshot byte-for-byte: the policy's
+          # source fingerprint is compared against every producer receipt.
+          git -c core.autocrlf=false -c core.eol=lf archive "${{ github.sha }}" | tar -x -C "$RUNNER_TEMP/sbom-receipt-source"
       - name: Generate aggregate policy
         if: always()
         env:

@@ -14,6 +14,20 @@ use thiserror::Error;
 pub const PIPELINE_SHARD_RECEIPT_SCHEMA: &str = "pipeline-shard-receipt/v1";
 pub const PIPELINE_SHARD_RECEIPT_INPUT_SCHEMA: &str = "pipeline-shard-receipt-input/v1";
 pub const PIPELINE_SHARD_JOB_MANIFEST_SCHEMA: &str = "pipeline-shard-job-manifest/v1";
+pub const AGGREGATE_POLICY_SCHEMA: &str = "aggregate-policy/v1";
+
+/// The published JSON Schemas list every nullable field in `required`: an
+/// evidence document must carry each key explicitly (as null when absent), so
+/// omission is always a contract violation rather than an implicit default.
+/// serde makes bare `Option` fields optional; this deserializer restores the
+/// required-but-nullable semantics.
+fn require_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sha256Digest(String);
@@ -88,6 +102,7 @@ pub struct TargetIdentity {
     pub toolchain: String,
     pub profile: String,
     pub features: Vec<String>,
+    #[serde(deserialize_with = "require_nullable")]
     pub binding_runtime: Option<String>,
 }
 
@@ -125,6 +140,7 @@ pub struct PipelineShardReceipt {
     pub schema: String,
     pub repository: String,
     pub workflow: String,
+    #[serde(deserialize_with = "require_nullable")]
     pub run_id: Option<String>,
     pub commit_sha: String,
     pub source_fingerprint: Sha256Digest,
@@ -135,9 +151,11 @@ pub struct PipelineShardReceipt {
     pub versions: BTreeMap<String, String>,
     pub checks: Vec<VerificationCheck>,
     pub artifacts: Vec<ReceiptArtifact>,
+    #[serde(deserialize_with = "require_nullable")]
     pub dagger_trace: Option<String>,
     pub started_at: String,
     pub completed_at: String,
+    #[serde(deserialize_with = "require_nullable")]
     pub failure_classification: Option<String>,
 }
 
@@ -177,9 +195,13 @@ pub struct ReceiptGenerationInput {
     pub checks: Vec<VerificationCheck>,
     pub started_at: String,
     pub completed_at: String,
+    #[serde(deserialize_with = "require_nullable")]
     pub run_id: Option<String>,
+    #[serde(deserialize_with = "require_nullable")]
     pub dagger_trace: Option<String>,
+    #[serde(deserialize_with = "require_nullable")]
     pub failure_classification: Option<String>,
+    #[serde(deserialize_with = "require_nullable")]
     pub hosted: Option<HostedReceiptMetadata>,
     pub local: bool,
 }
@@ -195,10 +217,16 @@ pub struct ReceiptArtifactInput {
 #[serde(deny_unknown_fields)]
 pub struct HostedReceiptMetadata {
     pub event_name: String,
+    /// Git reference for the hosted run. The canonical value is the full
+    /// `github.ref` form (`refs/pull/N/merge`, `refs/heads/<branch>`,
+    /// `refs/tags/<tag>`); the unambiguous `github.ref_name` short forms
+    /// (`N/merge`, the default branch name) are also accepted. A bare tag
+    /// name is indistinguishable from a branch and is rejected.
     pub ref_name: String,
     pub repository: String,
     pub default_branch: String,
     pub sha: String,
+    #[serde(deserialize_with = "require_nullable")]
     pub head_repository: Option<String>,
 }
 
@@ -216,6 +244,7 @@ pub struct ExpectedContext {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AggregatePolicy {
+    pub schema: String,
     pub expected_targets: Vec<TargetIdentity>,
     pub context: ExpectedContext,
     pub required_checks: Vec<String>,
@@ -309,18 +338,21 @@ pub(crate) fn validate_target(target: &TargetIdentity) -> Result<(), ReceiptErro
     Ok(())
 }
 
+// Must accept exactly what the published schema pattern accepts:
+// ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$ — each segment
+// starts alphanumeric, so ".hidden", "-x", or "..." are rejected here too
+// (tests/pipeline_receipt_schema_binding_tests.rs pins the agreement).
 fn is_portable_scope(value: &str) -> bool {
     !value.is_empty()
-        && value.is_ascii()
-        && !value.contains(char::is_whitespace)
-        && !value.contains('\\')
-        && !value.starts_with('/')
-        && !value
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        && value.split('/').all(|segment| {
+            segment
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
 }
 fn validate_commit(value: &str) -> Result<(), ReceiptError> {
     if !(40..=64).contains(&value.len())

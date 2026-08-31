@@ -48,6 +48,7 @@ fn receipt(source: Sha256Digest, lock: Sha256Digest) -> PipelineShardReceipt {
 }
 fn policy(source: Sha256Digest, lock: Sha256Digest) -> AggregatePolicy {
     AggregatePolicy {
+        schema: AGGREGATE_POLICY_SCHEMA.into(),
         expected_targets: vec![target()],
         context: ExpectedContext {
             repository: "org/repo".into(),
@@ -225,7 +226,24 @@ fn fixture_and_scope_segments_validate() {
     let fixture = include_str!("fixtures/pipeline-shard-receipt-v1.json");
     let receipt: PipelineShardReceipt = serde_json::from_str(fixture).unwrap();
     validate_receipt(&receipt).unwrap();
-    for scope in ["a//b", ".", "..", "a/./b", "a/../b", "/a", "a\\b"] {
+    // Includes the segments the published schema pattern rejects but a looser
+    // validator would accept: leading '.', '-', '_' and dot-only segments.
+    for scope in [
+        "a//b",
+        ".",
+        "..",
+        "a/./b",
+        "a/../b",
+        "/a",
+        "a\\b",
+        "...",
+        "-x",
+        ".hidden",
+        "_x",
+        "ok/.hidden",
+        "a/",
+        "a b",
+    ] {
         let mut receipt = receipt.clone();
         receipt.target.verification_scope = scope.into();
         assert!(validate_receipt(&receipt).is_err(), "accepted {scope}");

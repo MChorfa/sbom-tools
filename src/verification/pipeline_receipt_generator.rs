@@ -74,7 +74,7 @@ fn classify_hosted_event(
 ) -> Result<(TrustContext, bool), ReceiptError> {
     match metadata.event_name.as_str() {
         "pull_request" | "pull_request_target"
-            if metadata.ref_name.starts_with("refs/pull/")
+            if is_pull_request_ref(&metadata.ref_name)
                 && metadata
                     .head_repository
                     .as_deref()
@@ -82,7 +82,10 @@ fn classify_hosted_event(
         {
             Ok((TrustContext::PullRequest, false))
         }
-        "push" if metadata.ref_name == format!("refs/heads/{}", metadata.default_branch) => {
+        "push"
+            if metadata.ref_name == format!("refs/heads/{}", metadata.default_branch)
+                || metadata.ref_name == metadata.default_branch =>
+        {
             Ok((TrustContext::ProtectedMain, false))
         }
         "push"
@@ -94,10 +97,26 @@ fn classify_hosted_event(
         "pull_request" | "pull_request_target" => Err(ReceiptError::Contract(
             "ambiguous pull request metadata".into(),
         )),
+        // A bare `github.ref_name` for a tag is just the tag name, which is
+        // indistinguishable from a non-default branch — fail closed and point
+        // at the canonical form instead of guessing.
         _ => Err(ReceiptError::Contract(
-            "unsupported or ambiguous hosted event".into(),
+            "unsupported or ambiguous hosted event (tag pushes require the full \
+             github.ref form, e.g. refs/tags/<tag>)"
+                .into(),
         )),
     }
+}
+
+/// Accept both the full `github.ref` form (`refs/pull/N/merge`) and the
+/// `github.ref_name` short form (`N/merge`) for pull-request runs.
+fn is_pull_request_ref(ref_name: &str) -> bool {
+    if ref_name.starts_with("refs/pull/") {
+        return ref_name.len() > "refs/pull/".len();
+    }
+    ref_name
+        .strip_suffix("/merge")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 pub fn generate_receipt_from_descriptor(
