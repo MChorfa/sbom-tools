@@ -32,6 +32,7 @@ pub struct AggregatePolicyContextInput {
     pub schema: String,
     pub repository: String,
     pub commit_sha: String,
+    #[serde(deserialize_with = "super::pipeline_receipt::require_nullable")]
     pub hosted: Option<HostedReceiptMetadata>,
     pub local: bool,
 }

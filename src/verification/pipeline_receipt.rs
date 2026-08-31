@@ -21,7 +21,7 @@ pub const AGGREGATE_POLICY_SCHEMA: &str = "aggregate-policy/v1";
 /// omission is always a contract violation rather than an implicit default.
 /// serde makes bare `Option` fields optional; this deserializer restores the
 /// required-but-nullable semantics.
-fn require_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn require_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
