@@ -22,6 +22,7 @@ exclude = [
 [lib]
 name = "sbom_tools"
 crate-type = ["rlib"]
+bench = false
 
 # The binary drives the interactive TUI and parses arguments, so it needs both
 # heavy feature sets. Building with `--no-default-features` (e.g. for the FFI or
@@ -30,6 +31,7 @@ crate-type = ["rlib"]
 name = "sbom-tools"
 path = "src/main.rs"
 required-features = ["cli", "tui"]
+bench = false
 
 [dependencies]
 # Signal Handling (watch mode, reached only through the `cli` feature)

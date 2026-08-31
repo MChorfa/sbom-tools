@@ -9,6 +9,7 @@ license = "MIT"
 [lib]
 name = "sbom_tools_ffi"
 crate-type = ["cdylib", "staticlib"]
+bench = false
 
 [dependencies]
 # The C ABI only touches model/parsers/diff/quality (see ../../src/ffi.rs), so
