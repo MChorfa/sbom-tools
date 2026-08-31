@@ -7,38 +7,38 @@ sbom-tools  VIEW  │ bsi-aibom-complete-app │ CycloneDX 1.6 │ [AI-BOM]
 [1] Overview  │ [2] Models  │ [3] Datasets  │ [4] AI-Readiness  │ [5] Compliance  │ [6] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-┌ AI Readiness Summary ────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Overall Score: 66/100 (D) | Profile: AiReadiness                                                                      │
-│                                                                                                                      │
+┌ AI Readiness Score ──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ D Poor █████████████░░░░░░░ 66/100  Profile: AI Readiness  Engine v2.1                                               │
+│ ML Components: 1  │  Fully documented: 0                                                                             │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ AI Readiness Overview ───────────────────────────────────────────────────────────────────────────────────────────────┐
-│ ML Components: 1  |  Fully documented: 0                                                                             │
-│ Checks passing for every ML component are shown below.                                                               │
+┌ AI Readiness Checks (PASS = every ML component passes) ──────────────────────────────────────────────────────────────┐
+│Check    Description                                                                                 Weight   Status  │
 │                                                                                                                      │
+│AI-001   Model card URL present                                                                      12%      PASS    │
+│AI-002   Architecture family declared                                                                10%      PASS    │
+│AI-003   Training datasets referenced                                                                10%      PASS    │
+│AI-004   Quantitative analysis present                                                               10%      PASS    │
+│AI-005   Fairness assessments included                                                               9%       FAIL    │
+│AI-006   Energy consumption disclosed                                                                8%       FAIL    │
+│AI-007   Use-cases documented                                                                        8%       PASS    │
+│AI-008   Known limitations stated                                                                    7%       PASS    │
+│AI-009   Ethical considerations present                                                              7%       FAIL    │
+│AI-010   Model weight hashes present                                                                 10%      PASS    │
+│AI-011   Exploitability/advisory reference present                                                   10%      FAIL    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ AI Readiness Checks ─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│Check    Description                                                                                 Weight   Status  ▲
-│                                                                                                                      █
-│AI-001   Model card URL present                                                                      12%      PASS    █
-│AI-002   Architecture family declared                                                                10%      PASS    █
-│AI-003   Training datasets referenced                                                                10%      PASS    █
-│AI-004   Quantitative analysis present                                                               10%      PASS    ║
-│AI-005   Fairness assessments included                                                               9%       FAIL    ║
-│AI-006   Energy consumption disclosed                                                                8%       FAIL    ║
-│AI-007   Use-cases documented                                                                        8%       PASS    ║
-│AI-008   Known limitations stated                                                                    7%       PASS    ▼
+┌ Recommendations (4) ─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ [P1] [Completeness] [AI-005] Fairness assessments included                                                           │
+│       1 affected  |  +8.9pts                                                                                         │
+│       Why: Documents bias risks required by model-card standards                                                     │
+│ [P1] [Completeness] [AI-006] Energy consumption disclosed                                                            │
+│       1 affected  |  +8.1pts                                                                                         │
+│       Why: Energy disclosure supports sustainability reporting                                                       │
+│ [P1] [Completeness] [AI-009] Ethical considerations present                                                          │
+│       1 affected  |  +7.3pts                                                                                         │
+│       Why: Expected by AI governance and ethics frameworks                                                           │
+│ [P2] [Completeness] [AI-011] Exploitability/advisory reference present                                               │
+│       1 affected  |  +9.7pts                                                                                         │
+│       Why: Links the model to OSV/KEV/EPSS/VEX security tooling                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ Recommendations (4) - 'v' to switch view ────────────────────────────────────────────────────────────────────────────┐
-│ Actionable Recommendations (ordered by impact):                                                                      │
-│                                                                                                                      │
-│> [P1] [Completeness] [AI-005] Fairness assessments included                                                          │
-│      Why: Complete data enables accurate vulnerability scanning and license compliance                               │
-│      Affected: 1 components  |  Potential gain: +8.9 points                                                          │
-│                                                                                                                      │
-│  [P1] [Completeness] [AI-006] Energy consumption disclosed                                                           │
-│  [P1] [Completeness] [AI-009] Ethical considerations present                                                         │
-│  [P2] [Completeness] [AI-011] Exploitability/advisory reference present                                              │
-│                                                                                                                      │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- Components: 3 │ Vulns: 0 │ Licenses: 3
+ Components: 3 │ Models: 1 │ Datasets: 1
                                ↑↓ scroll │  Tab switch  / search  e export  ? help  q quit

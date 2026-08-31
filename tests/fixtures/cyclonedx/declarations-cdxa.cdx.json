@@ -1,0 +1,155 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:7e3f9a4c-2f6d-4a08-9b1e-4d2c5e8f1a23",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-02-01T00:00:00Z",
+    "tools": {
+      "components": [
+        { "type": "application", "name": "acme-sbom-gen", "version": "2.1.0" }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "acme-app",
+      "name": "acme-app",
+      "version": "3.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "comp-libalpha",
+      "name": "libalpha",
+      "version": "1.2.3",
+      "purl": "pkg:npm/libalpha@1.2.3"
+    }
+  ],
+  "definitions": {
+    "standards": [
+      {
+        "bom-ref": "std-ssdf",
+        "name": "NIST Secure Software Development Framework",
+        "version": "1.1",
+        "owner": "NIST",
+        "requirements": [
+          {
+            "bom-ref": "req-ps1",
+            "identifier": "PS.1",
+            "title": "Protect All Forms of Code from Unauthorized Access and Tampering",
+            "text": "Store all forms of code based on the principle of least privilege.",
+            "descriptions": [
+              "Helps prevent unauthorized changes to code, both inadvertent and intentional."
+            ],
+            "openCre": ["CRE:764-507"]
+          },
+          {
+            "bom-ref": "req-po3",
+            "identifier": "PO.3",
+            "title": "Implement Supporting Toolchains",
+            "descriptions": ["Automate build pipelines where practical."]
+          }
+        ]
+      }
+    ]
+  },
+  "declarations": {
+    "assessors": [
+      {
+        "bom-ref": "assessor-1",
+        "thirdParty": true,
+        "organization": { "name": "Auditors Inc" }
+      }
+    ],
+    "targets": {
+      "organizations": [
+        { "bom-ref": "target-org-1", "name": "Acme Product BU" }
+      ]
+    },
+    "claims": [
+      {
+        "bom-ref": "claim-provenance",
+        "target": "acme-app",
+        "predicate": "Build provenance is generated and archived for every release build",
+        "evidence": ["ev-provenance"],
+        "reasoning": "CI provenance archive reviewed during the 2026-01 audit",
+        "signature": { "algorithm": "ES256", "value": "Y2xhaW0tc2lnLXByZXNlbmNlLW9ubHk" }
+      },
+      {
+        "bom-ref": "claim-purl-target",
+        "target": "pkg:npm/libalpha@1.2.3",
+        "predicate": "Component integrity hashes are verified at ingest",
+        "evidence": ["ev-provenance"]
+      },
+      {
+        "bom-ref": "claim-dangling",
+        "target": "no-such-target",
+        "predicate": "Toolchain hardening is enforced",
+        "evidence": ["ev-missing"]
+      }
+    ],
+    "evidence": [
+      {
+        "bom-ref": "ev-provenance",
+        "propertyName": "internal:build:provenance",
+        "description": "Provenance archive for release builds",
+        "created": "2026-01-10T00:00:00Z",
+        "expires": "2027-01-10T00:00:00Z",
+        "data": [
+          {
+            "name": "provenance-2026-01.json",
+            "contents": {
+              "url": "https://evidence.acme.example/provenance/2026-01.json"
+            },
+            "classification": "internal",
+            "sensitiveData": []
+          }
+        ],
+        "author": { "name": "Jane Builder", "email": "jane@acme.example" },
+        "signature": { "algorithm": "ES256", "value": "ZXZpZGVuY2Utc2lnLXByZXNlbmNl" }
+      }
+    ],
+    "attestations": [
+      {
+        "summary": "SSDF conformance attestation for acme-app 3.0.0",
+        "assessor": "assessor-1",
+        "map": [
+          {
+            "requirement": "req-ps1",
+            "claims": ["claim-provenance", "claim-purl-target"],
+            "conformance": {
+              "score": 1.0,
+              "rationale": "All code repositories enforce least privilege"
+            },
+            "confidence": { "score": 0.9, "rationale": "Third-party audited" }
+          },
+          {
+            "requirement": "req-po3",
+            "claims": ["claim-dangling"],
+            "conformance": { "score": 1.0 }
+          },
+          {
+            "requirement": "req-unknown",
+            "claims": ["claim-provenance"],
+            "conformance": { "score": 1.0 }
+          }
+        ]
+      }
+    ],
+    "affirmation": {
+      "statement": "I certify, to the best of my knowledge, that all information is correct.",
+      "signatories": [
+        {
+          "name": "Jane Doe",
+          "role": "CISO",
+          "signature": { "algorithm": "ES256", "value": "YWZmaXJtYXRpb24tc2ln" }
+        },
+        {
+          "name": "No Complete Identity",
+          "organization": { "name": "Acme" }
+        }
+      ]
+    }
+  }
+}

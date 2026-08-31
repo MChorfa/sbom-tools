@@ -4,19 +4,19 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-« [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  »
+« [2] Components  │ [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  »
 
 ────────────────────────────────────────────────────────────────────────────────
-Group:  Ecosystem   Filter:  All   │  [/] se◀ [1] Overview  │ [2] Identifiers  │
+Group:  Ecosystem   Filter:  All   │   …    ◀ [1] Overview  │ [2] Identifiers  │
 
 ┌ Components (9) ──────────────────────────┐┌ Overview ────────────────────────┐
-│  ▼ npm (8)                               ││axios                            ▲│
-│▶ │  ├─ · axios@1.4.0 [npm]               ││no known risk signals            █│
+│  ▼ npm (8) ! 2                           ││axios                            ▲│
+│▶ │  ├─ · axios@1.4.0 [npm] C 1           ││1 vulns                          █│
 │  │  ├─ · dayjs@1.11.7 [npm]              ││Version:   1.4.0                 █│
-│  │  ├─ · express@4.18.2 [npm]            ││Ecosystem: npm                   █│
+│  │  ├─ · express@4.18.2 [npm] H 1        ││Ecosystem: npm                   █│
 │  │  ├─ · lodash@4.17.21 [npm]            ││Type:      library               █│
 │  │  ├─ · prisma@4.15.0 [npm]             ││                                 █│
-│  │  ├─ · react@18.2.0 [npm]              ││Vulns:     0 (clean)             █│
+│  │  ├─ · react@18.2.0 [npm]              ││Vulns:     1 (see [3] tab)       █│
 │  │  ├─ · typescript@5.0.4 [npm]          ││                                 ║│
 │  │  └─ · zod@3.21.4 [npm]                ││PURL:      pkg:npm/axios@1.4.0   ║│
 │  ▼ Unknown (1)                           ││                                 ║│
@@ -24,5 +24,5 @@ Group:  Ecosystem   Filter:  All   │  [/] se◀ [1] Overview  │ [2] Identifi
 │                                          ││• MIT                            ║│
 │                                          ││                                 ▼│
 └──────────────────────────────────────────┘└──────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3 │ Group:  Ecosystem  Filter:  All
- …  Tab switch  / search  e export  ? help  q quit [y] copy pkg:npm/axios@1.4.0
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2 │ Group:  Ecosystem  Filter:  Al
+ …  Tab switch  / filter  e export  ? help  q quit [y] copy pkg:npm/axios@1.4.0

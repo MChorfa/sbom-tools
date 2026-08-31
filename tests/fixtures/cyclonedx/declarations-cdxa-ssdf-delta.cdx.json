@@ -1,0 +1,96 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-02-01T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "acme-app",
+      "name": "acme-app",
+      "version": "3.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "comp-libalpha",
+      "name": "libalpha",
+      "version": "1.2.3",
+      "purl": "pkg:npm/libalpha@1.2.3"
+    }
+  ],
+  "definitions": {
+    "standards": [
+      {
+        "bom-ref": "std-ssdf",
+        "name": "NIST Secure Software Development Framework",
+        "version": "1.1",
+        "owner": "NIST",
+        "requirements": [
+          {
+            "bom-ref": "req-ps1",
+            "identifier": "PS.1",
+            "title": "Protect All Forms of Code from Unauthorized Access and Tampering"
+          },
+          {
+            "bom-ref": "req-po3",
+            "identifier": "PO.3",
+            "title": "Implement Supporting Toolchains"
+          }
+        ]
+      }
+    ]
+  },
+  "declarations": {
+    "assessors": [
+      {
+        "bom-ref": "assessor-1",
+        "thirdParty": true,
+        "organization": { "name": "Auditors Inc" }
+      }
+    ],
+    "claims": [
+      {
+        "bom-ref": "claim-ps1",
+        "target": "acme-app",
+        "predicate": "All code repositories enforce least privilege with provenance archiving",
+        "evidence": ["ev-audit"]
+      },
+      {
+        "bom-ref": "claim-po3",
+        "target": "acme-app",
+        "predicate": "Release builds run through a hardened, automated toolchain",
+        "evidence": ["ev-audit"]
+      }
+    ],
+    "evidence": [
+      {
+        "bom-ref": "ev-audit",
+        "description": "2026-01 third-party audit report",
+        "created": "2026-01-10T00:00:00Z",
+        "expires": "2027-01-10T00:00:00Z",
+        "signature": { "algorithm": "ES256", "value": "c2lnLXByZXNlbmNlLW9ubHk" }
+      }
+    ],
+    "attestations": [
+      {
+        "summary": "SSDF attestation for acme-app 3.0.0",
+        "assessor": "assessor-1",
+        "map": [
+          {
+            "requirement": "req-ps1",
+            "claims": ["claim-ps1"],
+            "conformance": { "score": 1.0 }
+          },
+          {
+            "requirement": "req-po3",
+            "claims": ["claim-po3"],
+            "conformance": { "score": 1.0 }
+          }
+        ]
+      }
+    ]
+  }
+}

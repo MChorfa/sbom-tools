@@ -73,10 +73,18 @@ pub fn compute_metadata_changes(old: &NormalizedSbom, new: &NormalizedSbom) -> V
     );
 
     // ── Document- and primary-component version ─────────────────────────────
-    // The document version proper is the serial number / namespace; the primary
-    // component's version is the product version this SBOM describes (e.g. the
-    // "1.0.0 -> 2.0.0" release bump that is otherwise only visible as a
-    // per-component modification).
+    // Three distinct version-ish signals: the document revision counter
+    // (CycloneDX top-level `version`, bumped on each BOM revision of the same
+    // serial number), the document identity (serial number / namespace), and
+    // the primary component's version — the product version this SBOM
+    // describes (e.g. the "1.0.0 -> 2.0.0" release bump that is otherwise only
+    // visible as a per-component modification).
+    push(
+        &mut changes,
+        "doc_version",
+        old_doc.doc_version.map(|v| v.to_string()),
+        new_doc.doc_version.map(|v| v.to_string()),
+    );
     push(
         &mut changes,
         "serial_number",
@@ -313,6 +321,36 @@ mod tests {
                 .iter()
                 .any(|c| c.kind == MetadataChangeKind::Added
                     && c.new_value.as_deref() == Some("bob"))
+        );
+    }
+
+    #[test]
+    fn doc_version_bump_is_a_modified_change() {
+        let mut old_doc = DocumentMetadata::default();
+        old_doc.doc_version = Some(1);
+        let mut new_doc = old_doc.clone();
+        new_doc.doc_version = Some(2);
+
+        let changes = compute_metadata_changes(&sbom_with(old_doc), &sbom_with(new_doc));
+        let dv = find(&changes, "doc_version");
+        assert_eq!(dv.kind, MetadataChangeKind::Modified);
+        assert_eq!(dv.old_value.as_deref(), Some("1"));
+        assert_eq!(dv.new_value.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn equal_or_absent_doc_version_is_silent() {
+        // Absent on both sides (SPDX) — no change.
+        let doc = DocumentMetadata::default();
+        assert!(compute_metadata_changes(&sbom_with(doc.clone()), &sbom_with(doc)).is_empty());
+
+        // Equal counters — no change.
+        let mut doc = DocumentMetadata::default();
+        doc.doc_version = Some(3);
+        assert!(
+            compute_metadata_changes(&sbom_with(doc.clone()), &sbom_with(doc))
+                .iter()
+                .all(|c| c.field != "doc_version")
         );
     }
 

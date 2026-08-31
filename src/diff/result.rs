@@ -32,7 +32,11 @@ pub struct DiffResult {
     pub licenses: LicenseChanges,
     /// Vulnerability changes
     pub vulnerabilities: VulnerabilityChanges,
-    /// Total semantic score
+    /// Overall semantic similarity of the two documents, **0.0-100.0**
+    /// (100 = identical). This is the single-diff scale used by every
+    /// `diff` output; the multi-SBOM commands rescale it to a 0.0-1.0
+    /// fraction (`MatrixResult::similarity_scores`, and `1 - similarity`
+    /// for `MultiDiffSummary::deviation_scores`).
     pub semantic_score: f64,
     /// Document-level metadata changes (author, tool, timestamp, spec version,
     /// lifecycle phase, signature, document/primary-component version)
@@ -336,13 +340,106 @@ pub struct CategoryDelta {
     pub delta: f32,
 }
 
+/// The per-slot scores the CBOM scorer actually used, or `None` when the
+/// report was not scored by the CBOM substitution path.
+///
+/// Mirrors `quality::scorer`'s slot substitution exactly (crypto scores in
+/// slots 1-6, standard provenance/licenses in slots 7-8), including its
+/// gates: a CBOM-profile report with no crypto data falls back to standard
+/// scoring (so its delta must keep the generic category names too), and PQC
+/// readiness is `None` when no algorithms exist — the scorer reweights it
+/// away, so the delta omits it the same way VulnDocs/Lifecycle are omitted.
+/// Slot order matches [`crate::quality::CryptographyMetrics::cbom_category_names`].
+fn cbom_slot_scores(report: &crate::quality::QualityReport) -> Option<[Option<f32>; 8]> {
+    if report.profile != crate::quality::ScoringProfile::Cbom
+        || !report.cryptography_metrics.has_data()
+    {
+        return None;
+    }
+    let cm = &report.cryptography_metrics;
+    Some([
+        Some(cm.crypto_completeness_score()),
+        Some(cm.crypto_identifier_score()),
+        Some(cm.algorithm_strength_score()),
+        Some(cm.crypto_dependency_score()),
+        Some(cm.crypto_lifecycle_score()),
+        cm.pqc_readiness_score(),
+        Some(report.provenance_score),
+        Some(report.license_score),
+    ])
+}
+
 impl QualityDelta {
     /// Compute quality delta by comparing two quality reports.
+    ///
+    /// Category names are profile-aware: when BOTH reports were scored by the
+    /// CBOM substitution path, the deltas carry the crypto category names the
+    /// scorer's arithmetic actually used
+    /// ([`crate::quality::CryptographyMetrics::cbom_category_names`]) instead
+    /// of the generic ones — a "Completeness" regression on a CBOM diff would
+    /// describe a score that never contributed to either headline number.
     #[must_use]
     pub fn from_reports(
         old: &crate::quality::QualityReport,
         new: &crate::quality::QualityReport,
     ) -> Self {
+        let category_deltas: Vec<CategoryDelta> =
+            match (cbom_slot_scores(old), cbom_slot_scores(new)) {
+                (Some(old_slots), Some(new_slots)) => {
+                    crate::quality::CryptographyMetrics::cbom_category_names()
+                        .iter()
+                        .zip(old_slots.iter().zip(new_slots.iter()))
+                        // A slot that is N/A on either side (PQC without
+                        // algorithms) is omitted, like VulnDocs/Lifecycle.
+                        .filter_map(|(name, (old_s, new_s))| match (old_s, new_s) {
+                            (Some(o), Some(n)) => Some(CategoryDelta {
+                                category: (*name).to_string(),
+                                old_score: *o,
+                                new_score: *n,
+                                delta: n - o,
+                            }),
+                            _ => None,
+                        })
+                        .collect()
+                }
+                // Mixed pairs (CBOM vs plain SBOM) keep the generic categories:
+                // per-category deltas need the same scale on both sides.
+                _ => Self::standard_category_deltas(old, new),
+            };
+
+        let regressions: Vec<String> = category_deltas
+            .iter()
+            .filter(|d| d.delta < -1.0)
+            .map(|d| d.category.clone())
+            .collect();
+
+        let improvements: Vec<String> = category_deltas
+            .iter()
+            .filter(|d| d.delta > 1.0)
+            .map(|d| d.category.clone())
+            .collect();
+
+        // Compute compliance violation delta
+        let old_violations = old.compliance.error_count + old.compliance.warning_count;
+        let new_violations = new.compliance.error_count + new.compliance.warning_count;
+
+        Self {
+            overall_score_delta: new.overall_score - old.overall_score,
+            old_grade: Some(old.grade),
+            new_grade: Some(new.grade),
+            category_deltas,
+            regressions,
+            improvements,
+            violation_count_delta: new_violations as i32 - old_violations as i32,
+        }
+    }
+
+    /// The generic (non-CBOM) per-category deltas: the six always-scored
+    /// categories plus VulnDocs/Lifecycle when both sides have them.
+    fn standard_category_deltas(
+        old: &crate::quality::QualityReport,
+        new: &crate::quality::QualityReport,
+    ) -> Vec<CategoryDelta> {
         let categories = [
             (
                 "Completeness",
@@ -383,32 +480,7 @@ impl QualityDelta {
                 delta: new_l - old_l,
             });
         }
-
-        let regressions: Vec<String> = category_deltas
-            .iter()
-            .filter(|d| d.delta < -1.0)
-            .map(|d| d.category.clone())
-            .collect();
-
-        let improvements: Vec<String> = category_deltas
-            .iter()
-            .filter(|d| d.delta > 1.0)
-            .map(|d| d.category.clone())
-            .collect();
-
-        // Compute compliance violation delta
-        let old_violations = old.compliance.error_count + old.compliance.warning_count;
-        let new_violations = new.compliance.error_count + new.compliance.warning_count;
-
-        Self {
-            overall_score_delta: new.overall_score - old.overall_score,
-            old_grade: Some(old.grade),
-            new_grade: Some(new.grade),
-            category_deltas,
-            regressions,
-            improvements,
-            violation_count_delta: new_violations as i32 - old_violations as i32,
-        }
+        category_deltas
     }
 }
 
@@ -607,6 +679,15 @@ pub struct ComponentChange {
     pub new_version: Option<String>,
     /// Ecosystem
     pub ecosystem: Option<String>,
+    /// Resolved component type ("library", "application",
+    /// "machine-learning-model", ...). CBOM crypto assets are refined to
+    /// their cryptoProperties assetType ("algorithm", "certificate",
+    /// "protocol"), with related-crypto-material narrowed to its material
+    /// type ("private-key", ...) — the uniform "cryptographic" component
+    /// type carries no signal in a CBOM diff. Additive: omitted from JSON
+    /// when unresolved so existing consumers are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_type: Option<String>,
     /// Change type
     pub change_type: ChangeType,
     /// Detailed field changes
@@ -616,6 +697,28 @@ pub struct ComponentChange {
     /// Match information (for modified components, explains how old/new were correlated)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_info: Option<MatchInfo>,
+}
+
+/// Resolve the serialized component type for a change entry.
+///
+/// CycloneDX component type, refined for CBOM crypto assets to the
+/// cryptoProperties assetType (algorithm/certificate/protocol), with
+/// related-crypto-material narrowed to its declared material type
+/// (public-key, private-key, ...). ML models and datasets keep their
+/// CycloneDX type strings ("machine-learning-model" / "data") — the TUI
+/// applies its own display shorthand on top of the same resolution
+/// (`tui::views::components::component_type_label`).
+fn resolved_component_type(component: &Component) -> String {
+    use crate::model::CryptoAssetType;
+    if let Some(cp) = &component.crypto_properties {
+        if cp.asset_type == CryptoAssetType::RelatedCryptoMaterial
+            && let Some(mat) = &cp.related_crypto_material_properties
+        {
+            return mat.material_type.to_string();
+        }
+        return cp.asset_type.to_string();
+    }
+    component.component_type.to_string()
 }
 
 impl ComponentChange {
@@ -633,6 +736,7 @@ impl ComponentChange {
                 .ecosystem
                 .as_ref()
                 .map(std::string::ToString::to_string),
+            component_type: Some(resolved_component_type(component)),
             change_type: ChangeType::Added,
             field_changes: Vec::new(),
             cost,
@@ -654,6 +758,7 @@ impl ComponentChange {
                 .ecosystem
                 .as_ref()
                 .map(std::string::ToString::to_string),
+            component_type: Some(resolved_component_type(component)),
             change_type: ChangeType::Removed,
             field_changes: Vec::new(),
             cost,
@@ -674,6 +779,9 @@ impl ComponentChange {
             old_version: old.version.clone(),
             new_version: new.version.clone(),
             ecosystem: new.ecosystem.as_ref().map(std::string::ToString::to_string),
+            // New side: a matched pair's current type (mirrors the TUI's
+            // new-side-first resolution for changed components).
+            component_type: Some(resolved_component_type(new)),
             change_type: ChangeType::Unchanged,
             field_changes: Vec::new(),
             cost: 0,
@@ -697,6 +805,7 @@ impl ComponentChange {
             old_version: old.version.clone(),
             new_version: new.version.clone(),
             ecosystem: new.ecosystem.as_ref().map(std::string::ToString::to_string),
+            component_type: Some(resolved_component_type(new)),
             change_type: ChangeType::Modified,
             field_changes,
             cost,
@@ -721,6 +830,7 @@ impl ComponentChange {
             old_version: old.version.clone(),
             new_version: new.version.clone(),
             ecosystem: new.ecosystem.as_ref().map(std::string::ToString::to_string),
+            component_type: Some(resolved_component_type(new)),
             change_type: ChangeType::Modified,
             field_changes,
             cost,
@@ -1557,6 +1667,135 @@ pub struct GraphChangesByImpact {
     pub medium: usize,
     pub high: usize,
     pub critical: usize,
+}
+
+#[cfg(test)]
+mod quality_delta_tests {
+    use super::QualityDelta;
+    use crate::model::{
+        AlgorithmProperties, Component, ComponentType, CryptoAssetType, CryptoPrimitive,
+        CryptoProperties, NormalizedSbom,
+    };
+    use crate::quality::{CryptographyMetrics, QualityScorer, ScoringProfile};
+
+    /// A small CBOM: one crypto algorithm asset with the given family and
+    /// NIST quantum security level.
+    fn cbom_sbom(family: &str, quantum_level: u8) -> NormalizedSbom {
+        let mut sbom = NormalizedSbom::default();
+        let mut comp = Component::new(family.to_string(), format!("crypto/{family}"));
+        comp.component_type = ComponentType::Cryptographic;
+        comp.crypto_properties = Some(
+            CryptoProperties::new(CryptoAssetType::Algorithm).with_algorithm_properties(
+                AlgorithmProperties::new(CryptoPrimitive::Hash)
+                    .with_algorithm_family(family.to_string())
+                    .with_nist_quantum_security_level(quantum_level),
+            ),
+        );
+        comp.calculate_content_hash();
+        sbom.add_component(comp);
+        sbom
+    }
+
+    /// A plain SBOM with one library component.
+    fn plain_sbom(version: &str) -> NormalizedSbom {
+        let mut sbom = NormalizedSbom::default();
+        let mut comp = Component::new("lodash".to_string(), format!("pkg:npm/lodash@{version}"));
+        comp.version = Some(version.to_string());
+        comp.calculate_content_hash();
+        sbom.add_component(comp);
+        sbom
+    }
+
+    /// CBOM-scored pairs must carry the crypto category names the CBOM
+    /// scorer's arithmetic actually used — not the generic 8 (whose scores
+    /// never contributed to either headline number).
+    #[test]
+    fn cbom_pair_uses_crypto_category_names() {
+        let scorer = QualityScorer::new(ScoringProfile::Cbom);
+        let old_report = scorer.score(&cbom_sbom("SHA-2", 1));
+        let new_report = scorer.score(&cbom_sbom("MD5", 0));
+
+        let delta = QualityDelta::from_reports(&old_report, &new_report);
+
+        let names: Vec<&str> = delta
+            .category_deltas
+            .iter()
+            .map(|d| d.category.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            CryptographyMetrics::cbom_category_names().to_vec(),
+            "CBOM delta must use the scorer's crypto category names"
+        );
+        // Regressions/improvements derive from the same rows, so they can
+        // only ever name CBOM categories here.
+        for name in delta.regressions.iter().chain(delta.improvements.iter()) {
+            assert!(
+                CryptographyMetrics::cbom_category_names().contains(&name.as_str()),
+                "unexpected non-CBOM category `{name}` in a CBOM delta"
+            );
+        }
+        // The strong->weak hash family swap must actually surface as an
+        // Algo Strength regression, not hide under a generic name.
+        assert!(
+            delta.regressions.iter().any(|r| r == "Algo Strength"),
+            "expected an Algo Strength regression, got {:?}",
+            delta.regressions
+        );
+    }
+
+    /// Standard-profile pairs keep the generic category names (backward
+    /// compatible: this is the only shape existing JSON consumers have seen).
+    #[test]
+    fn standard_pair_keeps_generic_category_names() {
+        let scorer = QualityScorer::new(ScoringProfile::Standard);
+        let old_report = scorer.score(&plain_sbom("1.0.0"));
+        let new_report = scorer.score(&plain_sbom("2.0.0"));
+
+        let delta = QualityDelta::from_reports(&old_report, &new_report);
+
+        let names: Vec<&str> = delta
+            .category_deltas
+            .iter()
+            .map(|d| d.category.as_str())
+            .collect();
+        for expected in [
+            "Completeness",
+            "Identifiers",
+            "Licenses",
+            "Dependencies",
+            "Integrity",
+            "Provenance",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "missing `{expected}` in {names:?}"
+            );
+        }
+        assert!(
+            !names.iter().any(|n| n.starts_with("Crypto")),
+            "generic delta must not carry CBOM names: {names:?}"
+        );
+    }
+
+    /// A mixed pair (only one side scored by the CBOM substitution) falls
+    /// back to the generic categories: per-category deltas need the same
+    /// scale on both sides.
+    #[test]
+    fn mixed_profile_pair_falls_back_to_generic_names() {
+        let old_report = QualityScorer::new(ScoringProfile::Standard).score(&plain_sbom("1.0.0"));
+        let new_report = QualityScorer::new(ScoringProfile::Cbom).score(&cbom_sbom("SHA-2", 1));
+
+        let delta = QualityDelta::from_reports(&old_report, &new_report);
+
+        assert!(
+            delta
+                .category_deltas
+                .iter()
+                .any(|d| d.category == "Completeness"),
+            "mixed pair must keep generic categories"
+        );
+    }
 }
 
 #[cfg(test)]

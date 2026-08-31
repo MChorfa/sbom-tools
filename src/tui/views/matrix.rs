@@ -102,7 +102,9 @@ fn render_header(f: &mut Frame, area: Rect, result: &MatrixResult, state: &Matri
             Span::raw("")
         },
         if state.highlight_row_col {
-            Span::styled(" │ Highlight", Style::default().fg(scheme.info))
+            // key:value form like the neighboring indicators — the bare
+            // "Highlight" token read as a truncated label.
+            Span::styled(" │ Highlight: on", Style::default().fg(scheme.info))
         } else {
             Span::raw("")
         },
@@ -457,6 +459,9 @@ fn render_pair_details(f: &mut Frame, area: Rect, result: &MatrixResult, state: 
 
 fn render_clustering(f: &mut Frame, area: Rect, result: &MatrixResult, state: &MatrixState) {
     let scheme = colors();
+    // Interior rows actually available; the panel competes with Min()
+    // constraints at 80x24 and can shrink well below its requested height.
+    let inner_rows = area.height.saturating_sub(2) as usize;
     let text = result.clustering.as_ref().map_or_else(
         || {
             vec![Line::from(vec![Span::styled(
@@ -465,21 +470,10 @@ fn render_clustering(f: &mut Frame, area: Rect, result: &MatrixResult, state: &M
             )])]
         },
         |clustering| {
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::styled("Algorithm: ", Style::default().fg(scheme.text_muted)),
-                    Span::styled(&clustering.algorithm, Style::default().fg(scheme.text)),
-                    Span::raw("  "),
-                    Span::styled("Threshold: ", Style::default().fg(scheme.text_muted)),
-                    Span::styled(
-                        format!("{:.0}%", clustering.threshold * 100.0),
-                        Style::default().fg(scheme.primary),
-                    ),
-                ]),
-                Line::from(""),
-            ];
-
-            // Show clusters with selection highlighting
+            // Cluster membership lines are the panel's payload — build them
+            // first and only prepend the algorithm header when it fits, so a
+            // short panel shows clusters rather than only "Algorithm: greedy".
+            let mut cluster_lines: Vec<Line> = Vec::new();
             for (i, cluster) in clustering.clusters.iter().enumerate() {
                 let members: Vec<String> = cluster
                     .members
@@ -504,7 +498,7 @@ fn render_clustering(f: &mut Frame, area: Rect, result: &MatrixResult, state: &M
                         .add_modifier(Modifier::BOLD)
                 };
 
-                lines.push(Line::from(vec![
+                cluster_lines.push(Line::from(vec![
                     Span::styled(format!("{cluster_label}: "), label_style),
                     Span::styled(members.join(", "), Style::default().fg(scheme.text)),
                     Span::raw(" "),
@@ -524,20 +518,51 @@ fn render_clustering(f: &mut Frame, area: Rect, result: &MatrixResult, state: &M
                     .map(|s| s.name.clone())
                     .collect();
 
-                lines.push(Line::from(vec![
+                cluster_lines.push(Line::from(vec![
                     Span::styled("Outliers: ", Style::default().fg(scheme.removed)),
                     Span::styled(outliers.join(", "), Style::default().fg(scheme.text)),
                 ]));
             }
 
-            lines
+            // Clip with an explicit marker instead of silently dropping the
+            // trailing cluster/outlier rows.
+            if cluster_lines.len() > inner_rows && inner_rows >= 1 {
+                let hidden = cluster_lines.len() - (inner_rows - 1);
+                cluster_lines.truncate(inner_rows - 1);
+                cluster_lines.push(Line::from(vec![Span::styled(
+                    format!("\u{2026} and {hidden} more \u{2014} C: details"),
+                    Style::default().fg(scheme.text_muted),
+                )]));
+            }
+
+            if cluster_lines.len() + 2 <= inner_rows {
+                let mut lines = vec![
+                    Line::from(vec![
+                        Span::styled("Algorithm: ", Style::default().fg(scheme.text_muted)),
+                        Span::styled(&clustering.algorithm, Style::default().fg(scheme.text)),
+                        Span::raw("  "),
+                        Span::styled("Threshold: ", Style::default().fg(scheme.text_muted)),
+                        Span::styled(
+                            format!("{:.0}%", clustering.threshold * 100.0),
+                            Style::default().fg(scheme.primary),
+                        ),
+                    ]),
+                    Line::from(""),
+                ];
+                lines.extend(cluster_lines);
+                lines
+            } else {
+                cluster_lines
+            }
         },
     );
 
+    let cluster_count = result.clustering.as_ref().map_or(0, |c| c.clusters.len());
     let block = Block::default()
         .title(format!(
-            " Clustering ({} clusters) [C: details] ",
-            result.clustering.as_ref().map_or(0, |c| c.clusters.len())
+            " Clustering ({} cluster{}) [C: details] ",
+            cluster_count,
+            if cluster_count == 1 { "" } else { "s" }
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.critical));
@@ -550,7 +575,7 @@ fn render_status_bar(
     f: &mut Frame,
     area: Rect,
     result: &MatrixResult,
-    _state: &MatrixState,
+    state: &MatrixState,
     status: Option<&str>,
 ) {
     let scheme = colors();
@@ -573,11 +598,47 @@ fn render_status_bar(
         ),
         Span::raw("  \u{2502}  "),
     ];
-    extend_with_status_or_hints(&mut spans, area, status, "matrix");
+    // An open modal swallows every key, so the mode hints ("t threshold",
+    // "q quit", …) would all be false advertising; show the modal's own
+    // keys instead (#198).
+    let modal_hints: Option<&[(&str, &str)]> = if state.show_pair_diff {
+        Some(&[("j/k", "scroll"), ("Esc", "close")])
+    } else if state.show_export_options {
+        Some(&[("c", "CSV"), ("j", "JSON"), ("h", "HTML"), ("Esc", "close")])
+    } else if state.show_clustering_details {
+        Some(&[("j/k", "cluster"), ("Esc", "close")])
+    } else {
+        None
+    };
+    if let Some(hints) = modal_hints {
+        extend_with_modal_hints(&mut spans, hints);
+    } else {
+        extend_with_status_or_hints(&mut spans, area, status, "matrix");
+    }
 
     let block = Block::default().borders(Borders::ALL);
     let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, area);
+}
+
+/// Append a modal's own key hints to a status bar. Used by all multi-mode
+/// status bars while one of their modals is open, replacing the mode hints
+/// that the modal swallows (#198).
+pub(crate) fn extend_with_modal_hints(spans: &mut Vec<Span<'static>>, hints: &[(&str, &str)]) {
+    let scheme = colors();
+    for (i, (key, label)) in hints.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            (*key).to_string(),
+            Style::default().fg(scheme.primary),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
 }
 
 /// Shared status-bar tail for the multi modes: the pending status message
@@ -617,6 +678,91 @@ pub(crate) fn extend_with_status_or_hints(
         elided = true;
     }
     spans.extend(crate::tui::theme::render_footer_hints(&kept, elided));
+}
+
+/// Fit modal content into the modal interior, reserving the last two rows for
+/// a blank spacer + `footer` (the key hints).
+///
+/// When the content overflows, it is cut with an explicit "… N more lines"
+/// marker instead of ratatui's silent bottom clip, which used to swallow
+/// whole sections — including the per-section "... and N more" elisions and
+/// the "Esc: close" hint — at 80x24.
+pub(crate) fn fit_modal_lines<'a>(
+    mut lines: Vec<Line<'a>>,
+    inner_height: usize,
+    footer: Line<'a>,
+) -> Vec<Line<'a>> {
+    let scheme = colors();
+    let budget = inner_height.saturating_sub(2); // spacer + footer
+    if lines.len() > budget {
+        let keep = budget.saturating_sub(1);
+        let hidden = lines.len() - keep;
+        lines.truncate(keep);
+        lines.push(Line::from(Span::styled(
+            format!("\u{2026} {hidden} more lines \u{2014} enlarge the terminal to see them"),
+            Style::default().fg(scheme.text_muted),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(footer);
+    lines
+}
+
+/// Scroll-aware variant of [`fit_modal_lines`] for the pair-diff modal:
+/// windows `lines` at the j/k scroll offset (clamped and written back so the
+/// offset never drifts past the content) with row-exact "… N more" markers
+/// above and below, so every entry is reachable and the overflow claims stay
+/// accurate against the scroll (#95).
+fn fit_modal_lines_scrolled<'a>(
+    lines: Vec<Line<'a>>,
+    inner_height: usize,
+    footer: Line<'a>,
+) -> Vec<Line<'a>> {
+    let scheme = colors();
+    let budget = inner_height.saturating_sub(2); // spacer + footer
+    if lines.len() <= budget {
+        crate::tui::events::set_pair_diff_scroll(0);
+        let mut out = lines;
+        out.push(Line::from(""));
+        out.push(footer);
+        return out;
+    }
+    // Clamp so the last page ends exactly at the final line (one row is the
+    // "above" marker, the rest content).
+    let max_offset = lines.len().saturating_sub(budget.saturating_sub(1));
+    let offset = crate::tui::events::pair_diff_scroll().min(max_offset);
+    crate::tui::events::set_pair_diff_scroll(offset);
+
+    let mut content_rows = budget.saturating_sub(usize::from(offset > 0)).max(1);
+    let mut below = lines.len().saturating_sub(offset + content_rows);
+    if below > 0 {
+        content_rows = content_rows.saturating_sub(1).max(1);
+        below = lines.len().saturating_sub(offset + content_rows);
+    }
+
+    let mut out: Vec<Line<'a>> = Vec::with_capacity(budget + 2);
+    if offset > 0 {
+        out.push(Line::from(Span::styled(
+            format!(
+                "\u{2191} {offset} more line{} above",
+                if offset == 1 { "" } else { "s" }
+            ),
+            Style::default().fg(scheme.text_muted),
+        )));
+    }
+    out.extend(lines.into_iter().skip(offset).take(content_rows));
+    if below > 0 {
+        out.push(Line::from(Span::styled(
+            format!(
+                "\u{2026} {below} more line{} \u{2014} j/k to scroll",
+                if below == 1 { "" } else { "s" }
+            ),
+            Style::default().fg(scheme.text_muted),
+        )));
+    }
+    out.push(Line::from(""));
+    out.push(footer);
+    out
 }
 
 /// Render pair diff modal
@@ -729,13 +875,15 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
             ]));
         }
 
-        // Show sample components
+        // Full component lists: entries beyond the visible window are
+        // reachable via j/k scrolling, with row-exact "… N more" markers
+        // maintained by fit_modal_lines_scrolled (#95).
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "Added Components:",
             Style::default().fg(scheme.added),
         )]));
-        for comp in diff.components.added.iter().take(5) {
+        for comp in &diff.components.added {
             lines.push(Line::from(vec![
                 Span::raw("  + "),
                 Span::styled(&comp.name, Style::default().fg(scheme.text)),
@@ -746,19 +894,13 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
                 ),
             ]));
         }
-        if diff.components.added.len() > 5 {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  ... and {} more", diff.components.added.len() - 5),
-                Style::default().fg(scheme.text_muted),
-            )]));
-        }
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "Removed Components:",
             Style::default().fg(scheme.removed),
         )]));
-        for comp in diff.components.removed.iter().take(5) {
+        for comp in &diff.components.removed {
             lines.push(Line::from(vec![
                 Span::raw("  - "),
                 Span::styled(&comp.name, Style::default().fg(scheme.text)),
@@ -769,12 +911,6 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
                 ),
             ]));
         }
-        if diff.components.removed.len() > 5 {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  ... and {} more", diff.components.removed.len() - 5),
-                Style::default().fg(scheme.text_muted),
-            )]));
-        }
 
         // Show modified components (version changes)
         if !diff.components.modified.is_empty() {
@@ -783,7 +919,7 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
                 "Modified Components:",
                 Style::default().fg(scheme.modified),
             )]));
-            for comp in diff.components.modified.iter().take(5) {
+            for comp in &diff.components.modified {
                 let version_change = match (&comp.old_version, &comp.new_version) {
                     (Some(old), Some(new)) => format!("{old} \u{2192} {new}"),
                     (None, Some(new)) => format!("? \u{2192} {new}"),
@@ -797,28 +933,35 @@ fn render_pair_diff_modal(f: &mut Frame, area: Rect, result: &MatrixResult, stat
                     Span::styled(version_change, Style::default().fg(scheme.accent)),
                 ]));
             }
-            if diff.components.modified.len() > 5 {
-                lines.push(Line::from(vec![Span::styled(
-                    format!("  ... and {} more", diff.components.modified.len() - 5),
-                    Style::default().fg(scheme.text_muted),
-                )]));
-            }
         }
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("Esc", Style::default().fg(scheme.primary)),
-        Span::raw(": close"),
-    ]));
+    // No Wrap: the overflow accounting in fit_modal_lines_scrolled is
+    // row-exact only when one Line is one row.
+    let inner_height = modal_area.height.saturating_sub(2) as usize;
+    let overflows = lines.len() > inner_height.saturating_sub(2);
+    let footer = if overflows {
+        Line::from(vec![
+            Span::styled("j/k", Style::default().fg(scheme.primary)),
+            Span::raw(": scroll  "),
+            Span::styled("Esc", Style::default().fg(scheme.primary)),
+            Span::raw(": close"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Esc", Style::default().fg(scheme.primary)),
+            Span::raw(": close"),
+        ])
+    };
+    let lines = fit_modal_lines_scrolled(lines, inner_height, footer);
 
     let block = Block::default()
         .title(format!(" Diff: {} \u{2194} {} ", sbom_a.name, sbom_b.name))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
-    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, modal_area);
 }
 
@@ -865,7 +1008,7 @@ fn render_export_modal(f: &mut Frame, area: Rect) {
         .title(" Export Matrix ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.warning))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
     let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, modal_area);
@@ -983,7 +1126,7 @@ fn render_clustering_detail_modal(
         .title(" Clustering Details ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.critical))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
     f.render_widget(paragraph, modal_area);
@@ -1040,7 +1183,7 @@ pub(crate) fn render_multi_search_bar(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.accent))
-        .style(Style::default().bg(scheme.muted));
+        .style(Style::default().bg(scheme.background_alt));
 
     let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, search_area);
@@ -1066,4 +1209,123 @@ fn similarity_to_color(similarity: f64) -> Color {
 pub enum MatrixPanel {
     Matrix,
     Details,
+}
+
+#[cfg(test)]
+mod chrome_and_modal_tests {
+    use super::*;
+    use crate::tui::app::MatrixState;
+    use crate::tui::test_support::{demo_matrix, demo_matrix_large, pin_theme, render_to_text};
+
+    /// Singular/plural cluster count and the key:value Highlight indicator.
+    #[test]
+    fn header_and_clustering_chrome() {
+        pin_theme();
+        let result = demo_matrix();
+        assert_eq!(
+            result.clustering.as_ref().map(|c| c.clusters.len()),
+            Some(1),
+            "fixture precondition: one cluster"
+        );
+        let state = MatrixState::new();
+        let text = render_to_text(120, 40, |f| {
+            render_matrix(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            text.contains("Clustering (1 cluster)"),
+            "one cluster must not read '1 clusters':\n{text}"
+        );
+        assert!(
+            !text.contains("1 clusters"),
+            "pluralization must be correct:\n{text}"
+        );
+        if state.highlight_row_col {
+            assert!(
+                text.contains("Highlight: on"),
+                "the highlight indicator must be key:value, not a dangling token:\n{text}"
+            );
+        }
+    }
+
+    /// At 80x24 the Clustering panel keeps its payload visible: cluster rows
+    /// (or an explicit elision marker) win over the algorithm line.
+    #[test]
+    fn short_clustering_panel_prefers_payload_over_silent_clip() {
+        pin_theme();
+        let result = demo_matrix_large();
+        let clusters = result.clustering.as_ref().map_or(0, |c| {
+            c.clusters.len() + usize::from(!c.outliers.is_empty())
+        });
+        assert!(clusters >= 2, "fixture precondition: multiple cluster rows");
+        let state = MatrixState::new();
+        let text = render_to_text(80, 24, |f| {
+            render_matrix(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            text.contains("Cluster 1:") || text.contains("more \u{2014} C: details"),
+            "the shrunken panel must show clusters or an explicit marker, \
+             not only the algorithm line:\n{text}"
+        );
+    }
+
+    /// The pair-diff modal never silently clips: at 80x24 the Esc footer is
+    /// pinned to the last row and hidden content is explicitly counted.
+    #[test]
+    fn pair_diff_modal_footer_and_overflow_marker() {
+        pin_theme();
+        let result = demo_matrix();
+        let mut state = MatrixState::new();
+        // beta <-> gamma: 9 removed components, guaranteed overflow at 80x24.
+        state.selected_row = 1;
+        state.selected_col = 2;
+        state.show_pair_diff = true;
+
+        let narrow = render_to_text(80, 24, |f| {
+            render_matrix(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            narrow.contains("Esc: close"),
+            "the Esc hint must survive the 80x24 modal:\n{narrow}"
+        );
+        assert!(
+            narrow.contains("more lines"),
+            "clipped modal content must be explicitly marked:\n{narrow}"
+        );
+
+        let wide = render_to_text(120, 40, |f| {
+            render_matrix(f, f.area(), &result, &state, None);
+        });
+        assert!(
+            wide.contains("... and 4 more") || wide.contains("more lines"),
+            "every elision must be explicitly marked (per-section or modal-level):\n{wide}"
+        );
+        assert!(
+            wide.contains("Esc: close"),
+            "footer renders at full size too:\n{wide}"
+        );
+    }
+
+    /// fit_modal_lines row accounting: exact fit is untouched; overflow is
+    /// replaced by a counted marker plus the footer.
+    #[test]
+    fn fit_modal_lines_accounting() {
+        pin_theme();
+        let mk = |n: usize| -> Vec<Line<'static>> {
+            (0..n).map(|i| Line::from(format!("row {i}"))).collect()
+        };
+        // 10 rows interior: 8 content + spacer + footer fits exactly.
+        let fitted = fit_modal_lines(mk(8), 10, Line::from("FOOT"));
+        assert_eq!(fitted.len(), 10);
+        assert!(!format!("{fitted:?}").contains("more lines"));
+
+        // 12 content rows into 10: 7 kept + marker + spacer + footer.
+        let fitted = fit_modal_lines(mk(12), 10, Line::from("FOOT"));
+        assert_eq!(fitted.len(), 10);
+        let debug = format!("{fitted:?}");
+        assert!(
+            debug.contains("5 more lines"),
+            "12 - 7 kept = 5 hidden: {debug}"
+        );
+        assert!(debug.contains("FOOT"));
+    }
 }

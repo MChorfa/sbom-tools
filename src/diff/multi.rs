@@ -116,9 +116,10 @@ pub struct MultiDiffSummary {
     pub variable_components: Vec<VariableComponent>,
     /// Components missing from one or more targets
     pub inconsistent_components: Vec<InconsistentComponent>,
-    /// Per-target deviation scores
+    /// Per-target deviation from the baseline as a **0.0-1.0 fraction**
+    /// (`1 - similarity`; 0.0 = identical to baseline).
     pub deviation_scores: std::collections::BTreeMap<String, f64>,
-    /// Maximum deviation from baseline
+    /// Largest value in `deviation_scores`, same **0.0-1.0** scale.
     pub max_deviation: f64,
     /// Aggregate vulnerability exposure across targets
     pub vulnerability_matrix: VulnerabilityMatrix,
@@ -211,10 +212,33 @@ pub struct TimelineResult {
     pub sboms: Vec<SbomInfo>,
     /// Incremental diffs: [0→1, 1→2, 2→3, ...]
     pub incremental_diffs: Vec<DiffResult>,
+    /// Which pair each entry of `incremental_diffs` compares, same index.
+    ///
+    /// A [`DiffResult`] carries no identity of its own, so consumers could
+    /// previously only infer the pair from array position and the documented
+    /// ordering. These labels make it explicit.
+    #[serde(default)]
+    pub incremental_pairs: Vec<TimelinePair>,
     /// Cumulative diffs from first: [0→1, 0→2, 0→3, ...]
     pub cumulative_from_first: Vec<DiffResult>,
+    /// Which pair each entry of `cumulative_from_first` compares, same index.
+    #[serde(default)]
+    pub cumulative_pairs: Vec<TimelinePair>,
     /// High-level evolution summary
     pub evolution_summary: EvolutionSummary,
+}
+
+/// Identifies the two SBOMs a timeline diff compares.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelinePair {
+    /// Index of the older SBOM in `TimelineResult::sboms`
+    pub from_index: usize,
+    /// Index of the newer SBOM in `TimelineResult::sboms`
+    pub to_index: usize,
+    /// Display name of the older SBOM
+    pub from_name: String,
+    /// Display name of the newer SBOM
+    pub to_name: String,
 }
 
 /// High-level evolution across the timeline
@@ -364,8 +388,11 @@ pub struct MatrixResult {
     /// Upper-triangle matrix of diff results
     /// Access with matrix[i * `sboms.len()` + j] where i < j
     pub diffs: Vec<Option<DiffResult>>,
-    /// Similarity scores (0.0 = completely different, 1.0 = identical)
-    /// Same indexing as diffs
+    /// Similarity per pair as a **0.0-1.0 fraction** (1.0 = identical),
+    /// indexed like `diffs`. This is `DiffResult::semantic_score / 100`:
+    /// the multi-SBOM commands express similarity and deviation as
+    /// fractions, while the embedded per-pair `DiffResult` keeps the
+    /// 0-100 single-diff scale.
     pub similarity_scores: Vec<f64>,
     /// Optional clustering based on similarity
     pub clustering: Option<SbomClustering>,

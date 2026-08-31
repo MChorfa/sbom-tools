@@ -32,6 +32,15 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
              use `sbom-tools validate -o oscal-json` for OSCAL assessment results"
         );
     }
+    // Same reasoning for the sbomqs comparison view: it is a `quality`
+    // renderer, and falling through to the JSON reporter emitted ordinary
+    // diff JSON under a format the caller did not ask for.
+    if config.output.format == ReportFormat::SbomqsJson {
+        bail!(
+            "output format 'sbomqs-json' is not supported by `sbom-tools diff`; \
+             use `sbom-tools quality -o sbomqs-json` for sbomqs-comparable scores"
+        );
+    }
 
     // Stdin can only be consumed once, so a diff can read at most one side from "-".
     if is_stdin_path(&config.paths.old) && is_stdin_path(&config.paths.new) {
@@ -249,7 +258,7 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
             app.status_sticky = true;
         }
 
-        run_tui(&mut app)?;
+        run_tui(&mut app, config.output.no_color)?;
     } else {
         old_parsed.drop_raw_content();
         new_parsed.drop_raw_content();
@@ -437,6 +446,7 @@ mod tests {
             old_version: None,
             new_version: None,
             ecosystem: None,
+            component_type: None,
             change_type: ChangeType::Modified,
             field_changes: vec![FieldChange {
                 field: format!("ml_metric:{metric}"),

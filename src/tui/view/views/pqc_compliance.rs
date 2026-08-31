@@ -65,16 +65,41 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         .split(area);
 
     // ── Header: compliance summary ──
-    let cnsa2_errors = cnsa2_result
-        .violations
-        .iter()
-        .filter(|v| v.severity == ViolationSeverity::Error)
-        .count();
-    let pqc_errors = pqc_result
-        .violations
-        .iter()
-        .filter(|v| v.severity == ViolationSeverity::Error)
-        .count();
+    // Split each standard's error count into errors on the algorithms listed
+    // below vs. errors on other assets (certificates/keys/protocols/document
+    // checks). The old single total captioned a table it did not match:
+    // "(10 errors)" over 6 FAIL rows, with the other 4 invisible on this tab.
+    let algo_names: std::collections::HashSet<&str> =
+        algorithms.iter().map(|c| c.name.as_str()).collect();
+    let split_errors = |result: &crate::quality::ComplianceResult| -> (usize, usize) {
+        let mut on_algorithms = 0usize;
+        let mut other = 0usize;
+        for v in result
+            .violations
+            .iter()
+            .filter(|v| v.severity == ViolationSeverity::Error)
+        {
+            if v.element.as_deref().is_some_and(|e| algo_names.contains(e)) {
+                on_algorithms += 1;
+            } else {
+                other += 1;
+            }
+        }
+        (on_algorithms, other)
+    };
+    let (cnsa2_algo_errors, cnsa2_other_errors) = split_errors(cnsa2_result);
+    let (pqc_algo_errors, pqc_other_errors) = split_errors(pqc_result);
+    let cnsa2_errors = cnsa2_algo_errors + cnsa2_other_errors;
+    let pqc_errors = pqc_algo_errors + pqc_other_errors;
+
+    let error_summary = |on_algorithms: usize, other: usize, breakdown: bool| -> String {
+        let total = crate::tui::shared::text::count_noun(on_algorithms + other, "error");
+        if other == 0 || !breakdown {
+            format!(" ({total})")
+        } else {
+            format!(" ({total}: {on_algorithms} algo + {other} other)")
+        }
+    };
 
     let cnsa2_color = if cnsa2_errors == 0 {
         scheme.success
@@ -87,7 +112,7 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         scheme.error
     };
 
-    let header_lines = vec![
+    let verdict_line = |breakdown: bool| -> Line<'static> {
         Line::from(vec![
             Span::raw(" CNSA 2.0: "),
             Span::styled(
@@ -100,7 +125,11 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                     .fg(cnsa2_color)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(" ({cnsa2_errors} errors)")),
+            Span::raw(error_summary(
+                cnsa2_algo_errors,
+                cnsa2_other_errors,
+                breakdown,
+            )),
             Span::raw("   │   "),
             Span::raw("NIST PQC: "),
             Span::styled(
@@ -111,9 +140,50 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                 },
                 Style::default().fg(pqc_color).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(" ({pqc_errors} errors)")),
-        ]),
-        Line::raw(""),
+            Span::raw(error_summary(pqc_algo_errors, pqc_other_errors, breakdown)),
+        ])
+    };
+
+    // Prefer the per-asset breakdown, but never let it clip mid-token: fall
+    // back to plain totals when it doesn't fit (the note line below still
+    // explains where the non-algorithm errors live).
+    let inner_w = chunks[0].width.saturating_sub(2);
+    let line_width = |line: &Line| -> u16 {
+        use unicode_width::UnicodeWidthStr;
+        line.spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()) as u16)
+            .sum()
+    };
+    let mut summary_line = verdict_line(true);
+    if line_width(&summary_line) > inner_w {
+        summary_line = verdict_line(false);
+    }
+
+    // The non-algorithm errors have no rows below — say where they live
+    // instead of leaving the header count irreconcilable with the table.
+    // Width-aware with an ellipsized last resort: never clip mid-word.
+    let other_note = if cnsa2_other_errors + pqc_other_errors > 0 {
+        use unicode_width::UnicodeWidthStr;
+        const LONG: &str = " Errors on certificates/keys/protocols have no row below \u{2014} \
+                            press e to export the full report";
+        const SHORT: &str = " Errors on certs/keys/protocols have no row below \u{2014} \
+                             press e to export";
+        let text = if UnicodeWidthStr::width(LONG) as u16 <= inner_w {
+            LONG.to_string()
+        } else if UnicodeWidthStr::width(SHORT) as u16 <= inner_w {
+            SHORT.to_string()
+        } else {
+            crate::tui::widgets::truncate_str(SHORT, inner_w as usize)
+        };
+        Line::styled(text, Style::default().fg(scheme.text_muted))
+    } else {
+        Line::raw("")
+    };
+
+    let header_lines = vec![
+        summary_line,
+        other_note,
         Line::styled(
             " Algorithm-by-Algorithm Assessment",
             Style::default().add_modifier(Modifier::BOLD),
@@ -128,9 +198,15 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
     frame.render_widget(header, chunks[0]);
 
     // ── Table: per-algorithm compliance status ──
-    let header_row = Row::new(vec!["Algorithm", "Family", "Level", "CNSA 2.0", "NIST PQC"])
-        .style(Style::default().add_modifier(Modifier::BOLD))
-        .bottom_margin(1);
+    let header_row = Row::new(vec![
+        "Algorithm",
+        "Family",
+        "NIST Lvl",
+        "CNSA 2.0",
+        "NIST PQC",
+    ])
+    .style(Style::default().add_modifier(Modifier::BOLD))
+    .bottom_margin(1);
 
     let rows: Vec<Row> = algorithms
         .iter()
@@ -156,15 +232,14 @@ pub fn render_pqc_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
                 Span::styled("PASS", Style::default().fg(scheme.success))
             };
 
-            // Check NIST PQC status for this algorithm
+            // Check NIST PQC status for this algorithm. One green verdict
+            // only: the old "OK" (an Info-severity approval note exists) vs
+            // "PASS" (no violation at all) split was two unexplained green
+            // vocabularies — the approval note still shows in the detail pane.
             let pqc_status = if pqc_result.violations.iter().any(|v| {
                 v.element.as_deref() == Some(&comp.name) && v.severity == ViolationSeverity::Error
             }) {
                 Span::styled("FAIL", Style::default().fg(scheme.error))
-            } else if pqc_result.violations.iter().any(|v| {
-                v.element.as_deref() == Some(&comp.name) && v.severity == ViolationSeverity::Info
-            }) {
-                Span::styled("OK", Style::default().fg(scheme.success))
             } else {
                 Span::styled("PASS", Style::default().fg(scheme.success))
             };
@@ -278,6 +353,12 @@ fn render_violation_detail(
                 ),
             ]));
             for r in &v.standard_refs {
+                // Skip degenerate "CNSA 2.0: CNSA 2.0" citations — a ref
+                // whose id merely repeats the standard label adds nothing
+                // the [tag] hasn't already said.
+                if r.id == r.standard.label() {
+                    continue;
+                }
                 lines.push(Line::from(Span::styled(
                     crate::tui::widgets::truncate_str(
                         &format!("  {}: {}", r.standard.label(), r.id),
@@ -286,16 +367,29 @@ fn render_violation_detail(
                     Style::default().fg(scheme.text_muted),
                 )));
             }
-            lines.push(Line::from(vec![
-                Span::styled("  Fix: ", Style::default().fg(scheme.success)),
-                Span::styled(
-                    crate::tui::widgets::truncate_str(
-                        v.remediation_guidance(),
-                        inner_w.saturating_sub(7),
+            // Remediation is for findings that need remediating: an
+            // Info-severity approval note ("uses NIST-approved PQC
+            // algorithm") must not be followed by "Fix: Migrate…".
+            if v.severity == ViolationSeverity::Info {
+                lines.push(Line::from(vec![
+                    Span::styled("  Status: ", Style::default().fg(scheme.success)),
+                    Span::styled(
+                        "informational \u{2014} no action needed",
+                        Style::default().fg(scheme.text_muted),
                     ),
-                    Style::default().fg(scheme.text),
-                ),
-            ]));
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("  Fix: ", Style::default().fg(scheme.success)),
+                    Span::styled(
+                        crate::tui::widgets::truncate_str(
+                            v.remediation_guidance(),
+                            inner_w.saturating_sub(7),
+                        ),
+                        Style::default().fg(scheme.text),
+                    ),
+                ]));
+            }
         }
     }
 
@@ -307,13 +401,14 @@ fn render_violation_detail(
     }
 
     // Never clip silently: dual-failing algorithms produce more detail than
-    // the fixed pane holds — point at the Compliance tab for the rest.
+    // the fixed pane holds. Point at export — the CBOM profile has no
+    // Compliance tab, so the old "see the Compliance tab" hint was a dead end.
     let inner_h = area.height.saturating_sub(2) as usize;
     if lines.len() > inner_h && inner_h >= 2 {
         let hidden = lines.len() - (inner_h - 1);
         lines.truncate(inner_h - 1);
         lines.push(Line::styled(
-            format!("\u{2026} +{hidden} more lines \u{2014} see the Compliance tab"),
+            format!("\u{2026} +{hidden} more lines \u{2014} press e to export the full report"),
             Style::default().fg(scheme.text_muted),
         ));
     }

@@ -1,0 +1,156 @@
+//! Registry-driven per-rule matrix for `ComplianceLevel::NistSsdf`
+//! (audit P3: 7 of 8 SSDF rule sites were untested and no fixture ever
+//! produced a passing SSDF verdict).
+//!
+//! Every rule id in `SSDF_SARIF_RULE_IDS` gets a firing fixture and a silent
+//! fixture (real CycloneDX JSON through the real parser), or an explicit
+//! skip-with-reason; exhaustiveness is enforced against the registry slice.
+
+#[path = "common/rule_matrix.rs"]
+mod rule_matrix;
+
+use rule_matrix::{ComponentFixture, RuleEntry, SbomFixture, assert_no_violations, run_matrix};
+use sbom_tools::quality::{ComplianceLevel, SSDF_SARIF_RULE_IDS, ViolationSeverity as Sev};
+
+const LEVEL: ComplianceLevel = ComplianceLevel::NistSsdf;
+
+/// A fixture that satisfies every SP 800-218 practice the checker maps:
+/// tool provenance (PS.1), hashes on every component (PS.2), suppliers
+/// (PS.3), a VCS reference (PO.1), build metadata (PO.3), a dependency graph
+/// (PW.4), a security-advisories reference (PW.6), and PURLs (RV.1).
+fn base() -> SbomFixture {
+    let mut libalpha = ComponentFixture::conforming("libalpha");
+    libalpha.external_refs = vec![
+        (
+            "vcs".to_string(),
+            "https://github.com/acme/libalpha".to_string(),
+        ),
+        (
+            "build-meta".to_string(),
+            "https://ci.acme.example/builds/libalpha/123".to_string(),
+        ),
+        (
+            "advisories".to_string(),
+            "https://acme.example/security/advisories".to_string(),
+        ),
+    ];
+    SbomFixture {
+        spec_version: "1.5".to_string(),
+        timestamp: Some("2026-01-15T10:00:00Z".to_string()),
+        serial_number: None,
+        tools: vec![("acme-sbom-tool".to_string(), "1.0.0".to_string())],
+        authors: Vec::new(),
+        manufacturer: None,
+        primary: None,
+        components: vec![libalpha, ComponentFixture::conforming("libbeta")],
+        dependencies: vec![("ref-libalpha".to_string(), vec!["ref-libbeta".to_string()])],
+        vulnerabilities: Vec::new(),
+    }
+}
+
+fn broken(mutate: impl FnOnce(&mut SbomFixture)) -> SbomFixture {
+    let mut fixture = base();
+    mutate(&mut fixture);
+    fixture
+}
+
+/// The conforming SSDF fixture must pass with a clean verdict — previously a
+/// checker that always errored would have kept the suite green.
+#[test]
+fn ssdf_conforming_fixture_is_compliant_with_zero_violations() {
+    assert_no_violations(LEVEL, &base());
+}
+
+#[test]
+fn ssdf_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
+    let entries = vec![
+        // PS.1 has two sites sharing the rule id: creator-less SBOM (Error)
+        // and missing tool creator (Warning).
+        RuleEntry::tested(
+            "SBOM-SSDF-PS1",
+            Sev::Error,
+            broken(|s| s.tools.clear()),
+            base(),
+        )
+        .with_departing_firing(
+            "creators present but no generation tool",
+            Sev::Warning,
+            broken(|s| {
+                s.tools.clear();
+                s.authors = vec![("Dana Author".to_string(), None)];
+            }),
+        ),
+        // PS.2: >50% of components without hashes is an Error; at or below
+        // the threshold it relaxes to Warning.
+        RuleEntry::tested(
+            "SBOM-SSDF-PS2",
+            Sev::Error,
+            broken(|s| {
+                s.component_mut("libalpha").hashes.clear();
+                s.component_mut("libbeta").hashes.clear();
+            }),
+            base(),
+        )
+        .with_departing_firing(
+            "half the components missing hashes (at threshold)",
+            Sev::Warning,
+            broken(|s| s.component_mut("libalpha").hashes.clear()),
+        ),
+        RuleEntry::tested(
+            "SBOM-SSDF-PS3",
+            Sev::Warning,
+            broken(|s| s.component_mut("libalpha").supplier = None),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-SSDF-PO1",
+            Sev::Warning,
+            broken(|s| {
+                s.component_mut("libalpha")
+                    .external_refs
+                    .retain(|(t, _)| t != "vcs");
+            }),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-SSDF-PO3",
+            Sev::Info,
+            broken(|s| {
+                s.component_mut("libalpha")
+                    .external_refs
+                    .retain(|(t, _)| t != "build-meta");
+            }),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-SSDF-PW4",
+            Sev::Error,
+            broken(|s| s.dependencies.clear()),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-SSDF-PW6",
+            Sev::Info,
+            broken(|s| {
+                s.component_mut("libalpha")
+                    .external_refs
+                    .retain(|(t, _)| t != "advisories");
+            }),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-SSDF-RV1",
+            Sev::Warning,
+            broken(|s| s.component_mut("libalpha").purl = None),
+            base(),
+        ),
+        RuleEntry::skipped(
+            "SBOM-SSDF-GENERAL",
+            "registry catch-all for the SSDF family: no check site in \
+             check_nist_ssdf emits it (registry.rs keeps it so the SARIF rule \
+             catalogue mirrors the slice); it cannot fire from document content",
+        ),
+    ];
+
+    run_matrix(LEVEL, SSDF_SARIF_RULE_IDS, &entries);
+}

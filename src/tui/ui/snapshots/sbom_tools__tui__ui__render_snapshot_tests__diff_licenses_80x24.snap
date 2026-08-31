@@ -7,7 +7,7 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 « [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  »
 
 ────────────────────────────────────────────────────────────────────────────────
-Group:  License   Sort: License  │  Risk:  All   │  Compat:  Off   │  Focus:  Ne
+Group:  License   Sort: License │ Risk:  All  │ Compat:  Off  │ Focus:  New  …
 
 ────────────────────────────────────────────────────────────────────────────────
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -24,5 +24,5 @@ Group:  License   Sort: License  │  Risk:  All   │  Compat:  Off   │  Focu
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
   …  g group  s sort  r risk │  Tab switch  / search  e export  ? help  q quit

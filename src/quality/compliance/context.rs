@@ -8,6 +8,7 @@
 //! `ComplianceChecker::check`.
 
 use super::{ComplianceChecker, ComplianceLevel, NormalizedSbom, Violation};
+use crate::model::{AttestationDeclarations, AttestationRuleFamily, SupportedRequirement};
 
 /// Read-only context threaded through every [`StandardChecker`].
 ///
@@ -25,6 +26,47 @@ pub(crate) struct ComplianceContext<'a> {
 impl<'a> ComplianceContext<'a> {
     pub(crate) const fn new(checker: &'a ComplianceChecker, sbom: &'a NormalizedSbom) -> Self {
         Self { checker, sbom }
+    }
+
+    /// CDXA attestation declarations parsed from the document (CycloneDX
+    /// 1.6+ `declarations` + `definitions.standards`), if any.
+    ///
+    /// Structural evidence only: signature objects in the returned model are
+    /// PRESENCE records (algorithm, signatory identity) — nothing has been
+    /// cryptographically verified, so no consumer may report an evidence
+    /// level above `EvidenceLevel::SignaturePresent`.
+    pub(crate) fn attestation_declarations(&self) -> Option<&'a AttestationDeclarations> {
+        self.sbom.declarations()
+    }
+
+    /// Machine-readable attestation evidence that fully supports standard
+    /// requirements classified into `family`, evaluated at the checker's
+    /// injectable clock (`--as-of` pinned or wall clock — the Art. 14
+    /// pattern; expired or future-created evidence never counts).
+    ///
+    /// Fail closed end to end (see
+    /// [`AttestationDeclarations::supported_requirements`]): dangling
+    /// refLinks, partial conformance (score < 1), counter claims/evidence,
+    /// and stale evidence all drop the entry. Requirements whose (standard,
+    /// identifier) pair maps to no known family are recorded in the model
+    /// but never returned here — they cannot influence a verdict.
+    ///
+    /// Intended consumers (existing rule sites, keeping their current
+    /// satisfaction paths as `SelfDeclared`-level fallbacks — never a
+    /// regression for SBOMs that only carry presence bits):
+    /// - `ssdf.rs` SBOM-SSDF-PS1 / SBOM-SSDF-PO3 / SBOM-SSDF-PW6
+    /// - `eo14028.rs` SBOM-EO14028-* automation/provenance evidence
+    /// - `cra.rs` conformity-route evidence (`attestation_present` bits),
+    ///   `check_class_eucc_reference`, and `eucc.rs` SBOM-EUCC-CERTREF
+    pub(crate) fn evidence_for(
+        &self,
+        family: AttestationRuleFamily,
+    ) -> Vec<SupportedRequirement<'a>> {
+        self.sbom
+            .declarations()
+            .map_or_else(Vec::new, |declarations| {
+                declarations.evidence_for_family(family, self.checker.now())
+            })
     }
 }
 
@@ -136,6 +178,13 @@ dedicated_checker!(
     ComplianceLevel::BsiSbomForAi,
     check_bsi_sbom_for_ai
 );
+dedicated_checker!(Cisa2026Checker, ComplianceLevel::Cisa2026, check_cisa2026);
+dedicated_checker!(
+    PciDss632Checker,
+    ComplianceLevel::PciDss632,
+    check_pci_dss_6_3_2
+);
+dedicated_checker!(FsctChecker, ComplianceLevel::Fsct, check_fsct);
 
 /// Resolve the [`StandardChecker`] for a given level. The dedicated profiles
 /// get their own checker; everything else takes the generic path.
@@ -150,6 +199,117 @@ pub(crate) fn checker_for(level: ComplianceLevel) -> Box<dyn StandardChecker> {
         ComplianceLevel::EuccSubstantial => Box::new(EuccSubstantialChecker),
         ComplianceLevel::EuAiAct => Box::new(EuAiActChecker),
         ComplianceLevel::BsiSbomForAi => Box::new(BsiSbomForAiChecker),
+        ComplianceLevel::Cisa2026 => Box::new(Cisa2026Checker),
+        ComplianceLevel::PciDss632 => Box::new(PciDss632Checker),
+        ComplianceLevel::Fsct => Box::new(FsctChecker),
         other => Box::new(GenericChecker::new(other)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        AttestationAssertion, AttestationMapEntry, CdxaRef, CdxaResolution, DeclaredClaim,
+        DeclaredEvidence, DefinedRequirement, DefinedStandard, EvidenceLevel, SignaturePresence,
+    };
+
+    fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .expect("test timestamp must parse")
+            .with_timezone(&chrono::Utc)
+    }
+
+    /// An SBOM whose declarations carry one fully-supported SSDF PS.1
+    /// requirement (resolved refs, full conformance, fresh signed evidence).
+    fn sbom_with_ssdf_declarations() -> NormalizedSbom {
+        let declarations = AttestationDeclarations {
+            claims: vec![DeclaredClaim {
+                bom_ref: Some("claim-1".into()),
+                target: Some(CdxaRef {
+                    raw: "target-1".into(),
+                    resolution: CdxaResolution::Target,
+                }),
+                evidence: vec![CdxaRef {
+                    raw: "ev-1".into(),
+                    resolution: CdxaResolution::Evidence,
+                }],
+                ..DeclaredClaim::default()
+            }],
+            evidence: vec![DeclaredEvidence {
+                bom_ref: Some("ev-1".into()),
+                created: Some(ts("2026-01-10T00:00:00Z")),
+                expires: Some(ts("2027-01-10T00:00:00Z")),
+                signature: Some(SignaturePresence {
+                    algorithm: Some("ES256".into()),
+                    key_id: None,
+                    signer_count: 1,
+                }),
+                ..DeclaredEvidence::default()
+            }],
+            attestations: vec![AttestationAssertion {
+                map: vec![AttestationMapEntry {
+                    requirement: Some(CdxaRef {
+                        raw: "req-ps1".into(),
+                        resolution: CdxaResolution::Requirement,
+                    }),
+                    claims: vec![CdxaRef {
+                        raw: "claim-1".into(),
+                        resolution: CdxaResolution::Claim,
+                    }],
+                    conformance_score: Some(1.0),
+                    ..AttestationMapEntry::default()
+                }],
+                ..AttestationAssertion::default()
+            }],
+            standards: vec![DefinedStandard {
+                bom_ref: Some("std-ssdf".into()),
+                name: Some("NIST Secure Software Development Framework".into()),
+                requirements: vec![DefinedRequirement {
+                    bom_ref: Some("req-ps1".into()),
+                    identifier: Some("PS.1".into()),
+                    ..DefinedRequirement::default()
+                }],
+                ..DefinedStandard::default()
+            }],
+            ..AttestationDeclarations::default()
+        };
+        let mut sbom = NormalizedSbom::default();
+        sbom.extensions.declarations = Some(declarations);
+        sbom
+    }
+
+    #[test]
+    fn context_exposes_attestation_evidence_per_family() {
+        let sbom = sbom_with_ssdf_declarations();
+        let checker = ComplianceChecker::new(ComplianceLevel::NistSsdf)
+            .with_as_of(ts("2026-06-01T00:00:00Z"));
+        let ctx = ComplianceContext::new(&checker, &sbom);
+
+        assert!(ctx.attestation_declarations().is_some());
+        let ssdf = ctx.evidence_for(AttestationRuleFamily::Ssdf);
+        assert_eq!(ssdf.len(), 1);
+        assert_eq!(ssdf[0].requirement.identifier.as_deref(), Some("PS.1"));
+        // Signature PRESENCE only — never SignatureVerified in phase 1.
+        assert_eq!(ssdf[0].evidence_level, EvidenceLevel::SignaturePresent);
+        assert!(ctx.evidence_for(AttestationRuleFamily::Cra).is_empty());
+        assert!(ctx.evidence_for(AttestationRuleFamily::Eo14028).is_empty());
+    }
+
+    #[test]
+    fn context_evidence_respects_pinned_clock_and_absence() {
+        let sbom = sbom_with_ssdf_declarations();
+        // Clock pinned after evidence expiry: fail closed, nothing supports SSDF.
+        let expired = ComplianceChecker::new(ComplianceLevel::NistSsdf)
+            .with_as_of(ts("2027-06-01T00:00:00Z"));
+        let ctx = ComplianceContext::new(&expired, &sbom);
+        assert!(ctx.evidence_for(AttestationRuleFamily::Ssdf).is_empty());
+
+        // No declarations at all: accessor is None, evidence queries are empty.
+        let bare = NormalizedSbom::default();
+        let checker = ComplianceChecker::new(ComplianceLevel::NistSsdf);
+        let ctx = ComplianceContext::new(&checker, &bare);
+        assert!(ctx.attestation_declarations().is_none());
+        assert!(ctx.evidence_for(AttestationRuleFamily::Ssdf).is_empty());
     }
 }

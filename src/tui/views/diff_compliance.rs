@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 
 use crate::quality::{
@@ -190,8 +190,10 @@ pub fn render_diff_compliance(frame: &mut Frame, area: Rect, ctx: &RenderContext
 // ============================================================================
 
 fn render_standard_selector(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+    use unicode_width::UnicodeWidthStr;
+
     let levels = ComplianceLevel::all();
-    let selected = ctx.compliance.selected_standard;
+    let selected = ctx.compliance.selected_standard.min(levels.len() - 1);
     let Some(old_results) = ctx.old_compliance_results else {
         return;
     };
@@ -199,7 +201,8 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
         return;
     };
 
-    let titles: Vec<Line> = levels
+    // Build (indicator, color, label) per standard.
+    let entries: Vec<(&'static str, ratatui::style::Color, &'static str)> = levels
         .iter()
         .enumerate()
         .map(|(i, level)| {
@@ -212,53 +215,82 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, ctx: &RenderContext) 
             let new_na = new_results.get(i).is_some_and(|r| !r.is_applicable());
             let old_ok = old_results.get(i).is_some_and(|r| r.is_compliant);
             let new_ok = new_results.get(i).is_some_and(|r| r.is_compliant);
+            let new_warns = new_results.get(i).is_some_and(|r| r.warning_count > 0);
 
-            let indicator = if old_na || new_na {
+            let (glyph, color) = if old_na || new_na {
                 ("\u{2014}", colors().text_muted)
             } else {
                 match (old_ok, new_ok) {
+                    // Compliant on both sides, but with warnings on the new
+                    // document — matches the View app's ⚠ vocabulary.
+                    (true, true) if new_warns => ("\u{26a0}", colors().warning),
                     (true, true) => ("\u{2713}", colors().success),
                     (false, true) => ("\u{2191}", colors().success),
                     (true, false) => ("\u{2193}", colors().error),
                     (false, false) => ("\u{2717}", colors().error),
                 }
             };
-
-            let style = if i == selected {
-                Style::default()
-                    .fg(colors().accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(colors().text_muted)
-            };
-
-            Line::from(vec![
-                Span::styled(
-                    format!("{} ", indicator.0),
-                    Style::default().fg(indicator.1),
-                ),
-                Span::styled(level.short_name(), style),
-            ])
+            (glyph, color, level.short_name())
         })
         .collect();
 
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(colors().border))
-                .title(Span::styled(
-                    " Compliance Standards (\u{2190}/\u{2192}) ",
-                    Style::default().fg(colors().text_muted),
-                )),
-        )
-        .select(selected)
-        .divider(Span::styled(
-            " \u{2502} ",
-            Style::default().fg(colors().muted),
-        ));
+    // Window the entries against the real width (the ratatui Tabs widget
+    // clipped silently — the AI standards vanished on an AI-BOM diff with
+    // no indicator). Same «/» convention as the main tab bar.
+    let label_widths: Vec<u16> = entries
+        .iter()
+        .map(|(glyph, _, name)| {
+            (UnicodeWidthStr::width(*glyph) + 1 + UnicodeWidthStr::width(*name)) as u16
+        })
+        .collect();
+    let window = crate::tui::shared::tab_window(&label_widths, 3, selected, area.width);
 
-    frame.render_widget(tabs, area);
+    let mut spans: Vec<Span> = Vec::new();
+    if window.clipped_left {
+        spans.push(Span::styled(
+            "\u{ab} ",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+    for (i, (glyph, color, name)) in entries[window.start..window.end].iter().enumerate() {
+        let abs = window.start + i;
+        if i > 0 {
+            spans.push(Span::styled(
+                " \u{2502} ",
+                Style::default().fg(colors().muted),
+            ));
+        }
+        let style = if abs == selected {
+            Style::default()
+                .fg(colors().accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(colors().text_muted)
+        };
+        spans.push(Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(*color),
+        ));
+        spans.push(Span::styled(*name, style));
+    }
+    if window.clipped_right {
+        spans.push(Span::styled(
+            " \u{bb}",
+            Style::default().fg(colors().accent).bold(),
+        ));
+    }
+
+    let bar = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(colors().border))
+            .title(Span::styled(
+                " Compliance Standards (\u{2190}/\u{2192}) ",
+                Style::default().fg(colors().text_muted),
+            )),
+    );
+
+    frame.render_widget(bar, area);
 }
 
 // ============================================================================
@@ -885,7 +917,7 @@ fn render_overview(frame: &mut Frame, area: Rect, old: &ComplianceResult, new: &
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
-        "    Press v to cycle through: Overview \u{2192} New \u{2192} Resolved \u{2192} Old \u{2192} New SBOM",
+        "    Press v to cycle through: Overview \u{2192} New violations \u{2192} Resolved \u{2192} Pre-existing \u{2192} New-SBOM report",
         Style::default().fg(colors().text_muted),
     )]));
 
@@ -1194,55 +1226,77 @@ fn render_grouped_violation_table(
 // ============================================================================
 
 fn render_help_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
+    // Stage names match the Overview's cycle description exactly; "New
+    // violations" (delta) vs "New-SBOM report" (full document) no longer
+    // differ only by the word "SBOM".
     let mode_name = match ctx.compliance.view_mode {
         DiffComplianceViewMode::Overview => "Overview",
-        DiffComplianceViewMode::NewViolations => "New",
+        DiffComplianceViewMode::NewViolations => "New violations",
         DiffComplianceViewMode::ResolvedViolations => "Resolved",
-        DiffComplianceViewMode::OldViolations => "Old SBOM",
-        DiffComplianceViewMode::NewSbomViolations => "New SBOM",
+        DiffComplianceViewMode::OldViolations => "Pre-existing",
+        DiffComplianceViewMode::NewSbomViolations => "New-SBOM report",
     };
 
     let filter_label = ctx.compliance.severity_filter.label();
     let violation_count = diff_compliance_violation_count(ctx);
+    // Same verb and capitalized state vocabulary as the View app's compliance
+    // help bar ("Flat"/"Grouped"), so the shared toggle reads identically.
     let group_label = if ctx.compliance.group_by_element {
-        "grouped"
+        "Grouped"
     } else {
-        "flat"
+        "Flat"
     };
 
-    let help = Line::from(vec![
-        Span::styled("f", Style::default().fg(colors().accent)),
-        Span::styled(
-            format!(" filter [{filter_label}]  "),
-            Style::default().fg(colors().text_muted),
-        ),
-        Span::styled("g", Style::default().fg(colors().accent)),
-        Span::styled(
-            format!(" group [{group_label}]  "),
-            Style::default().fg(colors().text_muted),
-        ),
-        Span::styled("\u{2190}/\u{2192}", Style::default().fg(colors().accent)),
-        Span::styled(
-            " switch standard  ",
-            Style::default().fg(colors().text_muted),
-        ),
-        Span::styled("v", Style::default().fg(colors().accent)),
-        Span::styled(
-            format!(" cycle view [{mode_name}]  "),
-            Style::default().fg(colors().text_muted),
-        ),
-        Span::styled("j/k", Style::default().fg(colors().accent)),
-        Span::styled(
-            format!(" navigate ({violation_count})  "),
-            Style::default().fg(colors().text_muted),
-        ),
-        Span::styled("E", Style::default().fg(colors().accent)),
-        Span::styled(" export  ", Style::default().fg(colors().text_muted)),
-        Span::styled("?", Style::default().fg(colors().accent)),
-        Span::styled(" help", Style::default().fg(colors().text_muted)),
-    ]);
+    // Compliance-specific keys only: the global footer one line below already
+    // shows search/export-dialog/help/quit, and duplicating "e export"-style
+    // hints with different meanings ('E' = instant JSON write) misled.
+    let mut hints: Vec<(&str, String)> = vec![
+        ("f", format!("filter [{filter_label}]")),
+        ("g", format!("group [{group_label}]")),
+        ("\u{2190}/\u{2192}", "switch standard".to_string()),
+        ("v", format!("cycle view [{mode_name}]")),
+    ];
+    // Overview renders no violation list; advertising "j/k navigate (0)"
+    // there promised navigation over nothing.
+    if ctx.compliance.view_mode != DiffComplianceViewMode::Overview {
+        hints.push(("j/k", format!("navigate ({violation_count})")));
+    }
+    hints.push(("E", "export report (JSON)".to_string()));
 
-    let bar = Paragraph::new(help).style(Style::default());
+    // Whole-hint fitting: drop trailing key+label pairs (with a visible "…")
+    // rather than let ratatui clip mid-token ("E export report" → bare "E").
+    let budget = area.width as usize;
+    let mut help: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let mut dropped = false;
+    for (i, (key, label)) in hints.iter().enumerate() {
+        let gap = if i == 0 { 0 } else { 2 };
+        let w = gap + key.chars().count() + 1 + label.chars().count();
+        if used + w > budget {
+            dropped = true;
+            break;
+        }
+        if gap > 0 {
+            help.push(Span::raw("  "));
+        }
+        help.push(Span::styled(
+            (*key).to_string(),
+            Style::default().fg(colors().accent),
+        ));
+        help.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(colors().text_muted),
+        ));
+        used += w;
+    }
+    if dropped && used + 2 <= budget {
+        help.push(Span::styled(
+            " \u{2026}",
+            Style::default().fg(colors().text_muted),
+        ));
+    }
+
+    let bar = Paragraph::new(Line::from(help)).style(Style::default());
     frame.render_widget(bar, area);
 }
 

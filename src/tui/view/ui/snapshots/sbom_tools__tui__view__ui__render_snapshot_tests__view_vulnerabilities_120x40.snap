@@ -4,41 +4,41 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌────────────────────────────┐┌────────────────────────────┐┌────────────────────────────┐┌────────────────────────────┐
 │          CRITICAL          ││            HIGH            ││           MEDIUM           ││             LOW            │
-│                            ││                            ││                            ││                            │
-│              0             ││              0             ││              0             ││              0             │
-│ ░░░░░░░░░░░░░░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│              1             ││              1             ││              0             ││              0             │
+│ █████████████░░░░░░░░░░░░░ ││ █████████████░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ ││ ░░░░░░░░░░░░░░░░░░░░░░░░░░ │
 └────────────────────────────┘└────────────────────────────┘└────────────────────────────┘└────────────────────────────┘
+⚡  KEV 0 [K] · Fixable 0 · EPSS≥10% 0
 Filter:  All  KEV:  Off  Sort:  Severity  Dedupe:  On  Group:  Component
-[f] filter [k] kev [s] sort [d] dedupe [g] group [E/C] fold [Tab] next group
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                                      │
-│                                                           ✓                                                          │
-│                                                                                                                      │
-│                                              No vulnerabilities detected                                             │
-│                                                                                                                      │
-│                                    Great news! No known vulnerabilities were found                                   │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3
-          f filter  s sort  g group  d dedup  Enter component │  Tab switch  / search  e export  ? help  q quit
+[f] filter [K] kev [s] sort [d] dedupe [g] group [E/C] fold [}/{] group jump
+┌ Vulnerabilities (1 of 2) ──────────────────────────────────────┐┌ Group Details ─────────────────────────────────────┐
+│     Vuln ID                    CVSS  CWE                       ││axios  (1 vulnerability)                            │
+│▶    ├─▶ axios (1)              9.8                             ││  Max CVSS: 9.8                                     │
+│     └─▶ express (1)            8.1                             ││                                                    │
+│                                                                ││CVEs (1):                                           │
+│                                                                ││ C   9.8 CVE-2023-45857                             │
+│                                                                ││    Axios SSRF vulnerability allowing server-si...  │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+│                                                                ││                                                    │
+└────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2
+   f filter  s sort  g group  d dedup  Enter component │  Tab switch  / search  e export  ? help  q quit [y] copy axios

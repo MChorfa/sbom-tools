@@ -461,18 +461,21 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp, match_count: 
         spans.push(Span::raw("  │  "));
     }
 
-    spans.push(Span::styled("[/]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" search  "));
-    spans.push(Span::styled("[e]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" expand  "));
-    spans.push(Span::styled("[E]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" collapse  "));
-    spans.push(Span::styled("[c]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" component  "));
-    spans.push(Span::styled("[p]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" panel  "));
-    spans.push(Span::styled("[J/K]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" scroll"));
+    // Expand/collapse-all live on x/X ('e' is export, app-wide). Hints are
+    // fitted whole to the panel width so none is clipped mid-token by the
+    // adjacent Stats panel.
+    super::push_fitted_hints(
+        &mut spans,
+        &[
+            ("[/]", "search"),
+            ("[x]", "expand all"),
+            ("[X]", "collapse all"),
+            ("[c]", "component"),
+            ("[p]", "panel"),
+            ("[J/K]", "scroll"),
+        ],
+        area.width as usize,
+    );
 
     let para = Paragraph::new(Line::from(spans));
     frame.render_widget(para, area);
@@ -637,9 +640,12 @@ fn render_dependency_stats(
             format_thousands(root_count),
             Style::default().fg(scheme.text).bold(),
         ),
-        Span::styled("  D:", Style::default().fg(scheme.muted)),
+        Span::styled("  Depth: ", Style::default().fg(scheme.muted)),
         Span::styled(
-            max_depth.to_string(),
+            // calculate_max_depth counts NODES (root chain = 1); the per-node
+            // "Depth:" field below is 0-based (roots = 0). Convert so the two
+            // depths on this panel share one convention.
+            max_depth.saturating_sub(1).to_string(),
             Style::default().fg(scheme.text).bold(),
         ),
     ]));

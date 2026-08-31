@@ -4,19 +4,19 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
-« [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
+« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] SxS  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
-┌ Old SBOM [sync] -4 ~4 [Tree] (135 nod┐┌ New SBOM [sync] +4 ~4 [Tree] (126 nod┐
-│[▴░░██░██░██░██░░░░░░░░░░] 8 changes  ││[▴░░██░░░██░░░████░░░░░░░] 8 changes  │
+┌ Old SBOM [sync] -4 ~7 [Tree]─────────┐┌ New SBOM [sync] +4 ~7 [Tree]─────────┐
+│[▴░████░████░░░░░░░██░█░] 11 changes  ││[▴░██░░██░░███░░░░░██░█░] 11 changes  │
 │root                                  ││root                                  │
 │ > ▼ root: {} (7 keys)               ▲││ > ▼ root: {} (7 keys)               ▲│
 │   ├─ bomFormat: "CycloneDX"         █││   ├─ bomFormat: "CycloneDX"         █│
 │   ├─ ▼ components: [] (8 items)     ║││   ├─ ▼ components: [] (8 items)     ║│
-│~  │  ├─ ▶ [0]: lodash 4.17.20 → 4.17║││~  │  ├─ ▶ [0]: lodash 4.17.20 → 4.17║│
-│~  │  ├─ ▶ [1]: express 4.17.1 → 4.18║││~  │  ├─ ▶ [1]: express 4.17.1 → 4.18║│
-│-  │  ├─ ▶ [2]: moment@2.29.1 (libr..▼││      ·····                          ▼│
-└──────────────────────── Ln 1/20 (5%) ┘└──────────────────────── Ln 1/20 (5%) ┘
+│~  │  ├─ ▶ [0]: lodash 4.17.20 → 4.1…║││~  │  ├─ ▶ [0]: lodash 4.17.20 → 4.1…║│
+│~  │  ├─ ▶ [1]: express 4.17.1 → 4.1…║││~  │  ├─ ▶ [1]: express 4.17.1 → 4.1…║│
+│-  │  ├─ ▶ [2]: moment@2.29.1 (lib...▼││      ·····                          ▼│
+└──────────────────────── Ln 1/25 (4%) ┘└──────────────────────── Ln 1/25 (4%) ┘
 ┌ Detail ──────────────────────────────────────────────────────────────────────┐
 │Path: root                                                                    │
 │Key: root                                                                     │
@@ -24,5 +24,5 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │Depth: 0                                                                      │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
   …  u collapse │  Tab switch  / search  e export  ? help  q quit [y] copy root

@@ -65,8 +65,6 @@ pub const fn tab_to_report_type(tab: TabKind) -> ReportType {
         TabKind::Licenses => ReportType::Licenses,
         TabKind::Vulnerabilities => ReportType::Vulnerabilities,
         TabKind::Summary
-        | TabKind::Overview
-        | TabKind::Tree
         | TabKind::Quality
         | TabKind::Compliance
         | TabKind::SideBySide
@@ -593,6 +591,58 @@ pub fn export_source_content(content: &str, label: &str) -> ExportResult {
 /// Escape a value for CSV: double any embedded quotes.
 fn csv_escape(s: &str) -> String {
     s.replace('"', "\"\"")
+}
+
+/// Export multi-diff (1:N baseline comparison) results to a file.
+///
+/// JSON only: the result is the canonical serde `MultiDiffResult`.
+pub fn export_multi_diff(
+    format: ExportFormat,
+    result: &crate::diff::MultiDiffResult,
+    template: Option<&str>,
+) -> ExportResult {
+    export_serde_json_only(format, result, "multi_diff", template)
+}
+
+/// Export timeline analysis results to a file.
+///
+/// JSON only: the result is the canonical serde `TimelineResult`.
+pub fn export_timeline(
+    format: ExportFormat,
+    result: &crate::diff::TimelineResult,
+    template: Option<&str>,
+) -> ExportResult {
+    export_serde_json_only(format, result, "timeline", template)
+}
+
+/// Shared JSON-only exporter for the multi-comparison result structs.
+fn export_serde_json_only<T: serde::Serialize>(
+    format: ExportFormat,
+    result: &T,
+    command: &str,
+    template: Option<&str>,
+) -> ExportResult {
+    let path = build_export_filename(template, command, &format, None);
+    if format != ExportFormat::Json {
+        return ExportResult {
+            path,
+            success: false,
+            message: format!("{command} export supports JSON only — press j"),
+        };
+    }
+    let content = serde_json::to_string_pretty(result).unwrap_or_default();
+    match write_to_file(&path, &content) {
+        Ok(actual_path) => ExportResult {
+            message: format!("Exported to {}", display_path(&actual_path)),
+            path: actual_path,
+            success: true,
+        },
+        Err(e) => ExportResult {
+            path,
+            success: false,
+            message: format!("Failed to write: {e}"),
+        },
+    }
 }
 
 /// Export matrix results to a file (JSON, CSV, or HTML)

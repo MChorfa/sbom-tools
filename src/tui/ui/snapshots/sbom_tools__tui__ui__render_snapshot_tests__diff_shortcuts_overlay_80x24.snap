@@ -8,21 +8,21 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
      │This Tab — Summary                                                  │
 ─────│                                                                    │─────
 ┌ Sum│j/k  scroll                                                         │────┐
-│ Hig│Home/End  Jump to start/end                                         │    │
+│ Cri│Home/End  Jump to start/end                                         │    │
 │Comp│                                                                    │    │
 └────│Global                                                              │────┘
 ┌ All│                                                                    │────┐
 │── M│q  Quit application                                                 │    ▲
 │ ~ M│?  Toggle help                                                      │    █
 │ ~ M│e  Export dialog                                                    │    █
-│ ~ a│l  Color legend                                                     │    █
-│ ~ a│T  Toggle theme                                                     │    █
-│ ~ r│/  Search                                                           │    ║
-│ - j│K  Keyboard shortcuts                                               │    ║
-│ - m│V  View switcher (multi-views)                                      │    ║
-│ - r│D  Component deep dive                                              │    ║
-│ - u│y/Ctrl+C  Copy selected to clipboard                                │    ║
-│ + d│Shift+drag  Select text with mouse                                  │    ▼
-└────└───────────────────────────────────────── ↓ 30 more — ↑↓/j/k scroll ┘────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+│ ~ M│l  Color legend                                                     │    █
+│ ⚠ C│T  Toggle theme                                                     │er..║
+│ ~ a│K  Keyboard shortcuts                                               │    ║
+│ ~ a│D  Component deep dive                                              │    ║
+│ ~ r│y/Ctrl+C  Copy selected to clipboard                                │    ║
+│ ⚠ H│Shift+drag  Select text with mouse                                  │    ║
+│ - j│b/Backspace  Navigate back                                          │    ║
+│ - m│                                                                    │    ▼
+└────└───────────────────────────────────────── ↓ 26 more — ↑↓/j/k scroll ┘────┘
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
            j/k scroll │  Tab switch  / search  e export  ? help  q quit

@@ -645,8 +645,18 @@ pub fn set_theme(theme: Theme) {
 /// monochrome theme (grayscale only, no hue) regardless of the saved preference.
 /// Otherwise use the saved theme name.
 #[must_use]
-pub fn startup_theme(prefs_name: &str) -> Theme {
-    startup_theme_for(std::env::var_os("NO_COLOR").is_some(), prefs_name)
+pub fn startup_theme(no_color_flag: bool, prefs_name: &str) -> Theme {
+    startup_theme_for(no_color_flag || no_color_env(), prefs_name)
+}
+
+/// Whether the `NO_COLOR` convention asks for monochrome.
+///
+/// Per the convention, the variable counts only when present AND non-empty —
+/// `NO_COLOR=` means "not set". This matches the check the CLI applies to log
+/// and report output, so one invocation cannot be monochrome in one surface
+/// and colored in another.
+fn no_color_env() -> bool {
+    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
 }
 
 fn startup_theme_for(no_color: bool, prefs_name: &str) -> Theme {
@@ -1002,11 +1012,23 @@ impl FooterHints {
         let mut hints = Self::global();
 
         match tab.to_lowercase().as_str() {
+            "overview" => {
+                // 'P' is otherwise undiscoverable, yet it is the only way to
+                // reach the CBOM/AI-BOM tab sets on a misdetected document.
+                hints.insert(0, ("P", "cycle profile"));
+            }
             "tree" | "components" => {
-                // g/f/search already shown in filter bar at top
+                // g/f/filter already shown in filter bar at top.
+                // NOTE: view/ui.rs drops the "1-4" hint unless the detail
+                // panel is focused (digits switch app tabs otherwise).
                 hints.insert(0, ("p", "panel"));
                 hints.insert(1, ("Enter", "select"));
                 hints.insert(2, ("1-4", "detail tabs"));
+                // '/' here is an inline list filter, not the jump-to search
+                // palette the other tabs open — label it honestly.
+                if let Some(slash) = hints.iter_mut().find(|(k, _)| *k == "/") {
+                    slash.1 = "filter";
+                }
             }
             "vulnerabilities" | "vulns" => {
                 hints.insert(0, ("f", "filter"));
@@ -1023,8 +1045,9 @@ impl FooterHints {
             "dependencies" => {
                 hints.insert(0, ("Enter", "expand/inspect"));
                 hints.insert(1, ("←", "collapse"));
-                hints.insert(2, ("p", "panel"));
-                hints.insert(3, ("J/K", "scroll"));
+                hints.insert(2, ("x/X", "fold all"));
+                hints.insert(3, ("p", "panel"));
+                hints.insert(4, ("J/K", "scroll"));
             }
             "quality" => {
                 hints.insert(0, ("v", "view"));
@@ -1040,28 +1063,23 @@ impl FooterHints {
                 hints.insert(2, ("H/L", "fold all"));
                 hints.insert(3, ("Enter", "select"));
             }
+            // No ("Enter", "detail") hints here: Enter is a no-op on the
+            // four CBOM asset tabs (handle_enter ignores them) and the
+            // detail panel is already always visible — advertising a dead
+            // key is dishonest. Mirrors what Models/Datasets already do.
             "algorithms" => {
                 hints.insert(0, ("s", "sort"));
                 hints.insert(1, ("↑↓", "select"));
-                hints.insert(2, ("Enter", "detail"));
             }
-            "certificates" => {
+            "certificates" | "keys" | "protocols" => {
                 hints.insert(0, ("↑↓", "select"));
-                hints.insert(1, ("Enter", "detail"));
-            }
-            "keys" => {
-                hints.insert(0, ("↑↓", "select"));
-                hints.insert(1, ("Enter", "detail"));
-            }
-            "protocols" => {
-                hints.insert(0, ("↑↓", "select"));
-                hints.insert(1, ("Enter", "detail"));
             }
             "pqc-compliance" => {
                 hints.insert(0, ("↑↓", "select"));
             }
             "models" | "datasets" => {
                 hints.insert(0, ("↑↓", "select"));
+                hints.insert(1, ("K/J", "scroll detail"));
             }
             "ai-readiness" => {
                 hints.insert(0, ("↑↓", "scroll"));
@@ -1211,6 +1229,31 @@ mod a11y_tests {
         assert_eq!(startup_theme_for(true, "light").name, "monochrome");
         assert_eq!(startup_theme_for(false, "light").name, "light");
         assert_eq!(startup_theme_for(false, "dark").name, "dark");
+    }
+
+    /// The `--no-color` FLAG must force monochrome on its own. It previously
+    /// never reached the TUI at all: only the environment variable was
+    /// consulted, so `--no-color` launched a fully colored TUI.
+    #[test]
+    fn no_color_flag_forces_monochrome_independently_of_env() {
+        // Passing the resolved flag is enough, whatever the environment says.
+        assert_eq!(
+            super::startup_theme(true, "dark").name,
+            "monochrome",
+            "--no-color must force monochrome without relying on NO_COLOR"
+        );
+        assert_eq!(
+            super::startup_theme(true, "high-contrast").name,
+            "monochrome"
+        );
+    }
+
+    /// Monochrome must survive the `T` theme toggle: a user who asked for no
+    /// color cannot be cycled back into a colored theme.
+    #[test]
+    fn monochrome_is_sticky_under_toggle() {
+        let mono = super::startup_theme(true, "dark");
+        assert_eq!(mono.next().name, "monochrome");
     }
 
     /// Multi-mode footers must carry exactly GLOBAL_COUNT honest globals so

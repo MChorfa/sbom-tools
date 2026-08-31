@@ -4,7 +4,7 @@ expression: text
 ---
 sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 
-[1] Overview  │ [2] Algorithms  │ [3] Certs  │ [4] Keys  │ [5] Protocols  │ [6] Quality  │ [7] PQC Compliance  »
+[1] Overview  │ [2] Algorithms  │ [3] Certificates  │ [4] Keys  │ [5] Protocols  │ [6] Quality  │ [7] PQC Compliance  »
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ┌ Crypto Summary ──────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -17,7 +17,7 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │[ALG] Q ML-DSA-87                                         ││OID:  2.16.840.1.101.3.4.4.3                              │
 │[ALG] Q ML-DSA-65                                         ││                                                          │
 │[ALG] Q SLH-DSA-SHAKE-256s                                ││-- Algorithm Properties --                                │
-│[ALG] Q AES-256-GCM                                       ││Primitive: kem                                            │
+│[ALG] Q AES-256-GCM                                       ││Primitive: key encapsulation mechanism (kem)              │
 │[ALG] Q SHA-384                                           ││Family:    ML-KEM                                         │
 │[ALG] V X25519                                            ││Params:    1024                                           │
 │[ALG] Q X25519-ML-KEM-768                                 ││Security:  256 bits                                       │
@@ -39,6 +39,6 @@ sbom-tools  VIEW  │ quantum-ready-app │ CycloneDX 1.7 │ [CBOM]
 │                                                          ││                                                          │
 │                                                          ││                                                          │
 │                                                          ││                                                          │
-└ ! weak  Q quantum-safe  V vulnerable  ? unknown ─────────┘└──────────────────────────────────────────────────────────┘
+└ ! weak/broken  Q quantum-safe  V vulnerable  ? unknown ──┘└──────────────────────────────────────────────────────────┘
  Algo: 11 │ Certs: 1 │ Keys: 2 │ Quantum: 82%
                            Tab switch  / search  e export  ? help  q quit [y] copy ML-KEM-1024

@@ -4,11 +4,11 @@ expression: text
 ---
 sbom-tools  VIEW  │ SBOM │ CycloneDX  │ [SBOM]
 
-[1] Overview  │ [2] Components  │ [3] Vulns  │ [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Group:  License   │  [g] toggle  [Enter] inspect                  ┌ License Details ───────────────────────────────────┐
-✓ 1  ⚠ 1  ? 0  │  2 total  │  ⚡  1 conflicts                      │Apache-2.0                                          │
+components: ✓ 1  ⚠ 1  ? 0  │  2 licenses  │  ⚡  1 conflicts       │Apache-2.0                                          │
                                                                   │                                                    │
 ┌ Licenses (2) ──────────────────────────────────────────────────┐│Category: Permissive                                │
 │  License                         Count          Category       ││Risk: Low                                           │

@@ -57,14 +57,18 @@ pub use multi::{
     DependencySnapshot, DivergenceType, DivergentComponent, EvolutionSummary,
     InconsistentComponent, IncrementalChange, LicenseChange as TimelineLicenseChange,
     LicenseChangeType, MatrixResult, MultiDiffResult, MultiDiffSummary, SbomCluster,
-    SbomClustering, SbomInfo, SecurityImpact, TimelineResult, VariableComponent, VersionAtPoint,
-    VersionChangeType, VersionSpread, VulnerabilityMatrix, VulnerabilitySnapshot,
+    SbomClustering, SbomInfo, SecurityImpact, TimelinePair, TimelineResult, VariableComponent,
+    VersionAtPoint, VersionChangeType, VersionSpread, VulnerabilityMatrix, VulnerabilitySnapshot,
 };
 pub use multi_engine::MultiDiffEngine;
 // Only consumer is the TUI Summary tab; gate so `--no-default-features`
 // builds don't carry an unused re-export.
 #[cfg(feature = "tui")]
 pub(crate) use multi_engine::classify_version_strings;
+// TUI multi-dashboard drill-down matches pairwise change entries (whose ids
+// keep the version) against logical variable-component ids.
+#[cfg(feature = "tui")]
+pub(crate) use multi_engine::strip_purl_version;
 pub use result::ml_metric_higher_is_better;
 pub use result::{
     CategoryDelta, ChangeSet, ChangeType, ComponentChange, ComponentLicenseChange,

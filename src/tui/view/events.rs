@@ -219,9 +219,18 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
 
     // Handle overlays consistently - toggle or close with Esc/q
     if app.has_overlay() {
+        // Legend overlay: its footer promises "Press any key to close" — honor
+        // it literally (the legend is read-only, so no key is lost).
+        if app.show_legend {
+            app.toggle_legend();
+            return;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => app.close_overlays(),
-            KeyCode::Char('?') if app.show_help => app.toggle_help(),
+            // 'K' honors the overlay footer's "Press Esc, ? or K to close"
+            // (and Diff-app muscle memory). Safe here: the overlay swallows
+            // keys, so the Vulnerabilities tab's KEV toggle is unaffected.
+            KeyCode::Char('?' | 'K') if app.show_help => app.toggle_help(),
             KeyCode::Down | KeyCode::Char('j') if app.show_help => {
                 app.help_scroll = (app.help_scroll + 1).min(app.help_max_scroll);
             }
@@ -229,7 +238,6 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
                 app.help_scroll = app.help_scroll.saturating_sub(1);
             }
             KeyCode::Char('e') if app.show_export => app.toggle_export(),
-            KeyCode::Char('l') if app.show_legend => app.toggle_legend(),
             // Export format selection
             KeyCode::Char('j' | 's' | 'm' | 'h' | 'c') if app.show_export => {
                 handle_export_key(app, key);
@@ -352,6 +360,14 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
             // the tree empty-state's "[Esc] to clear" promise stays truthful.
             if app.active_tab == ViewTab::Tree && !app.tree_search_query.is_empty() {
                 app.clear_tree_search();
+            } else if app.active_tab == ViewTab::Vulnerabilities && app.vuln_state.filter_kev {
+                // The KEV no-results state promises "[Esc] to clear" — keep it true.
+                app.vuln_state.toggle_kev_filter();
+            } else if app.active_tab == ViewTab::Vulnerabilities
+                && app.vuln_state.filter_severity.is_some()
+            {
+                // Same promise for the severity-filter no-results state.
+                app.vuln_state.clear_severity_filter();
             } else if app.focus_panel == super::app::FocusPanel::Right {
                 app.focus_panel = super::app::FocusPanel::Left;
             } else if app.navigation_ctx.has_history() {
@@ -374,19 +390,10 @@ pub fn handle_key_event(app: &mut ViewApp, key: KeyEvent) {
                 app.start_search();
             }
         }
+        // 'e' means export on EVERY tab (Dependencies expand-all lives on 'x',
+        // so the global "e export" footer hint is never a lie).
         KeyCode::Char('e') => {
-            if app.active_tab == ViewTab::Dependencies {
-                // Expand all dependency nodes
-                let all_ids: Vec<String> = app
-                    .sbom
-                    .components
-                    .keys()
-                    .map(|id| id.value().to_string())
-                    .collect();
-                app.dependency_state.expand_all(&all_ids);
-            } else {
-                app.toggle_export();
-            }
+            app.toggle_export();
         }
         KeyCode::Char('l') => {
             app.toggle_legend();
@@ -493,12 +500,7 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
     }
 
     match key.code {
-        // KEV-only filter toggle (Vulnerabilities tab) — mirrors diff-mode VulnFilter::Kev.
-        // Must precede the generic `k` navigation arm below.
-        KeyCode::Char('k') if app.active_tab == ViewTab::Vulnerabilities => {
-            app.vuln_state.toggle_kev_filter();
-        }
-        // Navigation
+        // Navigation — j/k are sacred: no tab may shadow them.
         KeyCode::Up | KeyCode::Char('k') => {
             app.navigate_up();
         }
@@ -616,7 +618,8 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
             ViewTab::Compliance => app.compliance_state.toggle_grouped(),
             _ => {}
         },
-        // Scroll component list in License details / Dependency stats / Compliance affected (K/J)
+        // Scroll detail panes (K/J) — plus the Vulnerabilities KEV toggle,
+        // which lives on capital 'K' so plain 'k' stays pure navigation.
         KeyCode::Char('K') => match app.active_tab {
             ViewTab::Licenses => app.license_state.scroll_components_up(),
             ViewTab::Dependencies => {
@@ -624,6 +627,14 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
                     app.dependency_state.detail_scroll.saturating_sub(1);
             }
             ViewTab::Compliance => app.compliance_state.affected_scroll_up(),
+            // KEV-only filter toggle — mirrors diff-mode VulnFilter::Kev.
+            ViewTab::Vulnerabilities => app.vuln_state.toggle_kev_filter(),
+            ViewTab::Models => {
+                app.models_detail_scroll = app.models_detail_scroll.saturating_sub(1);
+            }
+            ViewTab::Datasets => {
+                app.datasets_detail_scroll = app.datasets_detail_scroll.saturating_sub(1);
+            }
             _ => {}
         },
         KeyCode::Char('J') => match app.active_tab {
@@ -637,6 +648,12 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
             ViewTab::Compliance => {
                 // Max lines is approximate — the panel will clamp
                 app.compliance_state.affected_scroll_down(500);
+            }
+            ViewTab::Models => {
+                app.models_detail_scroll = app.models_detail_scroll.saturating_add(1);
+            }
+            ViewTab::Datasets => {
+                app.datasets_detail_scroll = app.datasets_detail_scroll.saturating_add(1);
             }
             _ => {}
         },
@@ -960,23 +977,37 @@ fn handle_view_key(app: &mut ViewApp, key: KeyEvent) {
                 app.vuln_state.selected = pos;
             }
         }
-        KeyCode::Tab if app.active_tab == ViewTab::Vulnerabilities => {
+        // Group jump on }/{ — Tab/BackTab always switch app tabs (the old
+        // Tab-guarded arms here were unreachable behind the global Tab arm),
+        // and 'n'/'N' are taken on this tab (cycle affected component).
+        KeyCode::Char('}') if app.active_tab == ViewTab::Vulnerabilities => {
             // Jump to next group header — use cached display items
             app.vuln_state.jump_next_group_cached();
         }
-        KeyCode::BackTab if app.active_tab == ViewTab::Vulnerabilities => {
+        KeyCode::Char('{') if app.active_tab == ViewTab::Vulnerabilities => {
             // Jump to previous group header — use cached display items
             app.vuln_state.jump_prev_group_cached();
         }
-        KeyCode::Char('E') if app.active_tab == ViewTab::Dependencies => {
-            // Collapse all dependency nodes
+        // Expand/collapse all dependency nodes ('x'/'X'; 'e' is reserved for export).
+        KeyCode::Char('x') if app.active_tab == ViewTab::Dependencies => {
+            let all_ids: Vec<String> = app
+                .sbom
+                .components
+                .keys()
+                .map(|id| id.value().to_string())
+                .collect();
+            app.dependency_state.expand_all(&all_ids);
+        }
+        KeyCode::Char('X') if app.active_tab == ViewTab::Dependencies => {
             app.dependency_state.collapse_all();
         }
         KeyCode::Char('E') if app.active_tab == ViewTab::Compliance => {
             // Export compliance results as JSON
             app.export_compliance(crate::tui::export::ExportFormat::Json);
         }
-        KeyCode::Right | KeyCode::Char('l') if app.active_tab == ViewTab::Compliance => {
+        // 'l' is NOT bound here: the global arm above consumes it for the
+        // legend on every tab, so only the arrow key switches standards.
+        KeyCode::Right if app.active_tab == ViewTab::Compliance => {
             // Switch to next compliance standard
             app.compliance_state.next_standard();
         }
@@ -1295,20 +1326,64 @@ fn handle_list_click(app: &mut ViewApp, row: usize, _x: u16) {
 /// Get the text that would be copied for the current selection.
 ///
 /// Returns `None` if nothing is selected or the tab has no copyable item.
+///
+/// INVARIANT: every arm must resolve through the SAME display-ordered,
+/// filtered collection its tab renders — never a re-derived or re-sorted
+/// list — so the clipboard always receives the item the user is looking at.
 pub fn get_yank_text(app: &ViewApp) -> Option<String> {
+    fn component_yank_text(comp: &crate::model::Component) -> String {
+        if let Some(ref purl) = comp.identifiers.purl {
+            purl.clone()
+        } else {
+            let ver = comp.version.as_deref().unwrap_or("unknown");
+            format!("{}@{ver}", comp.name)
+        }
+    }
     match app.active_tab {
-        ViewTab::Tree | ViewTab::Overview => {
+        ViewTab::Tree => {
+            // Resolve through the tree cursor (the list the user actually
+            // sees): component rows copy purl/name@ver, group rows copy the
+            // group label (matching diff mode's copy-any-row behavior).
+            match app.get_selected_tree_node()? {
+                super::app::SelectedTreeNode::Component(id) => app
+                    .sbom
+                    .components
+                    .iter()
+                    .find(|(cid, _)| cid.value() == id)
+                    .map(|(_, comp)| component_yank_text(comp)),
+                super::app::SelectedTreeNode::Group(id) => {
+                    // Group ids carry a namespace prefix ("eco:npm",
+                    // "lic:MIT", "type:library"); copy the human label.
+                    let label = id
+                        .strip_prefix("eco:")
+                        .or_else(|| id.strip_prefix("lic:"))
+                        .or_else(|| id.strip_prefix("type:"))
+                        .unwrap_or(&id)
+                        .to_string();
+                    Some(label)
+                }
+            }
+        }
+        ViewTab::Overview => {
             let comp = app.get_selected_component()?;
-            Some(if let Some(ref purl) = comp.identifiers.purl {
-                purl.clone()
-            } else {
-                let ver = comp.version.as_deref().unwrap_or("unknown");
-                format!("{}@{ver}", comp.name)
-            })
+            Some(component_yank_text(comp))
         }
         ViewTab::Vulnerabilities => {
-            let (_comp_id, vuln) = app.vuln_state.get_selected(&app.sbom)?;
-            Some(vuln.id.clone())
+            // Same grouped/sorted/deduped display list the table renders.
+            let cache = app.vuln_state.cached_data.as_ref()?;
+            match app
+                .vuln_state
+                .cached_display_items
+                .get(app.vuln_state.selected)?
+            {
+                super::views::VulnDisplayItem::Vuln { idx, .. } => {
+                    cache.vulns.get(*idx).map(|v| v.vuln_id.clone())
+                }
+                super::views::VulnDisplayItem::GroupHeader { label, .. }
+                | super::views::VulnDisplayItem::SubGroupHeader { label, .. } => {
+                    Some(label.clone())
+                }
+            }
         }
         ViewTab::Dependencies => {
             let node_id = app.get_selected_dependency_node_id()?;
@@ -1321,16 +1396,12 @@ pub fn get_yank_text(app: &ViewApp) -> Option<String> {
             )
         }
         ViewTab::Licenses => {
-            let mut licenses: Vec<String> = Vec::new();
-            for comp in app.sbom.components.values() {
-                for lic in &comp.licenses.declared {
-                    if !licenses.contains(&lic.expression) {
-                        licenses.push(lic.expression.clone());
-                    }
-                }
-            }
-            licenses.sort();
-            licenses.get(app.license_state.selected).cloned()
+            // Same count-desc list (including the synthetic "Unknown" bucket)
+            // the table renders — NOT a fresh alphabetical rebuild.
+            let license_data = super::views::build_license_data_from_app(app);
+            license_data
+                .get(app.license_state.selected)
+                .map(|(license, _, _)| license.clone())
         }
         ViewTab::Quality => app
             .quality_report
@@ -1389,16 +1460,12 @@ pub fn get_yank_text(app: &ViewApp) -> Option<String> {
         | ViewTab::Certificates
         | ViewTab::Keys
         | ViewTab::Protocols => {
-            let crypto_components: Vec<_> = app
-                .sbom
-                .components
-                .values()
-                .filter(|c| c.component_type == crate::model::ComponentType::Cryptographic)
-                .collect();
+            // Per-tab asset filter + sort, exactly as the renderers build it.
+            let visible = app.visible_crypto_components(app.active_tab);
             let selected = app
                 .active_crypto_selected()
-                .min(crypto_components.len().saturating_sub(1));
-            crypto_components.get(selected).map(|c| c.name.clone())
+                .min(visible.len().saturating_sub(1));
+            visible.get(selected).map(|c| c.name.clone())
         }
         ViewTab::Models => {
             let mut models: Vec<_> = app
@@ -1432,6 +1499,11 @@ pub fn get_yank_text(app: &ViewApp) -> Option<String> {
 
 /// Handle `y` / `Ctrl+C` to copy the focused item to clipboard.
 fn handle_yank(app: &mut ViewApp) {
+    // The Tree yank path resolves through the cached tree nodes; warm the
+    // cache so a yank fired before the first render still resolves.
+    if app.active_tab == ViewTab::Tree {
+        app.ensure_tree_cache();
+    }
     let Some(text) = get_yank_text(app) else {
         if app.active_tab == ViewTab::Source {
             app.set_status_message("Shift+drag to select text, then Cmd/Ctrl+C");

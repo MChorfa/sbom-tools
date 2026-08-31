@@ -56,13 +56,21 @@ impl ViewState for GraphChangesView {
                 self.inner.page_down();
                 EventResult::Consumed
             }
-            KeyCode::Home => {
+            // `g` is bound here to match the advertised `g/G  First/Last`:
+            // the global `select_first` has no arm for this tab, so `g` fell
+            // through and did nothing while the footer promised otherwise.
+            KeyCode::Home | KeyCode::Char('g') => {
                 self.inner.go_first();
                 EventResult::Consumed
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.inner.go_last();
                 EventResult::Consumed
+            }
+            // The detail panel is always visible on this tab; make Enter
+            // respond instead of being the one silent Enter in the app.
+            KeyCode::Enter => {
+                EventResult::status("Details for the selected change are shown in the right panel")
             }
             _ => EventResult::Ignored,
         }
@@ -106,6 +114,30 @@ mod tests {
             tick: 0,
             status_message: status,
         }
+    }
+
+    /// `g` must actually move to the first row: the tab advertises
+    /// `g/G  First/Last`, but the global `select_first` has no arm for Graph
+    /// Changes, so an unbound `g` fell through and silently did nothing.
+    #[test]
+    fn g_jumps_to_first_as_advertised() {
+        let mut view = GraphChangesView::new();
+        view.inner_mut().set_total(5);
+        let mut ctx = make_ctx();
+
+        view.handle_key(make_key(KeyCode::End), &mut ctx);
+        assert_ne!(
+            view.inner().selected(),
+            0,
+            "precondition: moved off the first row"
+        );
+
+        let result = view.handle_key(make_key(KeyCode::Char('g')), &mut ctx);
+        assert!(
+            matches!(result, EventResult::Consumed),
+            "`g` must be consumed by the tab that advertises it"
+        );
+        assert_eq!(view.inner().selected(), 0, "`g` must jump to the first row");
     }
 
     #[test]

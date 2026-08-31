@@ -28,7 +28,7 @@ pub fn render_licenses(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
 
     // License content
     match ctx.mode {
-        AppMode::Diff | AppMode::View => render_diff_licenses(frame, chunks[1], ctx),
+        AppMode::Diff => render_diff_licenses(frame, chunks[1], ctx),
         // Multi-comparison modes have their own views
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => {}
     }
@@ -69,44 +69,52 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         "Off"
     };
 
-    let mut spans = vec![
-        Span::styled("Group: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(
-            format!(" {group_label} "),
-            Style::default()
-                .fg(scheme.badge_fg_dark)
-                .bg(scheme.primary)
-                .bold(),
-        ),
-        Span::raw("  "),
-        Span::styled("Sort: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(sort_label, Style::default().fg(scheme.accent).bold()),
-        Span::styled("  │  ", Style::default().fg(scheme.border)),
-        Span::styled("Risk: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(
-            format!(" {risk_filter_label} "),
-            Style::default()
-                .fg(scheme.badge_fg_dark)
-                .bg(if ctx.licenses.risk_filter.is_some() {
-                    scheme.warning
-                } else {
-                    scheme.success
-                })
-                .bold(),
-        ),
-        Span::styled("  │  ", Style::default().fg(scheme.border)),
-        Span::styled("Compat: ", Style::default().fg(scheme.text_muted)),
-        Span::styled(
-            format!(" {compat_label} "),
-            Style::default()
-                .fg(scheme.badge_fg_dark)
-                .bg(if ctx.licenses.show_compatibility {
-                    scheme.accent
-                } else {
-                    scheme.border
-                })
-                .bold(),
-        ),
+    // Assemble the row as whole segments and fit them to the width: state
+    // values must never clip mid-word ("Focus:  Ne") and key hints must
+    // never clip mid-token ("[c] com") — drop whole trailing segments with
+    // an ellipsis marker instead (hints are recoverable from '?').
+    let mut segments: Vec<Vec<Span>> = vec![
+        vec![
+            Span::styled("Group: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!(" {group_label} "),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(scheme.primary)
+                    .bold(),
+            ),
+            Span::raw("  "),
+            Span::styled("Sort: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(sort_label, Style::default().fg(scheme.accent).bold()),
+        ],
+        vec![
+            Span::styled("Risk: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!(" {risk_filter_label} "),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(if ctx.licenses.risk_filter.is_some() {
+                        scheme.warning
+                    } else {
+                        scheme.success
+                    })
+                    .bold(),
+            ),
+        ],
+        vec![
+            Span::styled("Compat: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!(" {compat_label} "),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(if ctx.licenses.show_compatibility {
+                        scheme.accent
+                    } else {
+                        scheme.border
+                    })
+                    .bold(),
+            ),
+        ],
     ];
 
     // Show panel focus indicator only in Diff mode
@@ -116,55 +124,38 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
         } else {
             "Removed"
         };
-        spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
-        spans.push(Span::styled(
-            "Focus: ",
-            Style::default().fg(scheme.text_muted),
-        ));
-        spans.push(Span::styled(
-            format!(" {focus_label} "),
-            Style::default()
-                .fg(scheme.badge_fg_dark)
-                .bg(if ctx.licenses.focus_left {
-                    scheme.added
-                } else {
-                    scheme.removed
-                })
-                .bold(),
-        ));
+        segments.push(vec![
+            Span::styled("Focus: ", Style::default().fg(scheme.text_muted)),
+            Span::styled(
+                format!(" {focus_label} "),
+                Style::default()
+                    .fg(scheme.badge_fg_dark)
+                    .bg(if ctx.licenses.focus_left {
+                        scheme.added
+                    } else {
+                        scheme.removed
+                    })
+                    .bold(),
+            ),
+        ]);
     }
 
-    // Keyboard hints
-    spans.push(Span::styled("  │  ", Style::default().fg(scheme.border)));
-    spans.push(Span::styled("[g]", Style::default().fg(scheme.accent)));
-    spans.push(Span::styled(
-        " grp ",
-        Style::default().fg(scheme.text_muted),
-    ));
-    spans.push(Span::styled("[s]", Style::default().fg(scheme.accent)));
-    spans.push(Span::styled(
-        " sort ",
-        Style::default().fg(scheme.text_muted),
-    ));
-    spans.push(Span::styled("[r]", Style::default().fg(scheme.accent)));
-    spans.push(Span::styled(
-        " risk ",
-        Style::default().fg(scheme.text_muted),
-    ));
-    spans.push(Span::styled("[c]", Style::default().fg(scheme.accent)));
-    spans.push(Span::styled(
-        " compat",
-        Style::default().fg(scheme.text_muted),
-    ));
-
-    // Panel switch hint only in Diff mode
+    // Keyboard hints, one segment per hint so each survives or drops whole.
+    let hint = |key: &'static str, label: &'static str| {
+        vec![
+            Span::styled(key, Style::default().fg(scheme.accent)),
+            Span::styled(label, Style::default().fg(scheme.text_muted)),
+        ]
+    };
+    segments.push(hint("[g]", " grp"));
+    segments.push(hint("[s]", " sort"));
+    segments.push(hint("[r]", " risk"));
+    segments.push(hint("[c]", " compat"));
     if is_diff_mode {
-        spans.push(Span::styled(" [p]", Style::default().fg(scheme.accent)));
-        spans.push(Span::styled(
-            " panel",
-            Style::default().fg(scheme.text_muted),
-        ));
+        segments.push(hint("[p]", " panel"));
     }
+
+    let spans = fit_option_segments(segments, area.width);
 
     let paragraph = Paragraph::new(Line::from(spans)).block(
         Block::default()
@@ -173,6 +164,59 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     );
 
     frame.render_widget(paragraph, area);
+}
+
+/// Join option-row segments left-to-right, keeping only whole segments that
+/// fit `width` and appending a `…` marker when anything was dropped.
+/// Key-hint segments (starting with "[") are joined with a space; state
+/// segments get the "  │  " divider.
+fn fit_option_segments(segments: Vec<Vec<Span<'static>>>, width: u16) -> Vec<Span<'static>> {
+    use unicode_width::UnicodeWidthStr;
+
+    let scheme = colors();
+    let seg_width = |seg: &[Span]| -> u16 {
+        seg.iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()) as u16)
+            .sum()
+    };
+    let is_hint = |seg: &[Span]| {
+        seg.first()
+            .is_some_and(|s| s.content.as_ref().starts_with('['))
+    };
+
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut used: u16 = 0;
+    let total = segments.len();
+    for (i, seg) in segments.into_iter().enumerate() {
+        let hint = is_hint(&seg);
+        let sep_w = if i == 0 {
+            0
+        } else if hint && used > 0 {
+            1
+        } else {
+            3
+        };
+        let w = seg_width(&seg);
+        // Reserve 2 columns for the "…" marker unless this is the last segment.
+        let reserve = if i + 1 < total { 2 } else { 0 };
+        if used + sep_w + w + reserve > width {
+            out.push(Span::styled(
+                " \u{2026}",
+                Style::default().fg(scheme.text_muted),
+            ));
+            return out;
+        }
+        if i > 0 {
+            if hint {
+                out.push(Span::raw(" "));
+            } else {
+                out.push(Span::styled(" │ ", Style::default().fg(scheme.border)));
+            }
+        }
+        used += sep_w + w;
+        out.extend(seg);
+    }
+    out
 }
 
 fn render_diff_licenses(frame: &mut Frame, area: Rect, ctx: &RenderContext) {

@@ -365,7 +365,7 @@ impl ViewState for SourceView {
             Shortcut::new("s", "Sync"),
             Shortcut::new("/", "Search"),
             Shortcut::new("H/L", "Collapse/Expand all"),
-            Shortcut::new("!/@@/#", "Fold depth"),
+            Shortcut::new("!/@/#", "Fold depth"),
             Shortcut::new("%", "Match bracket"),
             Shortcut::new("d", "Detail"),
         ]

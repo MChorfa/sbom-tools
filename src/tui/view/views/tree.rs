@@ -67,7 +67,7 @@ fn render_tree_panel(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
         let (message, hint) = if !app.tree_search_query.is_empty() {
             (
                 format!("No components match \"{}\"", app.tree_search_query),
-                "Press [/] to edit search or [Esc] to clear",
+                "Press [/] to edit filter or [Esc] to clear",
             )
         } else if !matches!(app.tree_filter, TreeFilter::All) {
             (
@@ -122,7 +122,7 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp, filtered_coun
     if app.tree_search_active {
         let cursor = if app.tick % 10 < 5 { "▌" } else { " " };
         let mut spans = vec![
-            Span::styled("Search: ", Style::default().fg(scheme.accent).bold()),
+            Span::styled("Filter: ", Style::default().fg(scheme.accent).bold()),
             Span::styled(
                 format!("{}{}", app.tree_search_query, cursor),
                 Style::default().fg(scheme.text).bg(scheme.selection),
@@ -166,11 +166,12 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp, filtered_coun
         ),
     ];
 
-    // Show search query if present
+    // Show the '/' text-filter query if present (quoted, to distinguish it
+    // from the [f] category-filter badge)
     if !app.tree_search_query.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            "Search: ",
+            "Filter: ",
             Style::default().fg(scheme.text_muted),
         ));
         spans.push(Span::styled(
@@ -188,14 +189,19 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &ViewApp, filtered_coun
     }
 
     spans.push(Span::raw("  │  "));
-    spans.push(Span::styled("[/]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" search  "));
-    spans.push(Span::styled("[g]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" group  "));
-    spans.push(Span::styled("[f]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" filter  "));
-    spans.push(Span::styled("[m]", Style::default().fg(scheme.accent)));
-    spans.push(Span::raw(" bookmark"));
+    // Hints are fitted whole to the panel width — the bar lives inside the
+    // left column, and ratatui would otherwise clip "[f] filter" to "[f] f"
+    // at the panel seam.
+    super::push_fitted_hints(
+        &mut spans,
+        &[
+            ("[/]", "filter"),
+            ("[g]", "group"),
+            ("[f]", "filter"),
+            ("[m]", "bookmark"),
+        ],
+        area.width as usize,
+    );
 
     let para = Paragraph::new(Line::from(spans));
     frame.render_widget(para, area);
@@ -1062,6 +1068,36 @@ fn render_dependencies_tab(
     render_detail_paragraph(frame, area, " Dependencies ", border_color, lines, scroll)
 }
 
+/// Bucket label for the "By Type" chart: the component's declared CycloneDX
+/// type, falling back to the filename-extension heuristic only for File /
+/// Other components (where the declared type carries no information).
+fn declared_type_bucket(comp: &Component) -> &'static str {
+    use crate::model::ComponentType;
+    match &comp.component_type {
+        ComponentType::Library => "Libraries",
+        ComponentType::Application => "Applications",
+        ComponentType::Framework => "Frameworks",
+        ComponentType::Container => "Containers",
+        ComponentType::OperatingSystem => "OS",
+        ComponentType::Device => "Devices",
+        ComponentType::DeviceDriver => "Drivers",
+        ComponentType::Firmware => "Firmware",
+        ComponentType::Platform => "Platforms",
+        ComponentType::Data => "Data",
+        ComponentType::MachineLearningModel => "ML Models",
+        ComponentType::Cryptographic => "Crypto Assets",
+        ComponentType::File | ComponentType::Other(_) => {
+            match crate::tui::widgets::detect_component_type(&comp.name) {
+                "lib" => "Libraries",
+                "bin" => "Binaries",
+                "cert" => "Certificates",
+                "fs" => "Filesystems",
+                _ => "Other Files",
+            }
+        }
+    }
+}
+
 /// Render component stats panel when no component is selected
 fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, border_color: Color) {
     use crate::tui::view::severity::severity_category;
@@ -1087,9 +1123,11 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
     ]));
     lines.push(Line::from(""));
 
-    // Count components by type - pre-allocate with known capacity
-    let mut type_counts: std::collections::HashMap<&str, usize> =
-        std::collections::HashMap::with_capacity(5);
+    // Count components by their DECLARED type; the filename-extension
+    // heuristic is only a fallback for File/Other components (firmware-style
+    // SBOMs), so an npm library SBOM no longer reads "Other Files 100%".
+    let mut type_counts: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::with_capacity(8);
     let mut vuln_counts: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::with_capacity(5);
     vuln_counts.insert("critical", 0);
@@ -1099,9 +1137,8 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
     vuln_counts.insert("clean", 0);
 
     for comp in app.sbom.components.values() {
-        // Type detection
-        let comp_type = crate::tui::widgets::detect_component_type(&comp.name);
-        *type_counts.entry(comp_type).or_insert(0) += 1;
+        let label = declared_type_bucket(comp);
+        *type_counts.entry(label).or_insert(0) += 1;
 
         // Vulnerability severity - use shared helper
         let category = severity_category(&comp.vulnerabilities);
@@ -1115,22 +1152,16 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
     ));
 
     let total = app.stats.component_count.max(1);
-    let type_order = vec![
-        ("lib", "Libraries", scheme.info),
-        ("bin", "Binaries", scheme.accent),
-        ("cert", "Certificates", scheme.success),
-        ("fs", "Filesystems", scheme.highlight),
-        ("file", "Other Files", scheme.text_muted),
-    ];
+    let mut type_entries: Vec<(&'static str, usize)> = type_counts.into_iter().collect();
+    type_entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
 
-    let max_type_count = type_counts.values().copied().max().unwrap_or(1);
+    let palette = scheme.chart_palette();
+    let max_type_count = type_entries.iter().map(|(_, c)| *c).max().unwrap_or(1);
     let bar_width = width.saturating_sub(26).min(30);
 
-    for (key, label, color) in &type_order {
-        let count = type_counts.get(key).copied().unwrap_or(0);
-        if count == 0 {
-            continue;
-        }
+    for (i, (label, count)) in type_entries.iter().enumerate() {
+        let count = *count;
+        let color = palette[i % palette.len()];
         let pct = (count * 100) / total;
         let bar_len = if max_type_count > 0 {
             (count * bar_width) / max_type_count
@@ -1139,13 +1170,13 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
         };
         let bar = "█".repeat(bar_len);
         lines.push(Line::from(vec![
-            Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
+            Span::styled(format!("  {label:12}"), Style::default().fg(color)),
             Span::styled(format!("{count:>5}"), Style::default().fg(scheme.text)),
             Span::styled(
                 format!(" {pct:>2}% "),
                 Style::default().fg(scheme.text_muted),
             ),
-            Span::styled(bar, Style::default().fg(*color)),
+            Span::styled(bar, Style::default().fg(color)),
         ]));
     }
 

@@ -8,7 +8,7 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
     app.clear_status_message();
 
     // The multi-comparison modes have their own layouts; the tabbed logic
-    // below assumes the Diff/View chrome and mis-routed y<=2 clicks into
+    // below assumes the Diff chrome and mis-routed y<=2 clicks into
     // select_tab.
     match app.mode {
         AppMode::MultiDiff => {
@@ -23,7 +23,7 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
             handle_matrix_mouse(app, mouse);
             return;
         }
-        AppMode::Diff | AppMode::View => {}
+        AppMode::Diff => {}
     }
 
     match mouse.kind {

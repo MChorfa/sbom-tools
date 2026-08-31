@@ -4,41 +4,41 @@ expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
-« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] SxS  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Transitive  Highlight  Cycles  │  Depth:5  Roots:50  Sort:Name
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-┌ Dependency Tree ────────────────────────────────────────────────────┐▲┌ Details ─────────────────────────────────────┐
-│Changes: +0 added, -0 removed                                        │█│Node Details                                  │
-│                                                                     │█│                                              │
-│No dependency changes detected                                       │█│Select a dependency node to view details      │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │█│                                              │
-│                                                                     │║│                                              │
-│                                                                     │║│                                              │
-└─────────────────────────────────────────────────────────────────────┘▼└──────────────────────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+┌ Dependency Tree ────────────────────────────────────────────────────┐ ┌ Details ─────────────────────────────────────┐
+│Changes: +1 added, -1 removed                                        │ │Node Details                                  │
+│                                                                     │ │                                              │
+│├─▶ prisma@4.15.0 (+1) D0                                            │ │Select a dependency node to view details      │
+│└─▶ request@2.88.2 (-1) D0                                           │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+│                                                                     │ │                                              │
+└─────────────────────────────────────────────────────────────────────┘ └──────────────────────────────────────────────┘
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
      f filter  t transitive  h highlight  Enter expand  c component │  Tab switch  / search  e export  ? help  q quit

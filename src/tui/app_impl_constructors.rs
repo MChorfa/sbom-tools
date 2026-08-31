@@ -195,39 +195,6 @@ impl App {
         }
     }
 
-    /// Create a new app for single-SBOM view mode.
-    ///
-    /// Sets up quality scoring, compliance checking, and source viewing
-    /// for exploring a single SBOM interactively.
-    #[must_use]
-    pub fn new_view(sbom: NormalizedSbom, raw_content: &str) -> Self {
-        // Quality scoring — profile-aware so AI-BOMs / CBOMs score correctly.
-        let profile = crate::tui::scoring_profile_for(crate::model::BomProfile::detect(&sbom));
-        let scorer = QualityScorer::new(profile);
-        let quality_report = Some(scorer.score(&sbom));
-
-        // Build index for O(1) lookups
-        let sbom_index = Some(sbom.build_index());
-
-        // Source viewer (single SBOM, no diff annotations)
-        let source = SourceDiffState::new("", raw_content);
-
-        let mut app = Self::base(AppMode::View);
-
-        // Restore last view tab preference
-        app.active_tab = crate::config::TuiPreferences::load()
-            .last_view_tab
-            .as_deref()
-            .and_then(TabKind::from_str_opt)
-            .unwrap_or(TabKind::Overview);
-
-        app.source_view = crate::tui::view_states::SourceView::with_state(source);
-        app.data.sbom = Some(sbom);
-        app.data.sbom_index = sbom_index;
-        app.data.quality_report = quality_report;
-        app
-    }
-
     /// Create a new app for multi-diff mode
     #[must_use]
     pub fn new_multi_diff(result: MultiDiffResult) -> Self {
@@ -249,8 +216,14 @@ impl App {
         let version_count = result.sboms.len();
         // Component filter defaults to All, so the unfiltered count is
         // correct at construction (the 'f' handler resyncs on filter change).
-        let component_count = result.evolution_summary.components_added.len()
-            + result.evolution_summary.components_removed.len();
+        // Must be the DISPLAY list's length: filtered_evolution_entries
+        // dedupes components the engine lists as both added and removed, so
+        // the raw list lengths would let the cursor walk past the end.
+        let component_count = crate::tui::views::filtered_evolution_entries(
+            &result,
+            crate::tui::app::TimelineComponentFilter::All,
+        )
+        .len();
 
         let mut app = Self::base(AppMode::Timeline);
         app.data.timeline_result = Some(result);

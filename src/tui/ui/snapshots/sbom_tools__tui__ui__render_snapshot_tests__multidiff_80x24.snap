@@ -9,20 +9,20 @@ expression: text
 │Baseline: baseline  Format: CycloneDX                                         │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Targets (2/2) ───────────┐┌ ai-service Details ──────────────────────────────┐
-│Target  Compon Devia Chang││Target: ai-service                                │
+│Target  Comps  Dev % Chg  ││Target: ai-service                                │
 │                          ││                                                  │
-│ai-serv 3      10000 17   ││+ Added: 3  - Removed: 9  ~ Modified: 0           │
-│webapp  9      4651. 15   ││                                                  │
+│ai-serv 3      70.0% 19   ││+ Added: 3  - Removed: 9  ~ Modified: 0           │
+│webapp  9      42.3% 18   ││Total Changes: 19  (comps 12, deps 3, graph 0,    │
 │                          │└──────────────────────────────────────────────────┘
-│                          │┌ Variable Components (1 total) [v: drill-down] ───┐
+│                          │┌ Variable Components (5 total) [v: drill-down] ───┐
 │                          ││Component         Baseline   Spread     Impact    │
 │                          ││                                                  │
 │                          ││ L  acme-webapp   1.0.0      2 versions low       │
-│                          ││                                                  │
-│                          ││                                                  │
-│                          ││                                                  │
-│                          ││                                                  │
+│                          ││ L  axios         0.21.1     2 versions low       │
+│                          ││ L  express       4.17.1     2 versions low       │
+│                          ││ L  lodash        4.17.20    2 versions low       │
+│                          ││ L  react         17.0.1     2 versions low       │
 └──────────────────────────┘└──────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│Universal: 0  Variable: 1  Inconsistent: 20  │  …  V views  K keys  q quit    │
+│Universal: 0  Variable: 5  Inconsistent: 16  │  …  V views  K keys  q quit    │
 └──────────────────────────────────────────────────────────────────────────────┘

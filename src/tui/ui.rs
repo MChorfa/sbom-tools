@@ -18,13 +18,19 @@ use ratatui::{
 use std::io::{self, stdout};
 
 #[cfg(test)]
+mod frame_dump_tests;
+#[cfg(test)]
 mod render_snapshot_tests;
 
-/// Run the TUI application
-pub fn run_tui(app: &mut App) -> io::Result<()> {
+/// Run the TUI application.
+///
+/// `no_color` is the resolved `--no-color` flag; together with the `NO_COLOR`
+/// environment convention it forces the monochrome theme, so an invocation
+/// cannot ask for no color and still get a colored TUI.
+pub fn run_tui(app: &mut App, no_color: bool) -> io::Result<()> {
     // Load saved theme preference
     let prefs = TuiPreferences::load();
-    set_theme(super::theme::startup_theme(prefs.theme.as_str()));
+    set_theme(super::theme::startup_theme(no_color, prefs.theme.as_str()));
 
     // Setup terminal. The guard restores it on drop — covering normal exit, the
     // `?` early-return from the render loop, and panic unwinding. Declared before
@@ -88,6 +94,7 @@ fn render(frame: &mut Frame, app: &mut App) {
                     app.status_message.as_deref(),
                 );
             }
+            render_multi_mode_export_dialog(frame, area, app);
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
             return;
@@ -102,6 +109,7 @@ fn render(frame: &mut Frame, app: &mut App) {
                     app.status_message.as_deref(),
                 );
             }
+            render_multi_mode_export_dialog(frame, area, app);
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
             return;
@@ -116,12 +124,13 @@ fn render(frame: &mut Frame, app: &mut App) {
                     app.status_message.as_deref(),
                 );
             }
+            render_multi_mode_export_dialog(frame, area, app);
             // Render cross-view overlays
             render_cross_view_overlays(frame, app);
             return;
         }
-        // Diff and View modes use the tabbed layout below
-        AppMode::Diff | AppMode::View => {}
+        // Diff mode uses the tabbed layout below
+        AppMode::Diff => {}
     }
 
     // Main layout: header, tabs, content, status bar, footer
@@ -155,8 +164,6 @@ fn render(frame: &mut Frame, app: &mut App) {
     match app.active_tab {
         // --- Migrated to RenderContext ---
         TabKind::Summary
-        | TabKind::Overview
-        | TabKind::Tree
         | TabKind::Quality
         | TabKind::GraphChanges
         | TabKind::Compliance
@@ -167,9 +174,7 @@ fn render(frame: &mut Frame, app: &mut App) {
         | TabKind::Vulnerabilities => {
             let ctx = super::render_context::RenderContext::from_app(app);
             match app.active_tab {
-                TabKind::Summary | TabKind::Overview | TabKind::Tree => {
-                    views::render_summary(frame, chunks[2], &ctx);
-                }
+                TabKind::Summary => views::render_summary(frame, chunks[2], &ctx),
                 TabKind::Quality => views::render_quality(frame, chunks[2], &ctx),
                 TabKind::GraphChanges => views::render_graph_changes(frame, chunks[2], &ctx),
                 TabKind::Compliance => views::render_diff_compliance(frame, chunks[2], &ctx),
@@ -207,6 +212,11 @@ fn render(frame: &mut Frame, app: &mut App) {
     // Render threshold tuning overlay
     if app.overlays.threshold_tuning.visible {
         super::views::render_threshold_tuning(frame, &app.overlays.threshold_tuning);
+    }
+
+    // Quick Filters picker (Components tab, 'Q')
+    if app.active_tab == TabKind::Components && app.components_view.quick_filter_picker_open {
+        super::views::render_quick_filter_picker(frame, &app.components_state().security_filter);
     }
 
     // Cross-view overlays (K shortcuts, D deep-dive). The K/D handlers set
@@ -260,10 +270,6 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
             let old_label = sbom_label(app.data.old_sbom.as_ref());
             let new_label = sbom_label(app.data.new_sbom.as_ref());
             ("diff", format!("{old_label} \u{27f7} {new_label}"))
-        }
-        AppMode::View => {
-            let label = sbom_label(app.data.sbom.as_ref());
-            ("view", label)
         }
         AppMode::MultiDiff => ("multi-diff", "Multi-Diff Comparison".to_string()),
         AppMode::Timeline => ("timeline", "Timeline Analysis".to_string()),
@@ -328,10 +334,12 @@ pub(crate) fn diff_tab_entries(app: &App) -> Vec<(TabKind, &'static str, &'stati
         (TabKind::Quality, "6", "Quality"),
     ];
 
-    // Compliance and side-by-side tabs only in diff/view mode
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
+    // Compliance and side-by-side tabs only in diff mode
+    if app.mode == AppMode::Diff {
         tabs_data.push((TabKind::Compliance, "7", "Compliance"));
-        tabs_data.push((TabKind::SideBySide, "8", "Diff"));
+        // "SxS": the view titles itself "Side-by-Side"; a tab named "Diff"
+        // inside the diff app identified nothing.
+        tabs_data.push((TabKind::SideBySide, "8", "SxS"));
     }
 
     // Graph changes tab only when graph diff data is available
@@ -344,9 +352,9 @@ pub(crate) fn diff_tab_entries(app: &App) -> Vec<(TabKind, &'static str, &'stati
         tabs_data.push((TabKind::GraphChanges, "9", "Graph"));
     }
 
-    // Source tab always available in diff/view mode.
+    // Source tab always available in diff mode.
     // Uses [9] when it's the 9th tab (no graph changes), [0] when it's the 10th.
-    if matches!(app.mode, AppMode::Diff | AppMode::View) {
+    if app.mode == AppMode::Diff {
         let source_key = if has_graph_changes { "0" } else { "9" };
         tabs_data.push((TabKind::Source, source_key, "Source"));
     }
@@ -426,17 +434,13 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let (comp_count, vuln_count, score) = match app.mode {
+    let (change_count, vuln_count, score) = match app.mode {
         AppMode::Diff => {
             let result = app.data.diff_result.as_ref();
-            let comp = result.map_or(0, |r| r.summary.total_changes);
+            let changes = result.map_or(0, |r| r.summary.total_changes);
             let vuln = result.map_or(0, |r| r.summary.vulnerabilities_introduced);
             let score = result.map_or(0.0, |r| r.semantic_score);
-            (comp, vuln, Some(score))
-        }
-        AppMode::View => {
-            let comp = app.data.sbom.as_ref().map_or(0, |s| s.components.len());
-            (comp, 0, None)
+            (changes, vuln, Some(score))
         }
         // Multi-comparison modes use their own status bars
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => (0, 0, None),
@@ -450,17 +454,36 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
                 .filter(|v| v.severity == "Critical")
                 .count()
         }),
-        AppMode::View | AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
+        AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
     };
+
+    // Real per-document component counts — "Components:" must never label
+    // the change total (which mixes component/dependency/metadata changes).
+    let old_comps = app
+        .data
+        .old_sbom
+        .as_ref()
+        .map_or(0, crate::model::NormalizedSbom::component_count);
+    let new_comps = app
+        .data
+        .new_sbom
+        .as_ref()
+        .map_or(0, crate::model::NormalizedSbom::component_count);
 
     let mut spans = vec![
         Span::styled(" Components: ", Style::default().fg(colors().text_muted)),
         Span::styled(
-            comp_count.to_string(),
+            format!("{old_comps}\u{2192}{new_comps}"),
             Style::default().fg(colors().primary).bold(),
         ),
         Span::styled(" │ ", Style::default().fg(colors().muted)),
-        Span::styled("Vulns: ", Style::default().fg(colors().text_muted)),
+        Span::styled("Changes: ", Style::default().fg(colors().text_muted)),
+        Span::styled(
+            change_count.to_string(),
+            Style::default().fg(colors().primary).bold(),
+        ),
+        Span::styled(" │ ", Style::default().fg(colors().muted)),
+        Span::styled("New vulns: ", Style::default().fg(colors().text_muted)),
         Span::styled(
             vuln_count.to_string(),
             if vuln_count > 0 {
@@ -481,20 +504,20 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(s) = score {
         spans.push(Span::styled(" │ ", Style::default().fg(colors().muted)));
         spans.push(Span::styled(
-            "Score: ",
+            "Similarity: ",
             Style::default().fg(colors().text_muted),
         ));
 
-        // Color-code the score based on value
-        let score_color = if s < 25.0 {
+        // Higher similarity = less churn = calmer color.
+        let score_color = if s >= 75.0 {
             colors().success
-        } else if s < 50.0 {
+        } else if s >= 50.0 {
             colors().warning
         } else {
             colors().error
         };
         spans.push(Span::styled(
-            format!("{s:.1}"),
+            format!("{s:.0}%"),
             Style::default().fg(score_color).bold(),
         ));
     }
@@ -553,6 +576,19 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|(k, d)| (k.as_str(), d.as_str()))
         .collect();
+    // The Components "o CVE" hint is dead when the diff carries no
+    // vulnerability data at all (common for CBOM/AI-BOM diffs) — drop it so
+    // the footer never advertises a no-op key.
+    if app.active_tab == TabKind::Components {
+        let has_vulns = app.data.diff_result.as_ref().is_some_and(|r| {
+            !r.vulnerabilities.introduced.is_empty()
+                || !r.vulnerabilities.resolved.is_empty()
+                || !r.vulnerabilities.persistent.is_empty()
+        });
+        if !has_vulns {
+            hints.retain(|(k, d)| !(*k == "o" && *d == "CVE"));
+        }
+    }
     hints.extend(FooterHints::global());
 
     // Budget the row: reserve the yank preview's width, keep the global
@@ -921,6 +957,14 @@ fn render_legend_overlay(frame: &mut Frame, area: Rect) {
             Span::styled("Proprietary ", Style::default().fg(colors().text)),
             Span::styled("(Commercial)", Style::default().fg(colors().text_muted)),
         ]),
+        Line::from(vec![
+            Span::styled("  ? ■ ", Style::default().fg(colors().text_muted)),
+            Span::styled("Unknown     ", Style::default().fg(colors().text)),
+            Span::styled(
+                "(undeclared/unrecognized)",
+                Style::default().fg(colors().text_muted),
+            ),
+        ]),
         Line::from(""),
         Line::styled(
             "Press any key to close",
@@ -958,6 +1002,14 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Render the export dialog in the multi-comparison modes. Without this the
+/// global 'e' opened an invisible modal that silently swallowed every key.
+fn render_multi_mode_export_dialog(frame: &mut Frame, area: Rect, app: &App) {
+    if app.overlays.show_export {
+        super::shared::export::render_export_dialog(frame, area, "Report", centered_rect);
+    }
 }
 
 /// Render cross-view overlays (view switcher, shortcuts, component deep dive)

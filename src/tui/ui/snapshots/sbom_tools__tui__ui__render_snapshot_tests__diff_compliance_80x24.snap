@@ -1,15 +1,14 @@
 ---
 source: src/tui/ui/render_snapshot_tests.rs
-assertion_line: 89
 expression: text
 ---
 sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 
-« [6] Quality  │ [7] Compliance  │ [8] Diff  │ [9] Source
+« [5] Vulnerabilities  │ [6] Quality  │ [7] Compliance  │ [8] SxS  │ [9] Source
 
 ────────────────────────────────────────────────────────────────────────────────
  Compliance Standards (←/→)
- ✓ Min  │  ✗ Std  │  ✗ NTIA  │  ✗ CRA-1  │  ✗ CRA-2  │  ✗ FDA  │  ✗ SSDF  │  ✗ E
+« ✗ CRA-1 │ ✗ CRA-2 │ ✗ FDA │ ✗ SSDF │ ✗ EO14028 │ ✗ CNSA2 │ ✗ PQC │ ✗ BSI »
 ────────────────────────────────────────────────────────────────────────────────
 ┌ EU CRA Phase 1 (2026): FAIL 5% → FAIL 5%  unchanged ─────────────────────────┐
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -21,9 +20,9 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 │      - 12 violations resolved                                                │
 │      = 31 violations persistent                                              │
 │                                                                              │
-│    Error count:  3 → 3  (0)                                                  │
+│    Error count:  2 → 2  (0)                                                  │
 └──────────────────────────────────────────────────────────────────────────────┘
-f filter [All]  g group [flat]  ←/→ switch standard  v cycle view [Overview]  j/
+f filter [All]  g group [Flat]  ←/→ switch standard  v cycle view [Overview] …
 
- Components: 15 │ Vulns: 0 │ Score: 53.5
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
     …  ←→ standard  v view │  Tab switch  / search  e export  ? help  q quit

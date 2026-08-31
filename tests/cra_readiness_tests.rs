@@ -21,6 +21,7 @@ fn base_document_metadata() -> DocumentMetadata {
         format_version: "1.6".to_string(),
         spec_version: "1.6".to_string(),
         serial_number: Some("urn:uuid:00000000-0000-0000-0000-000000000000".to_string()),
+        doc_version: None,
         created: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         creators: vec![Creator {
             creator_type: CreatorType::Organization,

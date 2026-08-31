@@ -15,14 +15,12 @@ impl App {
 
         self.active_tab = match self.active_tab {
             TabKind::Summary => TabKind::Components,
-            TabKind::Overview => TabKind::Tree,
-            TabKind::Tree => TabKind::Components,
             TabKind::Components => TabKind::Dependencies,
             TabKind::Dependencies => TabKind::Licenses,
             TabKind::Licenses => TabKind::Vulnerabilities,
             TabKind::Vulnerabilities => TabKind::Quality,
             TabKind::Quality => {
-                if matches!(self.mode, AppMode::Diff | AppMode::View) {
+                if self.mode == AppMode::Diff {
                     TabKind::Compliance
                 } else {
                     TabKind::Summary
@@ -51,14 +49,12 @@ impl App {
 
         self.active_tab = match self.active_tab {
             TabKind::Summary => {
-                if matches!(self.mode, AppMode::Diff | AppMode::View) {
+                if self.mode == AppMode::Diff {
                     TabKind::Source
                 } else {
                     TabKind::Quality
                 }
             }
-            TabKind::Overview => TabKind::Summary,
-            TabKind::Tree => TabKind::Overview,
             TabKind::Components => TabKind::Summary,
             TabKind::Dependencies => TabKind::Components,
             TabKind::Licenses => TabKind::Dependencies,
@@ -286,8 +282,6 @@ impl App {
 
         match target {
             TabTarget::Summary => self.active_tab = TabKind::Summary,
-            TabTarget::Overview => self.active_tab = TabKind::Overview,
-            TabTarget::Tree => self.active_tab = TabKind::Tree,
             TabTarget::Components => self.active_tab = TabKind::Components,
             TabTarget::Dependencies => self.active_tab = TabKind::Dependencies,
             TabTarget::Licenses => self.active_tab = TabKind::Licenses,

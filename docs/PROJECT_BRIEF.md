@@ -36,6 +36,7 @@ behavior rather than implement independent parsing or analysis rules.
 | Canonical ID | Stable component identity used for matching across documents |
 | Semantic diff | Component, dependency, vulnerability, license, metadata, model, and dataset changes |
 | Enrichment | Optional external metadata added before analysis, such as OSV, KEV, EOL, EPSS, or Hugging Face data |
+| CDXA declarations | CycloneDX 1.6 attestation section (assessors, attestations, claims, evidence) ingested structurally as compliance evidence; signature presence is recorded, never verified |
 | C ABI | Stable JSON-oriented native interface used by language bindings |
 
 ## Implemented capabilities
@@ -43,10 +44,15 @@ behavior rather than implement independent parsing or analysis rules.
 - CycloneDX and SPDX detection, parsing, and normalization.
 - SBOM, CBOM, and AI-BOM component modeling.
 - Semantic and graph-aware diffing.
-- Quality profiles, standards validation, and documented CI exit gates.
+- Multi-SBOM comparison: 1:N (`diff-multi`), chronological (`timeline`), and
+  N x N (`matrix`).
+- Structural ingestion of CycloneDX 1.6 attestation declarations, consumed as
+  evidence by existing compliance rules.
+- Quality profiles, 16 standards-validation profiles, and documented CI exit
+  gates.
 - Optional vulnerability, lifecycle, and model-registry enrichment.
-- TUI and JSON, NDJSON, SARIF, OSCAL (validate), HTML, Markdown, CSV, table,
-  summary, and side-by-side output.
+- TUI and JSON, NDJSON, SARIF, OSCAL (validate), sbomqs-comparable JSON
+  (quality), HTML, Markdown, CSV, table, summary, and side-by-side output.
 - C ABI with Go, Swift, Python, and Node.js bindings.
 
 ## Interface contract
@@ -57,6 +63,10 @@ behavior rather than implement independent parsing or analysis rules.
   score operations using JSON payloads.
 - Language bindings are thin ownership-safe wrappers over the C ABI.
 - JSON result shape and ABI constant parity are compatibility contracts.
+- Numeric scales are part of the JSON contract and are test-pinned:
+  `DiffResult.semantic_score` is 0-100, `MatrixResult` similarity is 0-1
+  (`semantic_score / 100`), and `diff-multi` deviation is 0-1
+  (`1 - similarity`).
 
 ## Non-goals and ownership boundary
 

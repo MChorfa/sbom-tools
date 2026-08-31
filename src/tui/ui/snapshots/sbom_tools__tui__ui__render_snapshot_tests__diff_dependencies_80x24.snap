@@ -9,20 +9,20 @@ sbom-tools  DIFF  │ acme-webapp@1.0.0 ⟷ acme-webapp@2.0.0
 ────────────────────────────────────────────────────────────────────────────────
 Transitive  Highlight  Cycles  │  Depth:5  Roots:50  Sort:Name
 ────────────────────────────────────────────────────────────────────────────────
-┌ Dependency Tree ────────────────────────────┐▲┌ Details ─────────────────────┐
-│Changes: +0 added, -0 removed                │█│Node Details                  │
-│                                             │█│                              │
-│No dependency changes detected               │█│Select a dependency node to   │
-│                                             │█│view details                  │
-│                                             │█│                              │
-│                                             │█│                              │
-│                                             │█│                              │
-│                                             │█│                              │
-│                                             │█│                              │
-│                                             │█│                              │
-│                                             │█│                              │
-│                                             │║│                              │
-│                                             │║│                              │
-└─────────────────────────────────────────────┘▼└──────────────────────────────┘
- Components: 15 │ Vulns: 0 │ Score: 53.5
+┌ Dependency Tree ────────────────────────────┐ ┌ Details ─────────────────────┐
+│Changes: +1 added, -1 removed                │ │Node Details                  │
+│                                             │ │                              │
+│├─▶ prisma@4.15.0 (+1) D0                    │ │Select a dependency node to   │
+│└─▶ request@2.88.2 (-1) D0                   │ │view details                  │
+│                                             │ │                              │
+│                                             │ │                              │
+│                                             │ │                              │
+│                                             │ │                              │
+│                                             │ │                              │
+│                                             │ │                              │
+│                                             │ │                              │
+│                                             │ │                              │
+│                                             │ │                              │
+└─────────────────────────────────────────────┘ └──────────────────────────────┘
+ Components: 9→9 │ Changes: 18 │ New vulns: 2 (1 Critical) │ Similarity: 58%
    …  f filter  t transitive │  Tab switch  / search  e export  ? help  q quit

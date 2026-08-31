@@ -178,9 +178,106 @@ pub(super) fn handle_timeline_keys(app: &mut App, key: KeyEvent) -> bool {
             app.tabs.timeline.scroll_chart_right();
         }
 
+        // Component deep dive on the selected (filtered) component. Handled
+        // mode-locally so the modal opens WITH its version history: the
+        // global fallback opened it with default collected_data, which
+        // rendered a permanently hollow "Versions tracked: 0" modal.
+        KeyCode::Char('D') => {
+            open_timeline_component_deep_dive(app);
+        }
+
         _ => return false,
     }
     true
+}
+
+/// Open the component deep dive for the selected component with the Versions
+/// and Vulnerabilities sections filled from the timeline result.
+fn open_timeline_component_deep_dive(app: &mut App) {
+    use crate::diff::VersionChangeType;
+    use crate::tui::app_states::{ComponentVersionEntry, ComponentVulnInfo};
+
+    struct Collected {
+        name: String,
+        id: String,
+        versions: Vec<ComponentVersionEntry>,
+        vulns: Vec<ComponentVulnInfo>,
+    }
+
+    let collected = app.data.timeline_result.as_ref().and_then(|result| {
+        // Resolve through the SAME filtered list the Components panel
+        // displays, so the deep dive matches the highlighted row.
+        let entries = crate::tui::views::filtered_evolution_entries(
+            result,
+            app.tabs.timeline.component_filter,
+        );
+        let (evo, _) = entries.get(app.tabs.timeline.selected_component)?;
+
+        let versions: Vec<ComponentVersionEntry> = result
+            .evolution_summary
+            .version_history
+            .get(&evo.id)
+            .map(|history| {
+                history
+                    .iter()
+                    // Absent points (before first appearance / after removal)
+                    // carry no information for the version list.
+                    .filter(|p| !matches!(p.change_type, VersionChangeType::Absent))
+                    .map(|p| ComponentVersionEntry {
+                        version: p.version.clone().unwrap_or_else(|| "-".to_string()),
+                        sbom_label: p.sbom_name.clone(),
+                        date: result
+                            .sboms
+                            .get(p.sbom_index)
+                            .and_then(|s| s.timestamp.clone()),
+                        change_type: match p.change_type {
+                            VersionChangeType::Initial => "added",
+                            VersionChangeType::Removed => "removed",
+                            VersionChangeType::Unchanged => "unchanged",
+                            VersionChangeType::Absent => "absent",
+                            _ => "modified",
+                        }
+                        .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut vulns: Vec<ComponentVulnInfo> = Vec::new();
+        for diff in &result.incremental_diffs {
+            for (status, list) in [
+                ("introduced", &diff.vulnerabilities.introduced),
+                ("resolved", &diff.vulnerabilities.resolved),
+            ] {
+                for v in list.iter().filter(|v| v.component_name == evo.name) {
+                    vulns.push(ComponentVulnInfo {
+                        vuln_id: v.id.clone(),
+                        severity: v.severity.clone(),
+                        status: status.to_string(),
+                        description: None,
+                    });
+                }
+            }
+        }
+        vulns.sort_by(|a, b| (&a.vuln_id, &a.status).cmp(&(&b.vuln_id, &b.status)));
+        vulns.dedup_by(|a, b| a.vuln_id == b.vuln_id && a.status == b.status);
+
+        Some(Collected {
+            name: evo.name.clone(),
+            id: evo.id.clone(),
+            versions,
+            vulns,
+        })
+    });
+
+    if let Some(c) = collected {
+        app.overlays.component_deep_dive.open(c.name, Some(c.id));
+        let data = &mut app.overlays.component_deep_dive.collected_data;
+        data.version_history = c.versions;
+        data.vulnerabilities = c.vulns;
+    } else {
+        app.set_status_message("No component selected for deep dive");
+    }
 }
 
 pub(super) fn handle_timeline_search(app: &mut App, key: KeyEvent) {
@@ -309,5 +406,52 @@ pub(super) fn handle_timeline_jump(app: &mut App, key: KeyEvent) {
             app.tabs.timeline.jump_push(c);
         }
         _ => {}
+    }
+}
+#[cfg(test)]
+mod deep_dive_tests {
+    use crate::tui::events::handle_key_event;
+    use crate::tui::test_support::{demo_timeline, pin_theme};
+    use crate::tui::{App, TabKind};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    /// 'D' in Timeline mode opens the deep dive WITH the component's real id
+    /// and version history (it used to open with default collected_data and
+    /// render "Versions tracked: 0 / No version history available" forever).
+    #[test]
+    fn deep_dive_opens_with_version_history() {
+        pin_theme();
+        let mut app = App::new_timeline(demo_timeline());
+        app.active_tab = TabKind::Summary; // deterministic tab dispatch
+
+        let expected = {
+            let result = app.data.timeline_result.as_ref().expect("timeline data");
+            crate::tui::views::filtered_evolution_entries(
+                result,
+                app.tabs.timeline.component_filter,
+            )[0]
+            .0
+            .name
+            .clone()
+        };
+
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE),
+        );
+        let dive = &app.overlays.component_deep_dive;
+        assert!(dive.visible, "'D' must open the deep dive");
+        assert_eq!(
+            dive.component_name, expected,
+            "must resolve the same entry the Components panel highlights"
+        );
+        assert!(
+            dive.component_id.is_some(),
+            "the modal must not render 'ID: Unknown'"
+        );
+        assert!(
+            !dive.collected_data.version_history.is_empty(),
+            "the Versions section must carry the timeline's real history"
+        );
     }
 }

@@ -1,5 +1,6 @@
 ---
 source: tests/golden_reports.rs
+assertion_line: 180
 expression: "render(&SummaryReporter::new().no_color())"
 ---
 SBOM Diff Summary
@@ -14,6 +15,11 @@ Changes:
 
 Metadata:
   created: [TIMESTAMP] → [TIMESTAMP]
+  doc_version: 1 → 2
   primary_component_version: 1.0.0 → 2.0.0
 
-Similarity:  53.5%
+Vulnerabilities:
+  !2 vulnerabilities introduced
+  ✓3 vulnerabilities resolved
+
+Similarity:  57.7%

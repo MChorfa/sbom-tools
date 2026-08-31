@@ -44,21 +44,23 @@ language bindings provide application access to the JSON-oriented C ABI.
 
 ## Features
 
-- **Semantic Diffing** — Component-level change detection (added, removed, modified), dependency graph diffing, vulnerability tracking, and license change analysis
+- **Semantic Diffing** — Component-level change detection (added, removed, modified), dependency graph diffing, vulnerability tracking, license change analysis, and document-revision (`version`) tracking
 - **Multi-Format Support** — CycloneDX (1.4–1.7) and SPDX (2.2–2.3, 3.0) in JSON, JSON-LD, XML, tag-value, and RDF/XML with automatic format detection
 - **Stdin Input** — Every analysis command accepts `-` as the input path, reading the SBOM from standard input so generated/fetched SBOMs can be piped in without temp files (e.g. `syft -o cyclonedx-json . | sbom-tools quality -`)
 - **Streaming Report Output** — Large diff reports are streamed to JSON without buffering the whole document in memory; inputs are capped at 512 MB
 - **Fuzzy Matching** — Multi-tier matching engine using exact PURL match, alias lookup, ecosystem-specific normalization, and string similarity with adaptive thresholds and LSH indexing
 - **Vulnerability Enrichment** — Integration with OSV and KEV databases to track new and resolved vulnerabilities, with VEX (Vulnerability Exploitability eXchange) overlay support (feature-gated)
 - **EOL Detection** — End-of-life status for components via endoflife.date API with TUI visualization and compliance integration (feature-gated)
-- **Quality Assessment** — Score SBOMs against compliance standards including NTIA, FDA, CRA (Cyber Resilience Act), NIST SSDF, and EO 14028, with quality delta tracking across versions
+- **Quality Assessment** — Weighted 0–100 scoring across 9 profiles with quality delta tracking across versions, plus an `sbomqs-json` output that recomputes the [sbomqs](https://github.com/interlynk-io/sbomqs) 0–10 score model for side-by-side comparison
+- **Compliance Validation** — 16 standards: NTIA, CISA 2026 Minimum Elements, FDA, CRA Phase 1 / Phase 2, NIST SSDF, EO 14028, CNSA 2.0, NIST PQC, BSI TR-03183-2, CRA Art. 24 OSS steward, EUCC, EU AI Act, BSI SBOM-for-AI, PCI DSS 6.3.2, and CISA FSCT 3rd ed.
+- **Attestation Evidence (CDXA)** — Parses `declarations` (assessors, attestations, claims, evidence, affirmation) from CycloneDX 1.6+ **JSON** — the XML parser does not ingest them yet — and lets a declaration satisfy an SSDF practice, a CRA conformity route, an EUCC certificate reference, or EO 14028 provenance. **Structural verification only** — signature *presence* is recorded, never cryptographically verified
 - **CBOM Quality Scoring** — Grade cryptographic inventory health across 8 categories: algorithm strength, PQC readiness, OID coverage, crypto completeness, key/certificate lifecycle, and cross-reference resolution, with hard caps for broken cryptography and compromised keys
 - **PQC Compliance** — CNSA 2.0 (NSA) and NIST IR 8547 post-quantum cryptography compliance checking with per-algorithm PASS/FAIL assessment
 - **Cryptographic Inventory** — Parse CycloneDX 1.6/1.7 `cryptoProperties` (algorithms, certificates, keys, protocols) with auto-detection of CBOM vs SBOM profiles
 - **Fleet Comparison** — 1:N baseline comparison, timeline analysis across versions, and NxN matrix analysis, all with enrichment support
 - **Incremental Diff** — Section-selective recomputation for partial changes with cached matching results
 - **VEX Tracking** — Detect VEX state transitions (NotAffected → Affected) across SBOM versions, with `--fail-on-vex-gap` CI gate
-- **Multiple Output Formats** — JSON, SARIF, OSCAL assessment results (`validate`), HTML, Markdown, CSV, table, side-by-side, summary, and an interactive TUI
+- **Multiple Output Formats** — JSON, NDJSON, SARIF, OSCAL assessment results (`validate`), sbomqs-JSON (`quality`), HTML, Markdown, CSV, table, side-by-side, summary, and an interactive TUI
 - **Ecosystem-Aware** — Configurable per-ecosystem normalization rules, typosquat detection, pre-release version handling, and cross-ecosystem package correlation
 
 ## Installation
@@ -489,10 +491,23 @@ Checks an SBOM against a compliance standard and reports missing fields or faili
 
 | Flag | Description |
 |------|-------------|
-| `--standard <std>` | Standard to validate: `ntia` (default), `fda`, `cra` (= Phase 2), `cra-phase1`, `ssdf`, `eo14028`, `cnsa2`, `pqc`, `bsi`, `oss-steward`, `eucc`, `ai-act`, `bsi-ai` (comma-separated for multiple; aliases in `--help`) |
+| `--standard <std>` | Standard to validate: `ntia` (default), `cisa-2026`, `fda`, `cra` (= Phase 2), `cra-phase1`, `ssdf`, `eo14028`, `cnsa2`, `pqc`, `bsi`, `oss-steward`, `eucc`, `ai-act`, `bsi-ai`, `pci-dss`, `fsct` (comma-separated for multiple; aliases in `--help`) |
 | `-o, --output <fmt>` | Output format: `summary` (default via `auto`), `json`, `sarif`, `oscal-json` |
 
 </details>
+
+Notes on the newest profiles:
+
+- `cisa-2026` — CISA/NSA/FBI *2026 Minimum Elements for an SBOM* (v2.1, 2026-07-29), the successor to NTIA 2021 and deliberately stricter: a tool-only creator list does not satisfy SBOM Author, and silently omitting a license fails where an explicit `NOASSERTION` passes.
+- `pci-dss` — PCI DSS v4.0.1 Requirement 6.3.2 software-inventory profile. A passing verdict is evidence that the inventory exists and is usable — **not** a PCI DSS compliance certification.
+- `fsct` — CISA *Framing Software Component Transparency* 3rd ed. (2024), with the three maturity tiers mapped Minimum Expected → error, Recommended Practice → warning, Aspirational Goal → info.
+
+Where a CycloneDX JSON document carries `declarations`, a matching attestation
+satisfies the corresponding SSDF / CRA / EUCC / EO 14028 rule at
+structural (signature-present) level. Every pre-existing self-declared
+evidence path stays valid, and documents without `declarations` are
+unaffected. See [`docs/STANDARDS_VERSIONS.md`](docs/STANDARDS_VERSIONS.md)
+for the exact edition, publication date, and citation behind every standard.
 
 ### Quality
 
@@ -502,12 +517,22 @@ sbom-tools quality sbom.json --profile security --recommendations
 
 Scores an SBOM from 0–100 using a weighted profile. Use `--min-score` to fail CI if quality drops below a threshold.
 
+The plain-text summary also appends an sbomqs-comparable 0–10 category
+table, and `-o sbomqs-json` emits a full report in the
+[sbomqs](https://github.com/interlynk-io/sbomqs) `score --json` schema
+(parity target v2.0.11) so the two tools can be compared side by side.
+Categories that cannot be computed are emitted as `ignored` with a reason.
+The two scales are **not** convertible — the 0–10 numbers are recomputed
+per feature with sbomqs' own formulas, not the 0–100 score divided by ten.
+Documented quirks live in [`docs/STANDARDS_VERSIONS.md`](docs/STANDARDS_VERSIONS.md).
+
 <details>
 <summary>Quality options</summary>
 
 | Flag | Description |
 |------|-------------|
 | `--profile <name>` | Scoring profile: `minimal`, `standard` (default), `security`, `license-compliance`, `cra`, `bsi`, `comprehensive`, `cbom`, `ai-readiness` |
+| `-o, --output <fmt>` | Output format: `summary` (default via `auto`), `json`, `sarif`, `sbomqs-json` |
 | `--min-score <n>` | Fail if quality score is below threshold (0–100) |
 | `--fail-on-noncompliant` | Exit with code 1 if the profile's embedded compliance check reports the SBOM as non-compliant |
 | `--recommendations` | Show detailed improvement recommendations |
@@ -592,6 +617,22 @@ sbom-tools timeline v1.json v2.json v3.json
 sbom-tools matrix sbom1.json sbom2.json sbom3.json
 ```
 
+Each command opens a full-screen dashboard: press `p`/`Tab` to switch panels, `v` for the variable-components drill-down (multi-diff), `Enter` for a pair diff (matrix), and `d` to compare adjacent versions (timeline).
+
+These three commands accept `-o auto|tui|json` only (`auto` = TUI on a TTY,
+JSON when piped); any other value is rejected as a usage error before any
+SBOM is parsed. `diff-multi` and `timeline` both key components by
+version-stripped PURL, so a version bump is one entry rather than an
+added/removed pair: in `diff-multi` that covers `summary.universal_components`,
+`summary.variable_components`, `summary.inconsistent_components`, and each
+comparison's `divergent_components`; in `timeline` it covers
+`evolution_summary` (`version_history`, `components_added`,
+`components_removed`). Deviation scores are `diff-multi` only —
+`summary.deviation_scores` per target plus `summary.max_deviation`, both
+fractions in `0.0`–`1.0`. `timeline` JSON carries `incremental_pairs` and
+`cumulative_pairs`, index-aligned with the diff arrays, so consumers never
+have to infer which SBOMs a diff came from.
+
 ### Shell completions
 
 ```sh
@@ -607,7 +648,7 @@ sbom-tools completions fish > ~/.config/fish/completions/sbom-tools.fish
 | `-o, --output <fmt>` | Output format, accepted per command (see [Output Formats](#output-formats)) |
 | `-v, --verbose` | Enable debug output |
 | `-q, --quiet` | Suppress non-essential output |
-| `--no-color` | Disable colored output (also respects `NO_COLOR`) |
+| `--no-color` | Disable colored output, including the TUI and side-by-side reports (also respects a non-empty `NO_COLOR`; an empty `NO_COLOR=` counts as unset) |
 | `--offline` | Never make network calls; serve enrichment purely from cache (also settable via `SBOM_TOOLS_OFFLINE`) |
 
 ## Interactive TUI
@@ -616,7 +657,7 @@ Both `diff` and `view` commands launch an interactive terminal UI by default whe
 
 ### Diff Mode
 
-Compare two SBOMs with semantic change detection across 10 tabs.
+Compare two SBOMs with semantic change detection across 10 tabs (the Graph tab appears when dependency-graph changes are detected).
 
 **Summary** — Overall change score with component, vulnerability, and compliance breakdowns at a glance.
 
@@ -645,7 +686,7 @@ Compare two SBOMs with semantic change detection across 10 tabs.
 
 ### View Mode
 
-Explore a single SBOM, CBOM, or AI-BOM interactively. SBOM mode shows 8 tabs (Overview, Tree, Vulnerabilities, Licenses, Dependencies, Quality, Compliance, Source). CBOM mode auto-detects and shows crypto-specific tabs (Overview, Algorithms, Certificates, Keys, Protocols, Quality, PQC Compliance, Source). AI-BOM mode shows model-centric tabs (Overview, Models, Datasets, AI-Readiness, Compliance, Source). Press `P` to cycle between modes.
+Explore a single SBOM, CBOM, or AI-BOM interactively. SBOM mode shows 8 tabs (Overview, Tree, Dependencies, Licenses, Vulnerabilities, Quality, Compliance, Source). CBOM mode auto-detects and shows crypto-specific tabs (Overview, Algorithms, Certificates, Keys, Protocols, Quality, PQC Compliance, Source). AI-BOM mode shows model-centric tabs (Overview, Models, Datasets, AI-Readiness, Compliance, Source) with AI inventory and AI-readiness panels on the overview. Press `P` to cycle between modes.
 
 **Overview** — SBOM metadata, component statistics, and vulnerability summary.
 
@@ -670,20 +711,48 @@ Explore a single SBOM, CBOM, or AI-BOM interactively. SBOM mode shows 8 tabs (Ov
 
 ### Navigation
 
+Press `?` for the in-app shortcut list — it is generated per mode, so it only
+shows keys bound in the mode you are in. In `diff` it also adds a "This Tab"
+section built from the active tab's own bindings. In `view` it lists the
+global keys plus the tab jumps for the active profile and points at each
+tab's toolbar for tab-specific actions; the multi-comparison modes have no
+tabs, so they show their mode keys only.
+
 | Key | Action |
 |-----|--------|
-| `1`–`0` / `Tab` | Switch tabs |
+| `1`–`0` / `Tab` | Jump to tab / next tab (two exceptions below) |
 | `↑↓` / `jk` | Navigate items |
-| `Enter` / `Space` | Expand / collapse |
-| `/` | Search |
-| `f` | Filter panel |
-| `s` | Sync panels (Source) / sort (Algorithms, Vulnerabilities) |
-| `w` | Switch focus (Source, Side-by-Side) |
-| `P` | Cycle SBOM/CBOM/AI-BOM profile |
-| `v` | Tree / raw toggle (Source) |
+| `Enter` / `Space` | Expand / collapse; on diff Components, open the component deep dive |
+| `/` | Search (on the view Tree tab, filter) |
+| `f` | Filter |
+| `Q` | Security quick-filter picker (diff Components) |
+| `A` / `r` / `m` / `x` | Toggle added / removed / modified / all (Side-by-Side) |
+| `s` | Sort / sync panels (Source) |
+| `w` | Switch focus (Source) |
+| `t` | Tune match threshold (diff; on Dependencies, toggle transitive) |
+| `x` / `X` | Expand / collapse all (view Dependencies; diff uses `x` / `E`) |
+| `C` | Toggle dependency cycles |
+| `K` | Shortcut overlay (diff, except on Side-by-Side where it is synchronized scroll up — `?` always opens the overlay) / KEV-only filter (view Vulnerabilities) |
+| `}` / `{` | Next / previous vulnerability group (view) |
+| `P` | Cycle SBOM/CBOM/AI-BOM profile (view) |
+| `v` | Multi-select (diff Components) / tree-raw toggle (Source) |
+| `D` | Component deep dive |
 | `e` | Export |
 | `T` | Cycle theme |
 | `q` | Quit |
+
+In both `diff` and `view` a digit jumps tabs from every tab, with two
+exceptions: while the diff Components `Q` quick-filter modal is open,
+`1`–`8`/`0` toggle filters instead, and on the view Tree tab with the detail
+panel focused, `1`–`4` select the component detail sub-tab. The
+multi-comparison dashboards have no tabs, so digits do nothing there.
+
+Empty panels state what is actually known: a tab with no vulnerability data
+says so rather than claiming there are none, quantum readiness reports `n/a`
+instead of 100% when a document declares no cryptographic assets, and the
+Graph tab distinguishes "no graph data" from "graphs are identical".
+`--no-color` (and a non-empty `NO_COLOR`) forces the monochrome theme, which
+stays monochrome under the `T` toggle.
 
 ## Output Formats
 
@@ -696,12 +765,23 @@ Select with `-o` / `--output`:
 | JSON | `json` | Programmatic integration |
 | SARIF | `sarif` | CI/CD security dashboards (SARIF 2.1.0) |
 | OSCAL assessment results | `oscal-json` | OSCAL 1.1.2 validation findings for assessment tooling (`validate` only) |
+| sbomqs JSON | `sbomqs-json` | sbomqs `score --json` 0–10 scores for tool comparison (`quality` only) |
+| NDJSON | `ndjson` | Newline-delimited JSON, one record per line (streaming-friendly) |
 | Markdown | `markdown` | Documentation, PR comments |
 | HTML | `html` | Stakeholder reports |
 | CSV | `csv` | Spreadsheet analysis |
 | Summary | `summary` | Terminal quick overview |
 | Table | `table` | Aligned, colored terminal output |
 | Side-by-side | `side-by-side` | Terminal diff comparison |
+
+Not every command accepts every format — `--help` lists the ones a command
+supports, and how an out-of-list value is rejected depends on the command.
+`diff-multi`, `timeline`, and `matrix` accept `auto`, `tui`, and `json` only,
+and reject anything else as a command-line usage error (exit `2`). `diff`,
+`view`, `validate`, `quality`, and `query` reject it at run time as an
+operational error (exit `3`), before any SBOM is read, naming the formats they
+do accept (`validate --summary` is the exception — it overrides `-o` outright,
+so no format is gated).
 
 ## CI/CD Integration
 
@@ -899,14 +979,14 @@ See [`examples/ecosystem-rules.yaml`](examples/ecosystem-rules.yaml) for a full 
 src/
 ├── cli/          Command handlers (diff, view, validate, quality, query, fleet, vex, watch, ...)
 ├── config/       YAML/JSON config with presets, validation, schema generation
-├── model/        Canonical SBOM representation (NormalizedSbom, Component, CanonicalId)
-├── parsers/      Format detection + parsing (stdin via '-', 512 MB input cap)
+├── model/        Canonical SBOM representation (NormalizedSbom, Component, CanonicalId, CDXA attestations)
+├── parsers/      Format detection + parsing (stdin via '-', 512 MB input cap, PURL-fallback ref resolution)
 ├── matching/     Multi-tier fuzzy matching (PURL, alias, ecosystem, adaptive, LSH)
 ├── diff/         Semantic diffing engine with graph support + incremental section-selective diff
 ├── enrichment/   OSV/KEV vulnerability data + EOL detection + VEX (feature-gated)
-├── quality/      8-category scoring engine + CBOM crypto scoring profile + 13 compliance standards (NTIA/FDA/CRA/SSDF/EO 14028/CNSA 2.0/NIST PQC/BSI TR-03183-2/OSS-steward/EUCC/EU AI Act/BSI SBOM-for-AI)
+├── quality/      8-category scoring engine + CBOM crypto scoring profile + 16 compliance standards (NTIA/CISA 2026/FDA/CRA Phase 1+2/SSDF/EO 14028/CNSA 2.0/NIST PQC/BSI TR-03183-2/OSS-steward/EUCC/EU AI Act/BSI SBOM-for-AI/PCI DSS 6.3.2/CISA FSCT)
 ├── pipeline/     parse → enrich → diff → report orchestration + shared enrichment pipeline
-├── reports/      9 output format generators + streaming reporter
+├── reports/      11 selectable output formats (json, ndjson, sarif, oscal-json, sbomqs-json, markdown, html, csv, summary, table, side-by-side) + streaming reporter
 ├── verification/ File hash verification + component hash auditing
 ├── license/      License policy engine (allow/deny/review) + propagation analysis
 ├── serialization/ Raw JSON enrichment, tailoring (filter), merging with dedup
@@ -930,10 +1010,19 @@ cargo bench
 
 - [Architecture overview](docs/ARCHITECTURE.md)
 - [Pipeline diagrams](docs/pipeline-diagrams.md)
+- [Standards versions](docs/STANDARDS_VERSIONS.md) — the exact edition,
+  publication date, and citation behind each of the 16 compliance
+  standards, plus the sbomqs interoperability notes
 - [CRA compliance reverse-mapping](docs/CRA_COMPLIANCE.md) — every
   CRA / BSI / prEN check sbom-tools surfaces, mapped to its
   regulation, harmonised standard, sidecar field, and canonical URL
-- [Releases and changelog](https://github.com/sbom-tool/sbom-tools/releases)
+- [TUI keyboard shortcuts](docs/TUI_SHORTCUTS.md) — every binding in the
+  diff, multi-comparison, and view TUIs, with the guards that make a key
+  mean different things on different tabs. `?` in the app shows the same
+  keys, filtered to the current context
+- [Changelog](CHANGELOG.md) — user-visible changes per release, with
+  breaking changes called out first
+- [Releases](https://github.com/sbom-tool/sbom-tools/releases)
 
 ## Contributing
 

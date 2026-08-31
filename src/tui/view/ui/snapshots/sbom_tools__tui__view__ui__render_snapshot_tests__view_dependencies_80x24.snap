@@ -4,25 +4,25 @@ expression: text
 ---
 sbom-tools  VIEW  │ acme-webapp │ CycloneDX 1.5 │ [SBOM]
 
-« [4] Licenses  │ [5] Deps  │ [6] Quality  │ [7] Compliance  │ [8] Source
+« [3] Dependencies  │ [4] Licenses  │ [5] Vulnerabilities  │ [6] Quality  »
 
 ────────────────────────────────────────────────────────────────────────────────
-[/] search  [e] expand  [E] collapse  [c] co┌ Stats & Info ────────────────────┐
-                                            │Components: 9  Edges: 0  Roots: 9 │
-┌ Dependency Tree (9 nodes) ───────────────┐│D:1                               │
-│▶ · acme-webapp@2.0.0                     ││────────────────────────────      │
-│  · axios@1.4.0                           ││acme-webapp  [APP]  Root          │
-│  · dayjs@1.11.7                          ││2.0.0                             │
-│  · express@4.18.2                        ││Dependencies: 0  │  Depth: 0      │
-│  · lodash@4.17.21                        ││                                  │
-│  · prisma@4.15.0                         ││                                  │
-│  · react@18.2.0                          ││                                  │
-│  · typescript@5.0.4                      ││                                  │
-│  · zod@3.21.4                            ││                                  │
-│                                          ││                                  │
+[/] search  [x] expand all  [X] collapse all┌ Stats & Info ────────────────────┐
+                                            │Components: 9  Edges: 2  Roots: 7 │
+┌ Dependency Tree (9 nodes) ───────────────┐│Depth: 1                          │
+│▶ · acme-webapp@2.0.0                     ││Relationships: 2 depends-on       │
+│  · axios@1.4.0 [C]1                      ││                                  │
+│  · dayjs@1.11.7                          ││Vulnerabilities:  22.2% affected  │
+│  ▼ express@4.18.2 [H]1                   ││ [C] Critical    1 █              │
+│  │  └─ · lodash@4.17.21                  ││ [H] High        1 █              │
+│  ▼ prisma@4.15.0                         ││ [✓] Clean       7 ██████████     │
+│  │  └─ · typescript@5.0.4                ││────────────────────────────      │
+│  · react@18.2.0                          ││acme-webapp  [APP]  Root          │
+│  · zod@3.21.4                            ││2.0.0                             │
+│                                          ││Dependencies: 0  │  Depth: 0      │
 │                                          ││                                  │
 │                                          ││                                  │
 │                                          ││                                  │
 └──────────────────────────────────────────┘└──────────────────────────────────┘
- Components: 9 │ Vulns: 0 │ Licenses: 3
+ Components: 9 │ Vulns: 2 (1C/1H) │ Licenses: 2
      …  Tab switch  / search  e export  ? help  q quit [y] copy acme-webapp

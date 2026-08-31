@@ -226,6 +226,9 @@ fn validate_help_enumerates_every_canonical_standard() {
         "eucc",
         "ai-act",
         "bsi-ai",
+        "cisa-2026",
+        "pci-dss",
+        "fsct",
     ] {
         assert!(
             help.contains(canonical),
@@ -744,4 +747,121 @@ fn validate_sidecar_with_snake_case_typo_names_key_and_hints_camel_case() {
         err.contains("camelCase"),
         "error must hint at camelCase keys: {err}"
     );
+}
+
+/// `--no-color` must suppress ANSI escapes in EVERY colored format.
+///
+/// The side-by-side reporter honoured its own `no_colors()` builder, but the
+/// reporter factory never called it for this format, so redirected/CI-captured
+/// side-by-side output was polluted with escape sequences.
+#[test]
+fn side_by_side_honours_no_color_flag() {
+    let output = base_command()
+        .arg("diff")
+        .arg(fixture_path("demo-old.cdx.json"))
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "side-by-side"])
+        .output()
+        .expect("diff command should run");
+
+    let rendered = stdout(&output);
+    // Guard against a vacuous pass: the report must actually have rendered.
+    assert!(
+        rendered.contains("lodash"),
+        "expected side-by-side content, got:\n{rendered}\n{}",
+        stderr(&output)
+    );
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "--no-color must suppress ANSI escapes in side-by-side output:\n{}",
+        stderr(&output)
+    );
+}
+
+/// The `NO_COLOR` convention is honoured for side-by-side too (the flag and
+/// the environment variable resolve through the same helper).
+#[test]
+fn side_by_side_honours_no_color_env() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sbom-tools"));
+    cmd.env("RUST_LOG", "error");
+    cmd.env("NO_COLOR", "1");
+    let output = cmd
+        .arg("diff")
+        .arg(fixture_path("demo-old.cdx.json"))
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "side-by-side"])
+        .output()
+        .expect("diff command should run");
+
+    let rendered = stdout(&output);
+    assert!(
+        rendered.contains("lodash"),
+        "expected side-by-side content, got:\n{rendered}\n{}",
+        stderr(&output)
+    );
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "NO_COLOR=1 must suppress ANSI escapes in side-by-side output:\n{}",
+        stderr(&output)
+    );
+}
+
+/// `-o sbomqs-json` is a `quality` renderer. `diff` and `view` used to accept
+/// it and silently emit ordinary JSON — the caller asked for one format and
+/// got another, the same defect the `oscal-json` guard beside it prevents.
+#[test]
+fn sbomqs_json_is_rejected_by_diff_and_view() {
+    let old = fixture_path("demo-old.cdx.json");
+    let new = fixture_path("demo-new.cdx.json");
+
+    let diff = base_command()
+        .arg("diff")
+        .arg(&old)
+        .arg(&new)
+        .args(["-o", "sbomqs-json"])
+        .output()
+        .expect("diff should run");
+    assert!(
+        !diff.status.success(),
+        "diff must reject sbomqs-json instead of emitting diff JSON: {}",
+        stdout(&diff)
+    );
+    assert!(
+        stderr(&diff).contains("quality -o sbomqs-json"),
+        "the error should point at the command that renders it: {}",
+        stderr(&diff)
+    );
+
+    let view = base_command()
+        .arg("view")
+        .arg(&new)
+        .args(["-o", "sbomqs-json"])
+        .output()
+        .expect("view should run");
+    assert!(
+        !view.status.success(),
+        "view must reject sbomqs-json: {}",
+        stdout(&view)
+    );
+}
+
+/// An empty `NO_COLOR=` means "not set" per the convention. Reports treated
+/// it as set and stripped color while logs and the TUI kept it, so a single
+/// invocation disagreed with itself.
+#[test]
+fn empty_no_color_env_is_treated_as_unset() {
+    // Colour also requires a TTY, which the test harness does not provide, so
+    // assert on the resolver rather than on rendered bytes.
+    unsafe { std::env::set_var("NO_COLOR", "") };
+    let empty = sbom_tools::pipeline::should_use_color(false);
+    unsafe { std::env::set_var("NO_COLOR", "1") };
+    let set = sbom_tools::pipeline::should_use_color(false);
+    unsafe { std::env::remove_var("NO_COLOR") };
+    let unset = sbom_tools::pipeline::should_use_color(false);
+
+    assert_eq!(
+        empty, unset,
+        "an empty NO_COLOR= must behave exactly like an unset one"
+    );
+    assert!(!set, "a non-empty NO_COLOR must disable colour");
 }

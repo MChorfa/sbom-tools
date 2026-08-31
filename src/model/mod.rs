@@ -17,6 +17,7 @@
 //! let deps = index.dependencies_of(&component_id, &sbom.edges);
 //! ```
 
+mod attestation;
 mod bom_profile;
 mod cra_sidecar;
 mod crypto;
@@ -27,6 +28,7 @@ mod metadata;
 mod sbom;
 mod vulnerability;
 
+pub use attestation::*;
 pub use bom_profile::*;
 pub use cra_sidecar::*;
 pub use crypto::*;

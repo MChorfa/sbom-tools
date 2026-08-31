@@ -23,6 +23,15 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
              use `sbom-tools validate -o oscal-json` for OSCAL assessment results"
         );
     }
+    // Same reasoning for the sbomqs comparison view: it is a `quality`
+    // renderer, and falling through to the JSON reporter emitted ordinary
+    // view JSON under a format the caller did not ask for.
+    if config.output.format == ReportFormat::SbomqsJson {
+        anyhow::bail!(
+            "output format 'sbomqs-json' is not supported by `sbom-tools view`; \
+             use `sbom-tools quality -o sbomqs-json` for sbomqs-comparable scores"
+        );
+    }
 
     // Validate --severity before any parsing or (network) enrichment work so
     // a typo fails fast instead of after expensive I/O.
@@ -253,7 +262,7 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
             app.status_sticky = true;
         }
 
-        run_view_tui(&mut app)?;
+        run_view_tui(&mut app, config.output.no_color)?;
     } else {
         parsed.drop_raw_content();
         output_view_report(

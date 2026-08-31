@@ -5,7 +5,79 @@
 > SPDX 2.2/2.3 (JSON, tag-value, RDF/XML) plus SPDX 3.0 via a separate
 > `src/parsers/spdx3.rs`. This document is retained as the historical plan;
 > statements below about "current" parser capabilities describe the state
-> before implementation.
+> before implementation. The status section immediately below is the
+> authoritative "what is supported today" summary.
+
+## Standards support status
+
+Verified 2026-07-31 against `sbom-tools 0.1.22` (binary, not source reading
+alone). Edition pins, citations and caveats for every compliance profile live
+in [`STANDARDS_VERSIONS.md`](STANDARDS_VERSIONS.md).
+
+### Formats — shipped
+
+CycloneDX 1.4/1.5/1.6/1.7 (JSON, XML), SPDX 2.2/2.3 (JSON, tag-value,
+RDF/XML) and SPDX 3.0 (JSON-LD), per `sbom-tools --version`.
+
+The Part 1 model work also landed: CycloneDX `citations` preserved in the
+format extensions plus `DocumentMetadata.citations_count`, the TLP
+distribution constraint in `DocumentMetadata.distribution_classification`,
+`Component.is_external` / `Component.version_range`,
+`HashAlgorithm::Streebog256`/`Streebog512`, and the `Citation` / `Patent` /
+`PatentAssertion` / `PatentFamily` external-reference types.
+
+Two deviations from Part 2's model plan are worth knowing:
+
+- SPDX 3.0 `profileConformance` is surfaced through
+  `DocumentMetadata.distribution_classification` — there is no dedicated
+  `profile_conformance` field.
+- There is no `root_elements` list; the first resolvable `rootElement`
+  (following at most one collection indirection) becomes
+  `primary_component_id`.
+
+### Compliance profiles — 16 shipped (was 13)
+
+`sbom-tools validate --standard` accepts exactly `ntia`, `fda`, `cra`,
+`cra-phase1`, `ssdf`, `eo14028`, `cnsa2`, `pqc`, `bsi`, `oss-steward`,
+`eucc`, `ai-act`, `bsi-ai`, `cisa-2026`, `pci-dss`, `fsct` (plus the aliases
+listed in `--help`). Any other value is a clap usage error — exit code 2,
+before any SBOM is parsed.
+
+Three of those shipped on 2026-07-30 (commit `b0e533b`), taking the count
+from 13 to 16:
+
+| Profile | Aliases (each verified to resolve) | Rules |
+|---|---|---|
+| `cisa-2026` | `cisa`, `cisa2026`, `minimum-elements-2026` | 17 `SBOM-CISA2026-*` (+ the `SBOM-CISA2026-GENERAL` fallback id) |
+| `pci-dss` | `pci`, `pci-dss-6-3-2`, `pci-dss-4` | 10 — 9 × `SBOM-PCI-6-3-2-*` plus `SBOM-PCI-11-3-1-1-SEVERITY` (+ `SBOM-PCI-GENERAL`) |
+| `fsct` | `fsct-3`, `component-transparency` | 27 `SBOM-FSCT-*` (+ `SBOM-FSCT-GENERAL`) |
+
+CISA published the **final** "2026 Minimum Elements for an SBOM" v2.1 on
+2026-07-29; `cisa-2026` targets that final text, not the August 2025 draft
+(which was v2.0 of the same document). It is deliberately stricter than the
+`ntia` profile — a tool-only creator list does not satisfy SBOM Author, while
+an explicit `NOASSERTION`-style marker satisfies the elements whose 2026 text
+provides an escape hatch. `pci-dss` evidences that a Req. 6.3.2 inventory
+exists and is usable; it is not a PCI DSS compliance certification. `fsct`
+maps the third edition's maturity tiers onto severities (Minimum Expected →
+Error, Recommended Practice → Warning, Aspirational → Info).
+
+CycloneDX 1.6 CDXA `declarations` are consumed as evidence by the existing
+SSDF / CRA / EUCC / EO 14028 rules; every pre-existing satisfaction path
+remains valid as a self-declared fallback, and documents without
+`declarations` are unaffected.
+
+### Not implemented
+
+- **Attestation phase 2** — ingestion of external in-toto / DSSE bundles
+  (SLSA provenance/VSA, test-result, vulns predicates) referenced from an
+  SBOM. Phase 1 covers in-document CDXA only, and signatures are recorded as
+  *present*, never cryptographically verified.
+- **METI, OpenChain Telco SBOM, NIST SP 800-161r1** — no profile exists;
+  `--standard` rejects those names with exit 2. They were never in scope for
+  this document, which covers format support only.
+
+---
 
 ## Executive Summary
 

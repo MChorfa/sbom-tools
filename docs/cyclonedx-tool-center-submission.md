@@ -52,11 +52,13 @@ Save as `tools/semantic_sbom_diff.json`:
   "tool": {
     "name": "Semantic SBOM Diff (sbom-tools)",
     "publisher": "sbom-tool",
-    "description": "Semantic SBOM diff and analysis tool for CycloneDX and SPDX. Compares SBOMs, enriches with vulnerability and EOL data, scores quality, checks compliance, and supports continuous watch monitoring.",
+    "description": "Semantic diff and analysis for CycloneDX and SPDX SBOMs, CBOMs and AI-BOMs. Compares BOMs, enriches with vulnerability, KEV and EOL data, scores quality, validates against compliance standards, and watches SBOMs for change.",
     "repository_url": "https://github.com/sbom-tool/sbom-tools",
     "website_url": "https://sbom.tools",
     "capabilities": [
       "SBOM",
+      "CBOM",
+      "AI/ML-BOM",
       "VDR/VEX"
     ],
     "availability": [
@@ -111,18 +113,18 @@ Save as `tools/semantic_sbom_diff.json`:
 | Field | Value | Rationale |
 |-------|-------|-----------|
 | `name` / `publisher` | `Semantic SBOM Diff (sbom-tools)` / `sbom-tool` | Leads with the functional differentiator (the original generic `sbom-tools` was flagged as too broad in [tool-center#111](https://github.com/CycloneDX/tool-center/pull/111)); crate name retained in parentheses for discoverability. Publisher is the GitHub org. |
-| `description` | 1 sentence, <250 chars | Schema caps `description` at 250 chars (min 10); keep it plain text. |
-| `capabilities` | `SBOM`, `VDR/VEX` | Core SBOM diff/analysis plus the OpenVEX integration (`vex` subcommand). |
+| `description` | 2 sentences, 223 chars | Schema caps `description` at 250 chars (min 10); keep it plain text. |
+| `capabilities` | `SBOM`, `CBOM`, `AI/ML-BOM`, `VDR/VEX` | BOM profile is auto-detected as SBOM, CBOM, or AI-BOM, each with its own scoring profile (`quality --profile cbom` / `ai-readiness`), compliance standards (CNSA 2.0, NIST PQC / EU AI Act, BSI SBOM-for-AI), and TUI tabs. `VDR/VEX` covers the `vex` subcommand (OpenVEX, CycloneDX VEX, CSAF in; CSAF out). |
 | `availability` | `OPEN_SOURCE`, `OSI_APPROVED` | MIT-licensed (MIT is OSI-approved). |
-| `functions` | `ANALYSIS`, `TRANSFORM` | Analyzes CycloneDX/SPDX BOMs; `merge`/`tailor`/`enrich` transform them. |
+| `functions` | `ANALYSIS`, `TRANSFORM` | Analyzes CycloneDX/SPDX BOMs; `convert`/`merge`/`tailor`/`enrich` transform them. It never authors a BOM from source, so `AUTHOR` is not claimed. |
 | `analysis` | license / outdated / policy / vuln | `license-check`, EOL detection, license+quality policy engine, OSV/KEV enrichment. |
-| `transform` | `BOM_SERIALIZATION_FORMAT` | The `convert` command converts between formats (SPDX ↔ CycloneDX); `merge`/`tailor` read/write BOMs across JSON/XML. |
+| `transform` | `BOM_SERIALIZATION_FORMAT` | `convert` converts between formats (SPDX 2.3 JSON ↔ CycloneDX 1.7 JSON); `merge`/`tailor` read and write JSON BOMs, preserving the input format (they do not accept XML, and `merge` requires both inputs in the same format). |
 | `packaging` | `COMMAND_LINE_UTILITY` | Shipped as a CLI (also crates.io / Homebrew / prebuilt binaries). |
 | `library` | `RUST` | Implementation language. |
-| `platform` | Linux/Mac/Windows | Release ships binaries for all three. |
+| `platform` | Linux/Mac/Windows | Release ships binaries for all three (x86_64 + aarch64 Linux, x86_64 + aarch64 macOS, x86_64 Windows). |
 | `lifecycle` | `POST-BUILD`, `OPERATIONS` | Operates on built SBOMs; watch mode monitors operational inventory. |
-| `supportedStandards` | CycloneDX, SPDX, Package-URL | Parses both formats; PURL-based component matching. |
-| `cycloneDxVersion` | 1.4–1.7 | Parser support range. |
+| `supportedStandards` | CycloneDX, SPDX, Package-URL | Parses CycloneDX 1.4–1.7 (JSON/XML) and SPDX 2.2/2.3 (JSON, tag-value, RDF/XML) + SPDX 3.0 (JSON-LD); component identity and matching are PURL-based. |
+| `cycloneDxVersion` | 1.4–1.7 | Parser support range (`convert --to cyclonedx` emits 1.7 JSON). |
 
 ### Notes before submitting
 
@@ -132,6 +134,18 @@ Save as `tools/semantic_sbom_diff.json`:
 - **`supportedLanguages` is intentionally omitted.** That field means the *ecosystems
   the tool analyzes*, not the tool's own language. sbom-tools is format- and
   ecosystem-agnostic, so leaving it empty is more accurate than enumerating languages.
+- **`CDXA` and `HBOM` are intentionally not claimed** even though both enum values
+  exist. sbom-tools parses CycloneDX 1.6 `declarations` and uses them as compliance
+  evidence, but it records signature *presence* only — signatures are never verified
+  — and it does not emit declarations, so claiming the CDXA capability would oversell
+  it. Hardware components are read and checked (CRA `[PRE-8-RQ-02]`), but there is no
+  HBOM profile. Revisit both when attestation verification and an HBOM profile land.
+- **`CPE`/`SWID` are not claimed under `supportedStandards`.** Those identifiers are
+  parsed and count towards unique-identifier checks, but matching, query, and diff
+  identity are PURL-based, so listing them would imply more than the tool does.
+- **Re-verify the entry against the shipped binary before submitting.** The claims
+  above were checked against `sbom-tools 0.1.22` (`--version`, per-command `--help`,
+  and real fixture runs) on 2026-07-31.
 - **Re-check enum values against the live schema** before opening the PR — the Tool
   Center schema evolves. Only the values present in `schemas/tool.schema.json` are valid;
   `additionalProperties` is `false`, so unknown fields fail validation.

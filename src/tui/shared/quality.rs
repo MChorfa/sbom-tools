@@ -39,6 +39,108 @@ pub const fn get_profile_weights(
     }
 }
 
+/// Per-profile `(label, score, weight)` rows for the category panels.
+///
+/// The CBOM engine substitutes crypto-specific scores into the 8 weight
+/// slots (scorer.rs: completeness→CryptoCompl, identifiers→OIDs,
+/// licenses→AlgoStrength, vulnerabilities→CryptoRefs, dependencies→
+/// CryptoLifecycle, integrity→PQCReadiness, provenance/lifecycle→standard
+/// Provenance/Licenses), so pairing the generic category labels with those
+/// weights produced a panel whose weighted sum could not reproduce the
+/// headline score. This returns the labels the engine's arithmetic actually
+/// used — the same crypto category names the View app shows.
+///
+/// `AiReadiness` has its own check-based scoring path; its rows are the
+/// per-check pass/fail results (score 100/0) with the real check weights.
+pub fn profile_category_rows(report: &QualityReport) -> Vec<(String, f32, f32)> {
+    let w = get_profile_weights(report.profile);
+    match report.profile {
+        ScoringProfile::Cbom => {
+            let cm = &report.cryptography_metrics;
+            let mut rows = vec![
+                (
+                    "Crypto Compl".to_string(),
+                    cm.crypto_completeness_score(),
+                    w.0,
+                ),
+                ("OIDs".to_string(), cm.crypto_identifier_score(), w.1),
+                (
+                    "Algo Strength".to_string(),
+                    cm.algorithm_strength_score(),
+                    w.2,
+                ),
+                ("Crypto Refs".to_string(), cm.crypto_dependency_score(), w.3),
+                ("Crypto Life".to_string(), cm.crypto_lifecycle_score(), w.4),
+            ];
+            // `None` (no algorithms) means the engine reweighted PQC away —
+            // omit the row, same as VulnDocs/Lifecycle below.
+            if let Some(pqc) = cm.pqc_readiness_score() {
+                rows.push(("PQC Readiness".to_string(), pqc, w.5));
+            }
+            rows.push(("Provenance".to_string(), report.provenance_score, w.6));
+            rows.push(("Licenses".to_string(), report.license_score, w.7));
+            rows
+        }
+        ScoringProfile::AiReadiness => report
+            .ai_readiness_metrics
+            .as_ref()
+            .map(|m| {
+                m.checks
+                    .iter()
+                    .map(|c| (c.name.clone(), if c.passed { 100.0 } else { 0.0 }, c.weight))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => {
+            let mut rows = vec![
+                ("Completeness".to_string(), report.completeness_score, w.0),
+                ("Identifiers".to_string(), report.identifier_score, w.1),
+                ("Licenses".to_string(), report.license_score, w.2),
+                ("Dependencies".to_string(), report.dependency_score, w.4),
+                ("Hashes".to_string(), report.integrity_score, w.5),
+                ("Provenance".to_string(), report.provenance_score, w.6),
+            ];
+            if let Some(v) = report.vulnerability_score {
+                rows.push(("VulnDocs".to_string(), v, w.3));
+            }
+            if let Some(l) = report.lifecycle_score {
+                rows.push(("Lifecycle".to_string(), l, w.7));
+            }
+            rows
+        }
+    }
+}
+
+/// Map an engine-side quality category name to its display name.
+///
+/// The scoring engine's `CategoryDelta` names are serialized into JSON
+/// reports and cannot be renamed, but on screen every surface must use one
+/// name per category: the engine's "Integrity" is shown as "Hashes",
+/// matching the chart's "Hash" bar and the checklist.
+#[must_use]
+pub fn category_display_name(engine_name: &str) -> &str {
+    match engine_name {
+        "Integrity" => "Hashes",
+        other => other,
+    }
+}
+
+/// Human display label for a scoring profile — never the Rust enum debug name
+/// ("Cbom"/"AiReadiness") and never the CLI slug ("ai-readiness").
+pub fn profile_display_label(profile: ScoringProfile) -> &'static str {
+    match profile {
+        ScoringProfile::Minimal => "Minimal",
+        ScoringProfile::Standard => "Standard",
+        ScoringProfile::Security => "Security",
+        ScoringProfile::LicenseCompliance => "License Compliance",
+        ScoringProfile::Cra => "CRA",
+        ScoringProfile::BsiTr03183_2 => "BSI TR-03183-2",
+        ScoringProfile::Comprehensive => "Comprehensive",
+        ScoringProfile::Cbom => "CBOM",
+        ScoringProfile::AiReadiness => "AI Readiness",
+    }
+}
+
 pub fn explain_completeness_score(report: &QualityReport) -> String {
     let m = &report.completeness_metrics;
     if m.components_with_version >= 90.0 && m.components_with_purl >= 80.0 {
@@ -556,25 +658,47 @@ pub fn render_quality_summary(
     let bars: Vec<Bar> = if is_cbom {
         let cm = &report.cryptography_metrics;
         let labels = CryptographyMetrics::cbom_category_labels();
+        // PQC is `None` (reweighted away) when no algorithms exist; render
+        // an N/A bar exactly like VulnDocs/Lifecycle in the standard chart.
+        let pqc = cm.pqc_readiness_score();
         let scores = [
             cm.crypto_completeness_score(),
             cm.crypto_identifier_score(),
             cm.algorithm_strength_score(),
             cm.crypto_dependency_score(),
             cm.crypto_lifecycle_score(),
-            cm.pqc_readiness_score(),
+            pqc.unwrap_or(0.0),
             report.provenance_score,
             report.license_score,
+        ];
+        let na_flags = [
+            false,
+            false,
+            false,
+            false,
+            false,
+            pqc.is_none(),
+            false,
+            false,
         ];
         labels
             .iter()
             .zip(scores.iter())
-            .map(|(label, &score)| {
-                Bar::default()
-                    .value((score as u64).max(1))
-                    .label(Line::from(*label))
-                    .style(bar_grade_style(score))
-                    .text_value(format!("{}", score as u64))
+            .zip(na_flags.iter())
+            .map(|((label, &score), &is_na)| {
+                if is_na {
+                    Bar::default()
+                        .value(1)
+                        .label(Line::styled(*label, Style::default().fg(scheme.muted)))
+                        .style(Style::default().fg(scheme.muted))
+                        .text_value("N/A".to_string())
+                } else {
+                    Bar::default()
+                        .value((score.round() as u64).max(1))
+                        .label(Line::from(*label))
+                        .style(bar_grade_style(score))
+                        .text_value(format!("{}", score.round() as u64))
+                }
             })
             .collect()
     } else {
@@ -616,10 +740,10 @@ pub fn render_quality_summary(
                         .text_value("N/A".to_string())
                 } else {
                     Bar::default()
-                        .value((score as u64).max(1))
+                        .value((score.round() as u64).max(1))
                         .label(Line::from(*label))
                         .style(bar_grade_style(score))
-                        .text_value(format!("{}", score as u64))
+                        .text_value(format!("{}", score.round() as u64))
                 }
             })
             .collect()
@@ -698,7 +822,10 @@ fn render_ai_readiness_summary(
             Style::default().fg(scheme.muted),
         ),
         Span::styled("| Profile: ", Style::default().fg(scheme.text)),
-        Span::styled("AiReadiness", Style::default().fg(scheme.primary)),
+        Span::styled(
+            profile_display_label(report.profile),
+            Style::default().fg(scheme.primary),
+        ),
     ]))
     .block(
         Block::default()
@@ -819,7 +946,7 @@ fn render_ai_readiness_summary(
 /// Render a compact 4-line header with grade, inline bar, score, profile, and strongest/weakest.
 fn render_compact_header(frame: &mut Frame, area: Rect, report: &QualityReport) {
     let scheme = colors();
-    let score = report.overall_score as u16;
+    let score = report.overall_score.round() as u16;
     let (gauge_color, grade_label) = grade_color_and_label(report.grade);
 
     // Build inline gauge bar using block characters
@@ -833,23 +960,32 @@ fn render_compact_header(frame: &mut Frame, area: Rect, report: &QualityReport) 
     let is_cbom = report.profile == ScoringProfile::Cbom;
     let scores: Vec<(&str, f32)> = if is_cbom {
         let cm = &report.cryptography_metrics;
-        vec![
+        let mut s = vec![
             ("Crypto Compl", cm.crypto_completeness_score()),
             ("OIDs", cm.crypto_identifier_score()),
             ("Algo Strength", cm.algorithm_strength_score()),
             ("Crypto Refs", cm.crypto_dependency_score()),
             ("Crypto Life", cm.crypto_lifecycle_score()),
-            ("PQC Readiness", cm.pqc_readiness_score()),
-            ("Provenance", report.provenance_score),
-            ("Licenses", report.license_score),
-        ]
+        ];
+        // `None` (no algorithms) is excluded from Best/Focus, matching the
+        // Vuln Docs / Lifecycle treatment below.
+        if let Some(pqc) = cm.pqc_readiness_score() {
+            s.push(("PQC Readiness", pqc));
+        }
+        s.push(("Provenance", report.provenance_score));
+        s.push(("Licenses", report.license_score));
+        s
     } else {
+        // Names must agree with the chart's short labels below ("Hash") and
+        // the checklist's "Hashes": one category, one name — a header saying
+        // "Focus: Integrity (0%)" over a bar labeled "Hash" reads as two
+        // different metrics.
         let mut s = vec![
             ("Completeness", report.completeness_score),
             ("Identifiers", report.identifier_score),
             ("Licenses", report.license_score),
             ("Dependencies", report.dependency_score),
-            ("Integrity", report.integrity_score),
+            ("Hashes", report.integrity_score),
             ("Provenance", report.provenance_score),
         ];
         if let Some(vs) = report.vulnerability_score {
@@ -883,7 +1019,7 @@ fn render_compact_header(frame: &mut Frame, area: Rect, report: &QualityReport) 
         ),
         Span::styled("  Profile: ", Style::default().fg(scheme.muted)),
         Span::styled(
-            format!("{:?}", report.profile),
+            profile_display_label(report.profile),
             Style::default().fg(scheme.primary),
         ),
         Span::styled(
@@ -940,7 +1076,10 @@ fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) 
 
     // --- Line 1: component count, ecosystems, SBOM age, complexity ---
     let mut line1 = vec![Span::styled(
-        format!(" {} components", cm.total_components),
+        format!(
+            " {}",
+            crate::tui::shared::text::count_noun(cm.total_components, "component")
+        ),
         Style::default().fg(scheme.text).bold(),
     )];
 
@@ -1033,7 +1172,10 @@ fn render_insights_panel(frame: &mut Frame, area: Rect, report: &QualityReport) 
         flags.push((format!("{} cycles", dep.cycle_count), scheme.error));
     }
     if dep.orphan_components > 0 {
-        flags.push((format!("{} orphans", dep.orphan_components), scheme.muted));
+        flags.push((
+            crate::tui::shared::text::count_noun(dep.orphan_components, "orphan"),
+            scheme.muted,
+        ));
     }
 
     let mut line2: Vec<Span> = Vec::new();
@@ -1313,7 +1455,13 @@ fn render_top_recommendations(
             lines.push(Line::from(vec![
                 Span::raw("       "),
                 Span::styled(
-                    format!("{} affected", rec.affected_count),
+                    // A zero count means the gap is document-wide (e.g. a
+                    // missing top-level field), not "affects nothing".
+                    if rec.affected_count == 0 {
+                        "document-level".to_string()
+                    } else {
+                        format!("{} affected", rec.affected_count)
+                    },
                     Style::default().fg(scheme.muted),
                 ),
                 Span::styled("  |  ", Style::default().fg(scheme.border)),
@@ -1345,7 +1493,7 @@ fn render_top_recommendations(
 
 pub fn render_score_gauge(frame: &mut Frame, area: Rect, report: &QualityReport, title: &str) {
     let scheme = colors();
-    let score = report.overall_score as u16;
+    let score = report.overall_score.round() as u16;
     let (gauge_color, grade_label) = grade_color_and_label(report.grade);
 
     let gauge = Gauge::default()
@@ -1392,7 +1540,7 @@ pub fn render_score_breakdown(frame: &mut Frame, area: Rect, report: &QualityRep
         ),
         Span::styled("| Profile: ", Style::default().fg(scheme.text)),
         Span::styled(
-            format!("{:?}", report.profile),
+            profile_display_label(report.profile),
             Style::default().fg(scheme.primary),
         ),
     ]))
@@ -2123,7 +2271,11 @@ pub fn render_quality_recommendations(
                     Span::raw("      "),
                     Span::styled("Affected: ", Style::default().fg(scheme.text_muted)),
                     Span::styled(
-                        format!("{} components", rec.affected_count),
+                        if rec.affected_count == 0 {
+                            "document-level".to_string()
+                        } else {
+                            crate::tui::shared::text::count_noun(rec.affected_count, "component")
+                        },
                         Style::default().fg(scheme.accent),
                     ),
                     Span::styled(

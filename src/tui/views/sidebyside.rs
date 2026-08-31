@@ -42,7 +42,7 @@ enum SemverBump {
 /// Render side-by-side diff view
 pub fn render_sidebyside(frame: &mut Frame, area: Rect, ctx: &RenderContext) {
     match ctx.mode {
-        AppMode::Diff | AppMode::View => render_diff_sidebyside(frame, area, ctx),
+        AppMode::Diff => render_diff_sidebyside(frame, area, ctx),
         // Multi-comparison modes have their own views
         AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => {
             crate::tui::widgets::render_empty_state_enhanced(
@@ -1032,6 +1032,8 @@ fn render_sidebyside_context_bar(frame: &mut Frame, area: Rect, ctx: &RenderCont
         Span::styled("lign ", Style::default().fg(scheme.text_muted)),
         Span::styled("[/]", Style::default().fg(scheme.accent)),
         Span::styled("search ", Style::default().fg(scheme.text_muted)),
+        Span::styled("[A/r/m]", Style::default().fg(scheme.accent)),
+        Span::styled("filter ", Style::default().fg(scheme.text_muted)),
     ];
     // n/N only navigate in row-selection modes; Grouped gates them behind a
     // hint, so don't advertise keys the same screen refuses to execute.

@@ -560,6 +560,7 @@ impl Spdx3Parser {
             format_version: spec_version.clone(),
             spec_version,
             serial_number: doc.spdx_id.clone(),
+            doc_version: None, // SPDX has no document revision counter
             created,
             creators,
             name: doc.name.clone(),
@@ -1851,6 +1852,7 @@ struct Spdx3Package {
     #[serde(alias = "software_copyrightText")]
     copyright_text: Option<String>,
     description: Option<String>,
+    #[serde(default, deserialize_with = "de_string_or_seq_opt")]
     supplied_by: Option<Vec<String>>,
     originated_by: Option<Vec<String>>,
     verified_using: Option<Vec<Spdx3IntegrityMethod>>,
@@ -2025,6 +2027,26 @@ where
         }
         _ => None,
     }))
+}
+
+/// Deserialize an optional `Vec<String>` field that may be supplied as
+/// either a single string (cardinality 0..1) or a JSON array of strings.
+fn de_string_or_seq_opt<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match Option::<OneOrMany>::deserialize(deserializer)? {
+        None => None,
+        Some(OneOrMany::One(s)) => Some(vec![s]),
+        Some(OneOrMany::Many(v)) => Some(v),
+    })
 }
 
 /// Normalize one SPDX 3.0 `ai_metric` value into the typed `MetricEntry`.
@@ -2435,6 +2457,43 @@ mod tests {
             ds.sensitivity_classifications
                 .contains(&"amber".to_string())
         );
+    }
+
+    #[test]
+    fn test_spdx3_supplied_by_accepts_bare_string() {
+        // Real-world producers (e.g. Yocto) emit suppliedBy as a single
+        // string even though the type is nominally Vec<String>; suppliedBy's
+        // spec cardinality is 0..1, so a bare string must parse the same as
+        // a one-element array instead of failing with a "expected a sequence"
+        // JSON error (see issue #348).
+        let pkg: Spdx3Package = serde_json::from_str(
+            r#"{"type": "software_Package", "spdxId": "urn:x:p", "name": "p",
+                "suppliedBy": "urn:spdx:agent:Test_Supplier"}"#,
+        )
+        .expect("bare-string suppliedBy should deserialize");
+        assert_eq!(
+            pkg.supplied_by,
+            Some(vec!["urn:spdx:agent:Test_Supplier".to_string()])
+        );
+
+        let pkg_array: Spdx3Package = serde_json::from_str(
+            r#"{"type": "software_Package", "spdxId": "urn:x:p", "name": "p",
+                "suppliedBy": ["urn:spdx:agent:a", "urn:spdx:agent:b"]}"#,
+        )
+        .expect("array suppliedBy should still deserialize");
+        assert_eq!(
+            pkg_array.supplied_by,
+            Some(vec![
+                "urn:spdx:agent:a".to_string(),
+                "urn:spdx:agent:b".to_string()
+            ])
+        );
+
+        let pkg_absent: Spdx3Package = serde_json::from_str(
+            r#"{"type": "software_Package", "spdxId": "urn:x:p", "name": "p"}"#,
+        )
+        .expect("missing suppliedBy should deserialize");
+        assert_eq!(pkg_absent.supplied_by, None);
     }
 
     fn spdx3_lib(elements: &str) -> NormalizedSbom {

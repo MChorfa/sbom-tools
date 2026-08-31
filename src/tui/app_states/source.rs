@@ -409,12 +409,13 @@ impl JsonTreeNode {
     }
 
     pub fn child_count_label(&self) -> String {
+        use crate::tui::shared::text::count_noun;
         match self {
             Self::Object { children, .. } => {
-                format!("{{}} ({} keys)", children.len())
+                format!("{{}} ({})", count_noun(children.len(), "key"))
             }
             Self::Array { len, .. } => {
-                format!("[] ({len} items)")
+                format!("[] ({})", count_noun(*len, "item"))
             }
             Self::Leaf { .. } => String::new(),
         }
@@ -1728,15 +1729,16 @@ impl SourcePanelState {
             self.build_change_indices();
         }
         // The user may have re-collapsed the tree; reveal the annotated
-        // paths again. Indices are NOT rebuilt here: expand_annotated_paths
-        // invalidates the flat cache, and rebuilding mid-event would mark it
-        // valid again BEFORE the render path's cross-panel alignment runs —
-        // the render rebuilds (aligned) on the next frame and the jump lands
-        // on the following press.
-        if self.change_indices.is_empty()
-            && !self.change_annotations.is_empty()
-            && self.view_mode == SourceViewMode::Tree
-        {
+        // paths again. Not gated on empty indices: a top-level annotation
+        // (e.g. the CycloneDX `root.version` bump) keeps one change row
+        // visible even when everything else is collapsed, and n/N must not
+        // get stuck cycling it. `expand_annotated_paths` is a no-op when
+        // nothing is collapsed. Indices are NOT rebuilt here:
+        // expand_annotated_paths invalidates the flat cache, and rebuilding
+        // mid-event would mark it valid again BEFORE the render path's
+        // cross-panel alignment runs — the render rebuilds (aligned) on the
+        // next frame and the jump lands on the following press.
+        if !self.change_annotations.is_empty() && self.view_mode == SourceViewMode::Tree {
             self.expand_annotated_paths();
         }
         if self.change_indices.is_empty() {
@@ -1766,10 +1768,7 @@ impl SourcePanelState {
         if self.change_indices.is_empty() {
             self.build_change_indices();
         }
-        if self.change_indices.is_empty()
-            && !self.change_annotations.is_empty()
-            && self.view_mode == SourceViewMode::Tree
-        {
+        if !self.change_annotations.is_empty() && self.view_mode == SourceViewMode::Tree {
             // See next_change: expand only; the render path rebuilds aligned.
             self.expand_annotated_paths();
         }
@@ -2136,6 +2135,68 @@ impl SourceDiffState {
                         .version_diffs
                         .insert(path, (old_v.clone(), new_v.clone()));
                 }
+            }
+        }
+
+        // Mark document-metadata changes too: the change gutter previously
+        // covered only component rows, so "created" or the primary
+        // component's version bump scrolled by unmarked and were excluded
+        // from n/N navigation. Field keys map to their well-known JSON
+        // paths per format; paths absent from a document are never looked
+        // up (annotations are keyed by existing node ids), so listing both
+        // CycloneDX and SPDX candidates is harmless.
+        // One path per panel, chosen by that panel's format, so each change
+        // contributes exactly one annotation (the minimap counts stay honest).
+        fn metadata_path(panel: &SourcePanelState, field: &str) -> Option<&'static str> {
+            let is_spdx = panel
+                .raw_lines
+                .iter()
+                .take(20)
+                .any(|l| l.contains("\"spdxVersion\""));
+            match (field, is_spdx) {
+                ("name", false) => Some("root.metadata.component.name"),
+                ("name", true) => Some("root.name"),
+                ("spec_version", false) => Some("root.specVersion"),
+                ("spec_version", true) => Some("root.spdxVersion"),
+                ("created", false) => Some("root.metadata.timestamp"),
+                ("created", true) => Some("root.creationInfo.created"),
+                ("serial_number", false) => Some("root.serialNumber"),
+                ("doc_version", false) => Some("root.version"),
+                ("primary_component_version", false) => Some("root.metadata.component.version"),
+                ("data_license", true) => Some("root.dataLicense"),
+                ("lifecycle_phase", false) => Some("root.metadata.lifecycles"),
+                _ => None,
+            }
+        }
+        use crate::diff::MetadataChangeKind;
+        for mc in &diff.metadata_changes {
+            if matches!(
+                mc.kind,
+                MetadataChangeKind::Removed | MetadataChangeKind::Modified
+            ) && let Some(path) = metadata_path(&self.old_panel, &mc.field)
+            {
+                let status = if mc.kind == MetadataChangeKind::Removed {
+                    SourceChangeStatus::Removed
+                } else {
+                    SourceChangeStatus::Modified
+                };
+                self.old_panel
+                    .change_annotations
+                    .insert(path.to_string(), status);
+            }
+            if matches!(
+                mc.kind,
+                MetadataChangeKind::Added | MetadataChangeKind::Modified
+            ) && let Some(path) = metadata_path(&self.new_panel, &mc.field)
+            {
+                let status = if mc.kind == MetadataChangeKind::Added {
+                    SourceChangeStatus::Added
+                } else {
+                    SourceChangeStatus::Modified
+                };
+                self.new_panel
+                    .change_annotations
+                    .insert(path.to_string(), status);
             }
         }
 

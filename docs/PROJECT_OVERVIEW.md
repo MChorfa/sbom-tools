@@ -38,16 +38,22 @@ flowchart LR
     INPUT["CycloneDX / SPDX<br/>SBOM / CBOM / AI-BOM"] --> PARSE["Detect and parse"]
     PARSE --> MODEL["NormalizedSbom<br/>canonical components and relationships"]
     MODEL --> ANALYSIS{"Analysis"}
-    ANALYSIS --> DIFF["Semantic and graph diff"]
+    ANALYSIS --> DIFF["Semantic and graph diff<br/>pairwise, 1:N, timeline, NxN"]
     ANALYSIS --> VALIDATE["Standards validation"]
     ANALYSIS --> SCORE["Quality and readiness scoring"]
     ANALYSIS --> ENRICH["Optional OSV / KEV / EOL / Hugging Face enrichment"]
-    DIFF --> OUTPUT["TUI / JSON / SARIF / HTML / Markdown / CSV"]
+    DIFF --> OUTPUT["TUI / JSON / NDJSON / SARIF / OSCAL<br/>HTML / Markdown / CSV"]
     VALIDATE --> OUTPUT
     SCORE --> OUTPUT
     ENRICH --> OUTPUT
     OUTPUT --> USERS["People / applications / CI systems"]
 ```
+
+The output list is the union across commands, not a per-command promise.
+Each command's `--help` is authoritative: OSCAL assessment results are a
+`validate` format, the sbomqs-comparable score JSON is a `quality` format,
+and the fleet commands (`diff-multi`, `timeline`, `matrix`) emit TUI or
+JSON only.
 
 Normalization is the central contract. CycloneDX and SPDX inputs become the
 same `NormalizedSbom` model before analysis. This lets downstream consumers use
@@ -61,7 +67,8 @@ dataset vocabulary.
 - format detection and parsing;
 - canonical normalization and subject identity within a BOM;
 - semantic and dependency-graph comparison;
-- BOM-visible validation, quality, compliance, and AI-readiness findings;
+- BOM-visible validation, quality, compliance (16 selectable standards), and
+  AI-readiness findings;
 - optional metadata enrichment;
 - human-readable and machine-readable reports;
 - language bindings over the stable C ABI.
@@ -74,10 +81,17 @@ or binding results as evidence, but remain responsible for:
 
 - policy decisions and admission control;
 - tenant, workspace, or authorization models;
-- attestation servers and trusted-hardware verification;
+- attestation servers, signature verification, and trusted-hardware
+  verification;
 - identity issuance, PKI, or secret management;
 - durable evidence ledgers and cross-system provenance graphs;
 - legal or regulatory authorization claims.
+
+Attestations sit exactly on that line. `sbom-tools` reads the CycloneDX 1.6
+`declarations` a BOM already carries and reports the covered requirements as
+evidence, but it records signature *presence* only — algorithm, key id,
+signer count — and never verifies a signature. Deciding whether that
+evidence is trustworthy remains the caller's job.
 
 This boundary keeps the upstream project broadly reusable. Integrations should
 consume public outputs rather than add an organization-specific control plane

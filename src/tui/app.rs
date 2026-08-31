@@ -251,11 +251,11 @@ impl App {
     /// primaries and the ?/K overlay's This-Tab section. `None` in the multi
     /// modes (their `active_tab` is a stale preference restore).
     pub(crate) fn active_view_state(&self) -> Option<&dyn crate::tui::traits::ViewState> {
-        if !matches!(self.mode, AppMode::Diff | AppMode::View) {
+        if self.mode != AppMode::Diff {
             return None;
         }
         Some(match self.active_tab {
-            TabKind::Summary | TabKind::Overview | TabKind::Tree => &self.summary_view,
+            TabKind::Summary => &self.summary_view,
             TabKind::Components => &self.components_view,
             TabKind::Dependencies => &self.dependencies_view,
             TabKind::Licenses => &self.licenses_view,
@@ -430,9 +430,7 @@ impl App {
     /// The export is scoped to the active tab: e.g. if the user is on the
     /// Vulnerabilities tab only vulnerability data is included.
     pub fn export(&mut self, format: super::export::ExportFormat) {
-        use super::export::{
-            export_diff, export_view, tab_to_report_type, view_tab_to_report_type,
-        };
+        use super::export::{export_diff, tab_to_report_type};
         use crate::reports::ReportConfig;
 
         let result = match self.mode {
@@ -465,31 +463,28 @@ impl App {
                     return;
                 }
             }
-            AppMode::View => {
-                // Map diff TabKind to ViewTab for report type mapping
-                let report_type = match self.active_tab {
-                    super::TabKind::Tree => view_tab_to_report_type(crate::tui::ViewTab::Tree),
-                    super::TabKind::Vulnerabilities => {
-                        view_tab_to_report_type(crate::tui::ViewTab::Vulnerabilities)
-                    }
-                    super::TabKind::Licenses => {
-                        view_tab_to_report_type(crate::tui::ViewTab::Licenses)
-                    }
-                    super::TabKind::Dependencies => {
-                        view_tab_to_report_type(crate::tui::ViewTab::Dependencies)
-                    }
-                    _ => view_tab_to_report_type(crate::tui::ViewTab::Overview),
-                };
-                let config = ReportConfig::with_types(vec![report_type]);
-                if let Some(ref sbom) = self.data.sbom {
-                    export_view(format, sbom, None, &config, self.export_template.as_deref())
+            AppMode::MultiDiff => {
+                if let Some(ref result) = self.data.multi_diff_result {
+                    super::export::export_multi_diff(
+                        format,
+                        result,
+                        self.export_template.as_deref(),
+                    )
                 } else {
-                    self.set_status_message("No SBOM data available for export");
+                    self.set_status_message("No multi-diff data to export");
                     return;
                 }
             }
-            _ => {
-                self.set_status_message("Export not supported for this mode");
+            AppMode::Timeline => {
+                if let Some(ref result) = self.data.timeline_result {
+                    super::export::export_timeline(format, result, self.export_template.as_deref())
+                } else {
+                    self.set_status_message("No timeline data to export");
+                    return;
+                }
+            }
+            AppMode::Matrix => {
+                self.export_matrix(format);
                 return;
             }
         };
@@ -758,6 +753,13 @@ impl App {
         // Re-run check with new policy if already checked
         if self.compliance_state.checked {
             self.run_compliance_check();
+        } else {
+            // Never cycle silently: the preset is only visible on the
+            // Summary policy widget, and a mute keypress reads as a no-op.
+            self.set_status_message(format!(
+                "Policy preset: {} — press P to check",
+                self.compliance_state.policy_preset.label()
+            ));
         }
     }
 
@@ -813,7 +815,6 @@ impl App {
                     AppMode::Timeline => ShortcutsContext::Timeline,
                     AppMode::Matrix => ShortcutsContext::Matrix,
                     AppMode::Diff => ShortcutsContext::Diff,
-                    AppMode::View => ShortcutsContext::View,
                 };
                 self.overlays.shortcuts.show(context);
             }
@@ -923,14 +924,14 @@ impl App {
         self.ensure_compliance_results();
 
         // 3. Vulnerability cache (was inline in render_vulnerabilities)
-        if matches!(self.mode, AppMode::Diff | AppMode::View) {
+        if self.mode == AppMode::Diff {
             self.ensure_vulnerability_cache();
         }
 
         // 4. Component totals (was inline in render_components)
         let comp_filter = self.components_state().filter;
         let comp_total = match self.mode {
-            AppMode::Diff | AppMode::View => self.diff_component_count(comp_filter),
+            AppMode::Diff => self.diff_component_count(comp_filter),
             AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
         };
         self.components_state_mut().total = comp_total;
@@ -965,7 +966,7 @@ impl App {
         // Build the aligned-rows / unified-entries lists and grouped panel counts
         // into owned locals BEFORE taking a &mut on the side-by-side state, so the
         // immutable `self.data.diff_result` borrow does not overlap the &mut borrow.
-        if matches!(self.mode, AppMode::Diff | AppMode::View) {
+        if self.mode == AppMode::Diff {
             let filter = self.side_by_side_state().filter.clone();
             let (aligned, unified, grouped_left, grouped_right) =
                 self.data.diff_result.as_ref().map_or_else(
@@ -1003,7 +1004,7 @@ impl App {
     /// Pre-compute license totals for rendering.
     fn prepare_license_totals(&mut self) {
         match self.mode {
-            AppMode::Diff | AppMode::View => {
+            AppMode::Diff => {
                 if let Some(ref result) = self.data.diff_result {
                     let focus_left = self.licenses_state().focus_left;
                     let risk_filter = self.licenses_state().risk_filter;
@@ -1047,7 +1048,7 @@ impl App {
     /// Pre-compute vulnerability totals for rendering.
     fn prepare_vulnerability_totals(&mut self) {
         let vuln_total = match self.mode {
-            AppMode::Diff | AppMode::View => self.diff_vulnerability_count(),
+            AppMode::Diff => self.diff_vulnerability_count(),
             AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => 0,
         };
         self.vulnerabilities_state_mut().total = vuln_total;
@@ -1067,8 +1068,6 @@ impl App {
 pub enum AppMode {
     /// Comparing two SBOMs
     Diff,
-    /// Exploring a single SBOM
-    View,
     /// 1:N multi-diff comparison
     MultiDiff,
     /// Timeline analysis
@@ -1081,10 +1080,6 @@ pub enum AppMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabKind {
     Summary,
-    /// Single SBOM overview (View mode)
-    Overview,
-    /// Hierarchical component browser (View mode)
-    Tree,
     Components,
     Dependencies,
     Licenses,
@@ -1101,8 +1096,6 @@ impl TabKind {
     pub const fn title(&self) -> &'static str {
         match self {
             Self::Summary => "Summary",
-            Self::Overview => "Overview",
-            Self::Tree => "Tree",
             Self::Components => "Components",
             Self::Dependencies => "Dependencies",
             Self::Licenses => "Licenses",
@@ -1120,8 +1113,6 @@ impl TabKind {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Summary => "summary",
-            Self::Overview => "overview",
-            Self::Tree => "tree",
             Self::Components => "components",
             Self::Dependencies => "dependencies",
             Self::Licenses => "licenses",
@@ -1139,8 +1130,6 @@ impl TabKind {
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s {
             "summary" => Some(Self::Summary),
-            "overview" => Some(Self::Overview),
-            "tree" => Some(Self::Tree),
             "components" => Some(Self::Components),
             "dependencies" => Some(Self::Dependencies),
             "licenses" => Some(Self::Licenses),
@@ -1151,37 +1140,6 @@ impl TabKind {
             "graph" => Some(Self::GraphChanges),
             "source" => Some(Self::Source),
             _ => None,
-        }
-    }
-
-    /// Returns the tabs visible in a given mode.
-    #[must_use]
-    pub const fn tabs_for_mode(mode: AppMode) -> &'static [TabKind] {
-        match mode {
-            AppMode::View => &[
-                TabKind::Overview,
-                TabKind::Tree,
-                TabKind::Vulnerabilities,
-                TabKind::Licenses,
-                TabKind::Dependencies,
-                TabKind::Quality,
-                TabKind::Compliance,
-                TabKind::Source,
-            ],
-            AppMode::Diff => &[
-                TabKind::Summary,
-                TabKind::Components,
-                TabKind::Dependencies,
-                TabKind::Licenses,
-                TabKind::Vulnerabilities,
-                TabKind::Quality,
-                TabKind::Compliance,
-                TabKind::SideBySide,
-                TabKind::GraphChanges,
-                TabKind::Source,
-            ],
-            // MultiDiff/Timeline/Matrix use full-screen renders, not tabs
-            AppMode::MultiDiff | AppMode::Timeline | AppMode::Matrix => &[],
         }
     }
 }

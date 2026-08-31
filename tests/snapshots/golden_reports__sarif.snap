@@ -839,10 +839,58 @@ expression: "render(&SarifReporter::new())"
           "locations": []
         },
         {
+          "ruleId": "SBOM-TOOLS-005",
+          "level": "error",
+          "message": {
+            "text": "Vulnerability introduced: CVE-2023-45857 (Critical) [Transitive] in axios 1.4.0"
+          },
+          "locations": []
+        },
+        {
+          "ruleId": "SBOM-TOOLS-005",
+          "level": "error",
+          "message": {
+            "text": "Vulnerability introduced: CVE-2023-26136 (High) [Transitive] in express 4.18.2"
+          },
+          "locations": []
+        },
+        {
+          "ruleId": "SBOM-TOOLS-006",
+          "level": "note",
+          "message": {
+            "text": "Vulnerability resolved: CVE-2020-28469 (High) [Transitive] was in express"
+          },
+          "locations": []
+        },
+        {
+          "ruleId": "SBOM-TOOLS-006",
+          "level": "note",
+          "message": {
+            "text": "Vulnerability resolved: CVE-2021-23337 (High) [Direct] was in lodash"
+          },
+          "locations": []
+        },
+        {
+          "ruleId": "SBOM-TOOLS-006",
+          "level": "note",
+          "message": {
+            "text": "Vulnerability resolved: CVE-2022-24999 (Medium) [Transitive] was in express"
+          },
+          "locations": []
+        },
+        {
           "ruleId": "SBOM-TOOLS-008",
           "level": "note",
           "message": {
             "text": "Metadata modified: created ([TIMESTAMP] -> [TIMESTAMP])"
+          },
+          "locations": []
+        },
+        {
+          "ruleId": "SBOM-TOOLS-008",
+          "level": "note",
+          "message": {
+            "text": "Metadata modified: doc_version (1 -> 2)"
           },
           "locations": []
         },
@@ -1334,9 +1382,9 @@ expression: "render(&SarifReporter::new())"
         },
         {
           "ruleId": "SBOM-CRA-ANNEX-I",
-          "level": "error",
+          "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I] SBOM with multiple components must include dependency relationships (Requirement: CRA Annex I: Dependency relationships) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): Primary component 'acme-webapp' participates in no dependency relationship (Requirement: CRA Annex I: Dependency relationships) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -1345,7 +1393,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -1484,19 +1533,23 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-VULN-STATEMENT",
-          "level": "note",
+          "ruleId": "SBOM-CRA-ANNEX-I",
+          "level": "warning",
           "message": {
-            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Annex I Part II (1): Documented vulnerability information) [Element: unknown]"
+            "text": "Old SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II / [PRE-7-RQ-03]] 9/9 transitive dependencies (100%) missing supplier (recommended): acme-webapp, lodash, express, moment, request, …and 4 more (Requirement: CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Transitive dependency supplier (recommended)) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I Part II (1)"
+              "CRA-Annex:Annex I Part II",
+              "prEN-40000-1-3:PRE-7-RQ-01",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "affected": 9,
+            "total": 9
           }
         },
         {
@@ -2075,9 +2128,9 @@ expression: "render(&SarifReporter::new())"
         },
         {
           "ruleId": "SBOM-CRA-ANNEX-I",
-          "level": "error",
+          "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I] SBOM with multiple components must include dependency relationships (Requirement: CRA Annex I: Dependency relationships) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): Primary component 'acme-webapp' participates in no dependency relationship (Requirement: CRA Annex I: Dependency relationships) [Element: acme-webapp]"
           },
           "locations": [],
           "properties": {
@@ -2086,7 +2139,8 @@ expression: "render(&SarifReporter::new())"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "componentId": "acme-webapp"
           }
         },
         {
@@ -2225,19 +2279,23 @@ expression: "render(&SarifReporter::new())"
           }
         },
         {
-          "ruleId": "SBOM-CRA-VULN-STATEMENT",
-          "level": "note",
+          "ruleId": "SBOM-CRA-ANNEX-I",
+          "level": "warning",
           "message": {
-            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities (Requirement: CRA Annex I Part II (1): Documented vulnerability information) [Element: unknown]"
+            "text": "New SBOM - EU CRA Phase 2 (2027): [CRA Annex I Part II / [PRE-7-RQ-03]] 9/9 transitive dependencies (100%) missing supplier (recommended): acme-webapp, lodash, express, dayjs, axios, …and 4 more (Requirement: CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Transitive dependency supplier (recommended)) [Element: unknown]"
           },
           "locations": [],
           "properties": {
             "standardIds": [
-              "CRA-Annex:Annex I Part II (1)"
+              "CRA-Annex:Annex I Part II",
+              "prEN-40000-1-3:PRE-7-RQ-01",
+              "prEN-40000-1-3:PRE-7-RQ-03"
             ],
             "standardHelpUris": [
               "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
-            ]
+            ],
+            "affected": 9,
+            "total": 9
           }
         },
         {

@@ -3,13 +3,19 @@
 //! attestation / EUCC references, the Annex VIII conformity summary, and the
 //! Article 24 open-source-steward profile.
 
+use super::ssdf::{cdxa_note, standard_references_eucc};
 use super::*;
+use crate::model::{AttestationRuleFamily, EvidenceLevel};
 
 impl ComplianceChecker {
     /// Build the per-route evidence checklist (CRA-P4.3). Each route lists
     /// the external references manufacturers are expected to attach to
     /// satisfy Annex VIII; the `satisfied` flag is computed by scanning the
-    /// SBOM's `external_refs` and the attached sidecar.
+    /// SBOM's `external_refs` and the attached sidecar — and, when the
+    /// document carries CDXA declarations, resolved fresh attestation
+    /// evidence targeting a CRA-classified standard satisfies the
+    /// attestation/DoC rows at Structural/SignaturePresent level while the
+    /// presence bits keep satisfying at SelfDeclared.
     pub(crate) fn build_conformity_summary(
         &self,
         sbom: &NormalizedSbom,
@@ -17,6 +23,30 @@ impl ComplianceChecker {
         use crate::model::{ConformityRoute, ExternalRefType};
         let class = self.effective_product_class();
         let route = self.effective_route();
+
+        // CDXA attestation evidence classified into the CRA family, fresh
+        // and fully resolved at the injectable clock. Empty for documents
+        // without declarations, leaving every row exactly as before.
+        let ctx = ComplianceContext::new(self, sbom);
+        let cra_evidence = ctx.evidence_for(AttestationRuleFamily::Cra);
+        let cdxa_level = cra_evidence.iter().map(|s| s.evidence_level).max();
+        let cdxa_eucc_level = cra_evidence
+            .iter()
+            .filter(|s| standard_references_eucc(s.standard))
+            .map(|s| s.evidence_level)
+            .max();
+        // Strengthen a checklist row with CDXA evidence: the row becomes
+        // satisfied and the detail names the evidence level; without CDXA
+        // evidence the legacy (SelfDeclared) verdict passes through.
+        let cdxa = |satisfied: bool, level: Option<EvidenceLevel>, detail: &str| match level {
+            Some(level) => (
+                true,
+                format!(
+                    "{detail} Satisfied by machine-readable CDXA attestation ({level} evidence); external-reference/sidecar presence remains the self-declared fallback."
+                ),
+            ),
+            None => (satisfied, detail.to_string()),
+        };
 
         let any_ext = |needles: &[ExternalRefType]| -> bool {
             sbom.components.values().any(|c| {
@@ -61,10 +91,15 @@ impl ComplianceChecker {
             );
 
         let mut evidence: Vec<ConformityEvidence> = Vec::new();
+        let (satisfied, detail) = cdxa(
+            doc_or_ce,
+            cdxa_level,
+            "Annex V — manufacturer's signed declaration. Provide via Attestation/Certification external ref or sidecar ceMarkingReference.",
+        );
         evidence.push(ConformityEvidence {
             label: "EU Declaration of Conformity".to_string(),
-            detail: "Annex V — manufacturer's signed declaration. Provide via Attestation/Certification external ref or sidecar ceMarkingReference.".to_string(),
-            satisfied: doc_or_ce,
+            detail,
+            satisfied,
         });
 
         match route {
@@ -76,39 +111,71 @@ impl ComplianceChecker {
                 });
             }
             ConformityRoute::ModuleBC => {
+                let (satisfied, detail) = cdxa(
+                    attestation_present,
+                    cdxa_level,
+                    "Notified-body certificate of EU-type examination — Attestation/Certification external ref.",
+                );
                 evidence.push(ConformityEvidence {
                     label: "EU-type examination certificate (Module B)".to_string(),
-                    detail: "Notified-body certificate of EU-type examination — Attestation/Certification external ref.".to_string(),
-                    satisfied: attestation_present,
+                    detail,
+                    satisfied,
                 });
+                let (satisfied, detail) = cdxa(
+                    doc_or_ce,
+                    cdxa_level,
+                    "Manufacturer's declaration that production conforms to the type examined under Module B.",
+                );
                 evidence.push(ConformityEvidence {
                     label: "Production conformity statement (Module C)".to_string(),
-                    detail: "Manufacturer's declaration that production conforms to the type examined under Module B.".to_string(),
-                    satisfied: doc_or_ce,
+                    detail,
+                    satisfied,
                 });
             }
             ConformityRoute::ModuleH => {
+                let (satisfied, detail) = cdxa(
+                    attestation_present,
+                    cdxa_level,
+                    "Notified-body QMS certification (typically ISO 9001 / ISO/IEC 27001 family) — Certification external ref.",
+                );
                 evidence.push(ConformityEvidence {
                     label: "Quality-management-system certification (Module H)".to_string(),
-                    detail: "Notified-body QMS certification (typically ISO 9001 / ISO/IEC 27001 family) — Certification external ref.".to_string(),
-                    satisfied: attestation_present,
+                    detail,
+                    satisfied,
                 });
+                let (satisfied, detail) = cdxa(
+                    attestation_present,
+                    cdxa_level,
+                    "Notified-body surveillance / re-assessment record — referenced via Attestation external ref.",
+                );
                 evidence.push(ConformityEvidence {
                     label: "QMS surveillance plan".to_string(),
-                    detail: "Notified-body surveillance / re-assessment record — referenced via Attestation external ref.".to_string(),
-                    satisfied: attestation_present,
+                    detail,
+                    satisfied,
                 });
             }
             ConformityRoute::Eucc => {
+                // EUCC rows require the stricter subset: CDXA standards
+                // that both classify as CRA and name EUCC/Common Criteria.
+                let (satisfied, detail) = cdxa(
+                    eucc_present,
+                    cdxa_eucc_level,
+                    "Common Criteria certificate from an EUCC-accredited ITSEF — Certification external ref whose URL references EUCC or common-criteria.",
+                );
                 evidence.push(ConformityEvidence {
                     label: "EUCC / Common Criteria certificate".to_string(),
-                    detail: "Common Criteria certificate from an EUCC-accredited ITSEF — Certification external ref whose URL references EUCC or common-criteria.".to_string(),
-                    satisfied: eucc_present,
+                    detail,
+                    satisfied,
                 });
+                let (satisfied, detail) = cdxa(
+                    eucc_present,
+                    cdxa_eucc_level,
+                    "Reference to the ToE (and Protection Profile, when applicable) that the EUCC certificate covers.",
+                );
                 evidence.push(ConformityEvidence {
                     label: "Target of Evaluation reference".to_string(),
-                    detail: "Reference to the ToE (and Protection Profile, when applicable) that the EUCC certificate covers.".to_string(),
-                    satisfied: eucc_present,
+                    detail,
+                    satisfied,
                 });
             }
         }
@@ -692,7 +759,17 @@ impl ComplianceChecker {
             .sidecar
             .as_ref()
             .is_some_and(|s| s.has_live_eucc_evidence_at(self.now()));
+        // Fresh, fully-resolved CDXA attestation of a CRA-classified
+        // standard naming EUCC/Common Criteria satisfies at Structural/
+        // SignaturePresent level; sidecar fields and URL-substring refs
+        // remain valid SelfDeclared fallbacks.
+        let ctx = ComplianceContext::new(self, sbom);
+        let cdxa_eucc_attested = ctx
+            .evidence_for(AttestationRuleFamily::Cra)
+            .iter()
+            .any(|s| standard_references_eucc(s.standard));
         let has_eucc_ref = sidecar_has_eucc
+            || cdxa_eucc_attested
             || sbom.components.values().any(|comp| {
                 comp.external_refs.iter().any(|r| {
                     let url_lower = r.url.to_lowercase();
@@ -706,13 +783,23 @@ impl ComplianceChecker {
                 })
             });
         if !has_eucc_ref {
+            let mut message = format!(
+                "[CRA Annex IV / EUCC] Product class {} requires (or strongly recommends) a reference to a Common Criteria / EUCC certificate or Target of Evaluation",
+                self.effective_product_class().label()
+            );
+            if let Some(note) = cdxa_note(
+                ctx.attestation_declarations(),
+                AttestationRuleFamily::Cra,
+                &|s, _| standard_references_eucc(s),
+                self.now(),
+                "an EUCC / Common Criteria certification",
+            ) {
+                message.push_str(&note);
+            }
             violations.push(Violation {
                 severity,
                 category: ViolationCategory::DocumentMetadata,
-                message: format!(
-                    "[CRA Annex IV / EUCC] Product class {} requires (or strongly recommends) a reference to a Common Criteria / EUCC certificate or Target of Evaluation",
-                    self.effective_product_class().label()
-                ),
+                message,
                 element: None,
                 requirement: "CRA Annex IV: EUCC reference (Common Criteria certificate)"
                     .to_string(),

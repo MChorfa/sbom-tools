@@ -232,7 +232,7 @@ fn crypto_metrics_quantum_ready() {
     assert_eq!(metrics.expired_certificates, 0);
     assert_eq!(metrics.compromised_keys, 0);
     assert!(
-        metrics.quantum_readiness_score() > 90.0,
+        metrics.quantum_readiness_score().expect("has algorithms") > 90.0,
         "expected >90% quantum readiness"
     );
     assert!(metrics.quality_score().unwrap() > 80.0);
@@ -248,7 +248,7 @@ fn crypto_metrics_weak_crypto() {
     assert!(metrics.expired_certificates >= 1);
     assert!(metrics.compromised_keys >= 1);
     assert!(
-        metrics.quantum_readiness_score() < 20.0,
+        metrics.quantum_readiness_score().expect("has algorithms") < 20.0,
         "expected <20% quantum readiness"
     );
     assert!(metrics.quality_score().unwrap() < 30.0);

@@ -21,6 +21,18 @@ expression: "render(&SideBySideReporter::new())"
 [2m  .[0m [2m...[0m                                                      │ [32m 12[0m [32mzod 3.21.4[0m                                              
 [2m  .[0m [2m...[0m                                                      │ [32m 13[0m [32mprisma 4.15.0[0m                                           
 
+[36m[1m═══ Dependencies ═══════════════════════════════════════════════════════════════════════════════════════════════════════[0m
+[31m  1[0m [31mrequest@2.88.2 → lodash@4.17.20[0m                        │ [2m  .[0m [2m...[0m                                                     
+[2m  .[0m [2m...[0m                                                      │ [32m  2[0m [32mprisma@4.15.0 → typescript@5.0.4[0m                      
+
+[36m[1m═══ Vulnerabilities ════════════════════════════════════════════════════════════════════════════════════════════════════[0m
+  [32m-[0m [1mCVE-2020-28469  [0m [31mHigh      [0m → express
+  [32m-[0m [1mCVE-2021-23337  [0m [31mHigh      [0m → lodash
+  [32m-[0m [1mCVE-2022-24999  [0m [33mMedium    [0m → express
+  [31m+[0m [1mCVE-2023-45857  [0m [35mCritical  [0m → axios
+  [31m+[0m [1mCVE-2023-26136  [0m [31mHigh      [0m → express
+
 [36m[1m═══ Summary ════════════════════════════════════════════════════════════════════════════════════════════════════════════[0m
   [1mComponents:[0m [32m+4[0m added, [31m-4[0m removed, [33m~5[0m modified
-  [1mSemantic Score:[0m [36m53.5[0m
+  [1mVulnerabilities:[0m [31m+2[0m introduced, [32m-3[0m resolved
+  [1mSemantic Score:[0m [36m57.7[0m
