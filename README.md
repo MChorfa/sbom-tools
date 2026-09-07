@@ -797,8 +797,18 @@ Which JSON payloads are a compatibility contract, and how firm it is
   `summary` block plus, per component, `name`, `version`, `ecosystem`,
   `licenses`, `supplier`, `dependency_kind`, `vulnerability_count`,
   `vulnerabilities[]`, and optional EOL fields. Domain detail such as
-  `crypto_properties`, `ml_model`, or `dataset` is **not** included; the full
-  normalized document is available only through the ABI and bindings.
+  `crypto_properties`, `ml_model`, or `dataset` is **not** included.
+- **The full normalized document comes from `convert --to normalized`** (or
+  the ABI / bindings `parse` calls — the two are byte-identical, pinned by
+  `tests/ffi_schema_snapshots.rs`). It is the canonical model as JSON:
+  `document`, `components[]` as `{canonical_id, component}` entries in SBOM
+  order, `edges`, `extensions`, `content_hash`, `primary_component_id`,
+  `collision_count`. Lossless, and carries every parsed field including
+  `crypto_properties`.
+
+  ```sh
+  sbom-tools convert --to normalized my.cbom.json | jq '.components[].component.crypto_properties'
+  ```
 - **What is test-pinned.** The ABI snapshot tests pin the top-level keys of
   each payload (`tests/fixtures/abi/contract_required_keys.json`) and the
   numeric scales (`semantic_score` 0–100, similarity and deviation 0–1).

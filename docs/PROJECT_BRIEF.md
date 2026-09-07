@@ -74,8 +74,9 @@ behavior rather than implement independent parsing or analysis rules.
 - `view -o json` is a curated projection (summary + per-component identity,
   licenses, supplier, dependency kind, vulnerabilities, EOL). The full
   normalized model, including `crypto_properties`, `ml_model`, and `dataset`,
-  is exposed only through the ABI parse functions and the bindings. See
-  "JSON output contract" in the README.
+  is exposed through `convert --to normalized` and the ABI parse functions /
+  bindings, which share one serializer and are byte-identical. See "JSON
+  output contract" in the README.
 
 ## Non-goals and ownership boundary
 
