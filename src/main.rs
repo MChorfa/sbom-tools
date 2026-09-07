@@ -1477,7 +1477,9 @@ struct ConvertArgs {
     /// SBOM file to convert
     file: PathBuf,
 
-    /// Target format: cyclonedx (1.7 JSON) or spdx (2.3 JSON)
+    /// Target format: cyclonedx (1.7 JSON), spdx (2.3 JSON), or normalized
+    /// (the canonical-model JSON payload, identical to what the C ABI and the
+    /// language bindings return)
     #[arg(long = "to")]
     to: String,
 
