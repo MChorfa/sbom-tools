@@ -85,6 +85,15 @@ fn pin_snapshot_compliance(app: &mut App) {
         );
         *compliance = Some(results(sbom));
     }
+    // The constructor derived this from wall-clock reports; keep the delta
+    // coherent with the pinned reports consumed by the renderer.
+    if let (Some(old), Some(new), Some(diff)) = (
+        app.data.old_quality.as_ref(),
+        app.data.new_quality.as_ref(),
+        app.data.diff_result.as_mut(),
+    ) {
+        diff.quality_delta = Some(crate::diff::QualityDelta::from_reports(old, new));
+    }
 }
 
 /// All diff tabs that the tabbed layout renders (multi-comparison modes use
