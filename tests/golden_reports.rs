@@ -42,6 +42,18 @@ fn demo_diff() -> (DiffResult, NormalizedSbom, NormalizedSbom) {
 /// has a predictable target and the rendered output is deterministic.
 fn stable_config() -> ReportConfig {
     let mut config = ReportConfig::all();
+    // Snapshot the pre-deadline contract; production uses the current date.
+    // Dedicated Article 14 tests exercise both sides of the deadline.
+    let as_of = chrono::DateTime::parse_from_rfc3339("2026-04-26T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let (_, old, new) = demo_diff();
+    let checker = sbom_tools::quality::ComplianceChecker::new(
+        sbom_tools::quality::ComplianceLevel::CraPhase2,
+    )
+    .with_as_of(as_of);
+    config.old_cra_compliance = Some(checker.check(&old));
+    config.new_cra_compliance = Some(checker.check(&new));
     config.metadata.old_sbom_path = Some("tests/fixtures/demo-old.cdx.json".to_string());
     config.metadata.new_sbom_path = Some("tests/fixtures/demo-new.cdx.json".to_string());
     config

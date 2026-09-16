@@ -41,10 +41,50 @@ fn key(code: KeyCode) -> KeyEvent {
 /// before `render` builds a `RenderContext` from the app.
 fn render_tab(active_tab: TabKind, width: u16, height: u16) -> String {
     let mut app = demo_app(active_tab);
+    pin_snapshot_compliance(&mut app);
     render_to_text(width, height, |frame| {
         app.prepare_render();
         render(frame, &mut app);
     })
+}
+
+/// Keep render fixtures independent of the Article 14 calendar boundary.
+/// Deadline transitions are exercised by the compliance module's clock tests.
+fn pin_snapshot_compliance(app: &mut App) {
+    use crate::quality::{ComplianceChecker, ComplianceLevel, QualityScorer};
+    let as_of = chrono::DateTime::parse_from_rfc3339("2026-04-26T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let results = |sbom: &crate::model::NormalizedSbom| {
+        ComplianceLevel::all()
+            .iter()
+            .map(|level| ComplianceChecker::new(*level).with_as_of(as_of).check(sbom))
+            .collect()
+    };
+    for (sbom, quality, cra, compliance) in [
+        (
+            &app.data.old_sbom,
+            &mut app.data.old_quality,
+            &mut app.data.old_cra_compliance,
+            &mut app.data.old_compliance_results,
+        ),
+        (
+            &app.data.new_sbom,
+            &mut app.data.new_quality,
+            &mut app.data.new_cra_compliance,
+            &mut app.data.new_compliance_results,
+        ),
+    ] {
+        let sbom = sbom.as_ref().unwrap();
+        let profile = crate::tui::scoring_profile_for(crate::model::BomProfile::detect(sbom));
+        *quality = Some(QualityScorer::new(profile).with_as_of(as_of).score(sbom));
+        *cra = Some(
+            ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                .with_as_of(as_of)
+                .check(sbom),
+        );
+        *compliance = Some(results(sbom));
+    }
 }
 
 /// All diff tabs that the tabbed layout renders (multi-comparison modes use
