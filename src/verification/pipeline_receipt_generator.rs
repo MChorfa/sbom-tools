@@ -5,37 +5,46 @@ use super::{
         PipelineShardReceipt, ReceiptArtifact, ReceiptArtifactInput, ReceiptError,
         ReceiptGenerationInput, ReceiptInput, Sha256Digest, TrustContext, validate_receipt,
     },
-    pipeline_receipt_fingerprint::{lock_fingerprint, source_fingerprint},
-    pipeline_receipt_paths::validate_relative_path,
+    pipeline_receipt_fingerprint::{lock_fingerprint, source_fingerprint, stream_into},
+    pipeline_receipt_paths::{reject_symlink_components, validate_relative_path},
 };
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::{Path, PathBuf},
-};
+use sha2::{Digest, Sha256};
+use std::{collections::BTreeSet, fs, path::Path};
 
 pub fn generate_receipt(input: ReceiptInput) -> Result<PipelineShardReceipt, ReceiptError> {
-    let receipt = PipelineShardReceipt {
-        schema: PIPELINE_SHARD_RECEIPT_SCHEMA.into(),
-        repository: input.repository,
-        workflow: input.workflow,
-        run_id: input.run_id,
-        commit_sha: input.commit_sha,
-        source_fingerprint: source_fingerprint(&input.source_root)?,
-        trust_context: input.trust_context,
-        promotable: input.promotable,
-        target: input.target,
-        lock_digest: lock_fingerprint(&input.source_root, &input.lock_paths)?,
-        versions: input.versions,
-        checks: input.checks,
-        artifacts: input.artifacts,
-        dagger_trace: input.dagger_trace,
-        started_at: input.started_at,
-        completed_at: input.completed_at,
-        failure_classification: input.failure_classification,
-    };
+    // Every field except the digests is caller-supplied: reject cheap semantic
+    // errors (commit, timestamps, checks, target, artifact claims) before
+    // walking and hashing the source tree.
+    let mut receipt = receipt_without_digests(&input);
+    validate_receipt(&receipt)?;
+    receipt.source_fingerprint = source_fingerprint(&input.source_root)?;
+    receipt.lock_digest = lock_fingerprint(&input.source_root, &input.lock_paths)?;
     validate_receipt(&receipt)?;
     Ok(receipt)
+}
+
+/// The receipt `input` describes, with placeholder digests (SHA-256 of the
+/// empty string) standing in for the not-yet-computed fingerprints.
+fn receipt_without_digests(input: &ReceiptInput) -> PipelineShardReceipt {
+    PipelineShardReceipt {
+        schema: PIPELINE_SHARD_RECEIPT_SCHEMA.into(),
+        repository: input.repository.clone(),
+        workflow: input.workflow.clone(),
+        run_id: input.run_id.clone(),
+        commit_sha: input.commit_sha.clone(),
+        source_fingerprint: Sha256Digest::from_bytes(&[]),
+        trust_context: input.trust_context,
+        promotable: input.promotable,
+        target: input.target.clone(),
+        lock_digest: Sha256Digest::from_bytes(&[]),
+        versions: input.versions.clone(),
+        checks: input.checks.clone(),
+        artifacts: input.artifacts.clone(),
+        dagger_trace: input.dagger_trace.clone(),
+        started_at: input.started_at.clone(),
+        completed_at: input.completed_at.clone(),
+        failure_classification: input.failure_classification.clone(),
+    }
 }
 
 pub fn derive_trust_context(
@@ -85,10 +94,9 @@ fn classify_hosted_event(
         {
             Ok((TrustContext::PullRequest, false))
         }
-        "push"
-            if metadata.ref_name == format!("refs/heads/{}", metadata.default_branch)
-                || metadata.ref_name == metadata.default_branch =>
-        {
+        // Push runs require the full ref: a bare `main` is also the
+        // `github.ref_name` of a tag called `main`.
+        "push" if metadata.ref_name == format!("refs/heads/{}", metadata.default_branch) => {
             Ok((TrustContext::ProtectedMain, false))
         }
         "push"
@@ -100,12 +108,12 @@ fn classify_hosted_event(
         "pull_request" => Err(ReceiptError::Contract(
             "ambiguous pull request metadata".into(),
         )),
-        // A bare `github.ref_name` for a tag is just the tag name, which is
-        // indistinguishable from a non-default branch — fail closed and point
-        // at the canonical form instead of guessing.
+        // A bare `github.ref_name` for a push is just the branch or tag name,
+        // and the two namespaces overlap — fail closed and point at the
+        // canonical form instead of guessing.
         _ => Err(ReceiptError::Contract(
-            "unsupported or ambiguous hosted event (tag pushes require the full \
-             github.ref form, e.g. refs/tags/<tag>)"
+            "unsupported or ambiguous hosted event (push runs require the full \
+             github.ref form, e.g. refs/heads/<branch> or refs/tags/<tag>)"
                 .into(),
         )),
     }
@@ -120,6 +128,8 @@ fn is_pull_request_ref(ref_name: &str) -> bool {
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// Generate a receipt from a descriptor. Relative `source_root` and
+/// `artifact_root` paths resolve against the process working directory.
 pub fn generate_receipt_from_descriptor(
     descriptor: ReceiptGenerationInput,
 ) -> Result<PipelineShardReceipt, ReceiptError> {
@@ -127,8 +137,8 @@ pub fn generate_receipt_from_descriptor(
     let (trust_context, promotable) =
         derive_trust_context(descriptor.hosted.as_ref(), descriptor.local)?;
     let target = canonical_target(descriptor.target)?;
-    let artifacts = hash_artifacts(&descriptor.artifact_root, &descriptor.artifacts)?;
-    generate_receipt(ReceiptInput {
+    validate_artifact_inputs(&descriptor.artifacts)?;
+    let mut input = ReceiptInput {
         repository: descriptor.repository,
         workflow: descriptor.workflow,
         run_id: descriptor.run_id,
@@ -140,12 +150,16 @@ pub fn generate_receipt_from_descriptor(
         lock_paths: descriptor.lock_paths,
         versions: descriptor.versions,
         checks: descriptor.checks,
-        artifacts,
+        artifacts: Vec::new(),
         dagger_trace: descriptor.dagger_trace,
         started_at: descriptor.started_at,
         completed_at: descriptor.completed_at,
         failure_classification: descriptor.failure_classification,
-    })
+    };
+    // Fail on cheap descriptor errors before hashing any artifact bytes.
+    validate_receipt(&receipt_without_digests(&input))?;
+    input.artifacts = hash_artifacts(&descriptor.artifact_root, &descriptor.artifacts)?;
+    generate_receipt(input)
 }
 
 fn validate_descriptor(descriptor: &ReceiptGenerationInput) -> Result<(), ReceiptError> {
@@ -155,6 +169,15 @@ fn validate_descriptor(descriptor: &ReceiptGenerationInput) -> Result<(), Receip
     {
         return Err(ReceiptError::Contract(
             "invalid generator input identity or schema".into(),
+        ));
+    }
+    // The schema requires nonempty roots; an empty path would otherwise
+    // surface as an I/O error (exit 3) instead of a contract verdict.
+    if descriptor.source_root.as_os_str().is_empty()
+        || descriptor.artifact_root.as_os_str().is_empty()
+    {
+        return Err(ReceiptError::Contract(
+            "source_root and artifact_root must be nonempty".into(),
         ));
     }
     if let Some(hosted) = &descriptor.hosted {
@@ -200,12 +223,23 @@ pub(crate) fn hash_artifacts(
             "artifact root must be a regular directory".into(),
         ));
     }
+    validate_artifact_inputs(inputs)?;
     let canonical_root = fs::canonicalize(root).map_err(|source| ReceiptError::Io {
         path: root.into(),
         source,
     })?;
-    let mut names = BTreeSet::new();
     let mut artifacts = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        reject_symlink_components(root, &input.path, "artifact path")?;
+        let path = root.join(&input.path);
+        artifacts.push(hash_one_artifact(&path, &canonical_root, input)?);
+    }
+    Ok(artifacts)
+}
+
+/// Lexical checks over every artifact claim, run before any file is hashed.
+fn validate_artifact_inputs(inputs: &[ReceiptArtifactInput]) -> Result<(), ReceiptError> {
+    let mut names = BTreeSet::new();
     for input in inputs {
         if input.name.is_empty() || !names.insert(&input.name) {
             return Err(ReceiptError::Contract(
@@ -213,11 +247,8 @@ pub(crate) fn hash_artifacts(
             ));
         }
         validate_relative_path(&input.path, "artifact path")?;
-        let path = root.join(&input.path);
-        reject_symlink_components(root, &input.path)?;
-        artifacts.push(hash_one_artifact(&path, &canonical_root, input)?);
     }
-    Ok(artifacts)
+    Ok(())
 }
 
 fn hash_one_artifact(
@@ -243,31 +274,17 @@ fn hash_one_artifact(
             "artifact must be a regular file".into(),
         ));
     }
-    let bytes = fs::read(path).map_err(|source| ReceiptError::Io {
+    let io_error = |source| ReceiptError::Io {
         path: path.into(),
         source,
-    })?;
+    };
+    let mut file = fs::File::open(path).map_err(io_error)?;
+    let mut hasher = Sha256::new();
+    let size = stream_into(&mut file, &mut hasher).map_err(io_error)?;
     Ok(ReceiptArtifact {
         name: input.name.clone(),
         path: input.path.clone(),
-        size: bytes.len() as u64,
-        sha256: Sha256Digest::from_bytes(&bytes),
+        size,
+        sha256: Sha256Digest::from_hasher(hasher),
     })
-}
-
-fn reject_symlink_components(root: &Path, relative: &str) -> Result<(), ReceiptError> {
-    let mut current = PathBuf::from(root);
-    for component in Path::new(relative).components() {
-        current.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&current).map_err(|source| ReceiptError::Io {
-            path: current.clone(),
-            source,
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(ReceiptError::Contract(
-                "artifact path contains a symlink".into(),
-            ));
-        }
-    }
-    Ok(())
 }

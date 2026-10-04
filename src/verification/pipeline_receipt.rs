@@ -28,6 +28,39 @@ where
     Option::<T>::deserialize(deserializer)
 }
 
+/// Deserialize a string map, rejecting duplicate keys. Derived structs already
+/// reject duplicate fields, but serde's map impls keep the last value silently;
+/// on an evidence format that is a parser differential (a first-wins consumer
+/// would read a different value), so it is a contract violation instead.
+pub(crate) fn unique_string_map<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct UniqueMap;
+    impl<'de> serde::de::Visitor<'de> for UniqueMap {
+        type Value = BTreeMap<String, String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a map of strings with unique keys")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, String>()? {
+                if out.contains_key(&key) {
+                    return Err(serde::de::Error::custom(format!("duplicate key `{key}`")));
+                }
+                out.insert(key, value);
+            }
+            Ok(out)
+        }
+    }
+    deserializer.deserialize_map(UniqueMap)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sha256Digest(String);
 impl Sha256Digest {
@@ -47,6 +80,9 @@ impl Sha256Digest {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let mut h = Sha256::new();
         h.update(bytes);
+        Self::from_hasher(h)
+    }
+    pub(crate) fn from_hasher(h: Sha256) -> Self {
         let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
         Self(format!("sha256:{hex}"))
     }
@@ -147,6 +183,7 @@ pub struct PipelineShardReceipt {
     pub promotable: bool,
     pub target: TargetIdentity,
     pub lock_digest: Sha256Digest,
+    #[serde(deserialize_with = "unique_string_map")]
     pub versions: BTreeMap<String, String>,
     pub checks: Vec<VerificationCheck>,
     pub artifacts: Vec<ReceiptArtifact>,
@@ -190,6 +227,7 @@ pub struct ReceiptGenerationInput {
     pub artifact_root: PathBuf,
     pub artifacts: Vec<ReceiptArtifactInput>,
     pub target: TargetIdentity,
+    #[serde(deserialize_with = "unique_string_map")]
     pub versions: BTreeMap<String, String>,
     pub checks: Vec<VerificationCheck>,
     pub started_at: String,
@@ -216,11 +254,12 @@ pub struct ReceiptArtifactInput {
 #[serde(deny_unknown_fields)]
 pub struct HostedReceiptMetadata {
     pub event_name: String,
-    /// Git reference for the hosted run. The canonical value is the full
-    /// `github.ref` form (`refs/pull/N/merge`, `refs/heads/<branch>`,
-    /// `refs/tags/<tag>`); the unambiguous `github.ref_name` short forms
-    /// (`N/merge`, the default branch name) are also accepted. A bare tag
-    /// name is indistinguishable from a branch and is rejected.
+    /// Git reference for the hosted run, in the full `github.ref` form
+    /// (`refs/pull/N/merge`, `refs/heads/<branch>`, `refs/tags/<tag>`). For
+    /// `pull_request` runs the `github.ref_name` short form `N/merge` is also
+    /// accepted because the event already disambiguates it. Push runs require
+    /// the full form: a bare `main` could name either the default branch or a
+    /// tag called `main`.
     pub ref_name: String,
     pub repository: String,
     pub default_branch: String,
@@ -447,6 +486,10 @@ pub fn aggregate_receipts(
     })
 }
 
+/// Artifact identity is the (name, path) pair; a tuple key cannot collide the
+/// way a delimiter-joined string can (`x:yy` + `q` vs `x` + `yy:q`).
+pub(crate) type ArtifactIds = BTreeSet<(String, String)>;
+
 fn validate_expected_targets(policy: &AggregatePolicy) -> Result<(), ReceiptError> {
     let mut expected_ids = BTreeSet::new();
     for target in &policy.expected_targets {
@@ -463,8 +506,7 @@ fn validate_trusted_artifacts(policy: &AggregatePolicy) -> Result<(), ReceiptErr
     let mut trusted_ids = BTreeSet::new();
     for artifact in &policy.artifacts {
         validate_relative_path(&artifact.path, "trusted artifact path")?;
-        let id = format!("{}:{}", artifact.name, artifact.path);
-        if !trusted_ids.insert(id) {
+        if !trusted_ids.insert((&artifact.name, &artifact.path)) {
             return Err(ReceiptError::Contract(
                 "duplicate trusted artifact identity".into(),
             ));
@@ -476,7 +518,7 @@ fn validate_trusted_artifacts(policy: &AggregatePolicy) -> Result<(), ReceiptErr
 fn verify_receipt_set(
     receipts: &[PipelineShardReceipt],
     policy: &AggregatePolicy,
-) -> Result<(BTreeSet<String>, BTreeSet<String>), ReceiptError> {
+) -> Result<(ArtifactIds, ArtifactIds), ReceiptError> {
     let context = &policy.context;
     let expected: BTreeSet<_> = policy
         .expected_targets

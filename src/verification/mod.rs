@@ -32,4 +32,6 @@ pub use pipeline_receipt_fingerprint::{lock_fingerprint, source_fingerprint};
 pub use pipeline_receipt_generator::{
     derive_trust_context, generate_receipt, generate_receipt_from_descriptor,
 };
-pub use pipeline_receipt_io::{check_receipt, read_receipt, write_receipt};
+pub use pipeline_receipt_io::{
+    MAX_CONTRACT_DOCUMENT_BYTES, check_receipt, read_contract_json, read_receipt, write_receipt,
+};

@@ -90,9 +90,8 @@ fn hosted_contexts_cover_pr_fork_main_and_release() {
         ),
         ("push", "refs/heads/main", TrustContext::ProtectedMain),
         ("push", "refs/tags/v1.0.0", TrustContext::Release),
-        // github.ref_name short forms, accepted where unambiguous.
+        // The github.ref_name PR short form is unambiguous under pull_request.
         ("pull_request", "7/merge", TrustContext::PullRequest),
-        ("push", "main", TrustContext::ProtectedMain),
     ] {
         let receipt = generate_receipt_from_descriptor(descriptor(
             dir.path(),
@@ -129,6 +128,10 @@ fn hosted_metadata_is_authoritative_and_rejects_mismatch_or_ambiguity() {
     // non-default branch name and must fail closed.
     let bare_tag = descriptor(dir.path(), Some(hosted("push", "v1.0.0")), false);
     assert!(generate_receipt_from_descriptor(bare_tag).is_err());
+    // A bare default-branch name is also the ref_name of a tag called `main`,
+    // so push runs must use the full refs/heads/ form to claim protected-main.
+    let bare_branch = descriptor(dir.path(), Some(hosted("push", "main")), false);
+    assert!(generate_receipt_from_descriptor(bare_branch).is_err());
     // A merge-suffixed but non-numeric short ref is not a PR ref.
     let fake_pr = descriptor(
         dir.path(),
@@ -250,4 +253,61 @@ fn compiled_cli_generates_a_readable_receipt() {
         .output()
         .unwrap();
     assert_eq!(result.status.code(), Some(3));
+}
+
+#[test]
+fn empty_roots_are_contract_violations_not_io_errors() {
+    let dir = setup();
+    for field in ["source_root", "artifact_root"] {
+        let mut input = descriptor(dir.path(), None, true);
+        match field {
+            "source_root" => input.source_root = "".into(),
+            _ => input.artifact_root = "".into(),
+        }
+        assert!(
+            matches!(
+                generate_receipt_from_descriptor(input),
+                Err(ReceiptError::Contract(_))
+            ),
+            "empty {field}"
+        );
+    }
+}
+
+#[test]
+fn cheap_descriptor_errors_are_reported_before_any_hashing() {
+    let dir = setup();
+    // Nonexistent roots would be I/O errors if hashing ran first; a bad
+    // commit, timestamp, or artifact path must win as a contract verdict.
+    let missing = dir.path().join("does-not-exist");
+    let mut bad_commit = descriptor(&missing, None, true);
+    bad_commit.commit_sha = "not-a-sha".into();
+    let mut bad_time = descriptor(&missing, None, true);
+    bad_time.completed_at = "2025-01-01T00:00:00Z".into();
+    let mut bad_artifact = descriptor(&missing, None, true);
+    bad_artifact.artifacts.push(ReceiptArtifactInput {
+        name: "escape".into(),
+        path: "../outside".into(),
+    });
+    for input in [bad_commit, bad_time, bad_artifact] {
+        assert!(matches!(
+            generate_receipt_from_descriptor(input),
+            Err(ReceiptError::Contract(_))
+        ));
+    }
+}
+
+#[test]
+fn artifact_hashing_streams_large_files_with_exact_size() {
+    let dir = setup();
+    let big = vec![0x5a_u8; 3 * 64 * 1024 + 17];
+    fs::write(dir.path().join("artifacts/big.bin"), &big).unwrap();
+    let mut input = descriptor(dir.path(), None, true);
+    input.artifacts = vec![ReceiptArtifactInput {
+        name: "big".into(),
+        path: "big.bin".into(),
+    }];
+    let receipt = generate_receipt_from_descriptor(input).unwrap();
+    assert_eq!(receipt.artifacts[0].size, big.len() as u64);
+    assert_eq!(receipt.artifacts[0].sha256, Sha256Digest::from_bytes(&big));
 }

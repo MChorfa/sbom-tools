@@ -481,3 +481,155 @@ fn readable_shape_errors_are_verdicts_in_receipts_and_policies() {
         );
     }
 }
+
+/// Splice a duplicate key into serialized JSON right after the first `{`
+/// following `anchor` (or the document start when `anchor` is empty).
+fn with_duplicate_key(json: &str, anchor: &str, member: &str) -> String {
+    let at = json.find(anchor).unwrap() + anchor.len();
+    let brace = at + json[at..].find('{').unwrap() + 1;
+    format!("{}{member},{}", &json[..brace], &json[brace..])
+}
+
+#[test]
+fn duplicate_json_keys_are_contract_violations_at_every_level() {
+    let (dir, valid, _invalid, policy_path, _receipts) = cli_fixtures();
+    let mut r = receipt(digest(b'a'), digest(b'b'));
+    r.versions = BTreeMap::from([("rust".into(), "1.88".into())]);
+    let json = serde_json::to_string(&r).unwrap();
+    // A first-wins consumer would read `true` for each of these.
+    for (anchor, member) in [
+        ("", r#""promotable":true"#),
+        (r#""target":"#, r#""os":"windows""#),
+        (r#""versions":"#, r#""rust":"1.0""#),
+    ] {
+        let doubled = with_duplicate_key(&json, anchor, member);
+        // Sanity: the splice really is valid JSON with a repeated key.
+        assert!(serde_json::from_str::<serde_json::Value>(&doubled).is_ok());
+        let path = dir.path().join("duplicate.json");
+        fs::write(&path, &doubled).unwrap();
+        assert!(
+            matches!(read_receipt(&path), Err(ReceiptError::Contract(_))),
+            "duplicate {member} at {anchor:?} accepted"
+        );
+        assert_eq!(
+            cli_run(&["verify", "receipt", path.to_str().unwrap()])
+                .status
+                .code(),
+            Some(1)
+        );
+    }
+    let policy_json = fs::read_to_string(&policy_path).unwrap();
+    fs::write(
+        &policy_path,
+        with_duplicate_key(&policy_json, r#""context":"#, r#""promotable":true"#),
+    )
+    .unwrap();
+    assert_eq!(
+        cli_run(&[
+            "verify",
+            "receipt-aggregate",
+            valid.to_str().unwrap(),
+            "--policy",
+            policy_path.to_str().unwrap()
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+}
+
+#[test]
+fn oversized_documents_are_rejected_before_parsing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("huge.json");
+    let file = fs::File::create(&path).unwrap();
+    file.set_len(MAX_CONTRACT_DOCUMENT_BYTES + 1).unwrap();
+    assert!(matches!(
+        read_receipt(&path),
+        Err(ReceiptError::Contract(_))
+    ));
+    assert_eq!(
+        cli_run(&["verify", "receipt", path.to_str().unwrap()])
+            .status
+            .code(),
+        Some(1)
+    );
+}
+
+#[test]
+fn artifact_identity_is_the_name_path_pair_not_a_joined_string() {
+    // "x:yy" + "q" and "x" + "yy:q" would both join to "x:yy:q".
+    let mut r = receipt(digest(b'a'), digest(b'b'));
+    r.artifacts = vec![
+        ReceiptArtifact {
+            name: "x:yy".into(),
+            path: "q".into(),
+            size: 1,
+            sha256: digest(b'c'),
+        },
+        ReceiptArtifact {
+            name: "x".into(),
+            path: "yy/q".into(),
+            size: 2,
+            sha256: digest(b'd'),
+        },
+    ];
+    let mut p = policy(digest(b'a'), digest(b'b'));
+    p.artifacts = r
+        .artifacts
+        .iter()
+        .map(|a| TrustedArtifact {
+            name: a.name.clone(),
+            path: a.path.clone(),
+            size: a.size,
+            sha256: a.sha256.clone(),
+        })
+        .collect();
+    let result = aggregate_receipts(&[r], &p).unwrap();
+    assert_eq!(result.artifact_count, 2);
+}
+
+#[test]
+fn cli_json_output_reports_verdicts_for_receipt_and_aggregate() {
+    let (_dir, valid, invalid, policy, _receipts) = cli_fixtures();
+    let parse = |output: &std::process::Output| -> serde_json::Value {
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let ok = cli_run(&["verify", "receipt", valid.to_str().unwrap(), "-f", "json"]);
+    assert_eq!(ok.status.code(), Some(0));
+    let ok = parse(&ok);
+    assert_eq!(ok["valid"], true);
+    assert_eq!(ok["error"], serde_json::Value::Null);
+    let bad = cli_run(&[
+        "verify",
+        "receipt",
+        invalid.to_str().unwrap(),
+        "--output",
+        "json",
+    ]);
+    assert_eq!(bad.status.code(), Some(1));
+    let bad = parse(&bad);
+    assert_eq!(bad["valid"], false);
+    assert!(bad["error"].as_str().unwrap().contains("promotable"));
+
+    let aggregate = |receipts: &PathBuf| {
+        cli_run(&[
+            "verify",
+            "receipt-aggregate",
+            receipts.to_str().unwrap(),
+            "--policy",
+            policy.to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+    };
+    let ok = aggregate(&valid);
+    assert_eq!(ok.status.code(), Some(0));
+    let ok = parse(&ok);
+    assert_eq!(ok["valid"], true);
+    assert_eq!(ok["receipt_count"], 1);
+    assert_eq!(ok["artifact_count"], 0);
+    let bad = aggregate(&invalid);
+    assert_eq!(bad.status.code(), Some(1));
+    assert_eq!(parse(&bad)["valid"], false);
+}

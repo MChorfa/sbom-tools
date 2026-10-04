@@ -59,3 +59,46 @@ fn source_fingerprint_rejects_symlinks_before_exclusion() {
     std::os::unix::fs::symlink(root.path().join("real.txt"), root.path().join("target")).unwrap();
     assert!(source_fingerprint(root.path()).is_err());
 }
+
+#[test]
+fn top_level_git_file_is_excluded_like_the_git_directory() {
+    // Worktree and submodule checkouts have a `.git` FILE holding an absolute
+    // `gitdir:` path; hashing it would make the fingerprint machine-specific.
+    let plain = tempfile::tempdir().unwrap();
+    put(plain.path(), "src/lib.rs", b"code");
+    let worktree = tempfile::tempdir().unwrap();
+    put(worktree.path(), "src/lib.rs", b"code");
+    put(
+        worktree.path(),
+        ".git",
+        b"gitdir: /home/someone/repo/.git/worktrees/wt",
+    );
+    assert_eq!(
+        source_fingerprint(plain.path()).unwrap(),
+        source_fingerprint(worktree.path()).unwrap()
+    );
+    // Nested `.git` entries (e.g. vendored trees) remain evidence.
+    put(worktree.path(), "vendor/.git", b"gitdir: elsewhere");
+    assert_ne!(
+        source_fingerprint(plain.path()).unwrap(),
+        source_fingerprint(worktree.path()).unwrap()
+    );
+}
+
+#[test]
+fn lock_fingerprint_rejects_duplicate_paths() {
+    let root = tempfile::tempdir().unwrap();
+    put(root.path(), "Cargo.lock", b"lock");
+    let paths = vec![PathBuf::from("Cargo.lock"), PathBuf::from("Cargo.lock")];
+    assert!(lock_fingerprint(root.path(), &paths).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_fingerprint_rejects_symlinked_intermediate_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    put(outside.path(), "Cargo.lock", b"outside");
+    std::os::unix::fs::symlink(outside.path(), root.path().join("vendor")).unwrap();
+    assert!(lock_fingerprint(root.path(), &[PathBuf::from("vendor/Cargo.lock")]).is_err());
+}

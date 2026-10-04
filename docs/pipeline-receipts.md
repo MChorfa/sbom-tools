@@ -5,24 +5,41 @@ unsigned `pipeline-shard-receipt/v1` diagnostics. It adds no workflow producers,
 actions, job manifests, required gates, signing, or release authority.
 
 ```sh
-sbom-tools verify receipt receipt.json
+sbom-tools verify receipt receipt.json [--output json]
 sbom-tools verify receipt-generate --input receipt-input.json --output receipt.json
-sbom-tools verify receipt-aggregate receipts/ --policy aggregate-policy.json
+sbom-tools verify receipt-aggregate receipts/ --policy aggregate-policy.json [--output json]
 ```
 
 ## Inputs and results
 
 The public schemas are `schemas/pipeline-shard-receipt/v1.schema.json`,
 `schemas/pipeline-shard-receipt/input-v1.schema.json`, and
-`schemas/aggregate-policy/v1.schema.json`. Unknown fields are rejected.
-Required nullable keys must be present, using `null` for an absent value.
+`schemas/aggregate-policy/v1.schema.json`. Unknown fields and duplicate keys
+(at any level, including inside `versions`) are rejected, so no two JSON
+parsers can disagree about a document's meaning. Required nullable keys must be
+present, using `null` for an absent value. Documents larger than 16 MiB are
+rejected before parsing. The schemas' `format: date-time` is an annotation in
+JSON Schema 2020-12; the Rust validator enforces RFC 3339 timestamps.
+
 The generator computes source, lock, and artifact digests from the descriptor's
-paths. It records supplied checks, versions, and timestamps; it does not execute
-checks or authenticate those claims. Output creation preserves existing files.
+paths; relative `source_root` and `artifact_root` values resolve against the
+current working directory. It validates every caller-supplied field before
+hashing anything. It records supplied checks, versions, and timestamps; it does
+not execute checks or authenticate those claims. Output creation preserves
+existing files.
+
+Artifact and lock paths use one portable grammar on every OS (the schemas'
+`$defs/relative_path`): `/`-separated nonempty segments, none equal to `.` or
+`..`, with no backslash, colon, or control characters. Lock paths must be
+unique, and no component of an artifact or lock path may be a symlink.
 
 Exit codes are 0 for accepted verification, 1 for readable JSON violating the
-contract, and 3 for I/O or malformed JSON. CLI usage errors retain exit code 2.
-`--quiet` suppresses success output; failure diagnostics remain on stderr.
+contract (including oversized documents), and 3 for I/O or malformed JSON. CLI
+usage errors retain exit code 2. `--quiet` suppresses success output; failure
+diagnostics remain on stderr. With `--output json`, `verify receipt` and
+`verify receipt-aggregate` print a JSON verdict (`valid`, `error`, and for
+aggregation `receipt_count`/`artifact_count`) on stdout for both outcomes,
+regardless of `--quiet`.
 
 ## Identity
 
@@ -33,8 +50,11 @@ features, and optional binding runtime. The descriptor generator sorts features.
 `versions` is supplied metadata, not proof of the executables that ran.
 
 Source fingerprinting hashes sorted UTF-8 relative names joined with `/` and
-exact file bytes. Only root `.git/`, `target/`, and `receipts/` directories are
-excluded. Nested directories and regular files with those names remain inputs.
+exact file bytes, streamed so memory use does not grow with the tree. Only the
+root `.git` entry (directory or worktree/submodule pointer file) and the root
+`target/` and `receipts/` directories are excluded. Nested entries and regular
+files with those names remain inputs. A file whose size changes while it is
+hashed fails the run instead of producing a digest.
 Encountered symlinks are rejected before exclusions. Empty directories and file
 permission bits are not encoded. Line endings are not normalized.
 
@@ -69,9 +89,11 @@ Default-branch and tag pushes can be labeled `protected-main` and `release`,
 but remain unsigned diagnostics. Hosted producers require separate agreement.
 See GitHub's [event reference](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows).
 
-The canonical `ref_name` representation is full `github.ref`. The default branch
-short name and numeric `N/merge` PR short form are also accepted; bare tag names
-are ambiguous and rejected.
+The canonical `ref_name` representation is full `github.ref`. For
+`pull_request` runs the numeric `N/merge` short form is also accepted, since
+the event disambiguates it. Push runs require the full form: a bare `main` is
+also the `github.ref_name` of a tag called `main`, so bare branch and tag names
+are rejected as ambiguous.
 
 ## Verification and recovery
 

@@ -1,11 +1,15 @@
 use std::{
+    collections::BTreeSet,
     fs,
+    io::Read,
     path::{Path, PathBuf},
 };
 
+use sha2::{Digest, Sha256};
+
 use super::{
     pipeline_receipt::{ReceiptError, Sha256Digest},
-    pipeline_receipt_paths::validate_relative_path,
+    pipeline_receipt_paths::{reject_symlink_components, validate_relative_path},
 };
 
 /// Compute a deterministic digest of source files, excluding generated and receipt directories.
@@ -32,12 +36,19 @@ pub fn lock_fingerprint(root: &Path, paths: &[PathBuf]) -> Result<Sha256Digest, 
         ));
     }
     let mut files = Vec::new();
+    let mut seen = BTreeSet::new();
     for path in paths {
         let value = path
             .to_str()
             .ok_or_else(|| ReceiptError::Contract("lock path must be UTF-8".into()))?;
         validate_relative_path(value, "lock path")?;
-        let full = root.join(path);
+        if !seen.insert(value) {
+            return Err(ReceiptError::Contract(format!(
+                "duplicate lock path: {value}"
+            )));
+        }
+        reject_symlink_components(root, value, "lock path")?;
+        let full = root.join(value);
         let meta = fs::symlink_metadata(&full).map_err(|source| ReceiptError::Io {
             path: full.clone(),
             source,
@@ -79,18 +90,19 @@ fn collect_source_files(
         if metadata.file_type().is_symlink() {
             return Err(ReceiptError::Contract("symlink in source tree".into()));
         }
-        // Exclusions are root-anchored and directory-only: only the top-level
-        // .git/, target/, and receipts/ directories are generated state. A
-        // nested vendored `foo/target/` or a source FILE named `receipts` is
-        // evidence and must stay in the fingerprint.
-        if metadata.is_dir()
-            && rel.components().count() == 1
-            && matches!(
-                rel.as_os_str().to_str(),
-                Some(".git" | "target" | "receipts")
-            )
-        {
-            continue;
+        // Exclusions are root-anchored: only the top-level .git, target/, and
+        // receipts/ entries are generated state. A nested vendored
+        // `foo/target/` or a source FILE named `receipts` is evidence and must
+        // stay in the fingerprint. `.git` is excluded as a file too: worktree
+        // and submodule checkouts store an absolute `gitdir:` pointer there,
+        // which would make the fingerprint machine-specific.
+        if rel.components().count() == 1 {
+            let name = rel.as_os_str().to_str();
+            if name == Some(".git")
+                || (metadata.is_dir() && matches!(name, Some("target" | "receipts")))
+            {
+                continue;
+            }
         }
         if rel.to_str().is_none_or(|value| value.is_empty()) {
             return Err(ReceiptError::Contract("non-UTF8 source path".into()));
@@ -113,18 +125,53 @@ fn fingerprint_files(root: &Path, mut files: Vec<PathBuf>) -> Result<Sha256Diges
         })
         .collect::<Result<Vec<_>, ReceiptError>>()?;
     files.sort_by(|(a, _), (b, _)| a.cmp(b));
-    let mut input = Vec::new();
+    // Stream each record straight into the hasher: the digest is identical to
+    // hashing the concatenated `len(rel) rel len(bytes) bytes` encoding, but
+    // memory stays bounded regardless of tree size.
+    let mut hasher = Sha256::new();
     for (rel, path) in files {
-        let bytes = fs::read(&path).map_err(|source| ReceiptError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        input.extend_from_slice(&(rel.len() as u64).to_be_bytes());
-        input.extend_from_slice(rel.as_bytes());
-        input.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
-        input.extend_from_slice(&bytes);
+        hasher.update((rel.len() as u64).to_be_bytes());
+        hasher.update(rel.as_bytes());
+        hash_file_record(&path, &mut hasher)?;
     }
-    Ok(Sha256Digest::from_bytes(&input))
+    Ok(Sha256Digest::from_hasher(hasher))
+}
+
+/// Hash `len(bytes) bytes` for one file. The length prefix comes from the open
+/// handle's metadata and must equal the bytes actually read; a file that
+/// changes size mid-hash is an operational error, never a silently wrong
+/// digest.
+fn hash_file_record(path: &Path, hasher: &mut Sha256) -> Result<(), ReceiptError> {
+    let io_error = |source| ReceiptError::Io {
+        path: path.into(),
+        source,
+    };
+    let mut file = fs::File::open(path).map_err(io_error)?;
+    let expected = file.metadata().map_err(io_error)?.len();
+    hasher.update(expected.to_be_bytes());
+    let read = stream_into(&mut file, hasher).map_err(io_error)?;
+    if read != expected {
+        return Err(io_error(std::io::Error::other(
+            "file size changed while fingerprinting; supply a stable snapshot",
+        )));
+    }
+    Ok(())
+}
+
+/// Feed a reader into the hasher in fixed-size chunks; returns bytes read.
+pub(crate) fn stream_into(reader: &mut impl Read, hasher: &mut Sha256) -> std::io::Result<u64> {
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let n = match reader.read(&mut buffer) {
+            Ok(0) => return Ok(total),
+            Ok(n) => n,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        hasher.update(&buffer[..n]);
+        total += n as u64;
+    }
 }
 
 fn relative_path_identity(root: &Path, path: &Path) -> Result<String, ReceiptError> {

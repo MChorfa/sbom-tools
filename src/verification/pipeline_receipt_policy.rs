@@ -1,5 +1,5 @@
 use super::pipeline_receipt::{
-    AggregatePolicy, PipelineShardReceipt, ReceiptError, TrustedArtifact,
+    AggregatePolicy, ArtifactIds, PipelineShardReceipt, ReceiptError, TrustedArtifact,
 };
 use std::collections::BTreeSet;
 
@@ -72,11 +72,11 @@ fn validate_policy_lists(policy: &AggregatePolicy) -> Result<(), ReceiptError> {
 pub(crate) fn compare_artifacts(
     receipt: &PipelineShardReceipt,
     trusted: &[TrustedArtifact],
-    ids: &mut BTreeSet<String>,
-    trusted_ids: &mut BTreeSet<String>,
+    ids: &mut ArtifactIds,
+    trusted_ids: &mut ArtifactIds,
 ) -> Result<(), ReceiptError> {
     for claim in &receipt.artifacts {
-        let id = format!("{}:{}", claim.name, claim.path);
+        let id = (claim.name.clone(), claim.path.clone());
         if !ids.insert(id.clone()) {
             return Err(ReceiptError::Contract("duplicate artifact identity".into()));
         }
