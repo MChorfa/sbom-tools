@@ -3,43 +3,47 @@
 //! attribute-maturity profile.
 //!
 //! Every rule id in `FSCT_SARIF_RULE_IDS` gets a firing fixture and a silent
-//! fixture (real CycloneDX JSON through the real parser), or an explicit
-//! skip-with-reason; exhaustiveness is enforced against the registry slice.
-//! The tier→severity pinning (Minimum Expected → Error, Recommended Practice
-//! → Warning, Aspirational Goal → Info) is asserted against the registry
-//! defaults — no entry departs from them.
+//! fixture (rendered in each of the four encodings and run through the real
+//! parser), or an explicit skip-with-reason; exhaustiveness is enforced
+//! against the registry slice. The tier→severity pinning (Minimum Expected →
+//! Error, Recommended Practice → Warning, Aspirational Goal → Info) is
+//! asserted against the registry defaults — no entry departs from them.
 //!
-//! The shared fixture DSL cannot express `metadata.lifecycles`, the JSF
-//! `signature`, `compositions`, component `copyright`/`cpe`, or SPDX input.
-//! Rules whose silent (or firing) state needs those fields are explicitly
-//! skipped in the matrix with the dedicated raw-JSON / SPDX tag-value test
-//! (below) that covers both states named in the reason.
+//! Four rules are evidence-gated to one format family (see the profile's
+//! module docs): SBOM-TYPE and SIGNATURE read CycloneDX only, DYNAMIC-DEPS
+//! and LICENSE-CONCLUDED SPDX only. Their rows assert the gate in the other
+//! encodings; the raw-JSON and SPDX tag-value tests below pin the same pairs
+//! on whole documents.
 
 #[path = "common/rule_matrix.rs"]
 mod rule_matrix;
 
+use rule_matrix::clock::checker;
 use rule_matrix::{
-    ComponentFixture, MD5_FILLER, RuleEntry, SHA256_FILLER, SbomFixture, run_matrix,
+    ComponentFixture, Encoding, MD5_FILLER, Outcome, RuleEntry, SHA256_FILLER,
+    SPDX23_HAS_NO_COMPLETENESS, SbomFixture, run_matrix,
 };
 use sbom_tools::parsers::parse_sbom_str;
 use sbom_tools::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, FSCT_SARIF_RULE_IDS,
-    ViolationSeverity as Sev,
+    ComplianceLevel, ComplianceResult, FSCT_SARIF_RULE_IDS, ViolationSeverity as Sev,
 };
 use std::collections::BTreeMap;
 
 const LEVEL: ComplianceLevel = ComplianceLevel::Fsct;
 
-/// The DSL-expressible conforming core: person author with email, versioned
-/// generation tool, timestamp, primary component wired to a depth-2
+/// The conforming core: person author with email, versioned generation
+/// tool, timestamp, JSF signature, primary component wired to a depth-2
 /// dependency chain, and components carrying version + PURL + supplier +
 /// SHA-256 hash + license.
 ///
-/// NOT fully conforming — the DSL cannot express copyright, a second
-/// identifier kind, lifecycles, compositions, or a signature, so
-/// `SBOM-FSCT-{COPYRIGHT-*,IDENTIFIER-MULTI,SBOM-TYPE,COMPLETENESS,
-/// SIGNATURE}` fire on every DSL fixture (all inside the declared universe;
-/// the fully conforming document lives in `conforming_doc()` below).
+/// NOT fully conforming — it carries no copyright, a single identifier kind
+/// and no lifecycle, and leaves the relationship completeness undeclared (a
+/// declaration counts as direct-dependency evidence and would mask
+/// SBOM-FSCT-DIRECT-DEPS), so
+/// `SBOM-FSCT-{COPYRIGHT-*,IDENTIFIER-MULTI,SBOM-TYPE,COMPLETENESS}` fire on
+/// every fixture built from it (all inside the declared universe); the rows
+/// of those rules add what silences them, and the fully conforming document
+/// lives in `conforming_doc()` below.
 fn base() -> SbomFixture {
     let mut app = ComponentFixture::conforming("acme-app");
     app.licenses = vec!["Apache-2.0".to_string()];
@@ -64,6 +68,8 @@ fn base() -> SbomFixture {
             ("ref-liba".to_string(), vec!["ref-libb".to_string()]),
         ],
         vulnerabilities: Vec::new(),
+        signature: Some(("ES256".to_string(), "c2lnbmF0dXJlLXZhbHVl".to_string())),
+        ..SbomFixture::default()
     }
 }
 
@@ -93,6 +99,22 @@ fn no_primary() -> SbomFixture {
         s.dependencies = vec![("ref-liba".to_string(), vec!["ref-libb".to_string()])];
     })
 }
+
+/// Give the primary and every component a copyright notice.
+fn copyright_everywhere(s: &mut SbomFixture) {
+    for c in s.primary.iter_mut().chain(&mut s.components) {
+        c.copyright = Some("Copyright (c) 2026 Acme Components Ltd".to_string());
+    }
+}
+
+/// The CycloneDX-only evidence gates (SBOM Type, signature).
+const CYCLONEDX_GATED: &str = "FSCT reads this attribute from CycloneDX only (its documented \
+     evidence gate): the SPDX parsers record no lifecycle phase, and FSCT does not consult the \
+     SPDX 3 verifiedUsing signature that CISA 2026 reads";
+/// The SPDX-only evidence gates (dynamic links, concluded licences).
+const SPDX_GATED: &str = "FSCT reads this evidence from SPDX only (its documented evidence \
+     gate): a CycloneDX document can carry no dynamic link or concluded licence the parser \
+     reads";
 
 #[test]
 fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
@@ -124,13 +146,13 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.timestamp = None),
             base(),
         ),
-        RuleEntry::skipped(
+        RuleEntry::tested(
             "SBOM-FSCT-SBOM-TYPE",
-            "the DSL cannot express metadata.lifecycles, so the Info fires on \
-             every DSL document and no silent case exists here; \
-             fsct_sbom_type_fires_without_lifecycles_and_silences_with covers \
-             both states through the real parser",
-        ),
+            Sev::Info,
+            base(),
+            broken(|s| s.lifecycles = vec!["build".to_string()]),
+        )
+        .case_differs("firing", Encoding::SPDX, Outcome::Silent, CYCLONEDX_GATED),
         RuleEntry::tested("SBOM-FSCT-PRIMARY", Sev::Error, no_primary(), base()),
         RuleEntry::tested(
             "SBOM-FSCT-DIRECT-DEPS",
@@ -146,14 +168,23 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             }),
             base(),
         ),
-        RuleEntry::skipped(
+        // The positive signal is a DYNAMIC_LINK (or RUNTIME_DEPENDENCY_OF,
+        // PROVIDED_DEPENDENCY_OF) relationship.
+        RuleEntry::tested(
             "SBOM-FSCT-DYNAMIC-DEPS",
-            "the positive signal (DYNAMIC_LINK / RUNTIME_DEPENDENCY_OF / \
-             PROVIDED_DEPENDENCY_OF edges) is parsed only from SPDX \
-             relationships, so the readiness note is evidence-gated to SPDX \
-             input and the CycloneDX-only DSL cannot reach the firing state; \
-             fsct_dynamic_deps_is_spdx_gated_with_firing_and_silent_states \
-             covers both states with SPDX tag-value documents",
+            Sev::Info,
+            base(),
+            broken(|s| {
+                s.dynamic_links = vec![("ref-acme-app".to_string(), "ref-libb".to_string())];
+            }),
+        )
+        .case_differs("firing", Encoding::CYCLONEDX, Outcome::Silent, SPDX_GATED)
+        .case_only(
+            "silent",
+            Encoding::ALL_BUT_SPDX3,
+            "open gap: the SPDX 3 parser maps no SPDX 3.0.1 hasDynamicLink or \
+             hasProvidedDependency relationship to a dynamic dependency, as the registry advice \
+             says, so no SPDX 3 document clears the note",
         ),
         RuleEntry::tested(
             "SBOM-FSCT-COMPONENT-NAME",
@@ -192,15 +223,22 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             }),
             broken(|s| s.component_mut("liba").purl = None),
         ),
-        // Every DSL component is PURL-only (< 2 identifier kinds), so the
-        // base fixture fires; the silent state needs a second kind (cpe) —
-        // covered by the conforming raw-JSON document — or an empty
-        // inventory, used here.
+        // The base components are PURL-only (< 2 identifier kinds), so the
+        // base fixture fires; a second kind (a CPE) on every component, or
+        // an empty inventory, is silent.
         RuleEntry::tested(
             "SBOM-FSCT-IDENTIFIER-MULTI",
             Sev::Warning,
             base(),
             empty_inventory(),
+        )
+        .with_silent(
+            "PURL and CPE on every component",
+            broken(|s| {
+                for c in s.primary.iter_mut().chain(&mut s.components) {
+                    c.cpe = Some(format!("cpe:2.3:a:acme:{}:1.2.3:*:*:*:*:*:*:*", c.name));
+                }
+            }),
         ),
         RuleEntry::tested(
             "SBOM-FSCT-HASH",
@@ -247,12 +285,25 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             }),
             base(),
         ),
-        RuleEntry::skipped(
+        // The base leaves the aggregate undeclared (see base()); a
+        // not_specified aggregate is no assertion either, a complete one is.
+        // Unlike CISA 2026, FSCT asks SPDX 2.x for a declaration too.
+        RuleEntry::tested(
             "SBOM-FSCT-COMPLETENESS",
-            "the DSL cannot express compositions.aggregate, so the Warning \
-             fires on every DSL document and no silent case exists here; \
-             fsct_completeness_fires_without_compositions_and_silences_with \
-             covers both states through the real parser",
+            Sev::Warning,
+            base(),
+            broken(|s| s.completeness = Some("complete".to_string())),
+        )
+        .with_firing(
+            "aggregate not_specified",
+            Sev::Warning,
+            broken(|s| s.completeness = Some("not_specified".to_string())),
+        )
+        .case_differs(
+            "silent",
+            &[Encoding::Spdx23Json],
+            Outcome::Fires(Sev::Warning),
+            SPDX23_HAS_NO_COMPLETENESS,
         ),
         RuleEntry::tested(
             "SBOM-FSCT-LICENSE-PRIMARY",
@@ -284,27 +335,44 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.component_mut("liba").licenses.clear()),
             base(),
         ),
-        // The DSL cannot express component copyright, so the base fixture
-        // fires; the silent states need copyright (conforming raw-JSON
-        // document), no primary, or an empty inventory.
+        // The concluded-license prong of §2.2.2.7: a concluded licence on
+        // any package is the attestation.
+        RuleEntry::tested(
+            "SBOM-FSCT-LICENSE-CONCLUDED",
+            Sev::Info,
+            base(),
+            broken(|s| s.component_mut("liba").concluded_license = Some("MIT".to_string())),
+        )
+        .case_differs("firing", Encoding::CYCLONEDX, Outcome::Silent, SPDX_GATED),
+        // The base carries no copyright, so it fires; the silent states are
+        // a copyright notice, no primary, or an empty inventory.
         RuleEntry::tested(
             "SBOM-FSCT-COPYRIGHT-PRIMARY",
             Sev::Error,
             base(),
             no_primary(),
+        )
+        .with_silent(
+            "copyright on the primary component",
+            broken(|s| {
+                s.primary_mut().copyright =
+                    Some("Copyright (c) 2026 Acme Components Ltd".to_string());
+            }),
         ),
         RuleEntry::tested(
             "SBOM-FSCT-COPYRIGHT-COVERAGE",
             Sev::Warning,
             base(),
             empty_inventory(),
-        ),
+        )
+        .with_silent("copyright on every component", broken(copyright_everywhere)),
         RuleEntry::tested(
             "SBOM-FSCT-COPYRIGHT-ALL",
             Sev::Info,
             base(),
             empty_inventory(),
-        ),
+        )
+        .with_silent("copyright on every component", broken(copyright_everywhere)),
         // Ambiguous placeholders fire §2.3.1 while the per-attribute rules
         // stay silent (the attribute counts as populated for their letter).
         RuleEntry::tested(
@@ -329,19 +397,23 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             }),
             base(),
         ),
-        RuleEntry::skipped(
+        RuleEntry::tested(
             "SBOM-FSCT-SIGNATURE",
-            "the DSL cannot express the top-level JSF signature, so the Info \
-             fires on every DSL document and no silent case exists here; \
-             fsct_signature_fires_without_signature_and_silences_with covers \
-             both states through the real parser",
-        ),
-        RuleEntry::skipped(
-            "SBOM-FSCT-GENERAL",
-            "registry catch-all for the FSCT family: no check site in \
-             check_fsct emits it (registry.rs keeps it so the SARIF rule \
-             catalogue mirrors the slice); it cannot fire from document \
-             content",
+            Sev::Info,
+            broken(|s| s.signature = None),
+            base(),
+        )
+        .with_firing(
+            "signature without a value",
+            Sev::Info,
+            broken(|s| s.signature = Some(("ES256".to_string(), String::new()))),
+        )
+        .case_differs("firing", Encoding::SPDX, Outcome::Silent, CYCLONEDX_GATED)
+        .case_differs(
+            "signature without a value",
+            Encoding::SPDX,
+            Outcome::Silent,
+            CYCLONEDX_GATED,
         ),
     ];
 
@@ -349,9 +421,9 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Raw-JSON fixtures beyond the DSL: the fully conforming document (all
-// three tiers satisfied) and the minimum-only document (Minimum tier
-// satisfied, every reachable Recommended/Aspirational rule firing).
+// Raw-JSON fixtures: the fully conforming document (all three tiers
+// satisfied) and the minimum-only document (Minimum tier satisfied, every
+// reachable Recommended/Aspirational rule firing).
 // ════════════════════════════════════════════════════════════════════════
 
 /// A CycloneDX 1.6 component that satisfies all three FSCT tiers: name,
@@ -408,7 +480,7 @@ fn check_doc(doc: &serde_json::Value) -> ComplianceResult {
     let json = serde_json::to_string_pretty(doc).expect("fixture JSON must serialize");
     let sbom = parse_sbom_str(&json)
         .unwrap_or_else(|e| panic!("fixture must parse as CycloneDX: {e}\n{json}"));
-    ComplianceChecker::new(LEVEL).check(&sbom)
+    checker(LEVEL).check(&sbom)
 }
 
 fn render(result: &ComplianceResult) -> String {
@@ -542,8 +614,9 @@ fn fsct_minimum_only_fixture_fires_exactly_recommended_and_aspirational_rules() 
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Dedicated firing/silent pairs for the rules the fixture DSL cannot
-// reach (each named in its matrix skip-with-reason entry above).
+// Firing/silent pairs on whole documents for the evidence-gated rules and
+// the signature and completeness pairs on the raw conforming document (the
+// matrix rows cover each through the DSL as well, in every encoding).
 // ════════════════════════════════════════════════════════════════════════
 
 fn fired_severities(result: &ComplianceResult, id: &str) -> Vec<Sev> {
@@ -668,7 +741,7 @@ Relationship: SPDXRef-app DEPENDS_ON SPDXRef-liba
 fn check_str(content: &str) -> ComplianceResult {
     let sbom = parse_sbom_str(content)
         .unwrap_or_else(|e| panic!("fixture must parse as SPDX tag-value: {e}"));
-    ComplianceChecker::new(LEVEL).check(&sbom)
+    checker(LEVEL).check(&sbom)
 }
 
 #[test]
@@ -702,6 +775,52 @@ fn fsct_dynamic_deps_is_spdx_gated_with_firing_and_silent_states() {
     assert!(
         fired_severities(&cyclonedx, "SBOM-FSCT-DYNAMIC-DEPS").is_empty(),
         "[Fsct] CycloneDX input must never fire SBOM-FSCT-DYNAMIC-DEPS:\n{}",
+        render(&cyclonedx)
+    );
+}
+
+#[test]
+fn fsct_license_concluded_is_spdx_gated_with_firing_and_silent_states() {
+    // SBOM-FSCT-LICENSE-CONCLUDED is a rule of its own beside LICENSE-ALL
+    // (the two shared one SARIF rule until v0.4.0).
+    let concluded = |result: &ComplianceResult| -> Vec<Sev> {
+        result
+            .violations
+            .iter()
+            .filter(|v| v.rule_id == "SBOM-FSCT-LICENSE-CONCLUDED")
+            .map(|v| v.severity)
+            .collect()
+    };
+
+    // No package carries a concluded license: the aspirational
+    // attestation note fires as Info.
+    let without = SPDX_TAG_VALUE_BASE
+        .replace("PackageLicenseConcluded: Apache-2.0\n", "")
+        .replace("PackageLicenseConcluded: MIT\n", "");
+    let firing = check_str(&without);
+    assert_eq!(
+        concluded(&firing),
+        vec![Sev::Info],
+        "[Fsct] SPDX without PackageLicenseConcluded must fire \
+         SBOM-FSCT-LICENSE-CONCLUDED as Info:\n{}",
+        render(&firing)
+    );
+
+    // A concluded license on any package is the attestation.
+    let silent = check_str(SPDX_TAG_VALUE_BASE);
+    assert!(
+        concluded(&silent).is_empty(),
+        "[Fsct] a PackageLicenseConcluded value must silence \
+         SBOM-FSCT-LICENSE-CONCLUDED:\n{}",
+        render(&silent)
+    );
+
+    // CycloneDX input never fires the note: its parsed model carries no
+    // concluded license.
+    let cyclonedx = check_doc(&conforming_doc());
+    assert!(
+        concluded(&cyclonedx).is_empty(),
+        "[Fsct] CycloneDX input must never fire SBOM-FSCT-LICENSE-CONCLUDED:\n{}",
         render(&cyclonedx)
     );
 }

@@ -1086,6 +1086,7 @@ fn declared_type_bucket(comp: &Component) -> &'static str {
         ComponentType::Data => "Data",
         ComponentType::MachineLearningModel => "ML Models",
         ComponentType::Cryptographic => "Crypto Assets",
+        ComponentType::Service => "Services",
         ComponentType::File | ComponentType::Other(_) => {
             match crate::tui::widgets::detect_component_type(&comp.name) {
                 "lib" => "Libraries",
@@ -1163,11 +1164,7 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
         let count = *count;
         let color = palette[i % palette.len()];
         let pct = (count * 100) / total;
-        let bar_len = if max_type_count > 0 {
-            (count * bar_width) / max_type_count
-        } else {
-            0
-        };
+        let bar_len = (count * bar_width).checked_div(max_type_count).unwrap_or(0);
         let bar = "█".repeat(bar_len);
         lines.push(Line::from(vec![
             Span::styled(format!("  {label:12}"), Style::default().fg(color)),
@@ -1201,11 +1198,7 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
     for (key, label, color) in &vuln_order {
         let count = vuln_counts.get(key).copied().unwrap_or(0);
         let pct = (count * 100) / total;
-        let bar_len = if max_vuln_count > 0 {
-            (count * bar_width) / max_vuln_count
-        } else {
-            0
-        };
+        let bar_len = (count * bar_width).checked_div(max_vuln_count).unwrap_or(0);
         let bar = "█".repeat(bar_len);
         lines.push(Line::from(vec![
             Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
@@ -1255,11 +1248,7 @@ fn render_component_stats_panel(frame: &mut Frame, area: Rect, app: &ViewApp, bo
                 continue;
             }
             let pct = (count * 100) / total;
-            let bar_len = if max_eol_count > 0 {
-                (count * bar_width) / max_eol_count
-            } else {
-                0
-            };
+            let bar_len = (count * bar_width).checked_div(max_eol_count).unwrap_or(0);
             let bar = "█".repeat(bar_len);
             lines.push(Line::from(vec![
                 Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
@@ -1363,11 +1352,7 @@ fn render_group_stats_panel(
         if count == 0 {
             continue;
         }
-        let bar_len = if max_vuln > 0 {
-            (count * bar_width) / max_vuln
-        } else {
-            0
-        };
+        let bar_len = (count * bar_width).checked_div(max_vuln).unwrap_or(0);
         lines.push(Line::from(vec![
             Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
             Span::styled(format!("{count:>5} "), Style::default().fg(scheme.text)),
@@ -1411,11 +1396,7 @@ fn render_group_stats_panel(
             if count == 0 {
                 continue;
             }
-            let bar_len = if max_eol > 0 {
-                (count * bar_width) / max_eol
-            } else {
-                0
-            };
+            let bar_len = (count * bar_width).checked_div(max_eol).unwrap_or(0);
             lines.push(Line::from(vec![
                 Span::styled(format!("  {label:12}"), Style::default().fg(*color)),
                 Span::styled(format!("{count:>5} "), Style::default().fg(scheme.text)),
@@ -1432,7 +1413,7 @@ fn render_group_stats_panel(
         .filter(|c| !c.vulnerabilities.is_empty())
         .map(|c| (c.name.as_str(), c.vulnerabilities.len()))
         .collect();
-    vuln_comps.sort_by(|a, b| b.1.cmp(&a.1));
+    vuln_comps.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     if !vuln_comps.is_empty() {
         lines.push(Line::styled(

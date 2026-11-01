@@ -3,6 +3,10 @@
 //! These tests verify end-to-end functionality of the SBOM parsing,
 //! diff engine, and report generation.
 
+#[path = "common/clock.rs"]
+mod clock;
+
+use clock::checker;
 use sbom_tools::{
     diff::DiffEngine,
     matching::FuzzyMatchConfig,
@@ -1660,12 +1664,12 @@ mod cross_format_tests {
 
     #[test]
     fn test_spdx3_compliance_no_false_positives() {
-        use sbom_tools::quality::{ComplianceChecker, ComplianceLevel};
+        use sbom_tools::quality::ComplianceLevel;
 
         let path = fixture_path("spdx3/minimal.spdx3.json");
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0");
 
-        let checker = ComplianceChecker::new(ComplianceLevel::Minimum);
+        let checker = checker(ComplianceLevel::Minimum);
         let report = checker.check(&sbom);
 
         // SPDX 3.0 URN-style IDs should not trigger false SPDXRef- format violations
@@ -1694,18 +1698,18 @@ mod cross_format_tests {
             .find(|c| c.name == "logging-lib")
             .expect("logging-lib not found");
 
-        // Should have vulnerabilities from AFFECTS relationship + CVSS assessment
-        assert!(
-            !logging_lib.vulnerabilities.is_empty(),
-            "logging-lib should have vulnerabilities"
+        // The AFFECTS relationship attaches CVE-2025-0001 and the CVSS
+        // assessment scores it: one record, carrying the score.
+        assert_eq!(
+            logging_lib.vulnerabilities.len(),
+            1,
+            "logging-lib should have one record for CVE-2025-0001"
         );
-
-        // Find the vulnerability with CVSS data (from the assessment)
-        let vuln_with_cvss = logging_lib
-            .vulnerabilities
-            .iter()
-            .find(|v| !v.cvss.is_empty())
-            .expect("Should have a vulnerability with CVSS scores from assessment");
+        let vuln_with_cvss = &logging_lib.vulnerabilities[0];
+        assert!(
+            !vuln_with_cvss.cvss.is_empty(),
+            "the record should carry the assessment's CVSS score"
+        );
 
         assert_eq!(vuln_with_cvss.id, "CVE-2025-0001");
 
@@ -1759,6 +1763,26 @@ mod cross_format_tests {
             vex.impact_statement.is_some(),
             "Should have impact statement"
         );
+
+        // The AFFECTS relationship says CVE-2025-0002 affects crypto-lib and
+        // the VEX assessment says it does not: the two contradict each other,
+        // so each keeps its record. The AFFECTS record carries no VEX status.
+        let records: Vec<_> = crypto_lib
+            .vulnerabilities
+            .iter()
+            .map(|v| (v.id.as_str(), v.vex_status.as_ref()))
+            .collect();
+        assert_eq!(records.len(), 2, "{records:?}");
+        assert_eq!(records[0].0, "CVE-2025-0002");
+        assert!(records[0].1.is_none(), "{records:?}");
+        assert_eq!(records[1].0, "CVE-2025-0002");
+        let record_vex = records[1]
+            .1
+            .expect("the assessment's record should carry its VEX status");
+        assert_eq!(record_vex.status, sbom_tools::model::VexState::NotAffected);
+        assert!(record_vex.justification.is_some());
+        assert!(record_vex.impact_statement.is_some());
+        assert!(record_vex.detail.is_some(), "statusNotes is kept");
     }
 
     // Phase 2: Completeness Tests
@@ -1878,12 +1902,12 @@ mod cross_format_tests {
 
     #[test]
     fn test_spdx3_cra_security_profile_conformance_check() {
-        use sbom_tools::quality::{ComplianceChecker, ComplianceLevel};
+        use sbom_tools::quality::ComplianceLevel;
 
         let path = fixture_path("spdx3/security-profile.spdx3.json");
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0 security profile");
 
-        let checker = ComplianceChecker::new(ComplianceLevel::CraPhase1);
+        let checker = checker(ComplianceLevel::CraPhase1);
         let report = checker.check(&sbom);
 
         // Security profile IS declared in this fixture, so no profile conformance warning
@@ -1900,13 +1924,13 @@ mod cross_format_tests {
 
     #[test]
     fn test_spdx3_cra_missing_security_profile_warning() {
-        use sbom_tools::quality::{ComplianceChecker, ComplianceLevel};
+        use sbom_tools::quality::ComplianceLevel;
 
         // The minimal fixture has vulns but no Security profile declaration
         let path = fixture_path("spdx3/minimal.spdx3.json");
         let sbom = parse_sbom(&path).expect("Failed to parse SPDX 3.0");
 
-        let checker = ComplianceChecker::new(ComplianceLevel::CraPhase1);
+        let checker = checker(ComplianceLevel::CraPhase1);
         let report = checker.check(&sbom);
 
         // Should warn about missing Security profile

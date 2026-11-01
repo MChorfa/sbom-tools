@@ -105,6 +105,47 @@ impl NormalizedSbom {
         }
     }
 
+    /// Settle the canonical ID `component` will be inserted under.
+    ///
+    /// Parsers call this before recording the ID in their reference maps.
+    /// When another component already holds the same canonical ID but has a
+    /// different name or version, the two are distinct components that share
+    /// an identifier (two versions under one version-less purl, say).
+    /// Inserting would overwrite — silently dropping a component from every
+    /// count and check — so `component` is re-keyed to an ID that appends its
+    /// format ID (bom-ref or SPDXID), and the clash is logged. A true
+    /// duplicate (same name and version) keeps the shared ID and is merged by
+    /// [`Self::add_component`] as before. Returns the ID to register.
+    pub fn claim_canonical_id(&self, component: &mut Component) -> CanonicalId {
+        let distinct = self
+            .components
+            .get(&component.canonical_id)
+            .is_some_and(|existing| {
+                existing.name != component.name || existing.version != component.version
+            });
+        if distinct {
+            let base = format!(
+                "{}#{}",
+                component.canonical_id.value(),
+                component.identifiers.format_id
+            );
+            let mut candidate = CanonicalId::from_format_id(&base);
+            let mut n = 2;
+            while self.components.contains_key(&candidate) {
+                candidate = CanonicalId::from_format_id(&format!("{base}#{n}"));
+                n += 1;
+            }
+            tracing::warn!(
+                shared_id = %component.canonical_id,
+                component = %component.name,
+                kept_as = %candidate,
+                "distinct components share a canonical ID; keeping both"
+            );
+            component.canonical_id = candidate;
+        }
+        component.canonical_id.clone()
+    }
+
     /// Log a single summary line if any canonical ID collisions occurred during parsing.
     pub fn log_collision_summary(&self) {
         if self.collision_count > 0 {
@@ -636,6 +677,7 @@ impl EolInfo {
 
 /// Component in the normalized SBOM
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Component {
     /// Canonical identifier
     pub canonical_id: CanonicalId,
@@ -671,8 +713,13 @@ pub struct Component {
     pub description: Option<String>,
     /// Copyright text
     pub copyright: Option<String>,
-    /// Author information
+    /// Author information (CycloneDX `author`, or the names of the 1.6+
+    /// `authors` that deprecate it)
     pub author: Option<String>,
+    /// Organization that created the component (CycloneDX 1.6+
+    /// `manufacturer`), as distinct from the supplier that distributes it
+    #[serde(default)]
+    pub manufacturer: Option<Organization>,
     /// Group/namespace (e.g., Maven groupId)
     pub group: Option<String>,
     /// Whether this component is external (expected from environment, not bundled)
@@ -693,6 +740,17 @@ pub struct Component {
 }
 
 impl Component {
+    /// Whether any producer attribution is present: a supplier, an author,
+    /// or a manufacturer.
+    ///
+    /// This is a raw presence test: a `NOASSERTION` or placeholder name
+    /// counts. Compliance checks use the sentinel-aware `has_known_producer`
+    /// instead.
+    #[must_use]
+    pub const fn has_producer(&self) -> bool {
+        self.supplier.is_some() || self.author.is_some() || self.manufacturer.is_some()
+    }
+
     /// Create a new component with minimal required fields
     #[must_use]
     pub fn new(name: String, format_id: String) -> Self {
@@ -718,6 +776,7 @@ impl Component {
             description: None,
             copyright: None,
             author: None,
+            manufacturer: None,
             group: None,
             is_external: false,
             version_range: None,
@@ -739,7 +798,28 @@ impl Component {
     /// Set the PURL in place, refreshing the canonical ID and deriving the
     /// ecosystem from the PURL type. Mirrors [`Self::with_purl`] for callers
     /// holding a `&mut Component` (e.g. enrichment that synthesizes a PURL).
+    ///
+    /// A value that is not a usable purl ([`is_usable_purl`]: empty, a
+    /// placeholder such as `NOASSERTION`, or missing the `pkg:` scheme) is
+    /// ignored, so it can neither pass an identifier rule nor merge distinct
+    /// components onto one canonical ID. Surrounding whitespace is trimmed.
+    ///
+    /// [`is_usable_purl`]: crate::model::is_usable_purl
     pub fn set_purl(&mut self, purl: String) {
+        if !crate::model::is_usable_purl(&purl) {
+            tracing::debug!(
+                component = %self.name,
+                purl = %purl,
+                "ignoring unusable purl"
+            );
+            return;
+        }
+        let trimmed = purl.trim();
+        let purl = if trimmed.len() == purl.len() {
+            purl
+        } else {
+            trimmed.to_string()
+        };
         self.identifiers.purl = Some(purl);
         self.canonical_id = self.identifiers.canonical_id();
 
@@ -751,6 +831,22 @@ impl Component {
         {
             self.ecosystem = Some(Ecosystem::from_purl_type(purl_type));
         }
+    }
+
+    /// Add a CPE identifier and refresh the canonical ID.
+    ///
+    /// Values that are not usable CPEs ([`is_usable_cpe`]: empty, a
+    /// placeholder, or not a `cpe:2.3:` / `cpe:/` string) are ignored, for
+    /// the same reasons as in [`Self::set_purl`].
+    ///
+    /// [`is_usable_cpe`]: crate::model::is_usable_cpe
+    pub fn add_cpe(&mut self, cpe: String) {
+        if !crate::model::is_usable_cpe(&cpe) {
+            tracing::debug!(component = %self.name, cpe = %cpe, "ignoring unusable CPE");
+            return;
+        }
+        self.identifiers.cpe.push(cpe.trim().to_string());
+        self.canonical_id = self.identifiers.canonical_id();
     }
 
     /// Set the version and try to parse as semver
@@ -1144,5 +1240,48 @@ mod tests {
 
         assert_eq!(positive_zero.content_hash, negative_zero.content_hash);
         assert_eq!(nan_a.content_hash, nan_b.content_hash);
+    }
+
+    #[test]
+    fn unusable_purls_and_cpes_are_not_identifiers() {
+        let mut comp = Component::new("beta".to_string(), "comp-beta".to_string());
+        comp = comp.with_purl(String::new());
+        comp = comp.with_purl("NOASSERTION".to_string());
+        comp.add_cpe("NOASSERTION".to_string());
+        assert!(comp.identifiers.purl.is_none());
+        assert!(comp.identifiers.cpe.is_empty());
+        assert_eq!(comp.canonical_id.value(), "comp-beta");
+    }
+
+    #[test]
+    fn add_cpe_refreshes_the_canonical_id() {
+        let mut comp = Component::new("openssl".to_string(), "comp-openssl".to_string());
+        comp.add_cpe("cpe:2.3:a:openssl:openssl:3.0.1:*:*:*:*:*:*:*".to_string());
+        assert_eq!(comp.identifiers.cpe.len(), 1);
+        assert_ne!(comp.canonical_id.value(), "comp-openssl");
+    }
+
+    #[test]
+    fn claim_canonical_id_keeps_distinct_components_apart() {
+        let mut sbom = NormalizedSbom::default();
+        // Two versions under one version-less purl.
+        let mut v1 = Component::new("beta".to_string(), "beta-1".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:npm/beta".to_string());
+        let mut v2 = Component::new("beta".to_string(), "beta-2".to_string())
+            .with_version("2.0.0".to_string())
+            .with_purl("pkg:npm/beta".to_string());
+        let id1 = sbom.claim_canonical_id(&mut v1);
+        sbom.add_component(v1);
+        let id2 = sbom.claim_canonical_id(&mut v2);
+        sbom.add_component(v2);
+        assert_ne!(id1, id2);
+        assert_eq!(sbom.components.len(), 2, "both versions must survive");
+
+        // A true duplicate (same name and version) still merges.
+        let mut dup = Component::new("beta".to_string(), "beta-1-again".to_string())
+            .with_version("1.0.0".to_string())
+            .with_purl("pkg:npm/beta".to_string());
+        assert_eq!(sbom.claim_canonical_id(&mut dup), id1);
     }
 }

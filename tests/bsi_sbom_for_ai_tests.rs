@@ -9,11 +9,15 @@
 //! the `validate --standard bsi-ai` CLI path works, and the SARIF output
 //! carries SBOM-BSIAI-* rules.
 
+#[path = "common/clock.rs"]
+mod clock;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use clock::checker;
 use sbom_tools::parsers::parse_sbom;
-use sbom_tools::quality::{ComplianceChecker, ComplianceLevel, StandardKind, ViolationSeverity};
+use sbom_tools::quality::{ComplianceLevel, StandardKind, ViolationSeverity};
 use sbom_tools::reports::generate_compliance_sarif;
 
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -42,7 +46,7 @@ fn stderr(output: &Output) -> String {
 fn well_documented_aibom_passes_models_and_datasets_element_checks() {
     let sbom = parse_sbom(&fixture("cyclonedx/bsi-aibom-complete.cdx.json"))
         .expect("parse bsi-aibom-complete fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     assert!(
         result.is_compliant,
@@ -81,9 +85,9 @@ fn well_documented_aibom_passes_models_and_datasets_element_checks() {
         );
     }
 
-    // It is an AI SBOM, so it must NOT report the not-applicable finding.
+    // It is an AI SBOM, so it must NOT be marked not applicable.
     assert!(
-        !ids.contains(&"SBOM-BSIAI-NA"),
+        result.is_applicable(),
         "AI SBOM must not be marked not-applicable"
     );
 }
@@ -91,19 +95,15 @@ fn well_documented_aibom_passes_models_and_datasets_element_checks() {
 #[test]
 fn non_ai_sbom_is_not_applicable_and_does_not_fail() {
     let sbom = parse_sbom(&fixture("cyclonedx/minimal.cdx.json")).expect("parse minimal fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     assert!(result.is_compliant, "non-AI SBOM must not fail BSI-AI");
-    assert_eq!(result.error_count, 0);
-    assert_eq!(
-        result.violations.len(),
-        1,
-        "non-AI SBOM should produce exactly one informational N/A finding; got {:?}",
+    assert!(!result.is_applicable(), "a non-AI SBOM is not applicable");
+    assert!(
+        result.violations.is_empty(),
+        "N/A is the result's applicability, not a finding: {:?}",
         result.violations
     );
-    let v = &result.violations[0];
-    assert_eq!(v.rule_id, "SBOM-BSIAI-NA");
-    assert_eq!(v.severity, ViolationSeverity::Info);
 }
 
 #[test]
@@ -114,22 +114,19 @@ fn web_app_with_config_data_component_is_not_applicable() {
     // N/A and compliant.
     let sbom = parse_sbom(&fixture("cyclonedx/webapp-data-config.cdx.json"))
         .expect("parse webapp-data-config fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     assert!(
         result.is_compliant,
         "web-app SBOM must not fail BSI-AI; violations: {:?}",
         result.violations
     );
-    assert_eq!(result.error_count, 0, "no blocking errors expected");
-    assert_eq!(
-        result.violations.len(),
-        1,
-        "exactly one informational N/A finding expected; got {:?}",
+    assert!(!result.is_applicable(), "a config bundle is no AI content");
+    assert!(
+        result.violations.is_empty(),
+        "no finding expected; got {:?}",
         result.violations
     );
-    assert_eq!(result.violations[0].rule_id, "SBOM-BSIAI-NA");
-    assert_eq!(result.violations[0].severity, ViolationSeverity::Info);
 }
 
 #[test]
@@ -158,11 +155,11 @@ fn application_typed_component_with_model_card_is_applicable() {
     // component type; the Models cluster must see it (previously N/A).
     let sbom = parse_sbom(&fixture("cyclonedx/mistyped-mlbom.cdx.json"))
         .expect("parse mistyped-mlbom fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
     assert!(
-        !ids.contains(&"SBOM-BSIAI-NA"),
+        result.is_applicable(),
         "SBOM with modelCard metadata must not be N/A; got {ids:?}"
     );
     // The Models element checks ran (no PURL/hash on the mistyped model).
@@ -179,7 +176,7 @@ fn model_card_external_ref_satisfies_model_card_element() {
     // its model card.
     let sbom = parse_sbom(&fixture("cyclonedx/mlbom-extref-card.cdx.json"))
         .expect("parse mlbom-extref-card fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     assert!(
         !result
@@ -197,13 +194,10 @@ fn untyped_huggingface_model_is_applicable_with_mistyped_ml_warning() {
     // modelCard) keeps the profile applicable and is surfaced.
     let sbom = parse_sbom(&fixture("cyclonedx/untyped-hf-model.cdx.json"))
         .expect("parse untyped-hf-model fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     assert!(
-        !result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-BSIAI-NA"),
+        result.is_applicable(),
         "huggingface PURL must keep the profile applicable; got {:?}",
         result.violations
     );
@@ -224,13 +218,10 @@ fn dataset_component_with_dataset_evidence_still_counts() {
     // regression from requiring dataset evidence).
     let sbom = parse_sbom(&fixture("cyclonedx/minimal-dataset.cdx.json"))
         .expect("parse minimal-dataset fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     assert!(
-        !result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-BSIAI-NA"),
+        result.is_applicable(),
         "dataset evidence keeps the profile applicable; got {:?}",
         result.violations
     );
@@ -245,7 +236,7 @@ fn xml_dataset_evidence_reaches_the_datasets_cluster() {
     // `<data>` element must now enroll the component like its JSON twin.
     let sbom = parse_sbom(&fixture("cyclonedx/aibom-dataset-gap.cdx.xml"))
         .expect("parse aibom-dataset-gap XML fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
     assert!(
@@ -275,11 +266,11 @@ fn xml_documented_dataset_passes_datasets_cluster() {
     // and dataset evidence alone must keep the XML SBOM applicable.
     let sbom = parse_sbom(&fixture("cyclonedx/aibom-dataset-complete.cdx.xml"))
         .expect("parse aibom-dataset-complete XML fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
     assert!(
-        !ids.contains(&"SBOM-BSIAI-NA"),
+        result.is_applicable(),
         "XML dataset evidence must keep the profile applicable; got {ids:?}"
     );
     for rule in [
@@ -307,7 +298,7 @@ fn huggingface_dataset_with_evidence_is_not_flagged_as_untyped_ml() {
     // correct dataset as machine-learning-model.
     let sbom = parse_sbom(&fixture("cyclonedx/hf-dataset-aibom.cdx.json"))
         .expect("parse hf-dataset-aibom fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
     assert!(
@@ -317,7 +308,7 @@ fn huggingface_dataset_with_evidence_is_not_flagged_as_untyped_ml() {
     );
     // It stays enrolled as a dataset (profile applicable, no N/A).
     assert!(
-        !ids.contains(&"SBOM-BSIAI-NA"),
+        result.is_applicable(),
         "the HF dataset must keep the profile applicable; got {ids:?}"
     );
 }
@@ -329,7 +320,7 @@ fn sparse_aibom_fails_specific_element_checks_with_cluster_refs() {
     // element checks must fire.
     let sbom = parse_sbom(&fixture("cyclonedx/minimal-mlbom.cdx.json"))
         .expect("parse minimal-mlbom fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
 
     let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
     for expected in [
@@ -373,7 +364,7 @@ fn sparse_aibom_fails_specific_element_checks_with_cluster_refs() {
 fn compliance_sarif_emits_bsiai_rules() {
     let sbom = parse_sbom(&fixture("cyclonedx/minimal-mlbom.cdx.json"))
         .expect("parse minimal-mlbom fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+    let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
     let sarif = generate_compliance_sarif(&result).expect("generate SARIF");
     let value: serde_json::Value = serde_json::from_str(&sarif).expect("valid SARIF JSON");
 

@@ -1,0 +1,97 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:5e8a1c3f-2b7d-4f90-a6c4-0d9e3b71f285",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-04T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "vpn-gateway",
+      "name": "vpn-gateway",
+      "version": "3.1.0"
+    }
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-256-gcm",
+      "name": "AES-256-GCM",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "ae",
+          "algorithmFamily": "AES",
+          "parameterSetIdentifier": "256",
+          "mode": "gcm"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/sha-384",
+      "name": "SHA-384",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "hash",
+          "algorithmFamily": "SHA-2",
+          "parameterSetIdentifier": "384"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ipsec-legacy",
+      "name": "ipsec-legacy",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "ikev2",
+          "version": "2",
+          "ikev2TransformTypes": {
+            "encr": [{ "name": "ENCR_AES_CBC", "keyLength": 128 }],
+            "prf": [{ "name": "PRF_HMAC_SHA1" }],
+            "integ": [{ "name": "AUTH_HMAC_SHA2_384_192", "algorithm": "crypto/algorithm/sha-384" }],
+            "ke": [{ "group": 14 }],
+            "esn": false,
+            "auth": [{ "name": "RSA Digital Signature" }]
+          }
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ipsec-cnsa",
+      "name": "ipsec-cnsa",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "ikev2",
+          "version": "2",
+          "ikev2TransformTypes": {
+            "encr": [{ "name": "ENCR_AES_GCM_16", "keyLength": 256, "algorithm": "crypto/algorithm/aes-256-gcm" }],
+            "prf": [{ "name": "PRF_HMAC_SHA2_384" }],
+            "integ": ["crypto/algorithm/sha-384"],
+            "ke": [{ "group": 37 }]
+          }
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ipsec-opaque",
+      "name": "ipsec-opaque",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "ikev2",
+          "version": "2",
+          "ikev2TransformTypes": {
+            "ke": [{ "group": 1000 }]
+          }
+        }
+      }
+    }
+  ]
+}

@@ -197,6 +197,14 @@ impl ComplianceChecker {
     pub(crate) fn check_nist_ssdf(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
         use crate::model::ExternalRefType;
 
+        // PS.3.2 provenance data must cover the release's components; the
+        // per-component practices below have nothing to judge without one.
+        violations.extend(inventory_absent_violation(
+            sbom,
+            "SBOM-SSDF-INVENTORY",
+            "NIST SSDF PS.3.2: provenance data for the release's components",
+        ));
+
         // CDXA attestation evidence (CycloneDX 1.6 declarations): fresh,
         // fully-resolved machine-readable support for SSDF practices,
         // evaluated at the injectable clock. Evidence only strengthens —
@@ -242,6 +250,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -268,20 +278,21 @@ impl ComplianceChecker {
                 message,
                 element: None,
                 requirement: "NIST SSDF PS.1: Provenance — tool identification".to_string(),
-                rule_id: "SBOM-SSDF-PS1",
+                rule_id: "SBOM-SSDF-PS1-TOOL",
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
-        // PS.2 — Build integrity: components should have hashes
-        let total = sbom.components.len();
-        let without_hash = sbom
-            .components
-            .values()
-            .filter(|c| c.hashes.is_empty())
-            .count();
+        // PS.2 — Build integrity: components should have hashes. Package
+        // practices (hash, identifier, supplier) judge package-scoped
+        // components only — crypto assets, files and services carry none.
+        let packages: Vec<_> = package_components(sbom).collect();
+        let total = packages.len();
+        let without_hash = packages.iter().filter(|c| c.hashes.is_empty()).count();
         if without_hash > 0 {
             let pct = (without_hash * 100) / total.max(1);
             violations.push(Violation {
@@ -303,6 +314,8 @@ impl ComplianceChecker {
                     total,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -324,6 +337,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -361,11 +376,14 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // PW.4 — Dependency management: dependency relationships required
-        if sbom.components.len() > 1 && sbom.edges.is_empty() {
+        // between packages
+        if total > 1 && sbom.edges.is_empty() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DependencyInfo,
@@ -377,6 +395,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -422,15 +442,16 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // RV.1 — Component identification: unique identifiers
         // (PURL/CPE/SWHID/SWID via `has_cra_identifier`, so SWHID-only SPDX
         // components are not flagged)
-        let without_id = sbom
-            .components
-            .values()
+        let without_id = packages
+            .iter()
             .filter(|c| !c.identifiers.has_cra_identifier())
             .count();
         if without_id > 0 {
@@ -450,16 +471,14 @@ impl ComplianceChecker {
                     total,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // PS.3 — Supplier identification (placeholder values such as
         // NOASSERTION do not satisfy the element)
-        let without_supplier = sbom
-            .components
-            .values()
-            .filter(|c| !has_known_supplier(&c.supplier, &c.author))
-            .count();
+        let without_supplier = packages.iter().filter(|c| !has_known_producer(c)).count();
         if without_supplier > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
@@ -476,6 +495,8 @@ impl ComplianceChecker {
                     total,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }

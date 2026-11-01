@@ -4,12 +4,16 @@
 //! - `StandardRef::new` auto-populates `help_uri` from `StandardKind`
 //!   (canonical EUR-Lex / BSI / NIST / OASIS URLs).
 //! - SARIF rule definitions include `helpUri` for CRA-, BSI-, NTIA-,
-//!   SSDF-, EO-, FDA-, PQC-, CSAF-, CNSA-prefixed rules.
+//!   SSDF-, EO-, FDA-, PQC-, CSAF-, CNSA2-prefixed rules (every registered rule, in fact).
 //! - SARIF result `properties.standardHelpUris` parallels `standardIds`
 //!   when violations carry `StandardRef::help_uri`.
 
+#[path = "common/clock.rs"]
+mod clock;
+
+use clock::checker;
 use sbom_tools::model::{Component, NormalizedSbom};
-use sbom_tools::quality::{ComplianceChecker, ComplianceLevel, StandardKind, StandardRef};
+use sbom_tools::quality::{ComplianceLevel, StandardKind, StandardRef};
 use sbom_tools::reports::generate_compliance_sarif;
 
 #[test]
@@ -78,7 +82,7 @@ fn sarif_output_includes_help_uri_for_cra_rules() {
     // Empty SBOM under CraPhase2 generates many violations and exercises
     // the entire SARIF rule table.
     let sbom = NormalizedSbom::default();
-    let result = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
+    let result = checker(ComplianceLevel::CraPhase2).check(&sbom);
     let sarif = generate_compliance_sarif(&result).expect("SARIF generation");
     let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
 
@@ -104,7 +108,7 @@ fn sarif_output_results_include_standard_help_uris() {
     let mut sbom = NormalizedSbom::default();
     let c = Component::new("foo".to_string(), "foo".to_string());
     sbom.add_component(c);
-    let result = ComplianceChecker::new(ComplianceLevel::CraPhase2).check(&sbom);
+    let result = checker(ComplianceLevel::CraPhase2).check(&sbom);
     let sarif = generate_compliance_sarif(&result).expect("SARIF generation");
     let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
 
@@ -123,7 +127,7 @@ fn sarif_output_results_include_standard_help_uris() {
 #[test]
 fn sarif_output_includes_help_uri_for_bsi_rules() {
     let sbom = NormalizedSbom::default();
-    let result = ComplianceChecker::new(ComplianceLevel::BsiTr03183_2).check(&sbom);
+    let result = checker(ComplianceLevel::BsiTr03183_2).check(&sbom);
     let sarif = generate_compliance_sarif(&result).expect("SARIF generation");
     let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
 
@@ -142,4 +146,36 @@ fn sarif_output_includes_help_uri_for_bsi_rules() {
         bsi_rule_with_uri,
         "BSI rules must carry a bsi.bund.de helpUri"
     );
+}
+
+/// Every rule a SARIF catalogue declares links to its standard. The CNSA 2.0
+/// family carried no helpUri at all: the prefix table tested `SBOM-CNSA-`
+/// while every rule ID is `SBOM-CNSA2-…`.
+#[test]
+fn every_declared_sarif_rule_has_a_help_uri() {
+    let mut missing = std::collections::BTreeSet::new();
+    for level in ComplianceLevel::all() {
+        let result = checker(*level).check(&NormalizedSbom::default());
+        let sarif = generate_compliance_sarif(&result).expect("SARIF generation");
+        let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
+        for run in json["runs"].as_array().into_iter().flatten() {
+            assert_eq!(
+                run["tool"]["driver"]["informationUri"], "https://github.com/sbom-tool/sbom-tools",
+                "informationUri must point at the current repository"
+            );
+            for rule in run["tool"]["driver"]["rules"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let has_uri = rule["helpUri"]
+                    .as_str()
+                    .is_some_and(|u| u.starts_with("https://"));
+                if !has_uri {
+                    missing.insert(rule["id"].as_str().unwrap_or("?").to_string());
+                }
+            }
+        }
+    }
+    assert!(missing.is_empty(), "rules without a helpUri: {missing:?}");
 }

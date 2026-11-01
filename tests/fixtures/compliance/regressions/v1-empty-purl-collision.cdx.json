@@ -1,0 +1,69 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-01T00:00:00Z",
+    "authors": [
+      {
+        "name": "Example Corp",
+        "email": "sbom@example.com"
+      }
+    ],
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "example-generator",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "app",
+      "name": "app",
+      "version": "1.0.0",
+      "purl": "pkg:generic/app@1.0.0",
+      "supplier": {
+        "name": "Example Corp"
+      }
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "comp-beta",
+      "name": "beta",
+      "purl": ""
+    },
+    {
+      "type": "library",
+      "bom-ref": "comp-alpha",
+      "name": "alpha",
+      "version": "1.0.0",
+      "purl": "",
+      "supplier": {
+        "name": "Alpha Inc"
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "app",
+      "dependsOn": [
+        "comp-beta",
+        "comp-alpha"
+      ]
+    },
+    {
+      "ref": "comp-beta",
+      "dependsOn": []
+    },
+    {
+      "ref": "comp-alpha",
+      "dependsOn": []
+    }
+  ]
+}

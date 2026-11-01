@@ -3,10 +3,12 @@
 //! (SARIF 2.1.0 requirement; GitHub code scanning drops rule metadata for
 //! undeclared ids and rejects duplicate descriptors).
 
+#[path = "common/clock.rs"]
+mod clock;
+
+use clock::checker;
 use sbom_tools::model::{Component, DocumentMetadata, NormalizedSbom};
-use sbom_tools::quality::{
-    CNSA2_SARIF_RULE_IDS, ComplianceChecker, ComplianceLevel, PQC_SARIF_RULE_IDS,
-};
+use sbom_tools::quality::{CNSA2_SARIF_RULE_IDS, ComplianceLevel, PQC_SARIF_RULE_IDS};
 use sbom_tools::reports::{generate_compliance_sarif, generate_multi_compliance_sarif};
 use std::collections::HashSet;
 
@@ -62,7 +64,7 @@ fn single_standard_sarif_declares_every_emitted_rule() {
         ComplianceLevel::BsiTr03183_2,
         ComplianceLevel::EuccSubstantial,
     ] {
-        let result = ComplianceChecker::new(level).check(&sbom);
+        let result = checker(level).check(&sbom);
         let sarif = generate_compliance_sarif(&result).expect("sarif generation");
         assert_catalogue_complete(&sarif, level.name());
     }
@@ -74,7 +76,7 @@ fn single_standard_sarif_declares_every_emitted_rule() {
 #[test]
 fn eucc_sarif_declares_per_check_rule_ids() {
     let sbom = NormalizedSbom::default();
-    let result = ComplianceChecker::new(ComplianceLevel::EuccSubstantial).check(&sbom);
+    let result = checker(ComplianceLevel::EuccSubstantial).check(&sbom);
     let sarif = generate_compliance_sarif(&result).expect("sarif generation");
     let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
     let run = &json["runs"][0];
@@ -123,7 +125,7 @@ fn multi_standard_sarif_has_unique_descriptors() {
         ComplianceLevel::NtiaMinimum,
     ]
     .into_iter()
-    .map(|l| ComplianceChecker::new(l).check(&sbom))
+    .map(|l| checker(l).check(&sbom))
     .collect();
     let sarif = generate_multi_compliance_sarif(&results).expect("sarif generation");
     assert_catalogue_complete(&sarif, "multi cra,bsi,ntia");
@@ -139,7 +141,7 @@ fn cnsa2_and_pqc_sarif_declare_only_their_own_rule_family() {
         (ComplianceLevel::Cnsa2, "SBOM-CNSA2-", CNSA2_SARIF_RULE_IDS),
         (ComplianceLevel::NistPqc, "SBOM-PQC-", PQC_SARIF_RULE_IDS),
     ] {
-        let result = ComplianceChecker::new(level).check(&sbom);
+        let result = checker(level).check(&sbom);
         let sarif = generate_compliance_sarif(&result).expect("sarif generation");
         assert_catalogue_complete(&sarif, level.name());
         let json: serde_json::Value = serde_json::from_str(&sarif).expect("valid JSON");
@@ -175,7 +177,7 @@ fn multi_standard_sarif_carries_per_standard_run_summaries() {
     let sbom = violating_sbom();
     let results: Vec<_> = [ComplianceLevel::EuAiAct, ComplianceLevel::NtiaMinimum]
         .into_iter()
-        .map(|l| ComplianceChecker::new(l).check(&sbom))
+        .map(|l| checker(l).check(&sbom))
         .collect();
     assert!(
         !results[0].is_applicable() && results[1].is_applicable(),
@@ -236,6 +238,82 @@ fn multi_standard_sarif_carries_per_standard_run_summaries() {
                 "[{}] N/A entry must carry its human-readable reason",
                 result.level.name()
             );
+        }
+    }
+}
+
+/// Every declared rule carries what GitHub code scanning shows for it: a
+/// short and a full description within its 1,024-character limit, and help
+/// as plain text and Markdown. Each check is its own rule, so no two rules
+/// share a name.
+#[test]
+fn every_declared_rule_carries_descriptions_and_help() {
+    use sbom_tools::quality::{QualityScorer, ScoringProfile};
+    use sbom_tools::reports::{
+        ReportConfig, ReportGenerator, SarifReporter, generate_quality_sarif,
+    };
+    let sbom = violating_sbom();
+    let mut documents: Vec<(String, String)> = ComplianceLevel::all()
+        .iter()
+        .map(|level| {
+            let result = checker(*level).check(&sbom);
+            (
+                level.name().to_string(),
+                generate_compliance_sarif(&result).expect("sarif generation"),
+            )
+        })
+        .collect();
+    let report = QualityScorer::new(ScoringProfile::Standard).score(&sbom);
+    documents.push((
+        "quality".to_string(),
+        generate_quality_sarif(&report, "test.cdx.json", "standard").expect("sarif"),
+    ));
+    let config = ReportConfig::all();
+    let reporter = SarifReporter::new();
+    documents.push((
+        "view".to_string(),
+        reporter
+            .generate_view_report(&sbom, &config)
+            .expect("sarif"),
+    ));
+    let empty = NormalizedSbom::default();
+    let diff = sbom_tools::DiffEngine::new()
+        .diff(&sbom, &empty)
+        .expect("diff");
+    documents.push((
+        "diff".to_string(),
+        reporter
+            .generate_diff_report(&diff, &sbom, &empty, &config)
+            .expect("sarif"),
+    ));
+    for (label, sarif) in &documents {
+        let json: serde_json::Value = serde_json::from_str(sarif).expect("valid JSON");
+        let rules = json["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .expect("rules array");
+        let mut names = HashSet::new();
+        for rule in rules {
+            let id = rule["id"].as_str().expect("rule id");
+            for pointer in [
+                "/shortDescription/text",
+                "/fullDescription/text",
+                "/help/text",
+                "/help/markdown",
+            ] {
+                let text = rule
+                    .pointer(pointer)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert!(!text.trim().is_empty(), "[{label}] {id} lacks {pointer}");
+                if pointer.ends_with("Description/text") {
+                    assert!(
+                        text.chars().count() <= 1024,
+                        "[{label}] {id}: {pointer} exceeds 1,024 characters"
+                    );
+                }
+            }
+            let name = rule["name"].as_str().expect("rule name");
+            assert!(names.insert(name), "[{label}] two rules are named {name}");
         }
     }
 }

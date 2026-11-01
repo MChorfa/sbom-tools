@@ -76,9 +76,15 @@ pub struct CraSidecarMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incident_report_contact: Option<String>,
 
-    /// Manufacturer-side identifier for the ENISA single reporting platform
-    /// (Art. 14(7)). Until ENISA publishes the technical interface this is a
-    /// placeholder string — typically a manufacturer registration ID.
+    /// How the manufacturer reaches the ENISA Single Reporting Platform
+    /// (Art. 14(7); live since 2026-09-11 at
+    /// <https://portal.cra-srp.enisa.europa.eu/>). Naming the CSIRT
+    /// designated as coordinator is enough: the one Art. 14(7) assigns by
+    /// the manufacturer's main establishment and every notification selects
+    /// on the platform. No registration on the platform is needed before a
+    /// notification is due, and ENISA advises registering only then; a
+    /// registration already made may be recorded instead. Free text; the
+    /// platform publishes no machine-readable identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enisa_reporting_platform_id: Option<String>,
 
@@ -207,7 +213,11 @@ pub struct ControlAssertion {
     pub note: Option<String>,
 }
 
-/// CRA product class per Regulation (EU) 2024/2847 Annex III/IV.
+/// CRA product class per Regulation (EU) 2024/2847 Annex III/IV. Commission
+/// Implementing Regulation (EU) 2025/2392 (Art. 7(4)) gives the technical
+/// description of each class's product categories: its Annex I for the
+/// Annex III classes I and II, its Annex II for the Annex IV critical
+/// products.
 ///
 /// The class drives the conformity-assessment route and the severity
 /// calibration of compliance checks (per CRA-P3.2 calibration table):
@@ -219,21 +229,26 @@ pub enum CraProductClass {
     /// Default — neither Annex III nor Annex IV. Module A self-assessment.
     #[serde(rename = "default")]
     Default,
-    /// Annex III items 1–11 (Important Class I). Module A or B+C.
+    /// Annex III class I (19 categories, e.g. identity management systems,
+    /// browsers, password managers, VPNs, operating systems, routers).
+    /// Module A or B+C.
     #[serde(
         rename = "important-class-1",
         alias = "important1",
         alias = "ImportantClass1"
     )]
     ImportantClass1,
-    /// Annex III items 12–17 (Important Class II). Module B+C, H, or EUCC.
+    /// Annex III class II (4 categories: hypervisors and container runtimes,
+    /// firewalls and intrusion detection/prevention, tamper-resistant
+    /// microprocessors and microcontrollers). Module B+C, H, or EUCC.
     #[serde(
         rename = "important-class-2",
         alias = "important2",
         alias = "ImportantClass2"
     )]
     ImportantClass2,
-    /// Annex IV (Critical). EUCC mandatory.
+    /// Annex IV (critical: hardware devices with security boxes, smart
+    /// meter gateways, smartcards and secure elements). EUCC mandatory.
     #[serde(rename = "critical")]
     Critical,
 }
@@ -255,8 +270,8 @@ impl CraProductClass {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Default => "Default (no Annex)",
-            Self::ImportantClass1 => "Important Class I (Annex III items 1–11)",
-            Self::ImportantClass2 => "Important Class II (Annex III items 12–17)",
+            Self::ImportantClass1 => "Important Class I (Annex III, class I)",
+            Self::ImportantClass2 => "Important Class II (Annex III, class II)",
             Self::Critical => "Critical (Annex IV)",
         }
     }
@@ -488,9 +503,12 @@ impl CraSidecarMetadata {
 
     /// Whether the sidecar carries live EUCC evidence: a non-empty
     /// Protection-Profile / Target-of-Evaluation / ITSEF identifier, or a
-    /// certificate validity date that has not expired. Empty strings and
-    /// expired certificates must not satisfy the Critical-class Annex IV
-    /// gate (mirrors the dedicated EUCC profile's semantics).
+    /// certificate validity date that has not expired — and no validity
+    /// date that has. Empty strings and expired certificates must not
+    /// satisfy the Critical-class Annex IV gate (mirrors the dedicated EUCC
+    /// profile, which reports an expired certificate as an Error): the
+    /// identifiers of an expired certificate describe one that no longer
+    /// holds.
     #[must_use]
     pub fn has_live_eucc_evidence(&self) -> bool {
         self.has_live_eucc_evidence_at(Utc::now())
@@ -500,11 +518,14 @@ impl CraSidecarMetadata {
     /// (reproducible compliance runs; see `ComplianceChecker::with_as_of`).
     #[must_use]
     pub fn has_live_eucc_evidence_at(&self, now: DateTime<Utc>) -> bool {
+        if self.eucc_valid_until.is_some_and(|d| d <= now) {
+            return false;
+        }
         let live = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
         live(&self.eucc_protection_profile_id)
             || live(&self.eucc_target_of_evaluation)
             || live(&self.eucc_itsef_identifier)
-            || self.eucc_valid_until.is_some_and(|d| d > now)
+            || self.eucc_valid_until.is_some()
     }
 
     /// Check if any CRA-relevant fields are populated
@@ -849,5 +870,46 @@ mod tests {
             Some(ConformityRoute::Eucc)
         );
         assert_eq!(ConformityRoute::parse_cli("module-z"), None);
+    }
+
+    /// Live EUCC evidence: a non-blank identifier or an unexpired validity
+    /// date, and never an expired one — an expired certificate voids the
+    /// identifiers that describe it.
+    #[test]
+    fn live_eucc_evidence_requires_an_unexpired_certificate() {
+        let now = DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+            .expect("valid instant")
+            .with_timezone(&Utc);
+        let day = chrono::Duration::days(1);
+        let sidecar = |pp: Option<&str>, valid_until: Option<DateTime<Utc>>| CraSidecarMetadata {
+            eucc_protection_profile_id: pp.map(str::to_string),
+            eucc_valid_until: valid_until,
+            ..CraSidecarMetadata::default()
+        };
+        let cases = [
+            (sidecar(None, None), false, "nothing declared"),
+            (sidecar(Some(" "), None), false, "blank identifier"),
+            (sidecar(Some("PP-01"), None), true, "identifier, no date"),
+            (sidecar(None, Some(now + day)), true, "unexpired date alone"),
+            (
+                sidecar(Some("PP-01"), Some(now + day)),
+                true,
+                "identifier, unexpired",
+            ),
+            (sidecar(None, Some(now - day)), false, "expired date alone"),
+            (
+                sidecar(Some("PP-01"), Some(now - day)),
+                false,
+                "identifier, expired",
+            ),
+            (
+                sidecar(Some("PP-01"), Some(now)),
+                false,
+                "identifier, expiring now",
+            ),
+        ];
+        for (sidecar, live, label) in cases {
+            assert_eq!(sidecar.has_live_eucc_evidence_at(now), live, "{label}");
+        }
     }
 }

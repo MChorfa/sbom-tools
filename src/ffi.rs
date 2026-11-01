@@ -3,12 +3,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::diff::DiffEngine;
-use crate::model::{
-    CanonicalId, Component, DependencyEdge, DocumentMetadata, FormatExtensions, NormalizedSbom,
-};
+use crate::model::NormalizedSbom;
 use crate::parsers::{ParseError, detect_format, parse_sbom, parse_sbom_str};
 use crate::quality::{QualityScorer, ScoringProfile};
-use indexmap::IndexMap;
+use crate::serialization::NormalizedSbomPayload;
 use serde::Serialize;
 use std::ffi::{CStr, CString, c_char};
 use std::path::Path;
@@ -97,62 +95,6 @@ struct FfiError {
     message: String,
 }
 
-#[derive(Debug, Serialize, serde::Deserialize)]
-struct AbiComponentEntry {
-    canonical_id: CanonicalId,
-    component: Component,
-}
-
-#[derive(Debug, Serialize, serde::Deserialize)]
-struct AbiNormalizedSbom {
-    document: DocumentMetadata,
-    components: Vec<AbiComponentEntry>,
-    edges: Vec<DependencyEdge>,
-    extensions: FormatExtensions,
-    content_hash: u64,
-    primary_component_id: Option<CanonicalId>,
-    collision_count: usize,
-}
-
-impl AbiNormalizedSbom {
-    fn from_sbom(sbom: NormalizedSbom) -> Self {
-        Self {
-            document: sbom.document,
-            components: sbom
-                .components
-                .into_iter()
-                .map(|(canonical_id, component)| AbiComponentEntry {
-                    canonical_id,
-                    component,
-                })
-                .collect(),
-            edges: sbom.edges,
-            extensions: sbom.extensions,
-            content_hash: sbom.content_hash,
-            primary_component_id: sbom.primary_component_id,
-            collision_count: sbom.collision_count,
-        }
-    }
-
-    fn into_sbom(self) -> NormalizedSbom {
-        let components = self
-            .components
-            .into_iter()
-            .map(|entry| (entry.canonical_id, entry.component))
-            .collect::<IndexMap<_, _>>();
-
-        NormalizedSbom {
-            document: self.document,
-            components,
-            edges: self.edges,
-            extensions: self.extensions,
-            content_hash: self.content_hash,
-            primary_component_id: self.primary_component_id,
-            collision_count: self.collision_count,
-        }
-    }
-}
-
 #[derive(Serialize)]
 struct AbiVersionPayload<'a> {
     abi_version: &'a str,
@@ -187,8 +129,8 @@ fn read_input(value: *const c_char, field: &str) -> Result<String, FfiError> {
 }
 
 fn parse_normalized_sbom(json: &str, field: &str) -> Result<NormalizedSbom, FfiError> {
-    serde_json::from_str::<AbiNormalizedSbom>(json)
-        .map(AbiNormalizedSbom::into_sbom)
+    serde_json::from_str::<NormalizedSbomPayload>(json)
+        .map(NormalizedSbomPayload::into_sbom)
         .map_err(|err| FfiError {
             code: SbomToolsErrorCode::Validation,
             message: format!("invalid normalized SBOM JSON in {field}: {err}"),
@@ -307,7 +249,7 @@ pub extern "C" fn sbom_tools_parse_sbom_path_json(path: *const c_char) -> SbomTo
         run_json(|| {
             let path = read_input(path, "path")?;
             parse_sbom(Path::new(&path))
-                .map(AbiNormalizedSbom::from_sbom)
+                .map(NormalizedSbomPayload::from_sbom)
                 .map_err(map_parse_error)
         })
     })
@@ -320,7 +262,7 @@ pub extern "C" fn sbom_tools_parse_sbom_str_json(content: *const c_char) -> Sbom
         run_json(|| {
             let content = read_input(content, "content")?;
             parse_sbom_str(&content)
-                .map(AbiNormalizedSbom::from_sbom)
+                .map(NormalizedSbomPayload::from_sbom)
                 .map_err(map_parse_error)
         })
     })

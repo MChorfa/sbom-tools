@@ -1,0 +1,211 @@
+---
+source: tests/compliance_snapshots.rs
+---
+fixture: showcase/supply-chain-incident.cdx.json
+as_of: 2026-10-12T00:00:00Z
+
+[Minimum] compliant · E0 W1 I0
+  W SBOM-QUALITY-CREATOR  -
+[Standard] NON-COMPLIANT · E1 W2 I0
+  E SBOM-QUALITY-CREATOR  -
+  W SBOM-QUALITY-LICENSE  pkg:npm/acme-ai-studio@3.3.0
+  W SBOM-QUALITY-SERIAL  -
+[NtiaMinimum] NON-COMPLIANT · E8 W0 I0
+  E SBOM-NTIA-AUTHOR  -
+  E SBOM-NTIA-SUPPLIER  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-NTIA-SUPPLIER  pkg:npm/axios-builder@1.2.1
+  E SBOM-NTIA-SUPPLIER  pkg:npm/axios@1.7.9
+  E SBOM-NTIA-SUPPLIER  pkg:npm/lodash@4.17.15
+  E SBOM-NTIA-SUPPLIER  pkg:npm/zod@3.23.8
+  E SBOM-NTIA-SUPPLIER  pkg:pypi/vllm-plugins@99-99-99
+  E SBOM-NTIA-SUPPLIER  pkg:pypi/vllm@0-8-5
+[CraPhase1] NON-COMPLIANT · E1 W16 I11
+  E SBOM-CRA-CREATOR  -
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/acme-ai-studio@3.3.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/axios-builder@1.2.1
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/axios@1.7.9
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/lodash@4.17.15
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/zod@3.23.8
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:pypi/vllm-plugins@99-99-99
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:pypi/vllm@0-8-5
+  I SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE  - (2/7)
+  I SBOM-CRA-ART-13-5  - (1/7)
+  I SBOM-CRA-ART-13-8  -
+  I SBOM-CRA-DOC-INTEGRITY  -
+  W SBOM-CRA-ANNEX-I-SUPPLY-CHAIN  - (5/5)
+  W SBOM-CRA-ART-13-16  -
+  W SBOM-CRA-ART-13-17-CONTACT  -
+  W SBOM-CRA-ART-14-EARLY-WARNING  -
+  W SBOM-CRA-ART-14-ENISA  -
+  W SBOM-CRA-ART-14-NOTIFICATION  -
+  W SBOM-CRA-ART-14-PSIRT  -
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/acme-ai-studio@3.3.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/axios-builder@1.2.1
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/axios@1.7.9
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/lodash@4.17.15
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/zod@3.23.8
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:pypi/vllm-plugins@99-99-99
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:pypi/vllm@0-8-5
+  W SBOM-CRA-SBOM-FRESHNESS  -
+  W SBOM-CRA-SERIAL  -
+[CraPhase2] NON-COMPLIANT · E2 W17 I13
+  E SBOM-CRA-ANNEX-I-SUPPLY-CHAIN  - (5/5)
+  E SBOM-CRA-CREATOR  -
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/acme-ai-studio@3.3.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/axios-builder@1.2.1
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/axios@1.7.9
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/lodash@4.17.15
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/zod@3.23.8
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:pypi/vllm-plugins@99-99-99
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:pypi/vllm@0-8-5
+  I SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE  - (2/7)
+  I SBOM-CRA-ANNEX-V  -
+  I SBOM-CRA-ART-13-5  - (1/7)
+  I SBOM-CRA-ART-13-8  -
+  I SBOM-CRA-DOC-INTEGRITY  -
+  I SBOM-CRA-LIFECYCLE  -
+  W SBOM-CRA-ART-13-16  -
+  W SBOM-CRA-ART-13-17-CONTACT  -
+  W SBOM-CRA-ART-13-2  -
+  W SBOM-CRA-ART-14-EARLY-WARNING  -
+  W SBOM-CRA-ART-14-ENISA  -
+  W SBOM-CRA-ART-14-NOTIFICATION  -
+  W SBOM-CRA-ART-14-PSIRT  -
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/acme-ai-studio@3.3.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/axios-builder@1.2.1
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/axios@1.7.9
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/lodash@4.17.15
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:npm/zod@3.23.8
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:pypi/vllm-plugins@99-99-99
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:pypi/vllm@0-8-5
+  W SBOM-CRA-CVD-POLICY  -
+  W SBOM-CRA-SBOM-FRESHNESS  -
+  W SBOM-CRA-SERIAL  -
+[FdaMedicalDevice] NON-COMPLIANT · E15 W5 I0
+  E SBOM-FDA-CREATOR  -
+  E SBOM-FDA-HASH  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-FDA-HASH  pkg:npm/axios-builder@1.2.1
+  E SBOM-FDA-HASH  pkg:npm/axios@1.7.9
+  E SBOM-FDA-HASH  pkg:npm/lodash@4.17.15
+  E SBOM-FDA-HASH  pkg:npm/zod@3.23.8
+  E SBOM-FDA-HASH  pkg:pypi/vllm-plugins@99-99-99
+  E SBOM-FDA-HASH  pkg:pypi/vllm@0-8-5
+  E SBOM-FDA-SUPPLIER  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-FDA-SUPPLIER  pkg:npm/axios-builder@1.2.1
+  E SBOM-FDA-SUPPLIER  pkg:npm/axios@1.7.9
+  E SBOM-FDA-SUPPLIER  pkg:npm/lodash@4.17.15
+  E SBOM-FDA-SUPPLIER  pkg:npm/zod@3.23.8
+  E SBOM-FDA-SUPPLIER  pkg:pypi/vllm-plugins@99-99-99
+  E SBOM-FDA-SUPPLIER  pkg:pypi/vllm@0-8-5
+  W SBOM-FDA-CONTACT  -
+  W SBOM-FDA-NAMESPACE  -
+  W SBOM-FDA-SECURITY  -
+  W SBOM-FDA-SUPPLIER  -
+  W SBOM-FDA-SUPPORT  -
+[NistSsdf] NON-COMPLIANT · E2 W3 I1
+  E SBOM-SSDF-PS1  -
+  E SBOM-SSDF-PS2  - (7/7)
+  I SBOM-SSDF-PO3  -
+  W SBOM-SSDF-PO1  -
+  W SBOM-SSDF-PS1-TOOL  -
+  W SBOM-SSDF-PS3  - (7/7)
+[Eo14028] NON-COMPLIANT · E2 W3 I0
+  E SBOM-EO14028-CREATOR  -
+  E SBOM-EO14028-SUPPLIER  - (7/7)
+  W SBOM-EO14028-AUTOGEN  -
+  W SBOM-EO14028-DISCLOSURE  -
+  W SBOM-EO14028-INTEGRITY  - (7/7)
+[Cnsa2] NON-COMPLIANT · E1 W0 I0
+  E SBOM-CNSA2-000  -
+[NistPqc] NON-COMPLIANT · E1 W0 I0
+  E SBOM-PQC-000  -
+[BsiTr03183_2] NON-COMPLIANT · E3 W4 I0
+  E SBOM-BSI-TR-03183-2-4  -
+  E SBOM-BSI-TR-03183-2-5-1  -
+  E SBOM-BSI-TR-03183-2-LICENSE  - (1/7)
+  W SBOM-BSI-TR-03183-2-3-1  - (2/7)
+  W SBOM-BSI-TR-03183-2-5-4-MISSING  - (7/7)
+  W SBOM-BSI-TR-03183-2-5-5-COMPLETENESS  -
+  W SBOM-BSI-TR-03183-2-CREATOR  - (7/7)
+[CraOssSteward] NON-COMPLIANT · E1 W8 I7
+  E SBOM-CRA-ART-24  -
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/acme-ai-studio@3.3.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/axios-builder@1.2.1
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/axios@1.7.9
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/lodash@4.17.15
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:npm/zod@3.23.8
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:pypi/vllm-plugins@99-99-99
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:pypi/vllm@0-8-5
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:npm/acme-ai-studio@3.3.0
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:npm/axios-builder@1.2.1
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:npm/axios@1.7.9
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:npm/lodash@4.17.15
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:npm/zod@3.23.8
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:pypi/vllm-plugins@99-99-99
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:pypi/vllm@0-8-5
+  W SBOM-CRA-CVD-POLICY  -
+[EuccSubstantial] NON-COMPLIANT · E4 W1 I0
+  E SBOM-EUCC-ITSEF  -
+  E SBOM-EUCC-PP  -
+  E SBOM-EUCC-TOE  -
+  E SBOM-EUCC-VALIDITY  -
+  W SBOM-EUCC-CERTREF  -
+[EuAiAct] not applicable · E0 W0 I0
+[BsiSbomForAi] not applicable · E0 W0 I0
+[Cisa2026] NON-COMPLIANT · E17 W3 I0
+  E SBOM-CISA2026-AUTHOR  -
+  E SBOM-CISA2026-HASH  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-CISA2026-HASH  pkg:npm/axios-builder@1.2.1
+  E SBOM-CISA2026-HASH  pkg:npm/axios@1.7.9
+  E SBOM-CISA2026-HASH  pkg:npm/lodash@4.17.15
+  E SBOM-CISA2026-HASH  pkg:npm/zod@3.23.8
+  E SBOM-CISA2026-HASH  pkg:pypi/vllm-plugins@99-99-99
+  E SBOM-CISA2026-HASH  pkg:pypi/vllm@0-8-5
+  E SBOM-CISA2026-LICENSE  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-CISA2026-PRODUCER  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-CISA2026-PRODUCER  pkg:npm/axios-builder@1.2.1
+  E SBOM-CISA2026-PRODUCER  pkg:npm/axios@1.7.9
+  E SBOM-CISA2026-PRODUCER  pkg:npm/lodash@4.17.15
+  E SBOM-CISA2026-PRODUCER  pkg:npm/zod@3.23.8
+  E SBOM-CISA2026-PRODUCER  pkg:pypi/vllm-plugins@99-99-99
+  E SBOM-CISA2026-PRODUCER  pkg:pypi/vllm@0-8-5
+  E SBOM-CISA2026-TOOL  -
+  W SBOM-CISA2026-COVERAGE  -
+  W SBOM-CISA2026-GENERATION-CONTEXT  -
+  W SBOM-CISA2026-SIGNATURE  -
+[PciDss632] compliant · E0 W0 I1
+  I SBOM-PCI-6-3-2-COMPLETENESS  -
+[Fsct] NON-COMPLIANT · E5 W6 I4
+  E SBOM-FSCT-AUTHOR  -
+  E SBOM-FSCT-COPYRIGHT-PRIMARY  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-FSCT-HASH  - (7/7)
+  E SBOM-FSCT-LICENSE-PRIMARY  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-FSCT-SUPPLIER  - (7/7)
+  I SBOM-FSCT-COPYRIGHT-ALL  - (7/7)
+  I SBOM-FSCT-LICENSE-ALL  - (1/7)
+  I SBOM-FSCT-SBOM-TYPE  -
+  I SBOM-FSCT-SIGNATURE  -
+  W SBOM-FSCT-AUTHOR-TOOL  -
+  W SBOM-FSCT-COMPLETENESS  -
+  W SBOM-FSCT-COPYRIGHT-COVERAGE  - (0/7)
+  W SBOM-FSCT-HASH-PRIMARY-SHA2  pkg:npm/acme-ai-studio@3.3.0
+  W SBOM-FSCT-IDENTIFIER-MULTI  - (7/7)
+  W SBOM-FSCT-UPSTREAM-SBOM  -
+[Comprehensive] NON-COMPLIANT · E8 W9 I0
+  E SBOM-NTIA-SUPPLIER  pkg:npm/acme-ai-studio@3.3.0
+  E SBOM-NTIA-SUPPLIER  pkg:npm/axios-builder@1.2.1
+  E SBOM-NTIA-SUPPLIER  pkg:npm/axios@1.7.9
+  E SBOM-NTIA-SUPPLIER  pkg:npm/lodash@4.17.15
+  E SBOM-NTIA-SUPPLIER  pkg:npm/zod@3.23.8
+  E SBOM-NTIA-SUPPLIER  pkg:pypi/vllm-plugins@99-99-99
+  E SBOM-NTIA-SUPPLIER  pkg:pypi/vllm@0-8-5
+  E SBOM-QUALITY-CREATOR  -
+  W SBOM-QUALITY-HASH  pkg:npm/acme-ai-studio@3.3.0
+  W SBOM-QUALITY-HASH  pkg:npm/axios-builder@1.2.1
+  W SBOM-QUALITY-HASH  pkg:npm/axios@1.7.9
+  W SBOM-QUALITY-HASH  pkg:npm/lodash@4.17.15
+  W SBOM-QUALITY-HASH  pkg:npm/zod@3.23.8
+  W SBOM-QUALITY-HASH  pkg:pypi/vllm-plugins@99-99-99
+  W SBOM-QUALITY-HASH  pkg:pypi/vllm@0-8-5
+  W SBOM-QUALITY-LICENSE  pkg:npm/acme-ai-studio@3.3.0
+  W SBOM-QUALITY-SERIAL  -

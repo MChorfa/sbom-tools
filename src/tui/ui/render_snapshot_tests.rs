@@ -41,10 +41,59 @@ fn key(code: KeyCode) -> KeyEvent {
 /// before `render` builds a `RenderContext` from the app.
 fn render_tab(active_tab: TabKind, width: u16, height: u16) -> String {
     let mut app = demo_app(active_tab);
+    pin_snapshot_compliance(&mut app);
     render_to_text(width, height, |frame| {
         app.prepare_render();
         render(frame, &mut app);
     })
+}
+
+/// Keep render fixtures independent of the Article 14 calendar boundary.
+/// Deadline transitions are exercised by the compliance module's clock tests.
+fn pin_snapshot_compliance(app: &mut App) {
+    use crate::quality::{ComplianceChecker, ComplianceLevel, QualityScorer};
+    let as_of = chrono::DateTime::parse_from_rfc3339("2026-04-26T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let results = |sbom: &crate::model::NormalizedSbom| {
+        ComplianceLevel::all()
+            .iter()
+            .map(|level| ComplianceChecker::new(*level).with_as_of(as_of).check(sbom))
+            .collect()
+    };
+    for (sbom, quality, cra, compliance) in [
+        (
+            &app.data.old_sbom,
+            &mut app.data.old_quality,
+            &mut app.data.old_cra_compliance,
+            &mut app.data.old_compliance_results,
+        ),
+        (
+            &app.data.new_sbom,
+            &mut app.data.new_quality,
+            &mut app.data.new_cra_compliance,
+            &mut app.data.new_compliance_results,
+        ),
+    ] {
+        let sbom = sbom.as_ref().unwrap();
+        let profile = crate::tui::scoring_profile_for(crate::model::BomProfile::detect(sbom));
+        *quality = Some(QualityScorer::new(profile).with_as_of(as_of).score(sbom));
+        *cra = Some(
+            ComplianceChecker::new(ComplianceLevel::CraPhase2)
+                .with_as_of(as_of)
+                .check(sbom),
+        );
+        *compliance = Some(results(sbom));
+    }
+    // The constructor derived this from wall-clock reports; keep the delta
+    // coherent with the pinned reports consumed by the renderer.
+    if let (Some(old), Some(new), Some(diff)) = (
+        app.data.old_quality.as_ref(),
+        app.data.new_quality.as_ref(),
+        app.data.diff_result.as_mut(),
+    ) {
+        diff.quality_delta = Some(crate::diff::QualityDelta::from_reports(old, new));
+    }
 }
 
 /// All diff tabs that the tabbed layout renders (multi-comparison modes use
@@ -1185,7 +1234,10 @@ fn policy_preset_uses_shared_score_formula() {
     app.compliance_state.policy_preset = PolicyPreset::Cra;
     app.run_compliance_check();
 
+    // `run_compliance_check` evaluates at the wall clock (the TUI has no
+    // clock seam), so the expectation must too.
     let expected = ComplianceChecker::new(ComplianceLevel::CraPhase2)
+        .with_as_of(chrono::Utc::now())
         .check(app.data.new_sbom.as_ref().expect("demo new SBOM"))
         .score()
         .expect("CRA applies to the demo SBOM");

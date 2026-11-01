@@ -449,6 +449,54 @@ impl fmt::Display for CanonicalId {
     }
 }
 
+/// Placeholder values SBOM generators write where they have no value.
+fn is_placeholder(value: &str) -> bool {
+    ["NOASSERTION", "NONE", "UNKNOWN", "N/A", "NULL"]
+        .iter()
+        .any(|p| value.eq_ignore_ascii_case(p))
+}
+
+/// Whether `value` is usable as a component's package URL.
+///
+/// A purl must carry its `pkg:` scheme, a type and a name
+/// (`pkg:type/name…`). Empty strings, placeholders such as `NOASSERTION`, and
+/// scheme-less values are rejected: kept as identifiers they satisfy
+/// unique-identifier rules they do not meet, and two components with the same
+/// empty purl collapse onto one canonical ID, silently dropping one of them.
+#[must_use]
+pub fn is_usable_purl(value: &str) -> bool {
+    let value = value.trim();
+    // `get` rather than indexing: a multi-byte character straddling byte 4
+    // must reject the value, not panic.
+    let has_scheme = value
+        .get(..4)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("pkg:"));
+    if is_placeholder(value) || !has_scheme {
+        return false;
+    }
+    // The scheme may be followed by optional slashes (`pkg://type/name`).
+    let rest = value[4..].trim_start_matches('/');
+    rest.split_once('/')
+        .is_some_and(|(purl_type, name)| !purl_type.is_empty() && !name.trim().is_empty())
+}
+
+/// Whether `value` is usable as a CPE: a CPE 2.3 formatted string
+/// (`cpe:2.3:part:vendor:product…`) or a CPE 2.2 URI (`cpe:/part:vendor…`).
+/// Empty strings, placeholders and scheme-less values are rejected, for the
+/// same reasons as [`is_usable_purl`].
+#[must_use]
+pub fn is_usable_cpe(value: &str) -> bool {
+    let value = value.trim();
+    if is_placeholder(value) {
+        return false;
+    }
+    let lower = value.to_ascii_lowercase();
+    lower
+        .strip_prefix("cpe:2.3:")
+        .or_else(|| lower.strip_prefix("cpe:/"))
+        .is_some_and(|rest| !rest.trim().is_empty())
+}
+
 /// Component identifiers from various sources
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComponentIdentifiers {
@@ -1086,5 +1134,48 @@ mod swhid_tests {
         assert_eq!(parsed.swhid.len(), 2);
         assert_eq!(parsed.swhid[0].kind, SwhidKind::Cnt);
         assert_eq!(parsed.swhid[1].kind, SwhidKind::Dir);
+    }
+
+    #[test]
+    fn usable_purl_requires_scheme_type_and_name() {
+        for ok in [
+            "pkg:npm/lodash@4.17.21",
+            "pkg:maven/org.apache/commons@1.0",
+            "PKG:npm/x",
+            "pkg://npm/x",
+            "  pkg:npm/x  ",
+        ] {
+            assert!(is_usable_purl(ok), "{ok:?} should be usable");
+        }
+        for bad in [
+            "",
+            "   ",
+            "NOASSERTION",
+            "noassertion",
+            "NONE",
+            "UNKNOWN",
+            "npm/lodash",
+            "pkg:",
+            "pkg:npm",
+            "pkg:npm/",
+            "pkg:/lodash",
+            "pk€/x",
+        ] {
+            assert!(!is_usable_purl(bad), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn usable_cpe_requires_a_cpe_scheme() {
+        for ok in [
+            "cpe:2.3:a:openssl:openssl:3.0.1:*:*:*:*:*:*:*",
+            "cpe:/a:openssl:openssl:3.0.1",
+            "CPE:2.3:a:x:y",
+        ] {
+            assert!(is_usable_cpe(ok), "{ok:?} should be usable");
+        }
+        for bad in ["", "NOASSERTION", "openssl", "cpe:2.3:", "cpe:/", "cpe:"] {
+            assert!(!is_usable_cpe(bad), "{bad:?} should be rejected");
+        }
     }
 }

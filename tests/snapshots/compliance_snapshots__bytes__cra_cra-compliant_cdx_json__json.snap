@@ -1,0 +1,197 @@
+---
+source: tests/compliance_snapshots.rs
+---
+[
+  {
+    "is_compliant": true,
+    "level": "CraPhase2",
+    "violations": [
+      {
+        "severity": "Info",
+        "category": "FormatSpecific",
+        "message": "Component 'lib-a' may be missing bom-ref",
+        "element": "lib-a",
+        "component_id": "pkg:cargo/lib-a@2.3.4",
+        "requirement": "CycloneDX: bom-ref for dependency tracking",
+        "rule_id": "SBOM-CRA-ELEMENT-ID",
+        "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
+        "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+      },
+      {
+        "severity": "Info",
+        "category": "FormatSpecific",
+        "message": "Component 'lib-b' may be missing bom-ref",
+        "element": "lib-b",
+        "component_id": "pkg:cargo/lib-b@0.9.1",
+        "requirement": "CycloneDX: bom-ref for dependency tracking",
+        "rule_id": "SBOM-CRA-ELEMENT-ID",
+        "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
+        "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+      },
+      {
+        "severity": "Warning",
+        "category": "DocumentMetadata",
+        "message": "[CRA Art. 13(7) / Annex I Part II (1)] SBOM is 269 days old; keep the documented component inventory current when components change",
+        "element": null,
+        "requirement": "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness",
+        "rule_id": "SBOM-CRA-SBOM-FRESHNESS",
+        "sarif_rule_id": "SBOM-CRA-SBOM-FRESHNESS",
+        "standard_refs": [
+          {
+            "standard": "CraArticle",
+            "id": "Art. 13(7)",
+            "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+          },
+          {
+            "standard": "CraAnnex",
+            "id": "Annex I Part II (1)",
+            "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+          }
+        ],
+        "remediation": "Regenerate the SBOM when components are added, removed, or updated. CRA Art. 13(7) requires manufacturers to systematically document relevant cybersecurity aspects, and the Annex I Part II (1) SBOM must reflect the product's current components. A creation timestamp later than the evaluation date is reported like a missing one: correct the generator's clock or time zone.",
+        "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+      },
+      {
+        "severity": "Info",
+        "category": "SecurityInfo",
+        "message": "[CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities",
+        "element": null,
+        "requirement": "CRA Annex I Part II (1): Documented vulnerability information",
+        "rule_id": "SBOM-CRA-VULN-STATEMENT",
+        "sarif_rule_id": "SBOM-CRA-VULN-STATEMENT",
+        "standard_refs": [
+          {
+            "standard": "CraAnnex",
+            "id": "Annex I Part II (1)",
+            "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+          }
+        ],
+        "remediation": "Include the product's known vulnerabilities in the SBOM, or reference the vulnerability disclosure report (VDR) or VEX that states them (Annex I Part II (1)). CycloneDX: list them in vulnerabilities[] with affects[].ref pointing at the affected components, or reference the published VDR or VEX from an externalReferences[] entry of type vulnerability-assertion or exploitability-statement.",
+        "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+      }
+    ],
+    "error_count": 0,
+    "warning_count": 1,
+    "info_count": 3,
+    "conformity_summary": {
+      "product_class": "important-class-1",
+      "route": "module-a",
+      "evidence": [
+        {
+          "label": "EU Declaration of Conformity",
+          "detail": "Annex V — manufacturer's signed declaration. Provide via Attestation/Certification external ref or sidecar ceMarkingReference.",
+          "satisfied": true
+        },
+        {
+          "label": "Internal-control technical file",
+          "detail": "Module A — manufacturer holds the technical file at their premises. No external attestation required.",
+          "satisfied": true
+        },
+        {
+          "label": "PSIRT contact (Art. 14)",
+          "detail": "Public PSIRT URL for receiving external vulnerability reports.",
+          "satisfied": true
+        }
+      ]
+    },
+    "applicability": {
+      "status": "applicable"
+    }
+  },
+  {
+    "is_compliant": true,
+    "level": "CraPhase1",
+    "violations": [
+      {
+        "severity": "Info",
+        "category": "FormatSpecific",
+        "message": "Component 'lib-a' may be missing bom-ref",
+        "element": "lib-a",
+        "component_id": "pkg:cargo/lib-a@2.3.4",
+        "requirement": "CycloneDX: bom-ref for dependency tracking",
+        "rule_id": "SBOM-CRA-ELEMENT-ID",
+        "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
+        "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+      },
+      {
+        "severity": "Info",
+        "category": "FormatSpecific",
+        "message": "Component 'lib-b' may be missing bom-ref",
+        "element": "lib-b",
+        "component_id": "pkg:cargo/lib-b@0.9.1",
+        "requirement": "CycloneDX: bom-ref for dependency tracking",
+        "rule_id": "SBOM-CRA-ELEMENT-ID",
+        "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
+        "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+      },
+      {
+        "severity": "Warning",
+        "category": "DocumentMetadata",
+        "message": "[CRA Art. 13(7) / Annex I Part II (1)] SBOM is 269 days old; keep the documented component inventory current when components change",
+        "element": null,
+        "requirement": "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness",
+        "rule_id": "SBOM-CRA-SBOM-FRESHNESS",
+        "sarif_rule_id": "SBOM-CRA-SBOM-FRESHNESS",
+        "standard_refs": [
+          {
+            "standard": "CraArticle",
+            "id": "Art. 13(7)",
+            "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+          },
+          {
+            "standard": "CraAnnex",
+            "id": "Annex I Part II (1)",
+            "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+          }
+        ],
+        "remediation": "Regenerate the SBOM when components are added, removed, or updated. CRA Art. 13(7) requires manufacturers to systematically document relevant cybersecurity aspects, and the Annex I Part II (1) SBOM must reflect the product's current components. A creation timestamp later than the evaluation date is reported like a missing one: correct the generator's clock or time zone.",
+        "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+      },
+      {
+        "severity": "Info",
+        "category": "SecurityInfo",
+        "message": "[CRA Annex I Part II (1)] No vulnerability data or vulnerability assertion found; include vulnerability information or a statement of no known vulnerabilities",
+        "element": null,
+        "requirement": "CRA Annex I Part II (1): Documented vulnerability information",
+        "rule_id": "SBOM-CRA-VULN-STATEMENT",
+        "sarif_rule_id": "SBOM-CRA-VULN-STATEMENT",
+        "standard_refs": [
+          {
+            "standard": "CraAnnex",
+            "id": "Annex I Part II (1)",
+            "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+          }
+        ],
+        "remediation": "Include the product's known vulnerabilities in the SBOM, or reference the vulnerability disclosure report (VDR) or VEX that states them (Annex I Part II (1)). CycloneDX: list them in vulnerabilities[] with affects[].ref pointing at the affected components, or reference the published VDR or VEX from an externalReferences[] entry of type vulnerability-assertion or exploitability-statement.",
+        "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+      }
+    ],
+    "error_count": 0,
+    "warning_count": 1,
+    "info_count": 3,
+    "conformity_summary": {
+      "product_class": "important-class-1",
+      "route": "module-a",
+      "evidence": [
+        {
+          "label": "EU Declaration of Conformity",
+          "detail": "Annex V — manufacturer's signed declaration. Provide via Attestation/Certification external ref or sidecar ceMarkingReference.",
+          "satisfied": true
+        },
+        {
+          "label": "Internal-control technical file",
+          "detail": "Module A — manufacturer holds the technical file at their premises. No external attestation required.",
+          "satisfied": true
+        },
+        {
+          "label": "PSIRT contact (Art. 14)",
+          "detail": "Public PSIRT URL for receiving external vulnerability reports.",
+          "satisfied": true
+        }
+      ]
+    },
+    "applicability": {
+      "status": "applicable"
+    }
+  }
+]

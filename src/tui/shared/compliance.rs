@@ -1,6 +1,7 @@
 //! Shared compliance rendering functions used by both App (diff mode) and `ViewApp` (view mode).
 
 use crate::quality::ViolationSeverity;
+use crate::tui::shared::text::wrapped_line_count;
 use crate::tui::theme::colors;
 use ratatui::{
     prelude::*,
@@ -9,6 +10,12 @@ use ratatui::{
 };
 
 /// Render a modal overlay showing violation details, centered on the given area.
+///
+/// The overlay is sized to its content: every field, reference and the
+/// wrapped remediation text is measured first, and the box grows (up to the
+/// full area height) to hold all of it plus the close hint. When even the
+/// full height is too small, trailing lines are replaced by an explicit
+/// "+N more lines" marker rather than being clipped silently (#347).
 pub fn render_violation_detail_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -19,14 +26,8 @@ pub fn render_violation_detail_overlay(
     let overlay_width = (f32::from(area.width) * 0.7)
         .max(40.0)
         .min(f32::from(area.width)) as u16;
-    let overlay_height = (f32::from(area.height) * 0.6)
-        .max(12.0)
-        .min(f32::from(area.height)) as u16;
-    let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
-    let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
-    let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
-
-    frame.render_widget(Clear, overlay_area);
+    // Inner text width: the block draws a 1-column border on each side.
+    let inner_width = overlay_width.saturating_sub(2);
 
     let (severity_text, severity_color) = match violation.severity {
         ViolationSeverity::Error => ("ERROR", scheme.error),
@@ -108,19 +109,48 @@ pub fn render_violation_detail_overlay(
     )));
 
     let guidance = violation.remediation_guidance();
-    let max_line_width = overlay_width.saturating_sub(4) as usize;
-    for wrapped_line in textwrap_simple(guidance, max_line_width) {
+    for wrapped_line in textwrap_simple(&guidance, inner_width as usize) {
         lines.push(Line::from(Span::styled(
             wrapped_line,
             Style::default().fg(scheme.text),
         )));
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
+    // Size the box to the wrapped content (+2 for the border). The close hint
+    // is appended last so it is always the final visible row.
+    let close_hint = Line::from(Span::styled(
         " Press Enter or Esc to close ",
         Style::default().fg(scheme.text_muted),
-    )));
+    ));
+    let max_inner_height = area.height.saturating_sub(2) as usize;
+    // Content rows + blank spacer + close hint.
+    let mut rows = wrapped_line_count(&lines, inner_width) + 2;
+    if rows > max_inner_height && max_inner_height >= 3 {
+        // Never clip silently: drop trailing content until the marker and the
+        // close hint fit, then say how much is hidden.
+        let total = lines.len();
+        let budget = max_inner_height - 2;
+        while !lines.is_empty() && wrapped_line_count(&lines, inner_width) > budget {
+            lines.pop();
+        }
+        let hidden = total - lines.len();
+        lines.push(Line::from(Span::styled(
+            format!("\u{2026} +{hidden} more lines \u{2014} enlarge the terminal to see all"),
+            Style::default().fg(scheme.text_muted),
+        )));
+        lines.push(close_hint);
+        rows = wrapped_line_count(&lines, inner_width);
+    } else {
+        lines.push(Line::from(""));
+        lines.push(close_hint);
+    }
+
+    let overlay_height = u16::try_from(rows + 2).unwrap_or(u16::MAX).min(area.height);
+    let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+    let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+
+    frame.render_widget(Clear, overlay_area);
 
     let detail = Paragraph::new(lines)
         .block(
@@ -174,8 +204,10 @@ mod tests {
             component_id: None,
             counts: None,
             requirement: "EU AI Act Annex IV".to_string(),
-            rule_id: "SBOM-AIACT-ANNEX-IV-2D",
+            rule_id: "SBOM-AIACT-ANNEX-IV-2D-DATASETS",
             standard_refs: vec![StandardRef::new(StandardKind::EuAiAct, "Annex IV §2(d)")],
+            remediation: None,
+            finding_detail: None,
         }
     }
 
@@ -187,7 +219,7 @@ mod tests {
         });
         assert!(text.contains("Rule:"), "overlay must label the rule id");
         assert!(
-            text.contains("SBOM-AIACT-ANNEX-IV-2D"),
+            text.contains("SBOM-AIACT-ANNEX-IV-2D-DATASETS"),
             "overlay must surface the rule id; got:\n{text}"
         );
         assert!(
@@ -198,6 +230,85 @@ mod tests {
             text.contains("EU AI Act: Annex IV"),
             "overlay must render 'label: id' refs; got:\n{text}"
         );
+    }
+
+    /// #347: the reporter's CRA Annex I violation (3 references + a multi-line
+    /// remediation) overflowed the old fixed 60%-height box at 24 rows, so
+    /// the end of the remediation text and the close hint were clipped. The
+    /// remediation is the CycloneDX text `ComplianceChecker::check()` stamps.
+    fn cra_supply_chain_violation() -> Violation {
+        Violation {
+            severity: ViolationSeverity::Warning,
+            category: ViolationCategory::DependencyInfo,
+            message: "No dependency relationships found; 42 components have no dependency \
+                      information"
+                .to_string(),
+            element: None,
+            component_id: None,
+            counts: None,
+            requirement: "CRA Annex I: Technical documentation".to_string(),
+            rule_id: "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN",
+            standard_refs: vec![
+                StandardRef::new(StandardKind::CraAnnex, "Annex I Part II"),
+                StandardRef::new(StandardKind::Pren40000_1_3, "PRE-7-RQ-01"),
+                StandardRef::new(StandardKind::Pren40000_1_3, "PRE-7-RQ-03"),
+            ],
+            remediation: Some(
+                crate::quality::rule_meta("SBOM-CRA-ANNEX-I-SUPPLY-CHAIN")
+                    .expect("registered rule")
+                    .remediation_for(crate::quality::RemediationFormat::CycloneDx),
+            ),
+            finding_detail: None,
+        }
+    }
+
+    #[test]
+    fn overlay_grows_to_fit_remediation_and_close_hint() {
+        let violation = cra_supply_chain_violation();
+        let guidance = violation.remediation_guidance();
+        let last_word = guidance
+            .split_whitespace()
+            .last()
+            .expect("remediation has words");
+        for (width, height) in [(166u16, 24u16), (120, 24), (100, 24), (80, 24), (166, 40)] {
+            let text = render_to_text(width, height, |frame| {
+                super::render_violation_detail_overlay(frame, frame.area(), &violation);
+            });
+            assert!(
+                text.contains(last_word) && text.contains("Remediation:"),
+                "remediation must be fully visible to its last word at {width}x{height}; got:\n{text}"
+            );
+            assert!(
+                text.contains("Press Enter or Esc to close"),
+                "close hint must be visible at {width}x{height}; got:\n{text}"
+            );
+            assert!(
+                !text.contains("more lines"),
+                "no truncation marker when the detail fits at {width}x{height}; got:\n{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_marks_hidden_lines_on_tiny_terminal() {
+        let violation = cra_supply_chain_violation();
+        let text = render_to_text(80, 10, |frame| {
+            super::render_violation_detail_overlay(frame, frame.area(), &violation);
+        });
+        assert!(
+            text.contains("more lines"),
+            "overflow must be marked explicitly, not clipped silently; got:\n{text}"
+        );
+        assert!(
+            text.contains("Press Enter or Esc to close"),
+            "close hint must survive truncation; got:\n{text}"
+        );
+        // Degenerate sizes must not panic.
+        for (width, height) in [(40u16, 4u16), (40, 2), (10, 1)] {
+            let _ = render_to_text(width, height, |frame| {
+                super::render_violation_detail_overlay(frame, frame.area(), &violation);
+            });
+        }
     }
 
     #[test]

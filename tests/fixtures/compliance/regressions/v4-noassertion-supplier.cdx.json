@@ -1,0 +1,77 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-01T00:00:00Z",
+    "authors": [
+      {
+        "name": "Example Corp",
+        "email": "sbom@example.com"
+      }
+    ],
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "example-generator",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "manufacturer": {
+      "name": "Example Corp",
+      "url": [
+        "https://example.com"
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "app",
+      "name": "app",
+      "version": "1.0.0",
+      "purl": "pkg:generic/app@1.0.0",
+      "supplier": {
+        "name": "Example Corp"
+      }
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "libfoo",
+      "name": "libfoo",
+      "version": "2.1.0",
+      "purl": "pkg:npm/libfoo@2.1.0",
+      "supplier": {
+        "name": "NOASSERTION"
+      },
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "app",
+      "dependsOn": [
+        "libfoo"
+      ]
+    },
+    {
+      "ref": "libfoo",
+      "dependsOn": []
+    }
+  ]
+}

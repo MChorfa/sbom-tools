@@ -1,0 +1,42 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:3b1c9e52-6a0f-4d7e-8c21-5f4a9b2e7d10",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-09-29T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "curve-service",
+      "name": "curve-service",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/key-exchange",
+      "name": "key-exchange",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "key-agree",
+          "curve": "secp256r1"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/token-signer",
+      "name": "token-signer",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "curve": "secp384r1",
+          "cryptoFunctions": ["sign", "verify"]
+        }
+      }
+    }
+  ]
+}

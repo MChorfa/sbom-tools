@@ -30,10 +30,11 @@
 //!   `RUNTIME_DEPENDENCY_OF`, `PROVIDED_DEPENDENCY_OF`); CycloneDX's
 //!   dependency graph cannot express the positive signal, so the readiness
 //!   note is gated to SPDX input.
-//! - `SBOM-FSCT-LICENSE-ALL` (concluded-attestation prong): concluded
-//!   licenses are parsed only from SPDX `PackageLicenseConcluded`; the
-//!   CycloneDX 1.6 `licenses[].acknowledgement` field is not parsed, so the
-//!   prong is gated to SPDX input.
+//! - `SBOM-FSCT-LICENSE-CONCLUDED` (the concluded-attestation prong of
+//!   `SBOM-FSCT-LICENSE-ALL`): concluded licenses are parsed only from SPDX
+//!   `PackageLicenseConcluded`; the CycloneDX 1.6
+//!   `licenses[].acknowledgement` field is not parsed, so the prong is gated
+//!   to SPDX input.
 //!
 //! Profile-policy heuristics (documented as policy, not standard text —
 //! "as many as possible"-style tiers are not crisply verifiable from the
@@ -61,8 +62,8 @@
 
 use super::*;
 use crate::model::{
-    CanonicalId, CompletenessDeclaration, Component, ComponentType, CreatorType, DependencyType,
-    ExternalRefType, HashAlgorithm, HashProvenance, SbomFormat,
+    CanonicalId, CompletenessDeclaration, Component, CreatorType, DependencyType, ExternalRefType,
+    HashAlgorithm, HashProvenance, SbomFormat,
 };
 use std::collections::HashSet;
 
@@ -93,44 +94,12 @@ const fn completeness_undeclared(declaration: &CompletenessDeclaration) -> bool 
     )
 }
 
-/// Ambiguous placeholder values that neither populate a baseline attribute
-/// nor explicitly declare no-assertion/no-value. The explicit sentinels
-/// (`NOASSERTION`, `NONE`, `UNKNOWN`) are deliberately NOT in this list —
-/// §2.3.1 sanctions them as the graceful way to differentiate "no
-/// assertion" (data missing) from "no value" (not applicable). Curated
-/// conservatively so genuine values are never flagged.
-fn is_ambiguous_placeholder(value: &str) -> bool {
-    const AMBIGUOUS: &[&str] = &[
-        "tbd",
-        "to be determined",
-        "todo",
-        "n/a",
-        "n.a.",
-        "placeholder",
-        "unspecified",
-        "not specified",
-        "not available",
-        "unavailable",
-        "null",
-        "nil",
-        "undefined",
-        "xxx",
-        "-",
-        "--",
-        "?",
-    ];
-    let lower = value.trim().to_ascii_lowercase();
-    AMBIGUOUS.contains(&lower.as_str())
-}
-
-/// Whether the component carries at least one real (non-sentinel) license
-/// expression, declared or concluded.
-fn has_known_license(comp: &Component) -> bool {
-    comp.licenses
-        .all_licenses()
-        .into_iter()
-        .any(|l| known_value(Some(l.expression.as_str())).is_some())
-}
+// Ambiguous placeholders (§2.3.1) are `shared::is_placeholder`: values that
+// neither populate a baseline attribute nor explicitly declare
+// no-assertion/no-value. The explicit sentinels (`NOASSERTION`, `NONE`,
+// `UNKNOWN`) are deliberately not on that list — §2.3.1 sanctions them as
+// the graceful way to differentiate "no assertion" (data missing) from "no
+// value" (not applicable).
 
 /// Whether the component positively asserted it has no dependencies
 /// (CycloneDX dependency entry with an empty `dependsOn`, preserved by the
@@ -244,9 +213,10 @@ impl FsctEvidence {
                 nameless += 1;
             }
 
-            // File/snippet inventory entries are exempt from the remaining
-            // per-component baseline attributes (see field doc above).
-            if matches!(comp.component_type, ComponentType::File) {
+            // File/snippet entries and cryptographic assets are exempt from
+            // the remaining per-component baseline attributes (see field doc
+            // above).
+            if !comp.component_type.is_package_scoped() {
                 continue;
             }
             pkg_total += 1;
@@ -322,19 +292,15 @@ impl FsctEvidence {
                 without_copyright.push(comp.name.clone());
             }
 
-            // §2.3.1: ambiguous placeholders (see `is_ambiguous_placeholder`).
+            // §2.3.1: ambiguous placeholders (see `is_placeholder`).
             let mut fields = Vec::new();
-            if comp
-                .version
-                .as_deref()
-                .is_some_and(is_ambiguous_placeholder)
-            {
+            if comp.version.as_deref().is_some_and(is_placeholder) {
                 fields.push("version");
             }
             if comp
                 .supplier
                 .as_ref()
-                .is_some_and(|s| is_ambiguous_placeholder(&s.name))
+                .is_some_and(|s| is_placeholder(&s.name))
             {
                 fields.push("supplier");
             }
@@ -342,15 +308,11 @@ impl FsctEvidence {
                 .licenses
                 .all_licenses()
                 .iter()
-                .any(|l| is_ambiguous_placeholder(&l.expression))
+                .any(|l| is_placeholder(&l.expression))
             {
                 fields.push("license");
             }
-            if comp
-                .copyright
-                .as_deref()
-                .is_some_and(is_ambiguous_placeholder)
-            {
+            if comp.copyright.as_deref().is_some_and(is_placeholder) {
                 fields.push("copyright");
             }
             if !fields.is_empty() {
@@ -373,14 +335,20 @@ impl FsctEvidence {
 
         let mut direct_edge_count = 0usize;
         let mut unresolved_direct = Vec::new();
-        let mut direct_ids: HashSet<&CanonicalId> = HashSet::new();
+        // Direct dependencies in edge order. The set only deduplicates; every
+        // walk goes through the ordered Vec so findings come out in the same
+        // order on every run (a HashSet walk reordered them between runs).
+        let mut direct_ids: Vec<&CanonicalId> = Vec::new();
+        let mut direct_seen: HashSet<&CanonicalId> = HashSet::new();
         let mut primary_in_edge_set = false;
         if let Some(primary) = primary_id {
             for edge in &sbom.edges {
                 if &edge.from == primary {
                     direct_edge_count += 1;
                     if sbom.components.contains_key(&edge.to) {
-                        direct_ids.insert(&edge.to);
+                        if direct_seen.insert(&edge.to) {
+                            direct_ids.push(&edge.to);
+                        }
                     } else {
                         unresolved_direct.push(edge.to.value().to_string());
                     }
@@ -390,7 +358,11 @@ impl FsctEvidence {
                 }
             }
         }
-        let has_depth2_edges = sbom.edges.iter().any(|e| direct_ids.contains(&e.from));
+        // Every component that has at least one outgoing edge, computed once:
+        // checking each direct dependency against all edges was quadratic on
+        // wide, flat graphs.
+        let edge_sources: HashSet<&CanonicalId> = sbom.edges.iter().map(|e| &e.from).collect();
+        let has_depth2_edges = direct_ids.iter().any(|id| edge_sources.contains(id));
         let all_direct_declared_leaf = !direct_ids.is_empty()
             && direct_ids.iter().all(|id| {
                 sbom.components
@@ -403,11 +375,15 @@ impl FsctEvidence {
             touched.insert(&edge.from);
             touched.insert(&edge.to);
         }
+        // Relationships are a package-graph element: files, crypto assets
+        // and services need not appear in the dependency graph.
         let orphans: Vec<String> = sbom
             .components
             .iter()
-            .filter(|(id, _)| {
-                !touched.contains(id) && sbom.primary_component_id.as_ref() != Some(id)
+            .filter(|(id, c)| {
+                c.component_type.is_package_scoped()
+                    && !touched.contains(id)
+                    && sbom.primary_component_id.as_ref() != Some(id)
             })
             .map(|(_, c)| c.name.clone())
             .collect();
@@ -429,10 +405,10 @@ impl FsctEvidence {
             let Some(comp) = sbom.components.get(*id) else {
                 continue;
             };
-            if matches!(comp.component_type, ComponentType::File) {
+            if !comp.component_type.is_package_scoped() {
                 continue;
             }
-            let has_children = sbom.edges.iter().any(|e| &&e.from == id);
+            let has_children = edge_sources.contains(id);
             let has_bom_ref = comp
                 .external_refs
                 .iter()
@@ -493,12 +469,13 @@ fn fsct_minimum_expected(
     let pkg_total = evidence.pkg_total;
 
     // §2.2.1.1 (Minimum) — Author Name: the entity that prompted the SBOM's
-    // creation. A tool-only creator list does not satisfy the element.
+    // creation. A tool-only creator list does not satisfy the element, and
+    // neither does an empty or placeholder name.
     let has_person_or_org = sbom
         .document
         .creators
         .iter()
-        .any(|c| c.creator_type != CreatorType::Tool);
+        .any(|c| c.creator_type != CreatorType::Tool && creator_identified(c));
     if !has_person_or_org {
         violations.push(Violation {
             severity: ViolationSeverity::Error,
@@ -514,6 +491,8 @@ fn fsct_minimum_expected(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -533,6 +512,8 @@ fn fsct_minimum_expected(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -553,6 +534,8 @@ fn fsct_minimum_expected(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -581,6 +564,8 @@ fn fsct_minimum_expected(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
     // Direct-dependency edges whose target is not in the inventory: the
@@ -602,6 +587,8 @@ fn fsct_minimum_expected(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -624,6 +611,8 @@ fn fsct_minimum_expected(
                 total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -649,6 +638,8 @@ fn fsct_minimum_expected(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -674,6 +665,8 @@ fn fsct_minimum_expected(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -702,6 +695,8 @@ fn fsct_minimum_expected(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -729,6 +724,8 @@ fn fsct_minimum_expected(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -757,6 +754,8 @@ fn fsct_minimum_expected(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -779,6 +778,8 @@ fn fsct_minimum_expected(
                 component_id: Some(primary.canonical_id.value().to_string()),
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -800,6 +801,8 @@ fn fsct_minimum_expected(
                 component_id: Some(primary.canonical_id.value().to_string()),
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -830,6 +833,8 @@ fn fsct_minimum_expected(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 }
@@ -876,6 +881,8 @@ fn fsct_recommended_practice(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     } else if !tool_creators
         .iter()
@@ -895,6 +902,8 @@ fn fsct_recommended_practice(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -923,6 +932,8 @@ fn fsct_recommended_practice(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -950,6 +961,8 @@ fn fsct_recommended_practice(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -976,6 +989,8 @@ fn fsct_recommended_practice(
                 component_id: Some(primary.canonical_id.value().to_string()),
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -1003,6 +1018,8 @@ fn fsct_recommended_practice(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1018,7 +1035,7 @@ fn fsct_recommended_practice(
                 "[CISA FSCT 3e §2.2.2.6] {}/{} component(s) appear in no dependency \
                  relationship (orphans in the inventory): {}",
                 evidence.orphans.len(),
-                evidence.total,
+                evidence.pkg_total,
                 truncate_list(&evidence.orphans, 5)
             ),
             element: None,
@@ -1029,9 +1046,11 @@ fn fsct_recommended_practice(
             component_id: None,
             counts: Some(ViolationCounts {
                 affected: evidence.orphans.len(),
-                total: evidence.total,
+                total: evidence.pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1056,6 +1075,8 @@ fn fsct_recommended_practice(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1081,6 +1102,8 @@ fn fsct_recommended_practice(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1106,6 +1129,8 @@ fn fsct_recommended_practice(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1133,6 +1158,8 @@ fn fsct_recommended_practice(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 }
@@ -1176,6 +1203,8 @@ fn fsct_aspirational_goals(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1200,6 +1229,8 @@ fn fsct_aspirational_goals(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1225,6 +1256,8 @@ fn fsct_aspirational_goals(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
     // …including concluded-license attestation. Evidence-gated to SPDX
@@ -1243,10 +1276,12 @@ fn fsct_aspirational_goals(
             requirement: "CISA FSCT 3e §2.2.2.7: Concluded license attestation (Aspirational \
                           Goal)"
                 .to_string(),
-            rule_id: "SBOM-FSCT-LICENSE-ALL",
+            rule_id: "SBOM-FSCT-LICENSE-CONCLUDED",
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1272,6 +1307,8 @@ fn fsct_aspirational_goals(
                 total: pkg_total,
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -1299,6 +1336,8 @@ fn fsct_aspirational_goals(
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 }

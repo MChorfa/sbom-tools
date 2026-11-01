@@ -2,27 +2,42 @@
 //! (audit P3: no test anywhere instantiated the Standard profile).
 //!
 //! Standard has no dedicated SARIF slice in the registry: it runs on the
-//! generic checker path, and every rule it can emit funnels into the two ids
-//! below. The universe is therefore declared locally (derived from the
-//! Standard-level match arms in src/quality/compliance/generic.rs) and the
-//! matrix sweep enforces that no fixture ever emits an id outside it — if a
-//! new Standard-level check site lands, this file fails and must be extended.
+//! generic checker path, and every check it runs is a rule of its own (the
+//! NTIA version rule and the `SBOM-QUALITY-*` rules below). The universe is
+//! therefore declared locally
+//! (derived from the Standard-level match arms in
+//! src/quality/compliance/generic.rs) and the matrix sweep enforces that no
+//! fixture ever emits an id outside it — if a new Standard-level check site
+//! lands, this file fails and must be extended.
 
 #[path = "common/rule_matrix.rs"]
 mod rule_matrix;
 
-use rule_matrix::{ComponentFixture, RuleEntry, SbomFixture, assert_no_violations, run_matrix};
+use rule_matrix::{
+    CYCLONEDX_VERSION_CASE, ComponentFixture, Encoding, RuleEntry, SPDX_VERSION_CASE, SbomFixture,
+    assert_no_violations_in, assert_spdx_version_unknown, run_matrix,
+};
 use sbom_tools::quality::{ComplianceLevel, ViolationSeverity as Sev};
 
 const LEVEL: ComplianceLevel = ComplianceLevel::Standard;
 
-/// Every rule id the Standard profile can emit (generic.rs):
-/// * `SBOM-NTIA-VERSION` — missing component version (Error);
-/// * `SBOM-QUALITY-GENERAL` — the quality-family generic id stamped by every
-///   other Standard-level site: document creator (Error), serial number
-///   (Warning), component name (Error), unique identifier (Warning), license
-///   (Warning), and the CycloneDX/SPDX format-specific Infos.
-const STANDARD_RULE_UNIVERSE: &[&str] = &["SBOM-NTIA-VERSION", "SBOM-QUALITY-GENERAL"];
+/// Every SARIF rule id the Standard profile can emit (generic.rs): the NTIA
+/// component version (Error), document creator (Error), serial number
+/// (Warning), component inventory and name (Error), unique identifier
+/// (Warning), license (Warning), and the CycloneDX/SPDX format-specific
+/// checks.
+const STANDARD_RULE_UNIVERSE: &[&str] = &[
+    "SBOM-NTIA-VERSION",
+    "SBOM-QUALITY-CREATOR",
+    "SBOM-QUALITY-SERIAL",
+    "SBOM-QUALITY-INVENTORY",
+    "SBOM-QUALITY-NAME",
+    "SBOM-QUALITY-IDENTIFIER",
+    "SBOM-QUALITY-LICENSE",
+    "SBOM-QUALITY-SPEC-VERSION",
+    "SBOM-QUALITY-SPEC-VERSION-UNKNOWN",
+    "SBOM-QUALITY-ELEMENT-ID",
+];
 
 /// A component that also satisfies the Standard-level license check.
 fn comp(name: &str) -> ComponentFixture {
@@ -46,6 +61,7 @@ fn base() -> SbomFixture {
         components: vec![comp("libalpha"), comp("libbeta")],
         dependencies: vec![("ref-libalpha".to_string(), vec!["ref-libbeta".to_string()])],
         vulnerabilities: Vec::new(),
+        ..SbomFixture::default()
     }
 }
 
@@ -55,10 +71,11 @@ fn broken(mutate: impl FnOnce(&mut SbomFixture)) -> SbomFixture {
     fixture
 }
 
-/// The conforming Standard fixture must pass with a clean verdict.
+/// The conforming Standard fixture must pass with a clean verdict in every
+/// encoding.
 #[test]
 fn standard_conforming_fixture_is_compliant_with_zero_violations() {
-    assert_no_violations(LEVEL, &base());
+    assert_no_violations_in(LEVEL, &base(), Encoding::ALL);
 }
 
 #[test]
@@ -72,38 +89,105 @@ fn standard_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.component_mut("libalpha").version = None),
             base(),
         ),
-        // The quality-family generic bucket, exercised site by site. The
-        // registry default is Warning; the creator and component-name sites
-        // escalate to Error.
         RuleEntry::tested(
-            "SBOM-QUALITY-GENERAL",
+            "SBOM-QUALITY-CREATOR",
+            Sev::Error,
+            broken(|s| s.tools.clear()),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-QUALITY-SERIAL",
             Sev::Warning,
             broken(|s| s.serial_number = None),
             base(),
-        )
-        .with_departing_firing(
-            "document creator missing",
+        ),
+        // No software component at all: the per-component rules have
+        // nothing to judge, which is a finding.
+        RuleEntry::tested(
+            "SBOM-QUALITY-INVENTORY",
             Sev::Error,
-            broken(|s| s.tools.clear()),
-        )
-        .with_firing(
-            "license missing",
-            Sev::Warning,
-            broken(|s| s.component_mut("libalpha").licenses.clear()),
-        )
-        .with_firing(
-            "unique identifier missing",
+            broken(|s| {
+                s.components.clear();
+                s.dependencies.clear();
+            }),
+            base(),
+        ),
+        // "unknown" without a corroborating PURL name segment does not count
+        // as a real component name.
+        RuleEntry::tested(
+            "SBOM-QUALITY-NAME",
+            Sev::Error,
+            broken(|s| s.component_mut("libalpha").name = "unknown".to_string()),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-QUALITY-IDENTIFIER",
             Sev::Warning,
             broken(|s| s.component_mut("libalpha").purl = None),
+            base(),
+        ),
+        RuleEntry::tested(
+            "SBOM-QUALITY-LICENSE",
+            Sev::Warning,
+            broken(|s| s.component_mut("libalpha").licenses.clear()),
+            base(),
+        ),
+        // CycloneDX newer than the latest version read (1.7) or SPDX newer
+        // than 3.0 warns; an outdated CycloneDX version is an Info. Each
+        // version case runs in the format whose version it sets.
+        RuleEntry::tested(
+            "SBOM-QUALITY-SPEC-VERSION",
+            Sev::Warning,
+            broken(|s| s.spec_version = "1.8".to_string()),
+            base(),
         )
         .with_departing_firing(
-            "placeholder component name",
-            Sev::Error,
-            // "unknown" without a corroborating PURL name segment does not
-            // count as a real component name.
-            broken(|s| s.component_mut("libalpha").name = "unknown".to_string()),
+            "CycloneDX 1.3 is outdated",
+            Sev::Info,
+            broken(|s| s.spec_version = "1.3".to_string()),
+        )
+        .with_firing(
+            "SPDX 3.1 is newer than any version read",
+            Sev::Warning,
+            broken(|s| s.spdx_version = Some("3.1".to_string())),
+        )
+        .case_only("firing", Encoding::CYCLONEDX, CYCLONEDX_VERSION_CASE)
+        .case_only(
+            "CycloneDX 1.3 is outdated",
+            Encoding::CYCLONEDX,
+            CYCLONEDX_VERSION_CASE,
+        )
+        .case_only(
+            "SPDX 3.1 is newer than any version read",
+            Encoding::SPDX,
+            SPDX_VERSION_CASE,
+        ),
+        // An SPDX version that is neither 2.x nor 3.x.
+        RuleEntry::tested(
+            "SBOM-QUALITY-SPEC-VERSION-UNKNOWN",
+            Sev::Warning,
+            broken(|s| s.spdx_version = Some("4.0".to_string())),
+            base(),
+        )
+        .case_only("firing", Encoding::SPDX, SPDX_VERSION_CASE),
+        // A component whose bom-ref collapses to its name.
+        RuleEntry::tested(
+            "SBOM-QUALITY-ELEMENT-ID",
+            Sev::Info,
+            broken(|s| {
+                s.component_mut("libalpha").bom_ref = "libalpha".to_string();
+                s.dependencies = vec![("libalpha".to_string(), vec!["ref-libbeta".to_string()])];
+            }),
+            base(),
         ),
     ];
 
     run_matrix(LEVEL, STANDARD_RULE_UNIVERSE, &entries);
+}
+
+/// SBOM-QUALITY-SPEC-VERSION-UNKNOWN reads only SPDX input: its matrix row
+/// fires it in SPDX 2.3 JSON and SPDX 3; this pins SPDX tag-value.
+#[test]
+fn standard_spec_version_unknown_reads_only_spdx() {
+    assert_spdx_version_unknown(LEVEL, "SBOM-QUALITY-SPEC-VERSION-UNKNOWN");
 }

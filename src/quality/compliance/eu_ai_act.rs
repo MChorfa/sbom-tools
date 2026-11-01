@@ -14,9 +14,9 @@
 //!   guarantee. Passing every check does not make a system AI-Act compliant,
 //!   and the tool does not itself classify a system as high-risk.
 //! - When the SBOM carries no ML-model or dataset metadata the profile is
-//!   *not applicable* and returns a single informational finding rather than
-//!   failing every non-AI SBOM (mirrors the EUCC reference-only precedent in
-//!   `compliance/eucc.rs`).
+//!   *not applicable*: the result's applicability says so, with the reason,
+//!   and no finding is reported, rather than failing every non-AI SBOM
+//!   (mirrors the EUCC reference-only precedent in `compliance/eucc.rs`).
 //! - When the CRA sidecar `is_high_risk_ai` flag is set, missing-documentation
 //!   findings escalate from Info/Warning to Error: Annex IV is mandatory for
 //!   high-risk systems, so gaps are blocking rather than advisory.
@@ -24,12 +24,19 @@
 use super::ai_shared::{ai_bom_scope, has_model_card_ref, push_untyped_ml_warning};
 use super::*;
 
+/// Why the profile does not apply to an SBOM without AI/ML content: the
+/// result's not-applicable reason.
+const NOT_APPLICABLE_REASON: &str = "[AI-Act] Not applicable: SBOM contains no \
+     machine-learning-model components, ML-model metadata, or AI-dataset evidence, so EU AI Act \
+     Annex IV technical-documentation readiness cannot be assessed (readiness profile, not a \
+     legal-conformity guarantee)";
+
 impl ComplianceChecker {
     // ════════════════════════════════════════════════════════════════════
     // EU AI Act Annex IV technical-documentation readiness (AI3)
     // ════════════════════════════════════════════════════════════════════
 
-    pub(crate) fn check_eu_ai_act(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+    pub(crate) fn check_eu_ai_act(&self, sbom: &NormalizedSbom, findings: &mut Findings) {
         let high_risk = self.sidecar.as_ref().is_some_and(|s| s.is_high_risk_ai);
 
         // ML-model and dataset components drive the readiness checks. The
@@ -41,26 +48,13 @@ impl ComplianceChecker {
         // AI dataset).
         let scope = ai_bom_scope(sbom);
 
-        // N/A gate: no AI/ML content at all → single informational finding,
+        // N/A gate: no AI/ML content at all → the profile does not apply,
         // never a failure (a non-AI SBOM is simply out of scope here).
         if !scope.is_applicable() {
-            violations.push(Violation {
-                severity: ViolationSeverity::Info,
-                category: ViolationCategory::DocumentMetadata,
-                message: "[AI-Act] Not applicable: SBOM contains no machine-learning-model \
-                          components, ML-model metadata, or AI-dataset evidence, so EU AI Act \
-                          Annex IV technical-documentation readiness cannot be assessed \
-                          (readiness profile, not a legal-conformity guarantee)"
-                    .to_string(),
-                element: None,
-                requirement: "EU AI Act Annex IV: applicability".to_string(),
-                rule_id: "SBOM-AIACT-NA",
-                component_id: None,
-                counts: None,
-                standard_refs: Vec::new(),
-            });
+            findings.not_applicable(NOT_APPLICABLE_REASON);
             return;
         }
+        let violations = &mut findings.violations;
 
         // Evasion guard: ML-looking components (pkg:huggingface PURL or
         // model-card reference) that are neither typed machine-learning-model
@@ -91,6 +85,7 @@ impl ComplianceChecker {
 
         self.check_ai_act_general_description(&ml_components, missing_severity, violations);
         self.check_ai_act_training_data(
+            sbom,
             &ml_components,
             &dataset_components,
             missing_severity,
@@ -156,6 +151,8 @@ impl ComplianceChecker {
                     total: ml_components.len(),
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -178,6 +175,8 @@ impl ComplianceChecker {
                     total: ml_components.len(),
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -186,19 +185,20 @@ impl ComplianceChecker {
     /// was trained on, and whether datasets carry sensitivity classifications.
     fn check_ai_act_training_data(
         &self,
+        sbom: &NormalizedSbom,
         ml_components: &[&crate::model::Component],
         dataset_components: &[&crate::model::Component],
         missing_severity: ViolationSeverity,
         violations: &mut Vec<Violation>,
     ) {
-        // Every model should reference the dataset(s) it was trained on.
+        // Every model should reference the dataset(s) it was trained on:
+        // modelCard.modelParameters.datasets (SPDX 3.0 trainedOn), or
+        // dataset-evidenced components nested under the model. The shared
+        // predicate keeps this rule, SBOM-BSIAI-MODEL-DATASETS and quality
+        // check AI-003 in agreement on what counts.
         let mut without_datasets = Vec::new();
         for c in ml_components {
-            let has_datasets = c
-                .ml_model
-                .as_ref()
-                .is_some_and(|m| !m.training_datasets.is_empty());
-            if !has_datasets {
+            if !super::ai_shared::declares_training_datasets(sbom, c) {
                 without_datasets.push(c.name.clone());
             }
         }
@@ -221,6 +221,8 @@ impl ComplianceChecker {
                     total: ml_components.len(),
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -260,6 +262,8 @@ impl ComplianceChecker {
                     total: dataset_components.len(),
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -319,6 +323,8 @@ impl ComplianceChecker {
                     total: ml_components.len(),
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -369,6 +375,8 @@ impl ComplianceChecker {
                     total: ml_components.len(),
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -437,6 +445,8 @@ impl ComplianceChecker {
                     total: dataset_components.len(),
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -472,6 +482,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -484,6 +496,14 @@ mod tests {
         Component, ComponentType, CraSidecarMetadata, DatasetInfo, DatasetRef, MetricEntry,
         MlModelInfo,
     };
+
+    /// Pinned to the shared test clock (tests/common/clock.rs).
+    fn checker(level: ComplianceLevel) -> ComplianceChecker {
+        let as_of = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+            .expect("valid instant")
+            .with_timezone(&chrono::Utc);
+        ComplianceChecker::new(level).with_as_of(as_of)
+    }
 
     fn full_ml_component(name: &str) -> Component {
         let mut c =
@@ -543,17 +563,17 @@ mod tests {
         sw.component_type = ComponentType::Library;
         add(&mut sbom, sw);
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(result.is_compliant, "non-AI SBOM must not fail AI-Act");
-        assert_eq!(result.error_count, 0);
-        assert_eq!(
-            result.violations.len(),
-            1,
-            "exactly one informational N/A finding"
+        assert!(
+            result.violations.is_empty(),
+            "N/A is the result's applicability, not a finding: {:?}",
+            result.violations
         );
-        let v = &result.violations[0];
-        assert_eq!(v.rule_id, "SBOM-AIACT-NA");
-        assert_eq!(v.severity, ViolationSeverity::Info);
+        assert_eq!(
+            result.applicability,
+            Applicability::NotApplicable(NOT_APPLICABLE_REASON.to_string())
+        );
     }
 
     #[test]
@@ -562,7 +582,7 @@ mod tests {
         add(&mut sbom, full_ml_component("model-a"));
         add(&mut sbom, dataset_component("data-1", &["none"]));
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(result.is_compliant);
         assert_eq!(
             result.warning_count, 0,
@@ -576,7 +596,7 @@ mod tests {
         let mut sbom = NormalizedSbom::default();
         add(&mut sbom, bare_ml_component("model-a"));
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
         assert!(ids.contains(&"SBOM-AIACT-ANNEX-IV-1-DESCRIPTION"));
         assert!(ids.contains(&"SBOM-AIACT-ANNEX-IV-1-PURPOSE"));
@@ -591,7 +611,7 @@ mod tests {
         add(&mut sbom, bare_ml_component("model-a"));
 
         // Without the flag: §1/§2 gaps are Warnings (not blocking).
-        let baseline = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let baseline = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(baseline.is_compliant, "non-high-risk gaps are advisory");
         assert!(baseline.warning_count > 0);
 
@@ -600,7 +620,7 @@ mod tests {
             is_high_risk_ai: true,
             ..Default::default()
         };
-        let escalated = ComplianceChecker::new(ComplianceLevel::EuAiAct)
+        let escalated = checker(ComplianceLevel::EuAiAct)
             .with_sidecar(sidecar)
             .check(&sbom);
         assert!(
@@ -624,7 +644,7 @@ mod tests {
         add(&mut sbom, full_ml_component("model-a"));
         add(&mut sbom, dataset_component("data-1", &["pii"]));
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(
             result
                 .violations
@@ -649,7 +669,7 @@ mod tests {
         }));
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(
             !result
                 .violations
@@ -672,11 +692,10 @@ mod tests {
         cfg.component_type = ComponentType::Data;
         add(&mut sbom, cfg);
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(result.is_compliant);
-        assert_eq!(result.error_count, 0);
-        assert_eq!(result.violations.len(), 1, "single N/A finding expected");
-        assert_eq!(result.violations[0].rule_id, "SBOM-AIACT-NA");
+        assert!(!result.is_applicable());
+        assert!(result.violations.is_empty(), "{:?}", result.violations);
     }
 
     #[test]
@@ -693,7 +712,7 @@ mod tests {
         });
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(
             !result
                 .violations
@@ -723,7 +742,7 @@ mod tests {
         c.description = Some("Transformer encoder for English text classification".to_string());
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(
             !result
                 .violations
@@ -742,7 +761,7 @@ mod tests {
             .with_purl("pkg:huggingface/google-bert/bert-base-uncased@1.0.0".to_string());
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(
             !result
                 .violations
@@ -766,7 +785,7 @@ mod tests {
         let mut sbom = NormalizedSbom::default();
         add(&mut sbom, dataset_component("data-1", &["none"]));
 
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         assert!(
             !result
                 .violations
@@ -789,7 +808,7 @@ mod tests {
         let mut sbom = NormalizedSbom::default();
         add(&mut sbom, bare_ml_component("model-a"));
         add(&mut sbom, dataset_component("data-1", &[]));
-        let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+        let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
         for v in &result.violations {
             assert!(
                 super::rule_meta(v.rule_id).is_some(),

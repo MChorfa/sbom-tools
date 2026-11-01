@@ -2,43 +2,51 @@
 //! (PCI DSS v4.0.1 Requirement 6.3.2 software-inventory profile).
 //!
 //! Every rule id in `PCIDSS_SARIF_RULE_IDS` gets a firing fixture (a minimal
-//! CycloneDX document, parsed through the real parser, that must surface the
-//! rule) and a silent fixture (one that must not), or an explicit
-//! skip-with-reason. The runner enforces exhaustiveness against the
-//! registry's PCI SARIF slice, so a new PCI rule cannot land untested.
+//! SBOM, rendered in each of the four encodings and parsed through the real
+//! parser, that must surface the rule) and a silent fixture (one that must
+//! not), or an explicit skip-with-reason. The runner enforces exhaustiveness
+//! against the registry's PCI SARIF slice, so a new PCI rule cannot land
+//! untested.
 //!
 //! One profile-specific wrinkle: the checker treats an absent CycloneDX
 //! compositions aggregate (`CompletenessDeclaration::Unknown`, the serde
-//! default) as an Info-level "no completeness declaration" finding, so every
-//! DSL-built fixture in this matrix carries exactly that one Info. The
-//! fully-conforming zero-violation fixture therefore declares its inventory
-//! Complete via a raw-JSON compositions injection (the shared DSL cannot
-//! render compositions), and the SBOM-PCI-6-3-2-COMPLETENESS variants are
-//! covered by the dedicated raw-JSON tests at the bottom of this file.
+//! default) as an Info-level "no completeness declaration" finding, and a
+//! declared-Complete primary-only inventory suppresses the third-party
+//! inference. `base()` therefore leaves the aggregate undeclared, so every
+//! fixture built from it carries exactly that one Info; the fully-conforming
+//! zero-violation fixture declares its inventory Complete, and the
+//! SBOM-PCI-6-3-2-COMPLETENESS row (plus the tests at the bottom of this
+//! file) covers the declaration variants. SPDX 2.3 has no completeness
+//! declaration, so every SPDX 2.3 rendering carries that Info.
 
 #[path = "common/rule_matrix.rs"]
 mod rule_matrix;
 
-use rule_matrix::{ComponentFixture, RuleEntry, SbomFixture, render_violations, run_matrix};
-use sbom_tools::parsers::parse_sbom_str;
-use sbom_tools::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, PCIDSS_SARIF_RULE_IDS,
-    ViolationSeverity as Sev,
+use rule_matrix::clock::as_of;
+use rule_matrix::{
+    ComponentFixture, Encoding, Outcome, RuleEntry, SPDX23_HAS_NO_COMPLETENESS,
+    SPDX23_HAS_NO_VULNERABILITIES, SbomFixture, assert_no_violations_in, check, render_violations,
+    run_matrix,
 };
+use sbom_tools::quality::{ComplianceLevel, PCIDSS_SARIF_RULE_IDS, ViolationSeverity as Sev};
 
 const LEVEL: ComplianceLevel = ComplianceLevel::PciDss632;
 
-/// A recent (wall-clock-relative) RFC 3339 timestamp, so the tool-policy
-/// staleness advisory can never trip the fixtures as the calendar advances
-/// (the repo's known wall-clock snapshot gotcha).
+/// A recent RFC 3339 timestamp (the day before the pinned test clock), so
+/// the tool-policy staleness advisory never trips the fixtures.
 fn recent_timestamp() -> String {
-    (chrono::Utc::now() - chrono::Duration::days(1))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    (as_of() - chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// A timestamp 30 days after the pinned test clock, i.e. after the
+/// evaluation instant.
+fn future_timestamp() -> String {
+    (as_of() + chrono::Duration::days(30)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// A fixture that satisfies every PCI DSS 6.3.2 element the engine checks —
-/// except the completeness declaration, which the DSL cannot express (see
-/// the module docs): named/versioned/identified primary with an advisories
+/// except the completeness declaration, which it leaves undeclared (see the
+/// module docs): named/versioned/identified primary with an advisories
 /// reference (vulnerability-management hook), supplier-attributed
 /// third-party components, and a fresh timestamp.
 fn base() -> SbomFixture {
@@ -64,6 +72,7 @@ fn base() -> SbomFixture {
             vec!["ref-libalpha".to_string(), "ref-libbeta".to_string()],
         )],
         vulnerabilities: Vec::new(),
+        ..SbomFixture::default()
     }
 }
 
@@ -74,34 +83,18 @@ fn broken(mutate: impl FnOnce(&mut SbomFixture)) -> SbomFixture {
     fixture
 }
 
-/// Render the fixture and inject a CycloneDX compositions aggregate — the
-/// one document feature the shared DSL cannot express — then re-serialize.
-fn json_with_compositions(fixture: &SbomFixture, aggregate: &str) -> String {
-    let mut doc: serde_json::Value =
-        serde_json::from_str(&fixture.to_json_string()).expect("fixture JSON re-parses");
-    doc["compositions"] = serde_json::json!([{ "aggregate": aggregate }]);
-    serde_json::to_string(&doc).expect("augmented fixture serializes")
-}
-
-/// Run the PCI profile over raw CycloneDX JSON through the real parser.
-fn check_json(json: &str) -> ComplianceResult {
-    let sbom = parse_sbom_str(json).expect("raw fixture must parse as CycloneDX");
-    ComplianceChecker::new(LEVEL).check(&sbom)
+/// `base()` with the given compositions aggregate declared.
+fn declared(aggregate: &str) -> SbomFixture {
+    broken(|s| s.completeness = Some(aggregate.to_string()))
 }
 
 /// The conforming PCI fixture must pass with a clean verdict. It declares
 /// its inventory Complete (compositions aggregate) on top of `base()`; an
-/// undeclared inventory keeps an Info-level completeness finding by design.
+/// undeclared inventory keeps an Info-level completeness finding by design,
+/// which is why no SPDX 2.3 rendering is clean.
 #[test]
 fn pci_conforming_fixture_is_compliant_with_zero_violations() {
-    let result = check_json(&json_with_compositions(&base(), "complete"));
-    assert!(
-        result.violations.is_empty() && result.is_compliant,
-        "[{LEVEL:?}] conforming fixture must pass with zero violations; got \
-         is_compliant={compliant}:\n{violations}",
-        compliant = result.is_compliant,
-        violations = render_violations(&result)
-    );
+    assert_no_violations_in(LEVEL, &declared("complete"), Encoding::ALL_BUT_SPDX23);
 }
 
 #[test]
@@ -185,23 +178,47 @@ fn pci_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                 }
             }),
         ),
-        RuleEntry::skipped(
+        // Explicit incomplete* aggregates are self-declared inventory gaps
+        // (TP 6.3.2.b) and warn; an absent or not_specified declaration is
+        // informational; complete is silent.
+        RuleEntry::tested(
             "SBOM-PCI-6-3-2-COMPLETENESS",
-            "requires a CycloneDX compositions aggregate, which the shared fixture \
-             DSL cannot render; all declaration variants (Complete silent, \
-             Incomplete* Warning, Unknown/NotSpecified Info) are covered by the \
-             dedicated raw-JSON tests in this file and the unit tests in \
-             src/quality/compliance/pci_dss.rs",
+            Sev::Warning,
+            declared("incomplete"),
+            declared("complete"),
+        )
+        .with_departing_firing("no declaration", Sev::Info, base())
+        .with_departing_firing(
+            "aggregate not_specified",
+            Sev::Info,
+            declared("not_specified"),
+        )
+        .case_differs(
+            "firing",
+            &[Encoding::Spdx23Json],
+            Outcome::Fires(Sev::Info),
+            SPDX23_HAS_NO_COMPLETENESS,
+        )
+        .case_differs(
+            "silent",
+            &[Encoding::Spdx23Json],
+            Outcome::Fires(Sev::Info),
+            SPDX23_HAS_NO_COMPLETENESS,
         ),
-        // Missing timestamp (epoch sentinel) warns; the stale-timestamp Info
-        // advisory is pinned-clock-tested in pci_dss.rs unit tests (the
-        // matrix runner uses the wall clock, and fixtures stay fresh by
-        // construction).
+        // Missing timestamp (epoch sentinel) warns, and so does one dated
+        // after the evaluation instant; the stale-timestamp Info advisory is
+        // pinned-clock-tested in pci_dss.rs unit tests (fixtures here are
+        // dated the day before the runner's pinned clock).
         RuleEntry::tested(
             "SBOM-PCI-6-3-2-FRESHNESS",
             Sev::Warning,
             broken(|s| s.timestamp = None),
             base(),
+        )
+        .with_firing(
+            "future-dated",
+            Sev::Warning,
+            broken(|s| s.timestamp = Some(future_timestamp())),
         ),
         // No vulnerability-management hook anywhere: no embedded data, no
         // advisories/assertion/VDR reference, no contact.
@@ -214,6 +231,24 @@ fn pci_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                 }
             }),
             base(),
+        )
+        .with_silent(
+            "vulnerability-assertion (VDR) reference as the only hook",
+            broken(|s| {
+                if let Some(primary) = &mut s.primary {
+                    primary.external_refs = vec![(
+                        "vulnerability-assertion".to_string(),
+                        "https://acme.example/security/vdr.json".to_string(),
+                    )];
+                }
+            }),
+        )
+        .case_differs(
+            "vulnerability-assertion (VDR) reference as the only hook",
+            &[Encoding::Spdx23Json],
+            Outcome::Fires(Sev::Info),
+            "SPDX 2.3 has no reference category for a VDR: an OTHER vulnerability-assertion \
+             reference is unrecognized",
         ),
         // An embedded entry whose only rating severity is "unknown" (and no
         // CVSS score) is unranked; a "medium" entry is ranked and must stay
@@ -236,20 +271,15 @@ fn pci_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                     "ref-libalpha".to_string(),
                 )];
             }),
-        ),
-        RuleEntry::skipped(
-            "SBOM-PCI-GENERAL",
-            "registry catch-all for the PCI DSS family: no check site in \
-             check_pci_dss_6_3_2 emits it (registry.rs keeps it as the SARIF \
-             re-bucketing target); it cannot fire from document content",
-        ),
+        )
+        .only(Encoding::ALL_BUT_SPDX23, SPDX23_HAS_NO_VULNERABILITIES),
     ];
 
     run_matrix(LEVEL, PCIDSS_SARIF_RULE_IDS, &entries);
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// SBOM-PCI-6-3-2-COMPLETENESS coverage (raw-JSON compositions, real parser)
+// SBOM-PCI-6-3-2-COMPLETENESS declaration variants
 // ────────────────────────────────────────────────────────────────────────
 
 /// Explicit `incomplete*` aggregates are self-declared inventory gaps
@@ -261,7 +291,7 @@ fn pci_completeness_incomplete_declarations_warn() {
         "incomplete_first_party_only",
         "incomplete_third_party_only",
     ] {
-        let result = check_json(&json_with_compositions(&base(), aggregate));
+        let result = check(LEVEL, &declared(aggregate));
         assert!(
             result
                 .violations
@@ -279,7 +309,7 @@ fn pci_completeness_incomplete_declarations_warn() {
 /// not gaps; `complete` is silent (proved by the conforming-fixture test).
 #[test]
 fn pci_completeness_not_specified_and_absent_are_informational() {
-    let not_specified = check_json(&json_with_compositions(&base(), "not_specified"));
+    let not_specified = check(LEVEL, &declared("not_specified"));
     assert!(
         not_specified
             .violations
@@ -289,7 +319,7 @@ fn pci_completeness_not_specified_and_absent_are_informational() {
         render_violations(&not_specified)
     );
 
-    let absent = check_json(&base().to_json_string());
+    let absent = check(LEVEL, &base());
     assert!(
         absent
             .violations

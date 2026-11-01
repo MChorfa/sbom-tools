@@ -34,17 +34,23 @@ pub enum EmitTarget {
     CycloneDx,
     /// SPDX 2.3 JSON.
     Spdx,
+    /// The canonical model itself, as the normalized-SBOM JSON payload shared
+    /// with the C ABI (`sbom_tools_parse_sbom_*_json`). Lossless by
+    /// construction; not a CycloneDX or SPDX document.
+    Normalized,
 }
 
 impl EmitTarget {
     /// Parse a `--to` target value (case-insensitive).
     ///
-    /// Accepts `cyclonedx`/`cdx` and `spdx`. Returns `None` for unknown values.
+    /// Accepts `cyclonedx`/`cdx`, `spdx`, and `normalized`. Returns `None` for
+    /// unknown values.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "cyclonedx" | "cdx" | "cyclone-dx" => Some(Self::CycloneDx),
             "spdx" => Some(Self::Spdx),
+            "normalized" | "normalized-json" => Some(Self::Normalized),
             _ => None,
         }
     }
@@ -75,5 +81,24 @@ pub fn emit(
     match target {
         EmitTarget::CycloneDx => emit_cyclonedx(sbom),
         EmitTarget::Spdx => emit_spdx(sbom),
+        EmitTarget::Normalized => emit_normalized(sbom),
     }
+}
+
+/// Emit the canonical model as the normalized-SBOM JSON payload.
+///
+/// Byte-identical to what the C ABI returns for the same input. Nothing is
+/// synthesized or dropped, so the fidelity report is empty.
+///
+/// # Errors
+///
+/// Returns [`EmitError::Serialize`] if JSON serialization fails.
+pub fn emit_normalized(
+    sbom: &crate::model::NormalizedSbom,
+) -> Result<(String, FidelityReport), EmitError> {
+    let json = crate::serialization::normalized_sbom_json(sbom)?;
+    Ok((
+        json,
+        FidelityReport::new("canonical model", "normalized JSON"),
+    ))
 }

@@ -67,6 +67,16 @@ behavior rather than implement independent parsing or analysis rules.
   `DiffResult.semantic_score` is 0-100, `MatrixResult` similarity is 0-1
   (`semantic_score / 100`), and `diff-multi` deviation is 0-1
   (`1 - similarity`).
+- The contract is pinned at the top-level keys of each payload and the
+  numeric scales; nested shape follows the crate version, and pre-1.0 a
+  breaking change may land in a minor release with an entry under **Upgrade
+  notes** in `CHANGELOG.md`. There is no separate JSON schema version.
+- `view -o json` is a curated projection (summary + per-component identity,
+  licenses, supplier, dependency kind, vulnerabilities, EOL). The full
+  normalized model, including `crypto_properties`, `ml_model`, and `dataset`,
+  is exposed through `convert --to normalized` and the ABI parse functions /
+  bindings, which share one serializer and are byte-identical. See "JSON
+  output contract" in the README.
 
 ## Non-goals and ownership boundary
 
@@ -94,7 +104,7 @@ this repository.
 1. Installation packaging for the Python and Node.js bindings, proposed separately.
 
 Previously sequenced items now implemented: the BOM-visible ML-regression CI
-gate (`diff --fail-on-ml-regression`, exit code 7) and OSCAL 1.1.2
+gate (`diff --fail-on-ml-regression`, exit code 7) and OSCAL 1.2.3
 assessment-results export for validation findings (`validate -o oscal-json`).
 
 The sequence is a roadmap, not a claim that unmerged or proposed work is

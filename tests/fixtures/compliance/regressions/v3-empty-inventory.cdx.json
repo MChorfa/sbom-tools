@@ -1,0 +1,12 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:9a0f2b1e-6c4d-4a8b-9d7e-2f1c3b5a6e70",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-01T00:00:00Z",
+    "authors": [{ "name": "Example Corp", "email": "sbom@example.com" }],
+    "tools": { "components": [{ "type": "application", "name": "example-generator", "version": "1.0.0" }] }
+  },
+  "components": []
+}

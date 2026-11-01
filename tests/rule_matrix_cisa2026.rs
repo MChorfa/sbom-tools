@@ -2,26 +2,28 @@
 //! (audit P4: CISA 2026 Minimum Elements, v2.1, July 29, 2026).
 //!
 //! Every rule id in `CISA2026_SARIF_RULE_IDS` gets a firing fixture and a
-//! silent fixture (real CycloneDX JSON through the real parser), or an
-//! explicit skip-with-reason; exhaustiveness is enforced against the
-//! registry slice.
+//! silent fixture (rendered in each of the four encodings and run through
+//! the real parser), or an explicit skip-with-reason; exhaustiveness is
+//! enforced against the registry slice.
 //!
-//! Four rules cannot be exercised through the shared fixture DSL (it has no
-//! hooks for `signature`, `metadata.lifecycles`, `compositions`, or an
-//! omitted top-level `version`); their firing/silent behaviour is covered by
-//! the dedicated raw-JSON tests at the bottom of this file, which drive the
-//! same real parser and checker.
+//! SPDX 2.x has no field for a signature, a lifecycle phase or a
+//! completeness declaration, and the profile asks no SPDX 2.x document for
+//! them (review finding V14), so those rows assert the gate in SPDX 2.3. The
+//! raw-JSON tests at the bottom pin the fully conforming CycloneDX document,
+//! the escape hatches, and the SPDX 2.x gate on a corpus fixture.
 
 #[path = "common/rule_matrix.rs"]
 mod rule_matrix;
 
+use rule_matrix::clock::{AS_OF, checker};
 use rule_matrix::{
-    ComponentFixture, MD5_FILLER, RuleEntry, SbomFixture, check, render_violations, run_matrix,
+    CYCLONEDX_VERSION_CASE, ComponentFixture, Encoding, MD5_FILLER, Outcome, RuleEntry,
+    SPDX_VERSION_CASE, SPDX3_SBOM_TYPE_NOT_READ, SbomFixture, assert_no_violations_in, check,
+    render_violations, run_matrix,
 };
 use sbom_tools::parsers::parse_sbom_str;
 use sbom_tools::quality::{
-    CISA2026_SARIF_RULE_IDS, ComplianceChecker, ComplianceLevel, ComplianceResult,
-    ViolationSeverity as Sev,
+    CISA2026_SARIF_RULE_IDS, ComplianceLevel, ComplianceResult, ViolationSeverity as Sev,
 };
 
 const LEVEL: ComplianceLevel = ComplianceLevel::Cisa2026;
@@ -37,20 +39,16 @@ fn conforming_component(name: &str) -> ComponentFixture {
     c
 }
 
-/// A fixture satisfying every CISA 2026 element the DSL can express: Person
-/// author + versioned tool creator, timestamp, current format release,
-/// serial number, fully-populated components, and a dependency edge.
-///
-/// Three Warnings are unavoidable on every DSL fixture — SIGNATURE,
-/// GENERATION-CONTEXT, and COVERAGE — because the DSL cannot express a JSF
-/// signature, `metadata.lifecycles`, or `compositions`. They are all inside
-/// the declared universe, so the matrix's per-rule and sweep assertions are
-/// unaffected; the zero-violation conforming case uses the raw-JSON document
-/// below instead.
+/// A fixture satisfying every CISA 2026 element: Person author + versioned
+/// tool creator, timestamp, a lifecycle phase (generation context), current
+/// format release, serial number and bom.version, a JSF signature,
+/// fully-populated components, a dependency edge, and a complete
+/// compositions declaration.
 fn base() -> SbomFixture {
     SbomFixture {
         spec_version: "1.6".to_string(),
         timestamp: Some("2026-07-29T12:00:00Z".to_string()),
+        lifecycles: vec!["build".to_string()],
         serial_number: Some("urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79".to_string()),
         tools: vec![("acme-sbom-tool".to_string(), "1.0.0".to_string())],
         authors: vec![(
@@ -65,6 +63,9 @@ fn base() -> SbomFixture {
         ],
         dependencies: vec![("ref-libalpha".to_string(), vec!["ref-libbeta".to_string()])],
         vulnerabilities: Vec::new(),
+        completeness: Some("complete".to_string()),
+        signature: Some(("ES256".to_string(), "MEUCIQDx7q1FILLERSIGVALUE".to_string())),
+        ..SbomFixture::default()
     }
 }
 
@@ -74,9 +75,34 @@ fn broken(mutate: impl FnOnce(&mut SbomFixture)) -> SbomFixture {
     fixture
 }
 
+/// CISA 2026 asks no SPDX 2.x document for a signature, a lifecycle phase
+/// or a completeness declaration (review finding V14).
+const SPDX2_NOT_ASKED: &str = "SPDX 2.x has no field that can carry this evidence, so CISA \
+     2026 asks no SPDX 2.x document for it (review finding V14)";
+
+/// The conforming fixture passes with a clean verdict wherever the parser
+/// reads every element it carries: SPDX 3's software_sbomType is not read
+/// (the SBOM-CISA2026-GENERATION-CONTEXT row).
+#[test]
+fn cisa2026_conforming_fixture_is_compliant_with_zero_violations() {
+    assert_no_violations_in(LEVEL, &base(), Encoding::ALL_BUT_SPDX3);
+}
+
 #[test]
 fn cisa2026_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
     let entries = vec![
+        // No software component at all (no primary, no components): the
+        // per-component rules have nothing to judge, which is a finding.
+        RuleEntry::tested(
+            "SBOM-CISA2026-INVENTORY",
+            Sev::Error,
+            broken(|s| {
+                s.primary = None;
+                s.components.clear();
+                s.dependencies.clear();
+            }),
+            base(),
+        ),
         RuleEntry::tested(
             "SBOM-CISA2026-AUTHOR",
             Sev::Error,
@@ -86,26 +112,71 @@ fn cisa2026_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.authors.clear()),
             base(),
         ),
-        RuleEntry::skipped(
+        // A signature object without a value is no signature evidence.
+        RuleEntry::tested(
             "SBOM-CISA2026-SIGNATURE",
-            "the fixture DSL cannot express a CycloneDX JSF signature, so every \
-             DSL fixture fires this Warning and no DSL silent case exists; \
-             firing and silent behaviour are covered by the raw-JSON tests \
-             signature_missing_fires_warning / conforming document in this file",
+            Sev::Warning,
+            broken(|s| s.signature = None),
+            base(),
+        )
+        .with_firing(
+            "signature without a value",
+            Sev::Warning,
+            broken(|s| s.signature = Some(("ES256".to_string(), String::new()))),
+        )
+        .case_differs(
+            "firing",
+            &[Encoding::Spdx23Json],
+            Outcome::Silent,
+            SPDX2_NOT_ASKED,
+        )
+        .case_differs(
+            "signature without a value",
+            &[Encoding::Spdx23Json],
+            Outcome::Silent,
+            SPDX2_NOT_ASKED,
         ),
+        // Tool-policy floor (CycloneDX 1.4+ / SPDX 2.2+).
         RuleEntry::tested(
             "SBOM-CISA2026-FORMAT",
             Sev::Warning,
-            // Tool-policy floor (CycloneDX 1.4+): 1.3 must warn.
             broken(|s| s.spec_version = "1.3".to_string()),
             base(),
+        )
+        .with_firing(
+            "SPDX 2.1 is below the SPDX 2.2 floor",
+            Sev::Warning,
+            broken(|s| s.spdx_version = Some("2.1".to_string())),
+        )
+        .case_only("firing", Encoding::CYCLONEDX, CYCLONEDX_VERSION_CASE)
+        .case_only(
+            "SPDX 2.1 is below the SPDX 2.2 floor",
+            Encoding::SPDX,
+            SPDX_VERSION_CASE,
         ),
-        RuleEntry::skipped(
+        // The relative lifecycle phase at generation time; a free-form
+        // lifecycle name counts as well as a CycloneDX phase.
+        RuleEntry::tested(
             "SBOM-CISA2026-GENERATION-CONTEXT",
-            "the fixture DSL has no metadata.lifecycles hook, so every DSL \
-             fixture fires this Warning and no DSL silent case exists; covered \
-             by the raw-JSON tests generation_context_missing_fires_warning / \
-             conforming document in this file",
+            Sev::Warning,
+            broken(|s| s.lifecycles.clear()),
+            base(),
+        )
+        .with_silent(
+            "named lifecycle instead of a phase",
+            broken(|s| s.lifecycles = vec!["nightly-integration".to_string()]),
+        )
+        .case_differs(
+            "firing",
+            &[Encoding::Spdx23Json],
+            Outcome::Silent,
+            SPDX2_NOT_ASKED,
+        )
+        .case_only("silent", Encoding::ALL_BUT_SPDX3, SPDX3_SBOM_TYPE_NOT_READ)
+        .case_only(
+            "named lifecycle instead of a phase",
+            Encoding::ALL_BUT_SPDX3,
+            SPDX3_SBOM_TYPE_NOT_READ,
         ),
         RuleEntry::tested(
             "SBOM-CISA2026-TIMESTAMP",
@@ -131,13 +202,31 @@ fn cisa2026_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.tools = vec![("acme-sbom-tool".to_string(), String::new())]),
             base(),
         ),
-        RuleEntry::skipped(
+        // Neither bom.version nor a version-distinguishing serial number;
+        // either one alone declares the document's version.
+        RuleEntry::tested(
             "SBOM-CISA2026-SBOM-VERSION",
-            "the fixture DSL hardcodes the CycloneDX top-level version to 1, so \
-             the parsed doc_version is always Some(1) and the rule can never \
-             fire through the harness; firing/silent behaviour (omitted \
-             bom.version with and without serialNumber) is covered by the \
-             raw-JSON tests sbom_version_* in this file",
+            Sev::Warning,
+            broken(|s| {
+                s.doc_version = None;
+                s.serial_number = None;
+            }),
+            base(),
+        )
+        .with_silent(
+            "bom.version omitted, serial number present",
+            broken(|s| s.doc_version = None),
+        )
+        .with_silent(
+            "serial number omitted, bom.version present",
+            broken(|s| s.serial_number = None),
+        )
+        .case_differs(
+            "serial number omitted, bom.version present",
+            Encoding::SPDX,
+            Outcome::Fires(Sev::Warning),
+            "SPDX has no document revision counter, so an SPDX document without a \
+             namespace (SPDX 2.3) or document spdxId (SPDX 3) declares no version",
         ),
         RuleEntry::tested(
             "SBOM-CISA2026-PRODUCER",
@@ -202,6 +291,17 @@ fn cisa2026_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                 s.component_mut("libalpha").hashes =
                     vec![("WHIRLPOOL".to_string(), SHA1_FILLER.to_string())];
             }),
+        )
+        // Weak digests only, however many: no strong hash to fall back on.
+        .with_firing(
+            "md5-and-sha1-only",
+            Sev::Warning,
+            broken(|s| {
+                s.component_mut("libalpha").hashes = vec![
+                    ("MD5".to_string(), MD5_FILLER.to_string()),
+                    ("SHA-1".to_string(), SHA1_FILLER.to_string()),
+                ];
+            }),
         ),
         RuleEntry::tested(
             "SBOM-CISA2026-LICENSE",
@@ -215,18 +315,30 @@ fn cisa2026_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.dependencies.clear()),
             base(),
         ),
-        RuleEntry::skipped(
+        // Undeclared and declared-incomplete coverage both warn; a complete
+        // declaration is silent.
+        RuleEntry::tested(
             "SBOM-CISA2026-COVERAGE",
-            "the fixture DSL has no compositions hook, so every DSL fixture \
-             fires this Warning (undeclared completeness) and no DSL silent \
-             case exists; not-declared / declared-incomplete / declared-complete \
-             behaviour is covered by the raw-JSON tests coverage_* in this file",
-        ),
-        RuleEntry::skipped(
-            "SBOM-CISA2026-GENERAL",
-            "registry catch-all for the CISA 2026 family: no check site in \
-             check_cisa2026 emits it (registry.rs keeps it so the SARIF rule \
-             catalogue mirrors the slice); it cannot fire from document content",
+            Sev::Warning,
+            broken(|s| s.completeness = None),
+            base(),
+        )
+        .with_firing(
+            "declared incomplete",
+            Sev::Warning,
+            broken(|s| s.completeness = Some("incomplete".to_string())),
+        )
+        .case_differs(
+            "firing",
+            &[Encoding::Spdx23Json],
+            Outcome::Silent,
+            SPDX2_NOT_ASKED,
+        )
+        .case_differs(
+            "declared incomplete",
+            &[Encoding::Spdx23Json],
+            Outcome::Silent,
+            SPDX2_NOT_ASKED,
         ),
     ];
 
@@ -234,9 +346,10 @@ fn cisa2026_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
 }
 
 // ---------------------------------------------------------------------------
-// Raw-JSON cases for the elements the fixture DSL cannot express
-// (signature, lifecycles, compositions, omitted top-level version), plus the
-// escape-hatch and scoping semantics specific to the 2026 elements.
+// Raw-JSON cases on a fully conforming CycloneDX document: the lifecycle,
+// version, signature and coverage pairs (the matrix rows cover them through
+// the DSL as well, in every encoding), plus the escape-hatch and scoping
+// semantics specific to the 2026 elements.
 // ---------------------------------------------------------------------------
 
 /// A fully conforming CycloneDX 1.6 document: JSF signature, lifecycle
@@ -286,7 +399,7 @@ fn conforming_json() -> serde_json::Value {
 fn check_json(doc: &serde_json::Value) -> ComplianceResult {
     let json = doc.to_string();
     let sbom = parse_sbom_str(&json).unwrap_or_else(|e| panic!("fixture must parse: {e}\n{json}"));
-    ComplianceChecker::new(LEVEL).check(&sbom)
+    checker(LEVEL).check(&sbom)
 }
 
 /// Assert the rule fired at the given severity.
@@ -480,4 +593,127 @@ fn file_components_are_exempt_from_package_elements() {
     ] {
         assert_silent(&result, id);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review finding V14: weak digests beside a strong one, and SPDX 2.x, which
+// has no field for a signature, a lifecycle phase or a completeness
+// declaration. These tests pin the evaluation clock.
+// ---------------------------------------------------------------------------
+
+/// Filler SHA-512 digest (128 hex chars, the digest of empty input).
+const SHA512_FILLER: &str = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce\
+                             47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
+
+/// A complete SPDX 2.3 SBOM from the regression corpus.
+const SPDX2_COMPLETE: &str = "compliance/regressions/v14-spdx2-cisa2026-complete.spdx.json";
+
+fn fixture_path(rel: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(rel)
+}
+
+fn check_at_as_of(json: &str) -> ComplianceResult {
+    let sbom = parse_sbom_str(json).unwrap_or_else(|e| panic!("fixture must parse: {e}\n{json}"));
+    checker(LEVEL).check(&sbom)
+}
+
+fn check_fixture(rel: &str) -> ComplianceResult {
+    let path = fixture_path(rel);
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    check_at_as_of(&raw)
+}
+
+/// The cyclonedx-maven-plugin default lists MD5 and SHA-1 next to SHA-256
+/// and SHA-512. The strong digests satisfy the element, so the conforming
+/// document stays clean with that hash set on every component.
+#[test]
+fn weak_digests_beside_a_strong_one_do_not_warn() {
+    let mut doc = conforming_json();
+    let maven_default = serde_json::json!([
+        { "alg": "MD5", "content": MD5_FILLER },
+        { "alg": "SHA-1", "content": SHA1_FILLER },
+        { "alg": "SHA-256", "content": rule_matrix::SHA256_FILLER },
+        { "alg": "SHA-512", "content": SHA512_FILLER },
+    ]);
+    doc["metadata"]["component"]["hashes"] = maven_default.clone();
+    for component in doc["components"].as_array_mut().unwrap() {
+        component["hashes"] = maven_default.clone();
+    }
+    let result = check_at_as_of(&doc.to_string());
+    assert!(
+        result.violations.is_empty() && result.is_compliant,
+        "the Maven default hash set must pass cleanly; emitted:\n{}",
+        render_violations(&result)
+    );
+}
+
+/// A strong algorithm counts only with a real digest: next to an SHA-256
+/// entry that declares its value unknown, MD5 is the only hash, and warns.
+#[test]
+fn a_strong_algorithm_without_a_digest_leaves_the_warning() {
+    let mut doc = conforming_json();
+    doc["components"][0]["hashes"] = serde_json::json!([
+        { "alg": "MD5", "content": MD5_FILLER },
+        { "alg": "SHA-256", "content": "NOASSERTION" },
+    ]);
+    let result = check_at_as_of(&doc.to_string());
+    assert_fires(&result, "SBOM-CISA2026-HASH-ALGO", Sev::Warning);
+    assert_silent(&result, "SBOM-CISA2026-HASH");
+}
+
+/// SPDX 2.x cannot express a signature, a lifecycle phase or a completeness
+/// declaration, so a complete SPDX 2.3 SBOM passes with no findings at all.
+#[test]
+fn spdx2_is_not_asked_for_evidence_it_cannot_carry() {
+    let result = check_fixture(SPDX2_COMPLETE);
+    assert!(
+        result.violations.is_empty() && result.is_compliant,
+        "a complete SPDX 2.3 SBOM must pass with zero findings; emitted:\n{}",
+        render_violations(&result)
+    );
+}
+
+/// The gate is SPDX 2.x only. SPDX 3 can carry all three, so a document
+/// that omits them still warns.
+#[test]
+fn spdx3_without_the_evidence_still_warns() {
+    let result = check_fixture("spdx3/minimal.spdx3.json");
+    for id in [
+        "SBOM-CISA2026-SIGNATURE",
+        "SBOM-CISA2026-GENERATION-CONTEXT",
+        "SBOM-CISA2026-COVERAGE",
+    ] {
+        assert_fires(&result, id, Sev::Warning);
+    }
+}
+
+/// End to end: `validate --standard cisa-2026 --fail-on-warning` succeeds
+/// on a complete SPDX 2.3 SBOM. It used to exit 2 on the three warnings no
+/// SPDX 2.x document can clear.
+#[test]
+fn complete_spdx2_sbom_passes_validate_with_fail_on_warning() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sbom-tools"))
+        .arg("--no-color")
+        .arg("validate")
+        .arg(fixture_path(SPDX2_COMPLETE))
+        .args([
+            "--standard",
+            "cisa-2026",
+            "--fail-on-warning",
+            "--as-of",
+            AS_OF,
+        ])
+        .env("RUST_LOG", "error")
+        .output()
+        .expect("validate command should run");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

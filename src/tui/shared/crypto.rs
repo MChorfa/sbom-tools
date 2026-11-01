@@ -522,6 +522,12 @@ pub fn protocol_detail_lines(
                 refs.display_list(&ikev2.ke)
             )));
         }
+        if !ikev2.auth.is_empty() {
+            lines.push(Line::from(format!(
+                "Auth:       {}",
+                refs.display_list(&ikev2.auth)
+            )));
+        }
     }
 
     if !proto.crypto_ref_array.is_empty() {
@@ -748,6 +754,8 @@ mod tests {
             prf: vec![],
             integ: vec![],
             ke: vec![],
+            auth: vec![],
+            transforms: vec![],
         });
         let text = text_of(&protocol_detail_lines(&proto, &refs));
         assert!(text.contains("-- Referenced Crypto Assets --"), "{text}");

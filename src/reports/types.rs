@@ -33,7 +33,7 @@ pub enum ReportFormat {
     /// SARIF 2.1.0 for CI/CD
     #[serde(alias = "Sarif")]
     Sarif,
-    /// OSCAL 1.1.2 assessment-results JSON
+    /// OSCAL 1.2.3 assessment-results JSON
     #[serde(alias = "OscalJson")]
     OscalJson,
     /// Human-readable Markdown
@@ -54,9 +54,9 @@ pub enum ReportFormat {
     /// Newline-delimited JSON (one record per line, streaming-friendly)
     #[serde(alias = "Ndjson")]
     Ndjson,
-    /// interlynk-io/sbomqs `score --json`-shaped quality scores (0-10),
-    /// recomputed per-feature for side-by-side comparison with sbomqs
-    /// output (`quality` command only)
+    /// interlynk-io/sbomqs v2.1.2 `score --legacy --json`-shaped quality
+    /// scores (0-10), recomputed per-feature for side-by-side comparison
+    /// with sbomqs output (`quality` command only)
     #[serde(alias = "SbomqsJson")]
     SbomqsJson,
 }
@@ -161,6 +161,12 @@ pub struct ReportConfig {
     /// Pre-computed CRA compliance for single SBOM in view mode
     #[serde(skip)]
     pub view_cra_compliance: Option<crate::quality::ComplianceResult>,
+    /// How `-o sarif` renders a diff or a view: the SBOM file its results
+    /// point into (the new SBOM of a diff, the SBOM of a view), the
+    /// code-scanning category in place of `sbom-tools/diff/` or
+    /// `sbom-tools/view/`, and the cap on the number of results.
+    #[serde(skip)]
+    pub sarif: crate::reports::SarifOptions,
 }
 
 impl Default for ReportConfig {
@@ -176,6 +182,7 @@ impl Default for ReportConfig {
             old_cra_compliance: None,
             new_cra_compliance: None,
             view_cra_compliance: None,
+            sarif: crate::reports::SarifOptions::default(),
         }
     }
 }

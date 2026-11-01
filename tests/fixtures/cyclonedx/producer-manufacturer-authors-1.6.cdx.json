@@ -1,0 +1,48 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:c41d7e90-8a2b-4f36-9e15-6b0f3a2d8c77",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-04T00:00:00Z",
+    "authors": [{ "name": "Build Team", "email": "build@example.com" }],
+    "component": {
+      "type": "application",
+      "bom-ref": "app",
+      "name": "app",
+      "version": "1.0.0",
+      "supplier": { "name": "Example Corp" }
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "maker-lib",
+      "name": "maker-lib",
+      "version": "2.1.0",
+      "purl": "pkg:generic/maker-lib@2.1.0",
+      "manufacturer": { "name": "Maker GmbH", "url": ["https://maker.example"] }
+    },
+    {
+      "type": "library",
+      "bom-ref": "authored-lib",
+      "name": "authored-lib",
+      "version": "0.4.2",
+      "purl": "pkg:generic/authored-lib@0.4.2",
+      "authors": [{ "name": "Jane Dev" }, { "email": "ops@authored.example" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "anon-lib",
+      "name": "anon-lib",
+      "version": "9.9.9",
+      "purl": "pkg:generic/anon-lib@9.9.9"
+    }
+  ],
+  "dependencies": [
+    { "ref": "app", "dependsOn": ["maker-lib", "authored-lib", "anon-lib"] },
+    { "ref": "maker-lib", "dependsOn": [] },
+    { "ref": "authored-lib", "dependsOn": [] },
+    { "ref": "anon-lib", "dependsOn": [] }
+  ]
+}

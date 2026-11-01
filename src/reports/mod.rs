@@ -16,6 +16,7 @@
 //! be escaped before embedding in HTML or Markdown reports.
 
 pub mod analyst;
+mod compliance_json;
 pub mod csaf;
 mod csv;
 pub mod escape;
@@ -30,6 +31,7 @@ pub mod streaming;
 mod summary;
 mod types;
 
+pub use compliance_json::{COMPLIANCE_JSON_SCHEMA, generate_compliance_json};
 pub use csaf::{CsafEmitOptions, emit_csaf};
 pub use csv::CsvReporter;
 pub use html::HtmlReporter;
@@ -37,8 +39,11 @@ pub use json::JsonReporter;
 pub use markdown::MarkdownReporter;
 pub use sarif::SarifReporter;
 pub use sarif::{
-    generate_ai_readiness_sarif, generate_compliance_sarif, generate_multi_compliance_sarif,
-    generate_quality_sarif,
+    DEFAULT_SARIF_MAX_RESULTS, SARIF_SCHEMA_URI, SARIF_SRCROOT, SarifArtifact,
+    SarifArtifactLocation, SarifOptions, SbomLocator, generate_ai_readiness_sarif,
+    generate_ai_readiness_sarif_with, generate_compliance_sarif, generate_compliance_sarif_with,
+    generate_multi_compliance_sarif, generate_multi_compliance_sarif_with, generate_quality_sarif,
+    generate_quality_sarif_with,
 };
 pub use sidebyside::SideBySideReporter;
 pub use streaming::{

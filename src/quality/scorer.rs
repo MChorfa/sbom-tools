@@ -160,7 +160,9 @@ impl ScoringProfile {
             Self::Cra => ComplianceLevel::CraPhase2,
             Self::BsiTr03183_2 => ComplianceLevel::BsiTr03183_2,
             Self::Comprehensive => ComplianceLevel::Comprehensive,
-            Self::Cbom => ComplianceLevel::Comprehensive,
+            // A CBOM is judged on its cryptography, not on package fields
+            // (Comprehensive ran only generic package checks).
+            Self::Cbom => ComplianceLevel::NistPqc,
             Self::AiReadiness => ComplianceLevel::Comprehensive,
         }
     }
@@ -618,6 +620,9 @@ impl QualityScorer {
 
         let total_components = sbom.components.len();
         let is_cyclonedx = sbom.document.format == SbomFormat::CycloneDx;
+        // Time-dependent metrics (document age, certificate expiry) are
+        // judged at the pinned `--as-of` instant, like the compliance checks.
+        let now = self.as_of.unwrap_or_else(chrono::Utc::now);
 
         // Calculate all metrics
         let completeness_metrics = CompletenessMetrics::from_sbom(sbom);
@@ -626,10 +631,10 @@ impl QualityScorer {
         let vulnerability_metrics = VulnerabilityMetrics::from_sbom(sbom);
         let dependency_metrics = DependencyMetrics::from_sbom(sbom);
         let hash_quality_metrics = HashQualityMetrics::from_sbom(sbom);
-        let provenance_metrics = ProvenanceMetrics::from_sbom(sbom);
+        let provenance_metrics = ProvenanceMetrics::from_sbom_at(sbom, now);
         let auditability_metrics = AuditabilityMetrics::from_sbom(sbom);
         let lifecycle_metrics = LifecycleMetrics::from_sbom(sbom);
-        let cryptography_metrics = CryptographyMetrics::from_sbom(sbom);
+        let cryptography_metrics = CryptographyMetrics::from_sbom_at(sbom, now);
 
         // Calculate individual category scores
         let completeness_score = completeness_metrics.overall_score(&self.completeness_weights);
@@ -654,6 +659,13 @@ impl QualityScorer {
             // `vulnerability_score` below) so a zero-algorithm CBOM neither
             // earns a free 100-weighted category nor a punitive 0.
             let pqc_score = cm.pqc_readiness_score();
+            // License coverage only means something for package components;
+            // a pure CBOM (all crypto assets) has none, so the slot is N/A
+            // and reweighted away rather than scored 0.
+            let has_packages = sbom
+                .components
+                .values()
+                .any(|c| c.component_type.is_package_scoped());
             (
                 [
                     true,                // Crpt
@@ -663,7 +675,7 @@ impl QualityScorer {
                     true,                // Life
                     pqc_score.is_some(), // PQC
                     true,                // Prov
-                    true,                // Lic
+                    has_packages,        // Lic
                 ],
                 [
                     cm.crypto_completeness_score(), // slot 1: Crpt
@@ -803,7 +815,8 @@ impl QualityScorer {
         let vulnerability_metrics = VulnerabilityMetrics::from_sbom(sbom);
         let dependency_metrics = DependencyMetrics::from_sbom(sbom);
         let hash_quality_metrics = HashQualityMetrics::from_sbom(sbom);
-        let provenance_metrics = ProvenanceMetrics::from_sbom(sbom);
+        let provenance_metrics =
+            ProvenanceMetrics::from_sbom_at(sbom, self.as_of.unwrap_or_else(chrono::Utc::now));
         let auditability_metrics = AuditabilityMetrics::from_sbom(sbom);
         let lifecycle_metrics = LifecycleMetrics::from_sbom(sbom);
 
@@ -920,8 +933,9 @@ impl QualityScorer {
                 ml.and_then(|m| m.model_card_url.as_ref()).is_some(),
                 // AI-002: architecture family
                 ml.and_then(|m| m.architecture_family.as_ref()).is_some(),
-                // AI-003: training datasets
-                ml.is_some_and(|m| !m.training_datasets.is_empty()),
+                // AI-003: training datasets — modelParameters.datasets, or
+                // dataset-evidenced components nested under the model.
+                super::compliance::ai_shared::declares_training_datasets(sbom, component),
                 // AI-004: quantitative analysis — typed performance metrics, with
                 // a raw-pointer fallback for SBOMs parsed before typed extraction.
                 ml.is_some_and(|m| !m.performance_metrics.is_empty())
@@ -1624,7 +1638,10 @@ mod tests {
         );
 
         // Recompute the reweighted aggregate: PQC (index 5) excluded, its
-        // weight redistributed proportionally across the other seven slots.
+        // weight redistributed proportionally across the remaining slots.
+        // License (index 7) is N/A too: a pure CBOM has no package
+        // components for license coverage to describe.
+        let excluded = |i: usize| i == 5 || i == 7;
         let w = ScoringProfile::Cbom.weights().as_array();
         let scores = [
             cm.crypto_completeness_score(),
@@ -1634,19 +1651,19 @@ mod tests {
             cm.crypto_lifecycle_score(),
             0.0, // PQC: N/A, excluded
             report.provenance_score,
-            report.license_score,
+            0.0, // License: N/A (no package components), excluded
         ];
         let available_weight: f32 = w
             .iter()
             .enumerate()
-            .filter(|&(i, _)| i != 5)
+            .filter(|&(i, _)| !excluded(i))
             .map(|(_, wt)| wt)
             .sum();
         let expected: f32 = scores
             .iter()
             .zip(w.iter())
             .enumerate()
-            .filter(|&(i, _)| i != 5)
+            .filter(|&(i, _)| !excluded(i))
             .map(|(_, (s, wt))| s * (wt / available_weight))
             .sum();
         assert!(

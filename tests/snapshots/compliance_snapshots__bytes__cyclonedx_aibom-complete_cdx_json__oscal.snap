@@ -1,0 +1,927 @@
+---
+source: tests/compliance_snapshots.rs
+---
+{
+  "assessment-results": {
+    "back-matter": {
+      "resources": [
+        {
+          "description": "The SBOM document this assessment examined. Every observation names it as a subject.",
+          "props": [
+            {
+              "name": "type",
+              "value": "artifact"
+            },
+            {
+              "name": "sha256",
+              "ns": "https://sbom.tools/ns/oscal",
+              "value": "53e00feed5e200b15242a7e5c589d0d9b21abc5fb49f73132bf87a91514cbdb0"
+            },
+            {
+              "name": "format",
+              "ns": "https://sbom.tools/ns/oscal",
+              "value": "CycloneDX"
+            },
+            {
+              "name": "spec-version",
+              "ns": "https://sbom.tools/ns/oscal",
+              "value": "1.6"
+            }
+          ],
+          "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+          "uuid": "437ee9e2-a952-570e-b55f-7013564da526"
+        }
+      ]
+    },
+    "import-ap": {
+      "href": "urn:sbom-tools:assessment-plan:validation"
+    },
+    "metadata": {
+      "last-modified": "2026-10-12T00:00:00Z",
+      "oscal-version": "1.2.3",
+      "title": "sbom-tools validation assessment results",
+      "version": "[VERSION]"
+    },
+    "results": [
+      {
+        "description": "Validation results for EU AI Act Annex IV Readiness, derived only from the supplied SBOM.",
+        "findings": [
+          {
+            "description": "Overall verdict for EU AI Act Annex IV Readiness: 0 error(s), 0 warning(s), 0 informational finding(s).",
+            "target": {
+              "status": {
+                "state": "satisfied"
+              },
+              "target-id": "euaiact-compliance",
+              "type": "objective-id"
+            },
+            "title": "EU AI Act Annex IV Readiness compliance roll-up",
+            "uuid": "1a84c25c-05c3-56d8-a717-7fe2f7ef9630"
+          }
+        ],
+        "props": [
+          {
+            "name": "standard",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "EuAiAct"
+          },
+          {
+            "name": "standard-name",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "EU AI Act Annex IV Readiness"
+          },
+          {
+            "name": "is-compliant",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "true"
+          },
+          {
+            "name": "applicability",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "applicable"
+          },
+          {
+            "name": "error-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "0"
+          },
+          {
+            "name": "warning-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "0"
+          },
+          {
+            "name": "info-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "0"
+          },
+          {
+            "name": "passed-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "0"
+          },
+          {
+            "name": "score",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "100"
+          }
+        ],
+        "reviewed-controls": {
+          "control-selections": [
+            {
+              "description": "Controls represented by the selected sbom-tools validation standards.",
+              "include-all": {}
+            }
+          ]
+        },
+        "start": "2026-10-12T00:00:00Z",
+        "title": "sbom-tools validation assessment — EU AI Act Annex IV Readiness",
+        "uuid": "d7aa113e-0edc-5302-a29b-2c81e31797cd"
+      },
+      {
+        "description": "Validation results for BSI/G7 SBOM-for-AI Minimum Elements Readiness, derived only from the supplied SBOM.",
+        "findings": [
+          {
+            "description": "Overall verdict for BSI/G7 SBOM-for-AI Minimum Elements Readiness: 2 error(s), 5 warning(s), 5 informational finding(s).",
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "bsisbomforai-compliance",
+              "type": "objective-id"
+            },
+            "title": "BSI/G7 SBOM-for-AI Minimum Elements Readiness compliance roll-up",
+            "uuid": "9f266429-d2a2-5d7c-807f-f35d7d3ff6e5"
+          },
+          {
+            "description": "\\[BSI-AI\\] Metadata readiness: SBOM carries no document signature (integrity attestation recommended)",
+            "related-observations": [
+              {
+                "observation-uuid": "cdbaec54-c888-5826-8374-1295a7456296"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-meta-signature",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-META-SIGNATURE",
+            "uuid": "70809126-e8b5-56cf-a087-a42d4d147741"
+          },
+          {
+            "description": "\\[BSI-AI\\] System-Level readiness: no producer/supplier of the AI system is declared",
+            "related-observations": [
+              {
+                "observation-uuid": "6924e5f2-5b37-51b5-a1bd-11916b9186e1"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-sys-producer",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-SYS-PRODUCER",
+            "uuid": "d1d31c63-f0f6-5120-8c87-5db101663ca3"
+          },
+          {
+            "description": "\\[BSI-AI\\] System-Level readiness: AI-system data-flow / usage / input-output description is not declared (no SBOM field carries it today)",
+            "related-observations": [
+              {
+                "observation-uuid": "525c37a1-358b-54f1-b66f-a70aed80c5a0"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-sys-dataflow",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-SYS-DATAFLOW",
+            "uuid": "49b9ea7e-f0df-595b-b140-b3326759f129"
+          },
+          {
+            "description": "\\[BSI-AI\\] Model identifier readiness: 1 component(s) carry no unique identifier (PURL/CPE/SWHID/SWID): sentiment-classifier",
+            "related-observations": [
+              {
+                "observation-uuid": "947943a3-8c7a-5146-a367-39c948dfa908"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-model-identifier",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-MODEL-IDENTIFIER",
+            "uuid": "96fc4be6-1d78-57a5-95d4-36e28a7eeffa"
+          },
+          {
+            "description": "\\[BSI-AI\\] Model license readiness: 1 component(s) declare no license: sentiment-classifier",
+            "related-observations": [
+              {
+                "observation-uuid": "03227228-0eed-5905-b0c6-d0eb36005dd9"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-model-license",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-MODEL-LICENSE",
+            "uuid": "c37ecc05-740b-5a5d-9c74-ef910657da3c"
+          },
+          {
+            "description": "\\[BSI-AI\\] Dataset identifier readiness: 1 component(s) carry no unique identifier (PURL/CPE/SWHID/SWID): product-reviews-1M",
+            "related-observations": [
+              {
+                "observation-uuid": "85853d82-9510-5f9e-a20b-331fe1de743e"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-dataset-identifier",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-DATASET-IDENTIFIER",
+            "uuid": "761e5cda-b347-5e6a-9de5-a7bebe541323"
+          },
+          {
+            "description": "\\[BSI-AI\\] Dataset hash value readiness: 1 component(s) carry no hash value: product-reviews-1M",
+            "related-observations": [
+              {
+                "observation-uuid": "1f86c77a-4871-526e-bbfe-d45e87c1e566"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-dataset-hash",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-DATASET-HASH",
+            "uuid": "3eabee9d-cad2-5c67-84ca-c41c9e61c4d8"
+          },
+          {
+            "description": "\\[BSI-AI\\] Dataset license readiness: 1 component(s) declare no license: product-reviews-1M",
+            "related-observations": [
+              {
+                "observation-uuid": "a5fe0ff1-b5a3-55bf-bcb1-5284b1a86719"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-dataset-license",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-DATASET-LICENSE",
+            "uuid": "23615914-fad5-5123-bcc0-8cf70a8550a5"
+          },
+          {
+            "description": "\\[BSI-AI\\] Provenance & intended use readiness: 1 component(s) declare no provenance / intended-use: product-reviews-1M",
+            "related-observations": [
+              {
+                "observation-uuid": "395da9fd-e370-5a34-8c93-3ebb54bde30b"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-dataset-provenance",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-DATASET-PROVENANCE",
+            "uuid": "f438aaea-b65f-51a4-b2ef-3efcdeaf0df0"
+          },
+          {
+            "description": "\\[BSI-AI\\] Infrastructure readiness: no ML component links to its runtime / framework dependencies (no dependency edge or BOM/HBOM reference)",
+            "related-observations": [
+              {
+                "observation-uuid": "c838d0ca-691c-54b9-a184-89b80cf72cbc"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-infra-runtime",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-INFRA-RUNTIME",
+            "uuid": "29e6bc91-d4b7-5220-adf8-dbb1c8a09c0a"
+          },
+          {
+            "description": "\\[BSI-AI\\] Security readiness: no AI-specific security controls are declared (no SBOM field carries them today)",
+            "related-observations": [
+              {
+                "observation-uuid": "824efbaf-d2e5-5722-9ad4-54ee4a5c0b50"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-sec-controls",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-SEC-CONTROLS",
+            "uuid": "41ec1521-b489-5451-91a5-c57dc2395354"
+          },
+          {
+            "description": "\\[BSI-AI\\] Security readiness: no exploitability reference is declared (no SBOM field carries it today)",
+            "related-observations": [
+              {
+                "observation-uuid": "68753274-c82c-5dc2-af69-40253966e107"
+              }
+            ],
+            "target": {
+              "status": {
+                "state": "not-satisfied"
+              },
+              "target-id": "sbom-bsiai-sec-exploitability",
+              "type": "objective-id"
+            },
+            "title": "SBOM-BSIAI-SEC-EXPLOITABILITY",
+            "uuid": "bf230d31-df37-59b7-b344-eb7a6576cb89"
+          }
+        ],
+        "observations": [
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Metadata readiness: SBOM carries no document signature (integrity attestation recommended)",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "info"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Metadata / Signature"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-META-SIGNATURE"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-META-SIGNATURE"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-META-SIGNATURE",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "cdbaec54-c888-5826-8374-1295a7456296"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] System-Level readiness: no producer/supplier of the AI system is declared",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "warning"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — System-Level / Producer"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SYS-PRODUCER"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SYS-PRODUCER"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-SYS-PRODUCER",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "6924e5f2-5b37-51b5-a1bd-11916b9186e1"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] System-Level readiness: AI-system data-flow / usage / input-output description is not declared (no SBOM field carries it today)",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "info"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — System-Level / Data flow & usage"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SYS-DATAFLOW"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SYS-DATAFLOW"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-SYS-DATAFLOW",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "525c37a1-358b-54f1-b66f-a70aed80c5a0"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Model identifier readiness: 1 component(s) carry no unique identifier (PURL/CPE/SWHID/SWID): sentiment-classifier",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "error"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Models / Model identifier"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-MODEL-IDENTIFIER"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-MODEL-IDENTIFIER"
+              },
+              {
+                "name": "sbom-element",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "sentiment-classifier"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-MODEL-IDENTIFIER",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "947943a3-8c7a-5146-a367-39c948dfa908"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Model license readiness: 1 component(s) declare no license: sentiment-classifier",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "warning"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Models / Model license"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-MODEL-LICENSE"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-MODEL-LICENSE"
+              },
+              {
+                "name": "sbom-element",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "sentiment-classifier"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-MODEL-LICENSE",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "03227228-0eed-5905-b0c6-d0eb36005dd9"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Dataset identifier readiness: 1 component(s) carry no unique identifier (PURL/CPE/SWHID/SWID): product-reviews-1M",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "error"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Datasets / Dataset identifier"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-IDENTIFIER"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-IDENTIFIER"
+              },
+              {
+                "name": "sbom-element",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "product-reviews-1M"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-DATASET-IDENTIFIER",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "85853d82-9510-5f9e-a20b-331fe1de743e"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Dataset hash value readiness: 1 component(s) carry no hash value: product-reviews-1M",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "warning"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Datasets / Dataset hash value"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-HASH"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-HASH"
+              },
+              {
+                "name": "sbom-element",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "product-reviews-1M"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-DATASET-HASH",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "1f86c77a-4871-526e-bbfe-d45e87c1e566"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Dataset license readiness: 1 component(s) declare no license: product-reviews-1M",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "warning"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Datasets / Dataset license"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-LICENSE"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-LICENSE"
+              },
+              {
+                "name": "sbom-element",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "product-reviews-1M"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-DATASET-LICENSE",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "a5fe0ff1-b5a3-55bf-bcb1-5284b1a86719"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Provenance & intended use readiness: 1 component(s) declare no provenance / intended-use: product-reviews-1M",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "warning"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Datasets / Provenance & intended use"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-PROVENANCE"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-DATASET-PROVENANCE"
+              },
+              {
+                "name": "sbom-element",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "product-reviews-1M"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-DATASET-PROVENANCE",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "395da9fd-e370-5a34-8c93-3ebb54bde30b"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Infrastructure readiness: no ML component links to its runtime / framework dependencies (no dependency edge or BOM/HBOM reference)",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "info"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Infrastructure / Runtime & framework"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-INFRA-RUNTIME"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-INFRA-RUNTIME"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-INFRA-RUNTIME",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "c838d0ca-691c-54b9-a184-89b80cf72cbc"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Security readiness: no AI-specific security controls are declared (no SBOM field carries them today)",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "info"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Security / AI security controls"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SEC-CONTROLS"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SEC-CONTROLS"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-SEC-CONTROLS",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "824efbaf-d2e5-5722-9ad4-54ee4a5c0b50"
+          },
+          {
+            "collected": "2026-10-12T00:00:00Z",
+            "description": "\\[BSI-AI\\] Security readiness: no exploitability reference is declared (no SBOM field carries it today)",
+            "methods": [
+              "EXAMINE"
+            ],
+            "props": [
+              {
+                "name": "severity",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "info"
+              },
+              {
+                "name": "standard-reference",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "BSI/G7 SBOM-for-AI — Security / Exploitability reference"
+              },
+              {
+                "name": "rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SEC-EXPLOITABILITY"
+              },
+              {
+                "name": "sarif-rule-id",
+                "ns": "https://sbom.tools/ns/oscal",
+                "value": "SBOM-BSIAI-SEC-EXPLOITABILITY"
+              }
+            ],
+            "subjects": [
+              {
+                "subject-uuid": "437ee9e2-a952-570e-b55f-7013564da526",
+                "title": "aibom-complete-app (CycloneDX 1.6 SBOM)",
+                "type": "resource"
+              }
+            ],
+            "title": "SBOM-BSIAI-SEC-EXPLOITABILITY",
+            "types": [
+              "discovery"
+            ],
+            "uuid": "68753274-c82c-5dc2-af69-40253966e107"
+          }
+        ],
+        "props": [
+          {
+            "name": "standard",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "BsiSbomForAi"
+          },
+          {
+            "name": "standard-name",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "BSI/G7 SBOM-for-AI Minimum Elements Readiness"
+          },
+          {
+            "name": "is-compliant",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "false"
+          },
+          {
+            "name": "applicability",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "applicable"
+          },
+          {
+            "name": "error-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "2"
+          },
+          {
+            "name": "warning-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "5"
+          },
+          {
+            "name": "info-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "5"
+          },
+          {
+            "name": "passed-count",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "0"
+          },
+          {
+            "name": "score",
+            "ns": "https://sbom.tools/ns/oscal",
+            "value": "12"
+          }
+        ],
+        "reviewed-controls": {
+          "control-selections": [
+            {
+              "description": "Controls represented by the selected sbom-tools validation standards.",
+              "include-all": {}
+            }
+          ]
+        },
+        "start": "2026-10-12T00:00:00Z",
+        "title": "sbom-tools validation assessment — BSI/G7 SBOM-for-AI Minimum Elements Readiness",
+        "uuid": "d41ed849-ae45-50dd-8894-5eff4b8efa30"
+      }
+    ],
+    "uuid": "c7b3eda8-0816-5656-8e6a-54de793374e2"
+  }
+}

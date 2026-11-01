@@ -1,4 +1,10 @@
 //! Executive Order 14028 Section 4 checks.
+//!
+//! The profile follows the SBOM practice of EO 14028 §4(e) and the NTIA
+//! minimum elements it led to (§4(f)). It is practice, not a federal
+//! mandate: OMB M-26-05 (2026-01-23) rescinded M-22-18 and M-23-16, the
+//! attestation policy built on §4(e), and the FAR Council withdrew FAR
+//! Case 2023-002 on 2026-03-06. The checks themselves are unchanged.
 
 use super::ssdf::{cdxa_note, requirement_matches_id};
 use super::*;
@@ -24,6 +30,14 @@ impl ComplianceChecker {
     pub(crate) fn check_eo14028(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
         use crate::model::ExternalRefType;
 
+        // The component checks below have nothing to judge without a
+        // package-scoped component.
+        violations.extend(inventory_absent_violation(
+            sbom,
+            "SBOM-EO14028-INVENTORY",
+            "EO 14028 §4(e) practice: component inventory",
+        ));
+
         // CDXA attestation evidence for the EO 14028 family (fresh and
         // fully resolved at the injectable clock). Strengthens only: the
         // legacy tool-creator path below stays a valid SelfDeclared-level
@@ -35,42 +49,37 @@ impl ComplianceChecker {
             .iter()
             .any(|s| evidences_autogen_provenance(s.requirement));
 
-        // Sec 4(e) — Machine-readable format
-        let format_ok = match sbom.document.format {
-            crate::model::SbomFormat::CycloneDx => {
-                let v = &sbom.document.spec_version;
-                !(v.starts_with("1.0")
-                    || v.starts_with("1.1")
-                    || v.starts_with("1.2")
-                    || v.starts_with("1.3"))
-            }
-            crate::model::SbomFormat::Spdx => {
-                // The NTIA minimum-elements report that EO 14028 §4(e)
-                // defers to names SPDX (then at 2.2) as an accepted format,
-                // so SPDX 2.2 documents are machine-readable under the EO.
-                // An empty spec_version means the document declared no
-                // version (parsers never fabricate one): skip rather than
-                // false-fail, matching the CycloneDX arm where an empty
-                // version also passes.
-                let v = &sbom.document.spec_version;
-                v.is_empty() || v.starts_with("2.2") || v.starts_with("2.3") || v.starts_with("3.")
-            }
+        // Sec 4(e) — Machine-readable format: CycloneDX 1.4+, SPDX 2.2+.
+        // The NTIA minimum-elements report that EO 14028 §4(e) defers to
+        // names SPDX (then at 2.2) as an accepted format, so SPDX 2.2
+        // documents are machine-readable under the EO. Versions compare
+        // numerically ("1.10" is newer than "1.7", not "1.1"); an absent or
+        // unparseable version skips the gate instead of false-failing.
+        let minimum = match sbom.document.format {
+            crate::model::SbomFormat::CycloneDx => crate::model::SpecVersion::new(1, 4, 0),
+            crate::model::SbomFormat::Spdx => crate::model::SpecVersion::new(2, 2, 0),
         };
+        let format_ok = sbom
+            .document
+            .spec_version_parsed()
+            .is_none_or(|v| v >= minimum);
         if !format_ok {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::FormatSpecific,
                 message: format!(
-                    "SBOM format {} {} does not meet EO 14028 machine-readable requirements; \
-                    use CycloneDX 1.4+, SPDX 2.2+, or SPDX 3.0+",
+                    "SBOM format {} {} is older than the machine-readable formats EO 14028 \
+                    practice expects; use CycloneDX 1.4+, SPDX 2.2+, or SPDX 3.0+",
                     sbom.document.format, sbom.document.spec_version
                 ),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Machine-readable SBOM format".to_string(),
+                requirement: "EO 14028 §4(e) practice: Machine-readable SBOM format".to_string(),
                 rule_id: "SBOM-EO14028-FORMAT",
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -85,11 +94,13 @@ impl ComplianceChecker {
                 message: "SBOM is missing a creation timestamp (NTIA required data field)"
                     .to_string(),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Timestamp (NTIA baseline)".to_string(),
+                requirement: "EO 14028 §4(e) practice: Timestamp (NTIA baseline)".to_string(),
                 rule_id: "SBOM-EO14028-TIMESTAMP",
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -119,11 +130,13 @@ impl ComplianceChecker {
                 category: ViolationCategory::DocumentMetadata,
                 message,
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Automated SBOM generation".to_string(),
+                requirement: "EO 14028 §4(e) practice: Automated SBOM generation".to_string(),
                 rule_id: "SBOM-EO14028-AUTOGEN",
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -132,23 +145,27 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
-                message: "SBOM must identify its creator (vendor or tool)".to_string(),
+                message: "SBOM should identify its creator (vendor or tool)".to_string(),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): SBOM creator identification".to_string(),
+                requirement: "EO 14028 §4(e) practice: SBOM creator identification".to_string(),
                 rule_id: "SBOM-EO14028-CREATOR",
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // Sec 4(e) — Component identification with unique identifiers
         // (PURL/CPE/SWHID/SWID via `has_cra_identifier`, so SWHID-only SPDX
         // components are not flagged)
-        let total = sbom.components.len();
-        let without_id = sbom
-            .components
-            .values()
+        // Package elements (identifier, version, hash, supplier) apply to
+        // package-scoped components only; names apply to every component.
+        let packages: Vec<_> = package_components(sbom).collect();
+        let total = packages.len();
+        let without_id = packages
+            .iter()
             .filter(|c| !c.identifiers.has_cra_identifier())
             .count();
         if without_id > 0 {
@@ -159,7 +176,7 @@ impl ComplianceChecker {
                     "{without_id}/{total} components missing unique identifier (PURL/CPE/SWHID/SWID)"
                 ),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Component unique identification".to_string(),
+                requirement: "EO 14028 §4(e) practice: Component unique identification".to_string(),
                 rule_id: "SBOM-EO14028-IDENTIFIER",
                 component_id: None,
                 counts: Some(ViolationCounts {
@@ -167,10 +184,14 @@ impl ComplianceChecker {
                     total,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // Sec 4(e) — NTIA baseline: component names
+        // All components: every component needs a name, package or not.
+        let all_components = sbom.components.len();
         let without_name = sbom
             .components
             .values()
@@ -180,40 +201,46 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::ComponentIdentification,
-                message: format!("{without_name}/{total} components missing a component name"),
+                message: format!(
+                    "{without_name}/{all_components} components missing a component name"
+                ),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Component name (NTIA baseline)".to_string(),
+                requirement: "EO 14028 §4(e) practice: Component name (NTIA baseline)".to_string(),
                 rule_id: "SBOM-EO14028-NAME",
                 component_id: None,
                 counts: Some(ViolationCounts {
                     affected: without_name,
-                    total,
+                    total: all_components,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
-        // Sec 4(e) — Dependency relationships
-        if sbom.components.len() > 1 && sbom.edges.is_empty() {
+        // Sec 4(e) — Dependency relationships (between packages: crypto
+        // assets and files need not join the dependency graph)
+        if total > 1 && sbom.edges.is_empty() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DependencyInfo,
-                message: "SBOM with multiple components must include dependency relationships"
+                message: "SBOM with multiple components should include dependency relationships"
                     .to_string(),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Dependency relationships".to_string(),
+                requirement: "EO 14028 §4(e) practice: Dependency relationships".to_string(),
                 rule_id: "SBOM-EO14028-DEPENDENCY",
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // Sec 4(e) — Version information (placeholder values such as
         // NOASSERTION do not satisfy the element)
-        let without_version = sbom
-            .components
-            .values()
+        let without_version = packages
+            .iter()
             .filter(|c| !has_known_value(&c.version))
             .count();
         if without_version > 0 {
@@ -224,7 +251,7 @@ impl ComplianceChecker {
                     "{without_version}/{total} components missing version information"
                 ),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Component version".to_string(),
+                requirement: "EO 14028 §4(e) practice: Component version".to_string(),
                 rule_id: "SBOM-EO14028-VERSION",
                 component_id: None,
                 counts: Some(ViolationCounts {
@@ -232,22 +259,21 @@ impl ComplianceChecker {
                     total,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // Sec 4(e) — Cryptographic hashes for integrity
-        let without_hash = sbom
-            .components
-            .values()
-            .filter(|c| c.hashes.is_empty())
-            .count();
+        let without_hash = packages.iter().filter(|c| c.hashes.is_empty()).count();
         if without_hash > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::IntegrityInfo,
                 message: format!("{without_hash}/{total} components missing cryptographic hashes"),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Component integrity verification".to_string(),
+                requirement: "EO 14028 §4(e) practice: Component integrity verification"
+                    .to_string(),
                 rule_id: "SBOM-EO14028-INTEGRITY",
                 component_id: None,
                 counts: Some(ViolationCounts {
@@ -255,10 +281,12 @@ impl ComplianceChecker {
                     total,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
-        // Sec 4(g) — Vulnerability disclosure. Component-level refs count
+        // Sec 4(e)(viii) — Vulnerability disclosure program. Component-level refs count
         // only on the primary/root components — a dependency's upstream
         // advisories URL is not the vendor's disclosure process.
         let has_security_ref = sbom.document.security_contact.is_some()
@@ -278,24 +306,23 @@ impl ComplianceChecker {
                 message: "No security contact or vulnerability disclosure reference found"
                     .to_string(),
                 element: None,
-                requirement: "EO 14028 Sec 4(g): Vulnerability disclosure process".to_string(),
+                requirement: "EO 14028 §4(e)(viii) practice: Vulnerability disclosure program"
+                    .to_string(),
                 rule_id: "SBOM-EO14028-DISCLOSURE",
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // Sec 4(e) — Supplier identification (placeholder values such as
         // NOASSERTION do not satisfy the element)
-        let without_supplier = sbom
-            .components
-            .values()
-            .filter(|c| !has_known_supplier(&c.supplier, &c.author))
-            .count();
+        let without_supplier = packages.iter().filter(|c| !has_known_producer(c)).count();
         if without_supplier > 0 {
-            // Supplier Name is a REQUIRED NTIA minimum element, and EO 14028
-            // §4(e) mandates the NTIA minimum elements — so a missing supplier
+            // Supplier Name is a REQUIRED NTIA minimum element, and the EO 14028
+            // §4(e) practice incorporates the NTIA minimum elements — so a missing supplier
             // is a gating Error (as version and unique-id already are), not a
             // Warning behind a >30% threshold.
             let pct = (without_supplier * 100) / total.max(1);
@@ -306,7 +333,7 @@ impl ComplianceChecker {
                     "{without_supplier}/{total} components ({pct}%) missing supplier information"
                 ),
                 element: None,
-                requirement: "EO 14028 Sec 4(e): Supplier identification".to_string(),
+                requirement: "EO 14028 §4(e) practice: Supplier identification".to_string(),
                 rule_id: "SBOM-EO14028-SUPPLIER",
                 component_id: None,
                 counts: Some(ViolationCounts {
@@ -314,6 +341,8 @@ impl ComplianceChecker {
                     total,
                 }),
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }

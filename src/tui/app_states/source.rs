@@ -34,16 +34,12 @@ pub fn xml_tree_from_str(xml: &str) -> Option<XmlTreeNode> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let attributes = e
                     .attributes()
                     .filter_map(|a| {
-                        a.ok().map(|attr| {
-                            (
-                                String::from_utf8_lossy(attr.key.as_ref()).to_string(),
-                                String::from_utf8_lossy(&attr.value).to_string(),
-                            )
-                        })
+                        a.ok()
+                            .map(|attr| (attr.key.as_ref().to_string(), attr.value.to_string()))
                     })
                     .collect();
                 stack.push(XmlTreeNode::Element {
@@ -61,16 +57,12 @@ pub fn xml_tree_from_str(xml: &str) -> Option<XmlTreeNode> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let attributes = e
                     .attributes()
                     .filter_map(|a| {
-                        a.ok().map(|attr| {
-                            (
-                                String::from_utf8_lossy(attr.key.as_ref()).to_string(),
-                                String::from_utf8_lossy(&attr.value).to_string(),
-                            )
-                        })
+                        a.ok()
+                            .map(|attr| (attr.key.as_ref().to_string(), attr.value.to_string()))
                     })
                     .collect();
                 if let Some(XmlTreeNode::Element { children, .. }) = stack.last_mut() {
@@ -82,7 +74,8 @@ pub fn xml_tree_from_str(xml: &str) -> Option<XmlTreeNode> {
                 }
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.decode().unwrap_or_default().trim().to_string();
+                let raw: &str = e.as_ref();
+                let text = raw.trim().to_string();
                 if !text.is_empty()
                     && let Some(XmlTreeNode::Element { children, .. }) = stack.last_mut()
                 {
@@ -2479,7 +2472,7 @@ fn insert_gap_items(
 ) {
     // Process insertions from the highest position to lowest
     let mut sorted: Vec<(usize, usize)> = insertions.to_vec();
-    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    sorted.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     for (pos, count) in sorted {
         let insert_pos = pos.min(items.len());

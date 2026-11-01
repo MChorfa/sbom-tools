@@ -161,7 +161,7 @@ flowchart TD
     I1 --> Z
 ```
 
-`sbomqs_compat` recomputes sbomqs v2.0.11 feature scores straight from the
+`sbomqs_compat` recomputes sbomqs v2.1.2 feature scores straight from the
 NormalizedSbom (plus the raw document text); it never reads `QualityReport`, so
 the 0-10 table and the 0-100 score are independent computations, not a rescale.
 
@@ -195,7 +195,7 @@ flowchart TD
 
 Note: Typed `MultiDiffConfig`; enrichment supported; no streaming; output
 limited to JSON or TUI. `-o` is a restricted clap enum on these three commands,
-so an unsupported value is a usage error (exit 2) before any SBOM is parsed.
+so an unsupported value is a usage error (exit 3) before any SBOM is parsed.
 
 Scale conventions across the multi-SBOM results (test-pinned):
 

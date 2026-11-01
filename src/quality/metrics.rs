@@ -5,8 +5,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{
-    CompletenessDeclaration, ComponentType, CreatorType, CryptoAssetType, CryptoMaterialState,
-    CryptoPrimitive, EolStatus, ExternalRefType, HashAlgorithm, NormalizedSbom, StalenessLevel,
+    AlgorithmClass, CompletenessDeclaration, ComponentType, CreatorType, CryptoAssetType,
+    CryptoMaterialState, CryptoPrimitive, EolStatus, ExternalRefType, HashAlgorithm,
+    NormalizedSbom, StalenessLevel, classify_algorithm,
 };
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +63,7 @@ impl CompletenessMetrics {
         let mut countable = 0;
 
         for comp in sbom.components.values() {
-            if matches!(comp.component_type, crate::model::ComponentType::File) {
+            if !comp.component_type.is_package_scoped() {
                 continue;
             }
             countable += 1;
@@ -236,10 +237,13 @@ pub struct HashQualityMetrics {
     pub algorithm_distribution: BTreeMap<String, usize>,
     /// Total hash entries across all components
     pub total_hashes: usize,
-    /// Vendor-supplied components — supplier or author set AND a non-synthetic
-    /// canonical identifier (PURL/CPE/SWHID/SWID).
-    /// Tracks how many such "upstream" components exist, used to verify
-    /// CRA prEN 40000-1-3 `[PRE-7-RQ-07-RE]` (carry-through of vendor hashes).
+    /// Vendor-supplied components — a known supplier, manufacturer or author
+    /// (a `NOASSERTION` or placeholder name names no vendor) AND a PURL,
+    /// CPE, SWHID or SWID (`has_cra_identifier`), whatever the component's
+    /// canonical id: one re-keyed after a canonical-id collision keeps its
+    /// identifiers. Tracks how many such "upstream" components exist, used
+    /// to verify CRA prEN 40000-1-3 `[PRE-7-RQ-07-RE]` (carry-through of
+    /// vendor hashes).
     pub vendor_components_total: usize,
     /// Vendor components that carry at least one hash entry.
     pub vendor_components_with_hash: usize,
@@ -261,14 +265,15 @@ impl HashQualityMetrics {
         let mut vendor_with_strong = 0;
 
         for comp in sbom.components.values() {
-            // Vendor-component classification (independent of hash presence)
-            let is_vendor = (comp.supplier.is_some() || comp.author.is_some())
-                && !matches!(
-                    comp.canonical_id.source(),
-                    crate::model::IdSource::Synthetic
-                        | crate::model::IdSource::FormatSpecific
-                        | crate::model::IdSource::NameVersion
-                );
+            // Vendor-component classification (independent of hash presence),
+            // with the sentinel-aware producer test: a NOASSERTION or
+            // placeholder supplier names no vendor, exactly like an absent one.
+            // The identifier test reads the component's identifiers, as the
+            // CRA identifier checks do, not the source of its canonical id: a
+            // component re-keyed after a canonical-id collision has a
+            // format-specific canonical id and still has its purl.
+            let is_vendor = crate::quality::compliance::has_known_producer(comp)
+                && comp.identifiers.has_cra_identifier();
             if is_vendor {
                 vendor_total += 1;
             }
@@ -434,10 +439,11 @@ pub struct IdentifierMetrics {
     pub ecosystems: Vec<String>,
     /// Components missing all identifiers (only name)
     pub missing_all_identifiers: usize,
-    /// File-typed inventory entries excluded from per-component counting
-    /// (denominator plumbing for `quality_score`; not part of the report).
+    /// File and cryptographic-asset entries excluded from per-component
+    /// counting (denominator plumbing for `quality_score`; not part of the
+    /// report).
     #[serde(skip)]
-    pub file_components: usize,
+    pub non_package_components: usize,
 }
 
 impl IdentifierMetrics {
@@ -451,7 +457,7 @@ impl IdentifierMetrics {
         let mut with_swid = 0;
         let mut with_valid_id = 0;
         let mut missing_all = 0;
-        let mut file_components = 0;
+        let mut non_package_components = 0;
         let mut ecosystems = std::collections::HashSet::new();
 
         for comp in sbom.components.values() {
@@ -459,8 +465,8 @@ impl IdentifierMetrics {
             // structurally lack purl/cpe/swid, and counting them cratered
             // identifier coverage for file-cataloguing SBOMs (same exemption
             // as CompletenessMetrics).
-            if matches!(comp.component_type, ComponentType::File) {
-                file_components += 1;
+            if !comp.component_type.is_package_scoped() {
+                non_package_components += 1;
                 continue;
             }
 
@@ -518,7 +524,7 @@ impl IdentifierMetrics {
             components_with_valid_id: with_valid_id,
             ecosystems: ecosystem_list,
             missing_all_identifiers: missing_all,
-            file_components,
+            non_package_components,
         }
     }
 
@@ -528,7 +534,7 @@ impl IdentifierMetrics {
         // File entries are exempt from identifier counting (see from_sbom),
         // so remove them from the denominator too — otherwise a file
         // catalogue dilutes package identifier coverage.
-        let countable = total_components.saturating_sub(self.file_components);
+        let countable = total_components.saturating_sub(self.non_package_components);
         if countable == 0 {
             return 0.0;
         }
@@ -570,10 +576,11 @@ pub struct LicenseMetrics {
     pub copyleft_license_ids: Vec<String>,
     /// Unique licenses found
     pub unique_licenses: Vec<String>,
-    /// File-typed inventory entries excluded from per-component counting
-    /// (denominator plumbing for `quality_score`; not part of the report).
+    /// File and cryptographic-asset entries excluded from per-component
+    /// counting (denominator plumbing for `quality_score`; not part of the
+    /// report).
     #[serde(skip)]
-    pub file_components: usize,
+    pub non_package_components: usize,
 }
 
 impl LicenseMetrics {
@@ -587,7 +594,7 @@ impl LicenseMetrics {
         let mut noassertion = 0;
         let mut deprecated = 0;
         let mut restrictive = 0;
-        let mut file_components = 0;
+        let mut non_package_components = 0;
         let mut licenses = HashSet::new();
         let mut copyleft_ids = HashSet::new();
 
@@ -602,9 +609,9 @@ impl LicenseMetrics {
             // per-component license counting (same exemption as
             // CompletenessMetrics). Their license strings still feed the
             // informational unique/copyleft lists below.
-            let is_file = matches!(comp.component_type, ComponentType::File);
-            if is_file {
-                file_components += 1;
+            let is_non_package = !comp.component_type.is_package_scoped();
+            if is_non_package {
+                non_package_components += 1;
             }
 
             let mut has_real_entry = false;
@@ -638,7 +645,7 @@ impl LicenseMetrics {
                 }
             }
 
-            if is_file {
+            if is_non_package {
                 // Exempt from all per-component counters (license strings
                 // were still collected above).
                 continue;
@@ -683,7 +690,7 @@ impl LicenseMetrics {
             restrictive_licenses: restrictive,
             copyleft_license_ids: copyleft_list,
             unique_licenses: license_list,
-            file_components,
+            non_package_components,
         }
     }
 
@@ -693,7 +700,7 @@ impl LicenseMetrics {
         // File entries are exempt from per-component license counting (see
         // from_sbom), so remove them from the denominator too — otherwise a
         // file catalogue dilutes package license coverage.
-        let countable = total_components.saturating_sub(self.file_components);
+        let countable = total_components.saturating_sub(self.non_package_components);
         if countable == 0 {
             return 0.0;
         }
@@ -910,10 +917,11 @@ pub struct DependencyMetrics {
     pub complexity_level: Option<ComplexityLevel>,
     /// Factor breakdown. `None` when graph analysis skipped.
     pub complexity_factors: Option<ComplexityFactors>,
-    /// File-typed inventory entries excluded from the coverage denominator in
-    /// `quality_score` (denominator plumbing; not part of the report).
+    /// File and cryptographic-asset entries excluded from the coverage
+    /// denominator in `quality_score` (denominator plumbing; not part of the
+    /// report).
     #[serde(skip)]
-    pub file_components: usize,
+    pub non_package_components: usize,
 }
 
 impl DependencyMetrics {
@@ -929,10 +937,10 @@ impl DependencyMetrics {
         // denominator in quality_score (same exemption as
         // CompletenessMetrics). Cycle/orphan penalties for real packages are
         // unchanged.
-        let file_components = sbom
+        let non_package_components = sbom
             .components
             .values()
-            .filter(|c| matches!(c.component_type, ComponentType::File))
+            .filter(|c| !c.component_type.is_package_scoped())
             .count();
 
         // Build adjacency lists using CanonicalId.value() for string keys
@@ -982,7 +990,7 @@ impl DependencyMetrics {
                 software_complexity_index: None,
                 complexity_level: None,
                 complexity_factors: None,
-                file_components,
+                non_package_components,
             };
         }
 
@@ -1021,7 +1029,7 @@ impl DependencyMetrics {
             software_complexity_index: Some(complexity_index),
             complexity_level: Some(complexity_lvl),
             complexity_factors: Some(factors),
-            file_components,
+            non_package_components,
         }
     }
 
@@ -1035,7 +1043,7 @@ impl DependencyMetrics {
         // File entries are not dependency-graph members (see from_sbom), so
         // they are excluded from the coverage denominator — otherwise a file
         // catalogue dilutes package dependency coverage.
-        let countable = total_components.saturating_sub(self.file_components);
+        let countable = total_components.saturating_sub(self.non_package_components);
 
         // Score based on how many components have dependency info. Clamp to
         // 100 BEFORE subtracting penalties: with an N/(N-1) denominator a
@@ -1377,9 +1385,21 @@ const fn default_timestamp_known() -> bool {
 }
 
 impl ProvenanceMetrics {
-    /// Calculate provenance metrics from an SBOM
+    /// Compute provenance metrics, measuring document age at `now` (the
+    /// scorer's `--as-of` instant) instead of the wall clock.
+    #[must_use]
+    pub fn from_sbom_at(sbom: &NormalizedSbom, now: chrono::DateTime<chrono::Utc>) -> Self {
+        Self::compute(sbom, now)
+    }
+
+    /// Calculate provenance metrics from an SBOM, measuring document age
+    /// against the wall clock. Use [`Self::from_sbom_at`] to pin the instant.
     #[must_use]
     pub fn from_sbom(sbom: &NormalizedSbom) -> Self {
+        Self::compute(sbom, chrono::Utc::now())
+    }
+
+    fn compute(sbom: &NormalizedSbom, now: chrono::DateTime<chrono::Utc>) -> Self {
         let doc = &sbom.document;
 
         let has_tool_creator = doc
@@ -1406,7 +1426,7 @@ impl ProvenanceMetrics {
 
         let timestamp_known = doc.has_known_timestamp();
         // Signed age: negative means the document is dated in the future.
-        let age_days_signed = (chrono::Utc::now() - doc.created).num_days();
+        let age_days_signed = (now - doc.created).num_days();
         let age_days = age_days_signed.max(0) as u32;
 
         Self {
@@ -1772,6 +1792,11 @@ pub struct CryptographyMetrics {
     pub keys_with_algorithm_ref: usize,
     /// Protocols with at least one cipher suite
     pub protocols_with_cipher_suites: usize,
+    /// Protocols linked to the algorithms they use by any means: cipher
+    /// suites, `cryptoRefArray` / `relatedCryptographicAssets`, or IKEv2
+    /// transform types
+    #[serde(default)]
+    pub protocols_with_algorithm_refs: usize,
 
     // --- Key lifecycle (slot 5: Life) ---
     /// Keys with `state` tracked
@@ -1787,10 +1812,21 @@ pub struct CryptographyMetrics {
 }
 
 impl CryptographyMetrics {
-    /// Compute cryptography metrics from an SBOM.
+    /// Compute cryptography metrics from an SBOM, judging certificate expiry
+    /// against the wall clock. Use [`Self::from_sbom_at`] to pin the instant.
     #[must_use]
     pub fn from_sbom(sbom: &NormalizedSbom) -> Self {
+        Self::from_sbom_at(sbom, chrono::Utc::now())
+    }
+
+    /// Compute cryptography metrics, judging certificate expiry at `now`
+    /// (the scorer's `--as-of` instant).
+    #[must_use]
+    pub fn from_sbom_at(sbom: &NormalizedSbom, now: chrono::DateTime<chrono::Utc>) -> Self {
         let mut m = Self::default();
+        // References only earn credit when they resolve inside the SBOM.
+        let index = sbom.build_index();
+        let resolves = |r: &str| index.resolve_bom_ref(r).is_some();
 
         for comp in sbom.components.values() {
             if comp.component_type != ComponentType::Cryptographic {
@@ -1824,29 +1860,52 @@ impl CryptographyMetrics {
                         {
                             m.algorithms_with_security_level += 1;
                         }
-                        // A classical public-key family (RSA/ECDSA/DH/…) is
-                        // quantum-vulnerable on the family alone — real CBOMs
-                        // rarely set nistQuantumSecurityLevel=0, so counting
-                        // only Some(0) let classical crypto escape the penalty.
-                        // NOTE: the compliance checkers use the richer shared
-                        // classifier `crate::model::classify_algorithm` (OID,
-                        // name, curve, alias normalization); these
-                        // family-string helpers are kept here so the metrics
-                        // scoring stays stable.
-                        if algo.is_classical_quantum_vulnerable()
-                            || algo.nist_quantum_security_level == Some(0)
-                        {
-                            m.quantum_vulnerable_count += 1;
-                        } else if algo.is_quantum_safe() {
-                            m.quantum_safe_count += 1;
-                        }
-                        if algo.is_weak_by_name(&comp.name) {
-                            m.weak_algorithm_count += 1;
-                            m.weak_algorithm_names.push(comp.name.clone());
-                        }
                         if algo.is_hybrid_pqc() {
                             m.hybrid_pqc_count += 1;
                         }
+                    }
+
+                    // Weakness / quantum posture come from the same shared
+                    // classifier the compliance checkers use (family, OID,
+                    // name, curve, alias normalization), unioned with the
+                    // declared-field helpers — so the quality score cannot
+                    // be softer than `validate` on the same file (a name
+                    // like "HMAC_SHA1" escaped the old `starts_with` check).
+                    let algo = cp.algorithm_properties.as_ref();
+                    let cls = classify_algorithm(
+                        algo.and_then(|a| a.algorithm_family.as_deref()),
+                        Some(&comp.name),
+                        cp.oid.as_deref(),
+                        algo.and_then(|a| a.parameter_set_identifier.as_deref()),
+                        algo.and_then(|a| a.elliptic_curve.as_deref()),
+                    );
+                    // A classical public-key family (RSA/ECDSA/DH/…) is
+                    // quantum-vulnerable on the family alone — real CBOMs
+                    // rarely set nistQuantumSecurityLevel=0. A broken
+                    // algorithm (RSA-1024, …) is counted as weak below, not
+                    // here as well: counting it twice inflated the
+                    // quantum-vulnerable figure past what `validate` reports.
+                    // A PQ/T hybrid counts by its post-quantum part, as the
+                    // NIST PQC check judges it.
+                    let quantum = cls.hybrid_parts().map_or(&cls, |h| &h.post_quantum);
+                    if cls.class != AlgorithmClass::Broken
+                        && (cls.class == AlgorithmClass::ClassicalQuantumVulnerable
+                            || algo.is_some_and(|a| {
+                                a.is_classical_quantum_vulnerable()
+                                    || a.nist_quantum_security_level == Some(0)
+                            }))
+                    {
+                        m.quantum_vulnerable_count += 1;
+                    } else if matches!(quantum.class, AlgorithmClass::PostQuantum(_))
+                        || algo.is_some_and(|a| a.is_quantum_safe())
+                    {
+                        m.quantum_safe_count += 1;
+                    }
+                    if cls.class == AlgorithmClass::Broken
+                        || algo.is_some_and(|a| a.is_weak_by_name(&comp.name))
+                    {
+                        m.weak_algorithm_count += 1;
+                        m.weak_algorithm_names.push(comp.name.clone());
                     }
                 }
                 CryptoAssetType::Certificate => {
@@ -1855,12 +1914,12 @@ impl CryptographyMetrics {
                         if cert.not_valid_before.is_some() && cert.not_valid_after.is_some() {
                             m.certs_with_validity_dates += 1;
                         }
-                        if cert.signature_algorithm_ref.is_some() {
+                        if cert.signature_algorithm_refs().into_iter().any(&resolves) {
                             m.certs_with_signature_algo_ref += 1;
                         }
-                        if cert.is_expired() {
+                        if cert.is_expired_at(now) {
                             m.expired_certificates += 1;
-                        } else if cert.is_expiring_soon(90) {
+                        } else if cert.is_expiring_soon_at(90, now) {
                             m.expiring_soon_certificates += 1;
                         }
                     }
@@ -1877,7 +1936,7 @@ impl CryptographyMetrics {
                         if mat.creation_date.is_some() || mat.activation_date.is_some() {
                             m.keys_with_lifecycle_dates += 1;
                         }
-                        if mat.algorithm_ref.is_some() {
+                        if mat.algorithm_ref.as_deref().is_some_and(resolves) {
                             m.keys_with_algorithm_ref += 1;
                         }
                         if mat.state == Some(CryptoMaterialState::Compromised) {
@@ -1919,10 +1978,16 @@ impl CryptographyMetrics {
                 }
                 CryptoAssetType::Protocol => {
                     m.protocols_count += 1;
-                    if let Some(proto) = &cp.protocol_properties
-                        && !proto.cipher_suites.is_empty()
-                    {
-                        m.protocols_with_cipher_suites += 1;
+                    if let Some(proto) = &cp.protocol_properties {
+                        if !proto.cipher_suites.is_empty() {
+                            m.protocols_with_cipher_suites += 1;
+                        }
+                        if !proto.cipher_suites.is_empty()
+                            || !proto.crypto_ref_array.is_empty()
+                            || proto.ikev2_transform_types.is_some()
+                        {
+                            m.protocols_with_algorithm_refs += 1;
+                        }
                     }
                 }
                 _ => {}
@@ -1995,7 +2060,7 @@ impl CryptographyMetrics {
         if linkable > 0 {
             let resolved = self.certs_with_signature_algo_ref
                 + self.keys_with_algorithm_ref
-                + self.protocols_with_cipher_suites;
+                + self.protocols_with_algorithm_refs;
             let unresolved_pct = 1.0 - (resolved as f32 / linkable as f32);
             score -= unresolved_pct * 30.0;
         }
@@ -2054,7 +2119,7 @@ impl CryptographyMetrics {
         }
         let resolved = self.certs_with_signature_algo_ref
             + self.keys_with_algorithm_ref
-            + self.protocols_with_cipher_suites;
+            + self.protocols_with_algorithm_refs;
         let pct = resolved as f32 / linkable as f32;
         (pct * 100.0).clamp(0.0, 100.0)
     }
@@ -2264,7 +2329,7 @@ mod tests {
         }
 
         let im = IdentifierMetrics::from_sbom(&sbom);
-        assert_eq!(im.file_components, 30);
+        assert_eq!(im.non_package_components, 30);
         assert_eq!(
             im.missing_all_identifiers, 0,
             "exempt files must not count as identifier-less"
@@ -2296,7 +2361,7 @@ mod tests {
         }
 
         let lm = LicenseMetrics::from_sbom(&sbom);
-        assert_eq!(lm.file_components, 30);
+        assert_eq!(lm.non_package_components, 30);
         assert_eq!(lm.with_declared, 1, "files are exempt from counters");
         assert!(
             lm.unique_licenses.contains(&"GPL-2.0-only".to_string()),
@@ -2343,7 +2408,7 @@ mod tests {
         }
 
         let dm = DependencyMetrics::from_sbom(&sbom);
-        assert_eq!(dm.file_components, 30);
+        assert_eq!(dm.non_package_components, 30);
         let score = dm.quality_score(sbom.components.len());
         assert!(
             (score - 100.0).abs() < 0.01,
@@ -3226,6 +3291,7 @@ mod tests {
             certs_with_signature_algo_ref: 2,
             keys_with_algorithm_ref: 3,
             protocols_with_cipher_suites: 1,
+            protocols_with_algorithm_refs: 1,
             ..Default::default()
         };
         assert!((m.crypto_dependency_score() - 100.0).abs() < 0.1);

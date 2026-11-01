@@ -1,0 +1,1820 @@
+{
+  "description": "False-pass regression corpus from the v0.3.0 compliance review (review ids V*) and the v0.4.0 rule matrices (WP 1.2 findings B*). Each check names the verdict a standard must reach. A check with \"xfail\" is a known defect, still reproduced: the runner asserts its expectation does NOT hold yet, and the work package named in \"xfail\" must remove the marker when it fixes it. Paths are relative to this directory. Evaluated at as_of 2026-10-12T00:00:00Z.",
+  "entries": [
+    {
+      "id": "v1-empty-purl-collision",
+      "review_id": "V1",
+      "fixture": "v1-empty-purl-collision.cdx.json",
+      "note": "Two components with \"purl\": \"\" shared canonical ID \"\", so the incomplete one was overwritten and NTIA passed. Both are kept now, and an empty purl is no identifier, so each also fails the identifier rule.",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "compliant": false,
+            "errors": 4,
+            "rules_present": [
+              {
+                "rule": "SBOM-NTIA-VERSION",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-NTIA-SUPPLIER",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-NTIA-IDENTIFIER",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v3-empty-inventory",
+      "review_id": "V3",
+      "fixture": "v3-empty-inventory.cdx.json",
+      "note": "No components at all. PCI DSS and FSCT already fail; the others passed.",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-NTIA-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "fda",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-FDA-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cra",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cisa-2026",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CISA2026-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "eo14028",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-EO14028-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "ssdf",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-SSDF-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "bsi",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-BSI-TR-03183-2-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "pci-dss",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-PCI-6-3-2-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "fsct",
+          "expect": {
+            "compliant": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "v3-file-only",
+      "review_id": "V3",
+      "fixture": "v3-file-only.spdx.json",
+      "note": "An SPDX document whose only element is a file: no package inventory. EO 14028 and BSI used to fail it by judging the file as a package.",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-NTIA-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "fda",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-FDA-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cra",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cisa-2026",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CISA2026-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "ssdf",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-SSDF-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "pci-dss",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-PCI-6-3-2-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "eo14028",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-EO14028-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "bsi",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-BSI-TR-03183-2-INVENTORY",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v2-spdx-source-purpose",
+      "review_id": "V2",
+      "fixture": "v2-spdx-source-purpose.spdx.json",
+      "note": "zlib with primaryPackagePurpose SOURCE was mapped to File and escaped every package check.",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "compliant": false,
+            "errors": 3,
+            "rules_present": [
+              {
+                "rule": "SBOM-NTIA-VERSION",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-NTIA-IDENTIFIER",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-NTIA-SUPPLIER",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v2-spdx-archive-purpose",
+      "review_id": "V2",
+      "fixture": "v2-spdx-archive-purpose.spdx.json",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "compliant": false,
+            "errors": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "v2-spdx-file-purpose",
+      "review_id": "V2",
+      "fixture": "v2-spdx-file-purpose.spdx.json",
+      "note": "A package whose purpose is FILE is still a package; SPDX File elements are the exempt ones.",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "compliant": false,
+            "errors": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "v5-cbom-crypto-assets-as-packages",
+      "review_id": "V5",
+      "fixture": "../../cyclonedx/cbom-1.6.cdx.json",
+      "note": "16 crypto assets plus an application and one library; only the two package-scoped components may draw package findings.",
+      "checks": [
+        {
+          "standard": "eo14028",
+          "expect": {
+            "rule_counts": [
+              {
+                "rule": "SBOM-EO14028-SUPPLIER",
+                "total": 2
+              }
+            ]
+          }
+        },
+        {
+          "standard": "ssdf",
+          "expect": {
+            "rule_counts": [
+              {
+                "rule": "SBOM-SSDF-PS2",
+                "total": 2
+              }
+            ]
+          }
+        },
+        {
+          "standard": "bsi",
+          "expect": {
+            "rule_counts": [
+              {
+                "rule": "SBOM-BSI-TR-03183-2-CREATOR",
+                "total": 2
+              }
+            ],
+            "rules_absent": [
+              "SBOM-BSI-TR-03183-2-VERSION"
+            ]
+          }
+        },
+        {
+          "standard": "cra",
+          "expect": {
+            "message_excludes": [
+              {
+                "rule": "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN",
+                "text": [
+                  "TLS 1.2",
+                  "SSH 2.0"
+                ]
+              },
+              {
+                "rule": "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE",
+                "text": [
+                  "TLS 1.2",
+                  "SSH 2.0"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v4-noassertion-supplier",
+      "review_id": "V4",
+      "fixture": "v4-noassertion-supplier.cdx.json",
+      "note": "A direct dependency whose supplier is NOASSERTION satisfied the mandatory CRA supply-chain rule.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v4-placeholder-version",
+      "review_id": "V4",
+      "fixture": "v4-placeholder-version.cdx.json",
+      "note": "Versions \"N/A\" and \"TBD\" counted as versions.",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-NTIA-VERSION",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cisa-2026",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CISA2026-VERSION",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "pci-dss",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-PCI-6-3-2-VERSION",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v4-noassertion-author",
+      "review_id": "V4",
+      "fixture": "v4-noassertion-author.cdx.json",
+      "note": "An author named NOASSERTION names no entity; it satisfied the CISA 2026 and FSCT author elements.",
+      "checks": [
+        {
+          "standard": "cisa-2026",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CISA2026-AUTHOR",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "fsct",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-FSCT-AUTHOR",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v4-declared-unknown-version",
+      "review_id": "V4",
+      "fixture": "v4-declared-unknown-version.cdx.json",
+      "note": "Version NOASSERTION is an explicit unknown: NTIA needs a real version, while CISA 2026's escape hatch accepts the declaration.",
+      "checks": [
+        {
+          "standard": "ntia",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-NTIA-VERSION",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cisa-2026",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CISA2026-VERSION"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-unknown-algorithms",
+      "review_id": "V6",
+      "fixture": "v6-unknown-algorithms.cdx.json",
+      "note": "FFDH and two JCA signature names passed both crypto profiles with warnings only, then failed both as unclassifiable. They are now named: FFDH and SHA256withRSA are quantum-vulnerable, SHA1withRSA is broken on its SHA-1.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 3,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-006",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-CNSA2-ALG-005",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN",
+              "SBOM-CNSA2-000"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "errors": 3,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-001",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-PQC-005",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN",
+              "SBOM-PQC-000"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-jca-signature-names",
+      "review_id": "V6",
+      "fixture": "v6-jca-signature-names.cdx.json",
+      "note": "JCA <digest>with<signature> names are judged by their weaker part: the classical signature, or a broken SHA-1/MD5 digest (also via the sha1WithRSAEncryption OID).",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 6,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-006",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-CNSA2-ALG-005",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN",
+              "SBOM-CNSA2-000"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "errors": 6,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-001",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-PQC-005",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN",
+              "SBOM-PQC-000"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-curve-names",
+      "review_id": "V6",
+      "fixture": "v6-curve-names.cdx.json",
+      "note": "Assets named only by their curve (prime256v1, secp384r1, P-521, curve25519, x448, brainpoolP512r1) are classical elliptic-curve crypto.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 6,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-006",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "errors": 6,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-001",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-mqv-pake-names",
+      "review_id": "V6",
+      "fixture": "v6-mqv-pake-names.cdx.json",
+      "note": "MQV (the CycloneDX 1.7 family), ECMQV and the PAKEs SPAKE2, SRP-6a, CPace and EC-JPAKE run over classical groups: quantum-vulnerable key agreement.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 6,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-006",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "errors": 6,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-001",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-broken-legacy-names",
+      "review_id": "V6",
+      "fixture": "v6-broken-legacy-names.cdx.json",
+      "note": "A5/1, A5/2, CMEA and Dual_EC_DRBG are broken, not unknown.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 4,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-005",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "errors": 4,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-005",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-mac-kdf-sha256",
+      "review_id": "V6",
+      "fixture": "v6-mac-kdf-sha256.cdx.json",
+      "note": "HMAC-SHA256, HKDF-SHA256 and PBKDF2WithHmacSHA256 failed CNSA 2.0 as unknown and warned under NIST PQC. CNSA 2.0 now rejects them on SHA-256; NIST PQC accepts them.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 3,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-002",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN",
+              "SBOM-PQC-000"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-mac-kdf-sha384",
+      "review_id": "V6",
+      "fixture": "v6-mac-kdf-sha384.cdx.json",
+      "note": "HMAC and HKDF over SHA-384/SHA-512 and CMAC over AES-256, named by family plus parameter set, OID or name, pass both crypto profiles.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": true,
+            "errors": 0
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-bare-constructions",
+      "review_id": "V6",
+      "fixture": "v6-bare-constructions.cdx.json",
+      "note": "The CycloneDX 1.7 families HMAC, CMAC, SP800-108 and IKE-PRF without a named hash or cipher fail CNSA 2.0 on the missing primitive, not as unknown; NIST PQC accepts these symmetric constructions.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 4,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-002",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-CNSA2-ALG-001",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-CNSA2-ALG-008",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN",
+              "SBOM-CNSA2-000"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v6-tls13-unnamed-suite",
+      "review_id": "V6",
+      "fixture": "v6-tls13-unnamed-suite.cdx.json",
+      "note": "TLS 1.3 declaring a cipher suite the classifier cannot name added nothing to either profile.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-PROTO-UNKNOWN",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-PROTO-UNKNOWN",
+                "severity": "warning"
+              },
+              {
+                "rule": "SBOM-PQC-000",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v7-tls13-classical-groups",
+      "review_id": "V7",
+      "fixture": "v7-tls13-classical-groups.cdx.json",
+      "note": "A TLS 1.3 suite with an acceptable AEAD and hash, but only classical key-exchange groups (x25519, secp256r1) and an ECDSA P-384 signature scheme, passed both profiles with zero findings: tlsGroups and tlsSignatureSchemes were not read. Each offered group and scheme is judged now, so both profiles fail it under PROTO-002.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 2,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-PROTO-002",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-PROTO-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "errors": 2,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-PROTO-002",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v7-tls13-classical-only",
+      "review_id": "V7",
+      "fixture": "v7-tls13-classical-only.cdx.json",
+      "note": "TLS 1.3 offering only classical groups (x25519, secp256r1) and classical signature schemes (ecdsa_secp256r1_sha256, rsa_pss_rsae_sha256): the groups and the schemes each fail both profiles under PROTO-002.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 2,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-PROTO-002",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-PROTO-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "errors": 2,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-PROTO-002",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v7-tls13-x25519mlkem768",
+      "review_id": "V7",
+      "fixture": "v7-tls13-x25519mlkem768.cdx.json",
+      "note": "TLS 1.3 offering the hybrid group X25519MLKEM768 (RFC 10024) with mldsa87: NIST PQC accepts the group on its ML-KEM-768 part (SP 800-227 §4.6.2); CNSA 2.0 fails it under PROTO-002, as ML-KEM-768 is not ML-KEM-1024 and X25519 is not a CNSA 1.0 algorithm.",
+      "checks": [
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-PROTO-002",
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 1,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-PROTO-002",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v7-tls13-mlkem1024-mldsa87",
+      "review_id": "V7",
+      "fixture": "v7-tls13-mlkem1024-mldsa87.cdx.json",
+      "note": "TLS 1.3 offering the pure ML-KEM-1024 group and the mldsa87 signature scheme, the algorithms NSA's CNSA 2.0 TLS profile requires (draft-becker-cnsa2-tls-profile-05 §4): passes both profiles.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-CNSA2-PROTO-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v7-tls13-codepoints",
+      "review_id": "V7",
+      "fixture": "v7-tls13-codepoints.cdx.json",
+      "note": "The same algorithms given by IANA codepoint: groups 514 (MLKEM1024, decimal) and 0x11ED (SecP384r1MLKEM1024, hex), signature scheme 0x0906 (mldsa87). Each resolves through the IANA registry and passes both profiles; an unresolved codepoint would be unverifiable.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-CNSA2-PROTO-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v7-tls13-kyber-draft",
+      "review_id": "V7",
+      "fixture": "v7-tls13-kyber-draft.cdx.json",
+      "note": "The obsolete pre-standard group X25519Kyber768Draft00 is round-3 Kyber, not ML-KEM: it cannot be verified, so CNSA 2.0 fails it closed and NIST PQC warns instead of passing it silently.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "errors": 1,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-PROTO-UNKNOWN",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-PROTO-002"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "errors": 0,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-PROTO-UNKNOWN",
+                "severity": "warning"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-PROTO-002"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v7-tls13-grease",
+      "review_id": "V7",
+      "fixture": "v7-tls13-grease.cdx.json",
+      "note": "A client-side capture offering GREASE values (RFC 8701 §2: groups 0x0A0A and 64250 = 0xFAFA, signature scheme 0x1A1A) beside MLKEM1024 and mldsa87. No peer negotiates a GREASE value (RFC 8701 §3.2), so they are skipped, neither judged nor unverifiable, and the classical-free suite passes both profiles.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-CNSA2-PROTO-002",
+              "SBOM-CNSA2-PROTO-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-PROTO-002",
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v8-ikev2-rfc9370-p384-mlkem1024",
+      "review_id": "V8",
+      "fixture": "v8-ikev2-rfc9370-p384-mlkem1024.cdx.json",
+      "note": "NSA's CNSA 2.0 IPsec profile: an ECDH P-384 key exchange then ML-KEM-1024 as RFC 9370 additional key exchange 1. The ADDKE transform was dropped and P-384 failed both profiles as quantum-vulnerable; the pair is now one hybrid and passes both.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": true,
+            "errors": 0
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-PQC-PROTO-002",
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v8-ikev2-optional-addke",
+      "review_id": "V8",
+      "fixture": "v8-ikev2-optional-addke.cdx.json",
+      "note": "The ML-KEM-1024 additional key exchange also offers NONE, so an SA may run on P-384 alone (RFC 9370 §2.2.2): not a guaranteed hybrid, and it fails both profiles.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-PROTO-002",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-PROTO-002",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v8-tls-x25519mlkem768",
+      "review_id": "V8",
+      "fixture": "v8-tls-x25519mlkem768.cdx.json",
+      "note": "The TLS hybrid group X25519MLKEM768 was unclassifiable. NIST PQC now accepts it on its approved ML-KEM-768 part (SP 800-227 §4.6.2); CNSA 2.0 rejects it because ML-KEM-768 is not ML-KEM-1024 and X25519 is not a CNSA 1.0 algorithm.",
+      "checks": [
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_passed": [
+              "SBOM-PQC-010"
+            ],
+            "rules_absent": [
+              "SBOM-PQC-ALG-UNKNOWN",
+              "SBOM-PQC-PROTO-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-003",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-CNSA2-PROTO-002",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN",
+              "SBOM-CNSA2-PROTO-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v8-tls-secp384r1mlkem1024",
+      "review_id": "V8",
+      "fixture": "v8-tls-secp384r1mlkem1024.cdx.json",
+      "note": "SecP384r1MLKEM1024 pairs ML-KEM-1024 with ECDH P-384 and passes both profiles as an algorithm. NSA's CNSA 2.0 TLS profile negotiates ML-KEM-1024 alone; protocol-profile conformance is not judged here.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": true,
+            "errors": 0
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_passed": [
+              "SBOM-PQC-010"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v8-composite-mldsa87-ecdsa-p384",
+      "review_id": "V8",
+      "fixture": "v8-composite-mldsa87-ecdsa-p384.cdx.json",
+      "note": "Composite ML-DSA-87 with ECDSA P-384 (OID 1.3.6.1.5.5.7.6.49, draft-ietf-lamps-pq-composite-sigs-19) and a certificate it signs were unclassifiable; both pass both profiles.",
+      "checks": [
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-CNSA2-CERT-001",
+              "SBOM-CNSA2-CERT-UNKNOWN"
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_passed": [
+              "SBOM-PQC-010"
+            ],
+            "rules_absent": [
+              "SBOM-PQC-CERT-001",
+              "SBOM-PQC-CERT-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v8-ssh-hybrid-kex",
+      "review_id": "V8",
+      "fixture": "v8-ssh-hybrid-kex.cdx.json",
+      "note": "The SSH hybrid methods of RFC 10042: NIST PQC accepts both; CNSA 2.0 accepts mlkem1024nistp384-sha384 and rejects mlkem768x25519-sha256 on its ML-KEM-768 and X25519.",
+      "checks": [
+        {
+          "standard": "pqc",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_passed": [
+              "SBOM-PQC-010"
+            ]
+          }
+        },
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-003",
+                "severity": "error"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CNSA2-ALG-UNKNOWN"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v8-hybrid-unknown-pq",
+      "review_id": "V8",
+      "fixture": "v8-hybrid-unknown-pq.cdx.json",
+      "note": "Hybrids whose post-quantum part is not recognized — sntrup761x25519-sha512 (RFC 9941) and an IKEv2 additional key exchange in a private-use group — are judged by that part: NIST PQC warns that it cannot verify them instead of failing X25519 or P-384 as quantum-vulnerable. CNSA 2.0 fails the first on X25519 and cannot verify the second.",
+      "checks": [
+        {
+          "standard": "pqc",
+          "expect": {
+            "errors": 0,
+            "rules_present": [
+              {
+                "rule": "SBOM-PQC-ALG-UNKNOWN",
+                "severity": "warning"
+              },
+              {
+                "rule": "SBOM-PQC-PROTO-UNKNOWN",
+                "severity": "warning"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-PQC-001",
+              "SBOM-PQC-010",
+              "SBOM-PQC-PROTO-002"
+            ]
+          }
+        },
+        {
+          "standard": "cnsa2",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CNSA2-ALG-003",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-CNSA2-PROTO-UNKNOWN",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v13-cra-sidecar-support-end",
+      "review_id": "V13",
+      "fixture": "../../cra/cra-compliant.cdx.json",
+      "sidecar": "../../cra/cra-compliant.cra.json",
+      "note": "The sidecar declares supportEndDate 2031-01-15, yet ART-13-8 asked for a support end date.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-ART-13-8"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v12-spec-version-1-10",
+      "review_id": "V12",
+      "fixture": "v12-spec-version-1-10.cdx.json",
+      "note": "String-prefix version gates read \"1.10\" as 1.1; numeric gates read it as newer than 1.7.",
+      "checks": [
+        {
+          "standard": "eo14028",
+          "expect": {
+            "rules_absent": [
+              "SBOM-EO14028-FORMAT"
+            ]
+          }
+        },
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-MACHINE-READABLE"
+            ],
+            "message_excludes": [
+              {
+                "rule": "SBOM-CRA-SPEC-VERSION",
+                "text": [
+                  "is outdated"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v14-future-timestamp",
+      "review_id": "V14",
+      "fixture": "v14-future-timestamp.cdx.json",
+      "note": "Dated 2027-01-01, after the evaluation instant. The freshness checks read the negative age as just generated and stayed silent; a future timestamp now warns like a missing one.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-SBOM-FRESHNESS",
+                "severity": "warning"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cra-phase1",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-SBOM-FRESHNESS",
+                "severity": "warning"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "pci-dss",
+          "expect": {
+            "compliant": true,
+            "rules_present": [
+              {
+                "rule": "SBOM-PCI-6-3-2-FRESHNESS",
+                "severity": "warning"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v14-maven-default-hashes",
+      "review_id": "V14",
+      "fixture": "v14-maven-default-hashes.cdx.json",
+      "note": "Every component carries MD5, SHA-1, SHA-256 and SHA-512, the cyclonedx-maven-plugin default. HASH-ALGO warned on each although SHA-256 satisfies the element. The SPDX 2.x gate must not reach CycloneDX: the missing signature and completeness declaration still warn.",
+      "checks": [
+        {
+          "standard": "cisa-2026",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-CISA2026-HASH-ALGO"
+            ],
+            "rules_present": [
+              {
+                "rule": "SBOM-CISA2026-SIGNATURE",
+                "severity": "warning"
+              },
+              {
+                "rule": "SBOM-CISA2026-COVERAGE",
+                "severity": "warning"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "v14-spdx2-cisa2026-complete",
+      "review_id": "V14",
+      "fixture": "v14-spdx2-cisa2026-complete.spdx.json",
+      "note": "A complete SPDX 2.3 SBOM. Three CISA 2026 warnings asked for a signature, a lifecycle phase and a completeness declaration, none of which SPDX 2.x can carry, so --fail-on-warning could never pass.",
+      "checks": [
+        {
+          "standard": "cisa-2026",
+          "expect": {
+            "compliant": true,
+            "errors": 0,
+            "rules_absent": [
+              "SBOM-CISA2026-SIGNATURE",
+              "SBOM-CISA2026-GENERATION-CONTEXT",
+              "SBOM-CISA2026-COVERAGE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1-evidence-references",
+      "review_id": "B1",
+      "fixture": "b1-evidence-references.cdx.json",
+      "note": "The product's evidence is all external references: an attestation (the EU DoC), an EUCC certification report, a risk assessment, a VDR (vulnerability-assertion) and a build system. The CycloneDX parser mapped these types to Other, so the CRA, EUCC, SSDF and PCI DSS checks asking for them fired anyway.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-ANNEX-V",
+              "SBOM-CRA-ART-13-2",
+              "SBOM-CRA-VULN-STATEMENT"
+            ]
+          }
+        },
+        {
+          "standard": "cra-phase1",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-VULN-STATEMENT"
+            ]
+          }
+        },
+        {
+          "standard": "oss-steward",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-ART-24"
+            ]
+          }
+        },
+        {
+          "standard": "eucc",
+          "expect": {
+            "rules_absent": [
+              "SBOM-EUCC-CERTREF"
+            ]
+          }
+        },
+        {
+          "standard": "ssdf",
+          "expect": {
+            "rules_absent": [
+              "SBOM-SSDF-PO3",
+              "SBOM-SSDF-PW6"
+            ]
+          }
+        },
+        {
+          "standard": "pci-dss",
+          "expect": {
+            "rules_absent": [
+              "SBOM-PCI-6-3-2-VULN-EVIDENCE"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1-evidence-references-critical",
+      "review_id": "B1",
+      "fixture": "b1-evidence-references.cdx.json",
+      "sidecar": "b1-evidence-references.cra.json",
+      "note": "The same product pinned to the critical class (EUCC route): the certification report is both the Annex VIII route evidence and, its URL naming the EUCC scheme, the Annex IV reference.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-ANNEX-IV",
+              "SBOM-CRA-ANNEX-V",
+              "SBOM-CRA-ANNEX-VIII"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1-attestation-only",
+      "review_id": "B1",
+      "fixture": "b1-attestation-only.cdx.json",
+      "sidecar": "b1-attestation-only.cra.json",
+      "note": "An important class I product on the Module B+C route whose only reference is an attestation. It is the Annex V Declaration of Conformity reference, but not the Annex VIII evidence: that route needs the notified-body EU-type examination certificate, a certification-report reference, and an attestation may be a self-attestation.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-ANNEX-VIII",
+                "severity": "warning"
+              }
+            ],
+            "rules_absent": [
+              "SBOM-CRA-ANNEX-V"
+            ]
+          }
+        },
+        {
+          "standard": "cra-phase1",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-ANNEX-VIII",
+                "severity": "warning"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2-hashed-attestation",
+      "review_id": "B2",
+      "fixture": "b2-hashed-attestation.cdx.json",
+      "note": "No serial number, but the product's attestation reference carries the SHA-256 of the referenced declaration. The parser dropped externalReferences[].hashes, so the CRA document-integrity Info fired although the attestation-with-hash evidence it names is present.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-DOC-INTEGRITY"
+            ]
+          }
+        },
+        {
+          "standard": "cra-phase1",
+          "expect": {
+            "rules_absent": [
+              "SBOM-CRA-DOC-INTEGRITY"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3-nested-training-dataset",
+      "review_id": "B3",
+      "fixture": "b3-nested-training-dataset.cdx.json",
+      "note": "The model declares its training data as a nested dataset component with data[] evidence, not through modelParameters.datasets. BSI/G7 SBOM-for-AI and quality check AI-003 accept that shape; the EU AI Act Annex IV §2(d) check read only modelParameters.datasets and reported the datasets missing.",
+      "checks": [
+        {
+          "standard": "ai-act",
+          "expect": {
+            "rules_absent": [
+              "SBOM-AIACT-ANNEX-IV-2D-DATASETS"
+            ]
+          }
+        },
+        {
+          "standard": "bsi-ai",
+          "expect": {
+            "rules_absent": [
+              "SBOM-BSIAI-MODEL-DATASETS"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4-placeholder-model",
+      "review_id": "B4",
+      "fixture": "b4-placeholder-model.cdx.json",
+      "note": "A model named TBD with version N/A and licence NOASSERTION, and a dataset named NOASSERTION with licence TBD. The BSI/G7 SBOM-for-AI model and dataset clusters tested raw emptiness, so these values declaring nothing satisfied five elements the other profiles' presence checks reject.",
+      "checks": [
+        {
+          "standard": "bsi-ai",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-BSIAI-MODEL-NAME",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-BSIAI-MODEL-VERSION",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-BSIAI-MODEL-LICENSE",
+                "severity": "warning"
+              },
+              {
+                "rule": "SBOM-BSIAI-DATASET-NAME",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-BSIAI-DATASET-LICENSE",
+                "severity": "warning"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5-remediation-without-details",
+      "review_id": "B5",
+      "fixture": "b5-remediation-without-details.cdx.json",
+      "note": "The vulnerability declares the response update but gives no recommendation or workaround, so users learn neither the fixed version nor how to remediate. The parser built remediation records only from recommendation text, which made the CRA Phase 2 remediation-detail Info unreachable from CycloneDX.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-VULN-METADATA-REMEDIATION",
+                "severity": "info"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6-registry-severities",
+      "review_id": "B6",
+      "fixture": "b6-registry-severities.cdx.json",
+      "note": "Pins the severities these checks emit, which the rule registry and so the SARIF rule catalogue now advertise: a creator-less SBOM (SBOM-FDA-CREATOR), a component without an identifier (SBOM-CRA-ANNEX-I-IDENTIFIER), a steward product without a vulnerability-handling reference (SBOM-CRA-ART-24) and a hybrid PQC combiner (SBOM-PQC-010). The registry documented a Warning default for all four, though the first three are emitted as Errors and the last as an Info. Since v0.4.0 (review finding O2) SBOM-PQC-010 is a pass-only rule: the combiner is a passed check, not an Info violation, and the registry's Info default is what the SARIF catalogue declares for it.",
+      "checks": [
+        {
+          "standard": "fda",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-FDA-CREATOR",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cra",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-ANNEX-I-IDENTIFIER",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "oss-steward",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-ART-24",
+                "severity": "error"
+              },
+              {
+                "rule": "SBOM-CRA-ANNEX-I-IDENTIFIER",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "pqc",
+          "expect": {
+            "rules_passed": [
+              "SBOM-PQC-010"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6-registry-severities-class-1",
+      "review_id": "B6",
+      "fixture": "b6-registry-severities.cdx.json",
+      "sidecar": "b6-registry-severities.cra.json",
+      "note": "The same product as an important class I product on the Module B+C route: SBOM-CRA-ANNEX-VIII is a Warning, the registry default (it escalates to Error for class II and critical products); the registry documented Info, which no class emits.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-ANNEX-VIII",
+                "severity": "warning"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "i3-expired-eucc-certificate",
+      "review_id": "I3",
+      "fixture": "i3-expired-eucc-certificate.cdx.json",
+      "sidecar": "i3-expired-eucc-certificate.cra.json",
+      "note": "A critical product whose sidecar names a Protection Profile, a Target of Evaluation and an ITSEF for an EUCC certificate that expired on 2026-06-30. Any single non-empty identifier counted as live EUCC evidence, so the expired certificate satisfied the Annex IV reference that EUCC itself reports as expired.",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-CRA-ANNEX-IV",
+                "severity": "error"
+              }
+            ]
+          }
+        },
+        {
+          "standard": "eucc",
+          "expect": {
+            "compliant": false,
+            "rules_present": [
+              {
+                "rule": "SBOM-EUCC-VALIDITY",
+                "severity": "error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "i4-noassertion-vendor-hash",
+      "review_id": "I4",
+      "fixture": "v4-noassertion-supplier.cdx.json",
+      "note": "libfoo's supplier is NOASSERTION. The vendor-hash metric used the raw producer test, so libfoo counted as a vendor-supplied component and its hash lifted the PRE-7-RQ-07-RE coverage to 1/2. It names no vendor, like a missing supplier: the only vendor component, app, carries no hash (0/1).",
+      "checks": [
+        {
+          "standard": "cra",
+          "expect": {
+            "rule_counts": [
+              {
+                "rule": "SBOM-CRA-PRE-7-RQ-07-RE",
+                "severity": "error",
+                "affected": 0,
+                "total": 1
+              }
+            ]
+          }
+        },
+        {
+          "standard": "cra-phase1",
+          "expect": {
+            "rule_counts": [
+              {
+                "rule": "SBOM-CRA-PRE-7-RQ-07-RE",
+                "severity": "warning",
+                "affected": 0,
+                "total": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

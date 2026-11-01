@@ -29,7 +29,7 @@
 //! see `PCIDSS_SARIF_RULE_IDS`).
 
 use super::*;
-use crate::model::{CompletenessDeclaration, ComponentType, ExternalRefType, Severity};
+use crate::model::{CompletenessDeclaration, ExternalRefType, Severity};
 
 /// Tool-policy staleness threshold for the Req. 6.3.2 "is maintained"
 /// advisory. PCI DSS text prescribes no regeneration cadence; this cutoff is
@@ -64,21 +64,15 @@ impl ComplianceChecker {
     /// describes. An empty or headless document cannot serve as the
     /// Req. 6.3.2 inventory.
     fn check_pci_inventory(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        if sbom.components.is_empty() {
-            violations.push(Violation {
-                severity: ViolationSeverity::Error,
-                category: ViolationCategory::DocumentMetadata,
-                message: "[PCI DSS 6.3.2] SBOM inventories no components at all; an empty \
-                          document cannot serve as the Req. 6.3.2 software inventory"
-                    .to_string(),
-                element: None,
-                requirement: "PCI DSS v4.0.1 Req. 6.3.2 / TP 6.3.2.b: non-empty software inventory"
-                    .to_string(),
-                rule_id: "SBOM-PCI-6-3-2-INVENTORY",
-                component_id: None,
-                counts: None,
-                standard_refs: Vec::new(),
-            });
+        // A file- or crypto-only document is no software inventory either:
+        // the per-component rules exempt those entries, so it used to pass.
+        if let Some(mut absent) = inventory_absent_violation(
+            sbom,
+            "SBOM-PCI-6-3-2-INVENTORY",
+            "PCI DSS v4.0.1 Req. 6.3.2 / TP 6.3.2.b: non-empty software inventory",
+        ) {
+            absent.message = format!("[PCI DSS 6.3.2] {}", absent.message);
+            violations.push(absent);
         } else if sbom.primary_component().is_none() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
@@ -94,6 +88,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -113,7 +109,7 @@ impl ComplianceChecker {
     fn check_pci_components(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
         let primary_id = sbom.primary_component_id.as_ref();
         for (id, comp) in &sbom.components {
-            if matches!(comp.component_type, ComponentType::File) {
+            if !comp.component_type.is_package_scoped() {
                 continue;
             }
 
@@ -134,6 +130,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
 
@@ -158,6 +156,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
 
@@ -183,6 +183,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
 
@@ -193,7 +195,7 @@ impl ComplianceChecker {
             // entry is treated as potentially third-party and the finding
             // stays an evidence-limited Warning.
             let is_primary = primary_id.is_some_and(|p| p == id);
-            let supplier_evidence = has_known_supplier(&comp.supplier, &comp.author)
+            let supplier_evidence = has_known_producer(comp)
                 || has_known_value(&comp.group)
                 || comp.ecosystem.is_some();
             if !is_primary && !supplier_evidence {
@@ -216,6 +218,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
         }
@@ -246,9 +250,7 @@ impl ComplianceChecker {
         let non_primary: Vec<_> = sbom
             .components
             .iter()
-            .filter(|(id, comp)| {
-                *id != primary_id && !matches!(comp.component_type, ComponentType::File)
-            })
+            .filter(|(id, comp)| *id != primary_id && comp.component_type.is_package_scoped())
             .map(|(_, comp)| comp)
             .collect();
 
@@ -260,11 +262,10 @@ impl ComplianceChecker {
                  Complete); the real comparison against the software is assessor work",
                 "PCI DSS v4.0.1 Req. 6.3.2 / TP 6.3.2.b: third-party components enumerated",
             )
-        } else if !non_primary.iter().any(|comp| {
-            has_known_supplier(&comp.supplier, &comp.author)
-                || comp.ecosystem.is_some()
-                || comp.is_external
-        }) {
+        } else if !non_primary
+            .iter()
+            .any(|comp| has_known_producer(comp) || comp.ecosystem.is_some() || comp.is_external)
+        {
             (
                 "[PCI DSS TP 6.3.2.b] No component beyond the primary carries supplier, \
                  ecosystem, or external-dependency evidence, so third-party components cannot \
@@ -286,6 +287,8 @@ impl ComplianceChecker {
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -333,14 +336,18 @@ impl ComplianceChecker {
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
     /// SBOM-PCI-6-3-2-FRESHNESS: "is maintained" — the document must carry a
     /// creation timestamp (Warning when missing: maintenance cadence is
-    /// unverifiable). A stale-but-present timestamp is an Info advisory
-    /// only, and the threshold is explicitly tool policy, not PCI DSS text:
-    /// the SBOM proves generation time, not the inventory process.
+    /// unverifiable). A timestamp later than the evaluation instant evidences
+    /// no more than a missing one and warns the same way. A stale-but-present
+    /// timestamp is an Info advisory only, and the threshold is explicitly
+    /// tool policy, not PCI DSS text: the SBOM proves generation time, not the
+    /// inventory process.
     fn check_pci_freshness(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
         if !sbom.document.has_known_timestamp() {
             violations.push(Violation {
@@ -357,10 +364,23 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
             return;
         }
-        let age_days = (self.now() - sbom.document.created).num_days();
+        let now = self.now();
+        if let Some(future) = future_timestamp_violation(
+            sbom,
+            now,
+            "SBOM-PCI-6-3-2-FRESHNESS",
+            "[PCI DSS 6.3.2]",
+            "PCI DSS v4.0.1 Req. 6.3.2: inventory 'is maintained' — creation timestamp",
+        ) {
+            violations.push(future);
+            return;
+        }
+        let age_days = (now - sbom.document.created).num_days();
         if age_days > PCI_STALE_AFTER_DAYS {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
@@ -378,6 +398,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -426,6 +448,8 @@ impl ComplianceChecker {
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -483,6 +507,8 @@ impl ComplianceChecker {
                 total: all.len(),
             }),
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 }
@@ -501,8 +527,9 @@ mod tests {
             .with_timezone(&chrono::Utc)
     }
 
+    /// Pinned to the shared test clock (tests/common/clock.rs).
     fn checker() -> ComplianceChecker {
-        ComplianceChecker::new(ComplianceLevel::PciDss632)
+        ComplianceChecker::new(ComplianceLevel::PciDss632).with_as_of(ts("2026-10-12T00:00:00Z"))
     }
 
     fn run(sbom: &NormalizedSbom) -> Vec<Violation> {
@@ -529,7 +556,9 @@ mod tests {
     /// primary + third-party components with suppliers, a Complete
     /// declaration, a fresh timestamp, and a security contact.
     fn conforming_sbom() -> NormalizedSbom {
-        let mut sbom = NormalizedSbom::default(); // created = now → fresh
+        let mut sbom = NormalizedSbom::default();
+        // The day before the pinned clock: fresh, and not future-dated.
+        sbom.document.created = ts("2026-10-11T00:00:00Z");
         sbom.document.completeness_declaration = CompletenessDeclaration::Complete;
         sbom.document.security_contact = Some("security@acme.example".to_string());
         let primary = conforming_component("acme-payments");
@@ -585,7 +614,7 @@ mod tests {
     fn file_components_are_exempt_from_per_component_rules() {
         let mut sbom = conforming_sbom();
         let mut file = Component::new("src/main.c".to_string(), "ref-file-1".to_string());
-        file.component_type = ComponentType::File;
+        file.component_type = crate::model::ComponentType::File;
         // No version, no identifier, no supplier — and still clean.
         push(&mut sbom, file);
         let violations = run(&sbom);
@@ -875,6 +904,49 @@ mod tests {
                 .iter()
                 .any(|v| v.rule_id == "SBOM-PCI-6-3-2-FRESHNESS"),
             "fresh timestamp must stay silent"
+        );
+    }
+
+    /// A timestamp after the evaluation instant gave a negative age and
+    /// passed as fresh (review finding V14). It evidences no more than a
+    /// missing timestamp, so it warns like one.
+    #[test]
+    fn future_timestamp_warns_instead_of_counting_as_fresh() {
+        let mut sbom = conforming_sbom();
+        sbom.document.created = ts("2026-10-13T00:00:00Z");
+        let result = checker()
+            .with_as_of(ts("2026-10-12T00:00:00Z"))
+            .check(&sbom);
+        let freshness: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.rule_id == "SBOM-PCI-6-3-2-FRESHNESS")
+            .collect();
+        assert_eq!(
+            freshness.len(),
+            1,
+            "exactly one freshness finding, got {:?}",
+            rules_of(&result.violations)
+        );
+        assert_eq!(freshness[0].severity, ViolationSeverity::Warning);
+        assert!(
+            freshness[0]
+                .message
+                .contains("later than the evaluation instant"),
+            "{}",
+            freshness[0].message
+        );
+        // Warning, not Error: the inventory itself is still compliant.
+        assert!(result.is_compliant);
+
+        // The same document evaluated after its timestamp is fresh again.
+        let result = checker()
+            .with_as_of(ts("2026-10-14T00:00:00Z"))
+            .check(&sbom);
+        assert!(
+            result.violations.is_empty(),
+            "got {:?}",
+            rules_of(&result.violations)
         );
     }
 

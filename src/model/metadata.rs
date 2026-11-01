@@ -104,7 +104,67 @@ pub struct SignatureInfo {
     pub has_value: bool,
 }
 
+/// A format spec version (CycloneDX `specVersion`, SPDX `spdxVersion`)
+/// parsed into numbers, so versions compare numerically: "1.10" is newer
+/// than "1.7", where string-prefix tests read it as "1.1".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SpecVersion {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+
+impl SpecVersion {
+    #[must_use]
+    pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+
+    /// Parse "1.6", "3.0.1", "SPDX-2.3" or "v1.6". Missing trailing
+    /// segments count as zero; an empty or non-numeric value, or one with
+    /// more than three segments, yields `None` so callers can skip a version
+    /// gate instead of false-failing a document that declares no version.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let v = value.trim();
+        let v = v.strip_prefix("SPDX-").unwrap_or(v);
+        let v = v.strip_prefix(['v', 'V']).unwrap_or(v);
+        let mut parts = v.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = match parts.next() {
+            Some(s) => s.parse().ok()?,
+            None => 0,
+        };
+        let patch = match parts.next() {
+            Some(s) => s.parse().ok()?,
+            None => 0,
+        };
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self::new(major, minor, patch))
+    }
+}
+
+impl std::fmt::Display for SpecVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
 impl DocumentMetadata {
+    /// The spec version as numbers, or `None` when it is empty or cannot be
+    /// parsed. Every format-version gate compares this value; see
+    /// [`SpecVersion`].
+    #[must_use]
+    pub fn spec_version_parsed(&self) -> Option<SpecVersion> {
+        SpecVersion::parse(&self.spec_version)
+    }
+
     /// Whether the document carries a real creation timestamp.
     ///
     /// Parsers substitute [`DateTime::UNIX_EPOCH`] when the source document
@@ -213,7 +273,26 @@ pub enum ComponentType {
     Platform,
     DeviceDriver,
     Cryptographic,
+    /// A CycloneDX service (SaaSBOM): an endpoint the product calls, not a
+    /// package it ships.
+    Service,
     Other(String),
+}
+
+impl ComponentType {
+    /// Whether package-level SBOM elements (version, supplier, license,
+    /// unique identifier, hash, dependency-graph membership) apply. File /
+    /// snippet entries are name+hash inventory records, CycloneDX
+    /// `cryptographic-asset`s describe algorithms, keys, certificates and
+    /// protocols, and CycloneDX services are endpoints whose schema carries
+    /// no purl or hashes — none is a package, so standards scope those
+    /// elements away from them. A crypto *library* (e.g. OpenSSL typed
+    /// `library`) is still a package, and so is an SPDX package whose
+    /// purpose is SOURCE, ARCHIVE or FILE.
+    #[must_use]
+    pub const fn is_package_scoped(&self) -> bool {
+        !matches!(self, Self::File | Self::Cryptographic | Self::Service)
+    }
 }
 
 impl std::fmt::Display for ComponentType {
@@ -232,6 +311,7 @@ impl std::fmt::Display for ComponentType {
             Self::Platform => write!(f, "platform"),
             Self::DeviceDriver => write!(f, "device-driver"),
             Self::Cryptographic => write!(f, "cryptographic"),
+            Self::Service => write!(f, "service"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }
@@ -363,7 +443,14 @@ pub struct ExternalReference {
     pub hashes: Vec<Hash>,
 }
 
-/// External reference types
+/// External reference types.
+///
+/// The variants follow the CycloneDX `externalReference.type` vocabulary,
+/// and each displays as its CycloneDX value (`Certification` as
+/// `certification-report`, `SourceDistribution` as `distribution`, …), which
+/// is what the CycloneDX writer emits. Parsers map the other formats'
+/// equivalents onto the same variants; a type without one is kept verbatim
+/// in `Other`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExternalRefType {
     Vcs,
@@ -376,7 +463,10 @@ pub enum ExternalRefType {
     Chat,
     Documentation,
     Support,
+    /// CycloneDX `distribution`: a direct or repository download location
+    /// (the SPDX 2.x parser stores a package's download location here).
     SourceDistribution,
+    /// CycloneDX `distribution-intake`: where the component was published.
     BinaryDistribution,
     License,
     BuildMeta,
@@ -402,6 +492,7 @@ pub enum ExternalRefType {
     Maturity,
     Certification,
     QualityMetrics,
+    /// CycloneDX `codified-infrastructure` (infrastructure as code).
     Codified,
     Citation,
     Patent,
@@ -449,7 +540,7 @@ impl std::fmt::Display for ExternalRefType {
             Self::Maturity => write!(f, "maturity-report"),
             Self::Certification => write!(f, "certification-report"),
             Self::QualityMetrics => write!(f, "quality-metrics"),
-            Self::Codified => write!(f, "codified"),
+            Self::Codified => write!(f, "codified-infrastructure"),
             Self::Citation => write!(f, "citation"),
             Self::Patent => write!(f, "patent"),
             Self::PatentAssertion => write!(f, "patent-assertion"),
@@ -745,4 +836,37 @@ pub struct DatasetInfo {
     /// `dataset_anonymizationMethodUsed`). Surfaced for the BSI/G7
     /// SBOM-for-AI "Datasets" cluster provenance element.
     pub anonymization: Vec<String>,
+}
+
+#[cfg(test)]
+mod spec_version_tests {
+    use super::SpecVersion;
+
+    #[test]
+    fn parses_common_spellings() {
+        assert_eq!(SpecVersion::parse("1.6"), Some(SpecVersion::new(1, 6, 0)));
+        assert_eq!(SpecVersion::parse("3.0.1"), Some(SpecVersion::new(3, 0, 1)));
+        assert_eq!(
+            SpecVersion::parse("SPDX-2.3"),
+            Some(SpecVersion::new(2, 3, 0))
+        );
+        assert_eq!(
+            SpecVersion::parse(" v1.7 "),
+            Some(SpecVersion::new(1, 7, 0))
+        );
+        assert_eq!(SpecVersion::parse("2"), Some(SpecVersion::new(2, 0, 0)));
+        for bad in ["", "   ", "abc", "1.x", "1.2.3.4", "1..2"] {
+            assert_eq!(SpecVersion::parse(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn compares_numerically_not_by_prefix() {
+        // String prefixes read "1.10" as "1.1"; numerically it is newer.
+        let v110 = SpecVersion::parse("1.10").expect("parses");
+        assert!(v110 > SpecVersion::new(1, 7, 0));
+        assert!(SpecVersion::new(1, 0, 0) < SpecVersion::new(1, 4, 0));
+        assert!(SpecVersion::new(2, 0, 0) > SpecVersion::new(1, 7, 0));
+        assert!(SpecVersion::new(3, 0, 1) > SpecVersion::new(3, 0, 0));
+    }
 }

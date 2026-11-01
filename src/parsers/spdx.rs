@@ -435,8 +435,7 @@ impl SpdxParser {
                             for attr in e.attributes().filter_map(std::result::Result::ok) {
                                 let attr_name = Self::local_name(attr.key.as_ref());
                                 if attr_name == "about" {
-                                    doc.document_namespace =
-                                        Some(String::from_utf8_lossy(&attr.value).to_string());
+                                    doc.document_namespace = Some(attr.value.to_string());
                                 }
                             }
                         }
@@ -449,7 +448,7 @@ impl SpdxParser {
                             for attr in e.attributes().filter_map(std::result::Result::ok) {
                                 let attr_name = Self::local_name(attr.key.as_ref());
                                 if attr_name == "about" {
-                                    let uri = String::from_utf8_lossy(&attr.value).to_string();
+                                    let uri = attr.value.to_string();
                                     // Extract SPDX ID from URI fragment
                                     if let Some(idx) = uri.rfind('#') {
                                         pkg.spdx_id = uri[idx + 1..].to_string();
@@ -492,7 +491,7 @@ impl SpdxParser {
                             for attr in e.attributes().filter_map(std::result::Result::ok) {
                                 let attr_name = Self::local_name(attr.key.as_ref());
                                 if attr_name == "resource" {
-                                    let uri = String::from_utf8_lossy(&attr.value).to_string();
+                                    let uri = attr.value.to_string();
                                     // Extract license from URI
                                     if let Some(idx) = uri.rfind('/') {
                                         doc.data_license = uri[idx + 1..].to_string();
@@ -507,7 +506,7 @@ impl SpdxParser {
                                 for attr in e.attributes().filter_map(std::result::Result::ok) {
                                     let attr_name = Self::local_name(attr.key.as_ref());
                                     if attr_name == "resource" {
-                                        let uri = String::from_utf8_lossy(&attr.value).to_string();
+                                        let uri = attr.value.to_string();
                                         let id = Self::extract_spdx_id_from_uri(&uri);
                                         if local_name == "spdxElementId" {
                                             rel.spdx_element_id = id;
@@ -523,7 +522,7 @@ impl SpdxParser {
                                 for attr in e.attributes().filter_map(std::result::Result::ok) {
                                     let attr_name = Self::local_name(attr.key.as_ref());
                                     if attr_name == "resource" {
-                                        let uri = String::from_utf8_lossy(&attr.value).to_string();
+                                        let uri = attr.value.to_string();
                                         let license = Self::extract_license_from_uri(&uri);
                                         if local_name == "licenseConcluded" {
                                             pkg.license_concluded = Some(license);
@@ -539,7 +538,7 @@ impl SpdxParser {
                                 for attr in e.attributes().filter_map(std::result::Result::ok) {
                                     let attr_name = Self::local_name(attr.key.as_ref());
                                     if attr_name == "resource" {
-                                        let uri = String::from_utf8_lossy(&attr.value).to_string();
+                                        let uri = attr.value.to_string();
                                         // Extract algorithm from URI like http://spdx.org/rdf/terms#checksumAlgorithm_sha256
                                         if let Some(idx) = uri.rfind("checksumAlgorithm_") {
                                             checksum.algorithm = uri[idx + 18..].to_uppercase();
@@ -555,7 +554,7 @@ impl SpdxParser {
                                 for attr in e.attributes().filter_map(std::result::Result::ok) {
                                     let attr_name = Self::local_name(attr.key.as_ref());
                                     if attr_name == "resource" {
-                                        let uri = String::from_utf8_lossy(&attr.value).to_string();
+                                        let uri = attr.value.to_string();
                                         if let Some(idx) = uri.rfind("referenceCategory_") {
                                             ext_ref.reference_category =
                                                 uri[idx + 18..].to_string();
@@ -570,7 +569,8 @@ impl SpdxParser {
                     }
                 }
                 Ok(Event::Text(ref e)) => {
-                    current_text = e.decode().unwrap_or_default().to_string();
+                    let text: &str = e.as_ref();
+                    current_text = text.to_string();
                 }
                 Ok(Event::End(ref e)) => {
                     let local_name = Self::local_name(e.name().as_ref());
@@ -788,12 +788,9 @@ impl SpdxParser {
     }
 
     /// Extract local name from qualified XML name (strips namespace prefix)
-    fn local_name(name: &[u8]) -> String {
-        let name_str = String::from_utf8_lossy(name);
-        name_str.rfind(':').map_or_else(
-            || name_str.to_string(),
-            |idx| name_str[idx + 1..].to_string(),
-        )
+    fn local_name(name: &str) -> String {
+        name.rfind(':')
+            .map_or_else(|| name.to_string(), |idx| name[idx + 1..].to_string())
     }
 
     /// Extract SPDX ID from URI (e.g., "<http://example.org#SPDXRef-Package>" -> "SPDXRef-Package")
@@ -850,8 +847,8 @@ impl SpdxParser {
         let mut package_ids: HashSet<String> = HashSet::new();
         if let Some(packages) = &spdx.packages {
             for pkg in packages {
-                let comp = self.convert_package(pkg, &license_names);
-                id_map.insert(pkg.spdx_id.clone(), comp.canonical_id.clone());
+                let mut comp = self.convert_package(pkg, &license_names);
+                id_map.insert(pkg.spdx_id.clone(), sbom.claim_canonical_id(&mut comp));
                 package_ids.insert(pkg.spdx_id.clone());
                 sbom.add_component(comp);
             }
@@ -867,9 +864,10 @@ impl SpdxParser {
                 if file.spdx_id.is_empty() && file.file_name.is_empty() {
                     continue;
                 }
-                let comp = self.convert_file(file, &license_names);
+                let mut comp = self.convert_file(file, &license_names);
+                let canonical_id = sbom.claim_canonical_id(&mut comp);
                 if !file.spdx_id.is_empty() {
-                    id_map.insert(file.spdx_id.clone(), comp.canonical_id.clone());
+                    id_map.insert(file.spdx_id.clone(), canonical_id);
                 }
                 sbom.add_component(comp);
             }
@@ -879,9 +877,10 @@ impl SpdxParser {
                 if snippet.spdx_id.is_empty() && snippet.name.is_none() {
                     continue;
                 }
-                let comp = self.convert_snippet(snippet, &license_names);
+                let mut comp = self.convert_snippet(snippet, &license_names);
+                let canonical_id = sbom.claim_canonical_id(&mut comp);
                 if !snippet.spdx_id.is_empty() {
-                    id_map.insert(snippet.spdx_id.clone(), comp.canonical_id.clone());
+                    id_map.insert(snippet.spdx_id.clone(), canonical_id);
                 }
                 sbom.add_component(comp);
             }
@@ -1152,7 +1151,13 @@ impl SpdxParser {
                         "OPERATING_SYSTEM" => ComponentType::OperatingSystem,
                         "DEVICE" => ComponentType::Device,
                         "FIRMWARE" => ComponentType::Firmware,
-                        "SOURCE" | "ARCHIVE" | "FILE" => ComponentType::File,
+                        // Packages whose purpose is SOURCE, ARCHIVE or FILE
+                        // are still packages (a source tarball needs a
+                        // version and supplier); only SPDX File and Snippet
+                        // elements are `File`.
+                        "SOURCE" => ComponentType::Other("source".to_string()),
+                        "ARCHIVE" => ComponentType::Other("archive".to_string()),
+                        "FILE" => ComponentType::Other("file".to_string()),
                         "DATA" => ComponentType::Data,
                         other => ComponentType::Other(other.to_lowercase()),
                     }
@@ -1245,7 +1250,7 @@ impl SpdxParser {
                     || ext_ref.reference_type.eq_ignore_ascii_case("cpe22Type")
                     || ext_ref.reference_locator.starts_with("cpe:")
                 {
-                    comp.identifiers.cpe.push(ext_ref.reference_locator.clone());
+                    comp.add_cpe(ext_ref.reference_locator.clone());
                     continue;
                 }
                 if ext_ref.reference_type.eq_ignore_ascii_case("swid")
@@ -1254,6 +1259,13 @@ impl SpdxParser {
                     comp.identifiers.swid = Some(ext_ref.reference_locator.clone());
                     continue;
                 }
+                // SPDX 2.3 Annex F defines four categories: SECURITY
+                // (cpe22Type, cpe23Type, advisory, fix, url, swid),
+                // PACKAGE-MANAGER (maven-central, npm, nuget, bower, purl),
+                // PERSISTENT-ID (swh, gitoid) and OTHER (free-form). None of
+                // them names an attestation, certification report, risk
+                // assessment, VDR or VEX, so those stay `Other` here; SPDX 3.0
+                // has terms for them (see `map_spdx3_external_ref_type`).
                 let ref_type = match category.as_str() {
                     // Only advisory-shaped SECURITY refs are advisories; CPE
                     // and SWID identifiers were promoted above.
@@ -1819,6 +1831,73 @@ mod tests {
             !comp.identifiers.swhid.is_empty(),
             "PERSISTENT_ID (underscore spelling) must promote swh refs to SWHIDs"
         );
+    }
+
+    /// The SPDX 2.3 JSON schema spelled the operating-system purpose
+    /// `OPERATING_SYSTEM`, while the 2.3 text (7.24) spells it
+    /// `OPERATING-SYSTEM`; SPDX 2.3.1 corrected the schema to the hyphen and
+    /// also allows `PACKAGE_MANAGER` beside `PACKAGE-MANAGER`. Every spelling,
+    /// in JSON and in tag-value, must read the same.
+    #[test]
+    fn operating_system_purpose_reads_in_both_spellings() {
+        for purpose in ["OPERATING-SYSTEM", "OPERATING_SYSTEM"] {
+            for category in ["PACKAGE-MANAGER", "PACKAGE_MANAGER"] {
+                let json = format!(
+                    r#"{{
+                    "spdxVersion": "SPDX-2.3",
+                    "SPDXID": "SPDXRef-DOCUMENT",
+                    "name": "doc",
+                    "dataLicense": "CC0-1.0",
+                    "documentNamespace": "https://example.com/doc",
+                    "creationInfo": {{"created": "2026-01-01T00:00:00Z", "creators": ["Tool: gen-1.0"]}},
+                    "packages": [{{
+                        "name": "os",
+                        "SPDXID": "SPDXRef-os",
+                        "versionInfo": "1.0",
+                        "primaryPackagePurpose": "{purpose}",
+                        "externalRefs": [
+                            {{"referenceCategory": "{category}",
+                             "referenceType": "purl",
+                             "referenceLocator": "pkg:generic/os@1.0"}}
+                        ]
+                    }}]
+                }}"#
+                );
+                let sbom = SpdxParser::new()
+                    .parse_str(&json)
+                    .expect("json should parse");
+                let os = component(&sbom, "os");
+                assert_eq!(
+                    os.component_type,
+                    ComponentType::OperatingSystem,
+                    "JSON primaryPackagePurpose {purpose}"
+                );
+                assert_eq!(
+                    os.identifiers.purl.as_deref(),
+                    Some("pkg:generic/os@1.0"),
+                    "JSON referenceCategory {category}"
+                );
+            }
+
+            let sbom = parse_tv(&format!(
+                "SPDXVersion: SPDX-2.3\n\
+                 DataLicense: CC0-1.0\n\
+                 SPDXID: SPDXRef-DOCUMENT\n\
+                 DocumentName: doc\n\
+                 DocumentNamespace: https://example.com/doc\n\
+                 Creator: Tool: gen-1.0\n\
+                 Created: 2026-01-01T00:00:00Z\n\
+                 PackageName: os\n\
+                 SPDXID: SPDXRef-os\n\
+                 PackageVersion: 1.0\n\
+                 PrimaryPackagePurpose: {purpose}\n"
+            ));
+            assert_eq!(
+                component(&sbom, "os").component_type,
+                ComponentType::OperatingSystem,
+                "tag-value PrimaryPackagePurpose {purpose}"
+            );
+        }
     }
 
     /// A bare CPE locator must never become the document-level vulnerability

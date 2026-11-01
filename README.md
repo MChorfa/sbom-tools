@@ -380,7 +380,8 @@ sbom-tools timeline v1.json v2.json v3.json --enrich-vulns
 # Enrich an SBOM with vulnerability + EOL data
 sbom-tools enrich app.cdx.json --enrich-vulns --enrich-eol -O enriched.json
 
-# Grade cryptographic inventory quality
+# Grade cryptographic inventory quality (crypto metadata + NIST PQC readiness;
+# package fields like version/supplier/license are not required of crypto assets)
 sbom-tools quality cbom.cdx.json --profile cbom
 
 # View CBOM with crypto-specific tabs
@@ -422,6 +423,7 @@ Compares two SBOMs and reports added, removed, and modified components with vers
 | `--detect-typosquats` | Flag components that look like known-package typosquats |
 | `--explain-matches` | Show why each component pair was matched |
 | `--severity <level>` | Filter by minimum severity (`critical`, `high`, `medium`, `low`) |
+| `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
 
 </details>
 
@@ -474,6 +476,7 @@ Launches an interactive TUI with component tree, vulnerability details, license 
 | `--enrich-eol` | Detect end-of-life status via endoflife.date API |
 | `--validate-ntia` | Validate against NTIA minimum elements |
 | `--bom-type <type>` | BOM type override (`sbom`, `cbom`, `aibom`). Auto-detected from content if omitted |
+| `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
 
 </details>
 
@@ -493,6 +496,17 @@ Checks an SBOM against a compliance standard and reports missing fields or faili
 |------|-------------|
 | `--standard <std>` | Standard to validate: `ntia` (default), `cisa-2026`, `fda`, `cra` (= Phase 2), `cra-phase1`, `ssdf`, `eo14028`, `cnsa2`, `pqc`, `bsi`, `oss-steward`, `eucc`, `ai-act`, `bsi-ai`, `pci-dss`, `fsct` (comma-separated for multiple; aliases in `--help`) |
 | `-o, --output <fmt>` | Output format: `summary` (default via `auto`), `json`, `sarif`, `oscal-json` |
+| `--require-applicable` | Exit `1` when a selected standard does not apply to the SBOM (e.g. `ai-act` on an SBOM without ML components); without it, such a standard is reported as N/A and exits `0` |
+| `--json-schema <v1\|v2>` | Layout of `-o json`: `v2` (default) is the `sbom-tools/compliance/v2` envelope; `v1` is the deprecated pre-0.4 layout, removed in v0.5.0 |
+| `--sarif-include-passes` | With `-o sarif`, also report every check the SBOM passed (e.g. an approved post-quantum algorithm) as a result of `kind: "pass"`, level `none`. Off by default, so code scanning shows no pass as an alert |
+| `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
+
+`-o json` emits one object for any number of standards, with a stable
+`finding_id` on every violation and every passed check;
+[docs/compliance-output.md](docs/compliance-output.md) describes every field,
+and the schema is
+[`schemas/compliance/v2.schema.json`](schemas/compliance/v2.schema.json).
+Checks the SBOM passed are listed under `passed`, never as violations.
 
 </details>
 
@@ -519,8 +533,11 @@ Scores an SBOM from 0–100 using a weighted profile. Use `--min-score` to fail 
 
 The plain-text summary also appends an sbomqs-comparable 0–10 category
 table, and `-o sbomqs-json` emits a full report in the
-[sbomqs](https://github.com/interlynk-io/sbomqs) `score --json` schema
-(parity target v2.0.11) so the two tools can be compared side by side.
+[sbomqs](https://github.com/interlynk-io/sbomqs) `score --legacy --json`
+schema (parity target sbomqs v2.1.2, printed with the scores) so the two
+tools can be compared side by side. It covers the five documented legacy
+categories, so its average matches
+`sbomqs score --legacy --category ntia,semantic,quality,sharing,structural`.
 Categories that cannot be computed are emitted as `ignored` with a reason.
 The two scales are **not** convertible — the 0–10 numbers are recomputed
 per feature with sbomqs' own formulas, not the 0–100 score divided by ten.
@@ -537,6 +554,7 @@ Documented quirks live in [`docs/STANDARDS_VERSIONS.md`](docs/STANDARDS_VERSIONS
 | `--fail-on-noncompliant` | Exit with code 1 if the profile's embedded compliance check reports the SBOM as non-compliant |
 | `--recommendations` | Show detailed improvement recommendations |
 | `--metrics` | Show detailed scoring metrics |
+| `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
 
 </details>
 
@@ -764,8 +782,8 @@ Select with `-o` / `--output`:
 | TUI | `tui` | Interactive exploration |
 | JSON | `json` | Programmatic integration |
 | SARIF | `sarif` | CI/CD security dashboards (SARIF 2.1.0) |
-| OSCAL assessment results | `oscal-json` | OSCAL 1.1.2 validation findings for assessment tooling (`validate` only) |
-| sbomqs JSON | `sbomqs-json` | sbomqs `score --json` 0–10 scores for tool comparison (`quality` only) |
+| OSCAL assessment results | `oscal-json` | OSCAL 1.2.3 validation findings for assessment tooling (`validate` only) |
+| sbomqs JSON | `sbomqs-json` | sbomqs v2.1.2 `score --legacy --json` 0–10 scores for tool comparison (`quality` only) |
 | NDJSON | `ndjson` | Newline-delimited JSON, one record per line (streaming-friendly) |
 | Markdown | `markdown` | Documentation, PR comments |
 | HTML | `html` | Stakeholder reports |
@@ -777,11 +795,129 @@ Select with `-o` / `--output`:
 Not every command accepts every format — `--help` lists the ones a command
 supports, and how an out-of-list value is rejected depends on the command.
 `diff-multi`, `timeline`, and `matrix` accept `auto`, `tui`, and `json` only,
-and reject anything else as a command-line usage error (exit `2`). `diff`,
-`view`, `validate`, `quality`, and `query` reject it at run time as an
-operational error (exit `3`), before any SBOM is read, naming the formats they
-do accept (`validate --summary` is the exception — it overrides `-o` outright,
-so no format is gated).
+and reject anything else as a command-line usage error. `diff`, `view`,
+`validate`, `quality`, and `query` reject it at run time as an operational
+error, before any SBOM is read, naming the formats they do accept
+(`validate --summary` is the exception — it overrides `-o` outright, so no
+format is gated). Both exit `3`.
+
+### JSON output contract
+
+Which JSON payloads are a compatibility contract, and how firm it is
+(pre-1.0):
+
+- **Contractual payloads.** The normalized SBOM, diff results, and quality
+  reports, as emitted by the C ABI (`sbom_tools_parse_sbom_*_json`,
+  `sbom_tools_diff_*`, `sbom_tools_score_*`) and by the language bindings, and
+  the `-o json` output of `diff`, `diff-multi`, `matrix`, `timeline`,
+  `validate`, and `quality`. Field names are `snake_case` with no serde
+  renames; `Option` fields serialize as `null`, except a few additive blocks
+  (e.g. `crypto_properties`, `ml_model`-adjacent extensions) that are omitted
+  when absent.
+- **`view -o json` is a projection, not the normalized model.** It emits a
+  `summary` block plus, per component, `name`, `version`, `ecosystem`,
+  `licenses`, `supplier`, `dependency_kind`, `vulnerability_count`,
+  `vulnerabilities[]`, and optional EOL fields. Domain detail such as
+  `crypto_properties`, `ml_model`, or `dataset` is **not** included.
+- **The full normalized document comes from `convert --to normalized`** (or
+  the ABI / bindings `parse` calls — the two are byte-identical, pinned by
+  `tests/ffi_schema_snapshots.rs`). It is the canonical model as JSON:
+  `document`, `components[]` as `{canonical_id, component}` entries in SBOM
+  order, `edges`, `extensions`, `content_hash`, `primary_component_id`,
+  `collision_count`. Lossless, and carries every parsed field including
+  `crypto_properties`.
+
+  ```sh
+  sbom-tools convert --to normalized my.cbom.json | jq '.components[].component.crypto_properties'
+  ```
+- **What is test-pinned.** The ABI snapshot tests pin the top-level keys of
+  each payload (`tests/fixtures/abi/contract_required_keys.json`) and the
+  numeric scales (`semantic_score` 0–100, similarity and deviation 0–1).
+  Nested shape is covered by behaviour tests but is not frozen by a schema.
+- **No separate schema version.** The payload shape follows the crate version.
+  Until 1.0 a breaking change may land in a minor release and is always listed
+  under **Upgrade notes** in `CHANGELOG.md`; consumers should pin the crate
+  version and read those notes on each bump. The exception is
+  `validate -o json`, which names its layout (`"schema":
+  "sbom-tools/compliance/v2"`), has a published JSON Schema, and only adds
+  fields within a schema version; see
+  [docs/compliance-output.md](docs/compliance-output.md).
+- **Known conflation.** In the CycloneDX parser an absent
+  `cryptoProperties.algorithmProperties.primitive` and an explicit
+  `"unknown"` both normalize to `primitive: "Unknown"`. A consumer that must
+  tell "omitted" from "declared unknown" should read the raw CycloneDX
+  document, which is the stable contract for that distinction.
+
+### SARIF and code scanning
+
+`-o sarif` (`diff`, `view`, `validate`, `quality`) writes a SARIF 2.1.0 log
+with one run, shaped for GitHub code scanning:
+
+- **Every result points into the SBOM file**: at the line of the component's
+  `bom-ref`, `SPDXID`, `spdxId` or `@id`, or, for a finding about the whole
+  document, at the CycloneDX `metadata` or the SPDX creation information. A
+  component whose id the text does not state points at line 1. A component
+  result also names the component, by its purl or else its id, as a logical
+  location. A minified SBOM is a single line, so all of its results point at
+  line 1.
+- **The SBOM path is relative to the repository** the file is in (the nearest
+  ancestor directory holding a `.git`), under the `SRCROOT` base, so code
+  scanning finds the file in the checkout. `--sarif-base <dir>` names another
+  root. A file outside the root is named by its absolute `file://` URI, with a
+  warning, and standard input is named `-`.
+- **Every check is its own rule.** `ruleId` is the violation's `rule_id` from
+  `validate -o json`. Each rule has a description, help text naming where the
+  fix goes in each SBOM format, and a `helpUri` to the standard's text where
+  one is known.
+- **Alerts survive edits.** `partialFingerprints` are derived from the
+  finding's identity (standard, rule, component; see
+  [finding identity](docs/compliance-output.md#finding-identity)), never from
+  its line or message, so moving, reformatting or reordering the SBOM keeps
+  its alerts. `properties.findingKey` and `properties.findingId` carry the
+  same identity.
+- **One category per kind of run.** `automationDetails.id` is
+  `sbom-tools/<standards>/` for `validate` (the canonical `--standard` values,
+  sorted and joined by `+`, as in `sbom-tools/cra+ntia/`),
+  `sbom-tools/quality/<profile>/`, `sbom-tools/diff/` or `sbom-tools/view/`.
+  Code scanning keeps one set of alerts per category, and each upload replaces
+  that set. Because the SARIF already names its category, `upload-sarif`
+  ignores its own `category` input, and it fails a job that uploads two files
+  with the same category. When one workflow checks several SBOMs against the
+  same standards, give each one its own category:
+
+  ```sh
+  sbom-tools validate services/api/sbom.cdx.json --standard cra \
+    -o sarif -O api.sarif --sarif-category sbom-tools/cra/api
+  sbom-tools validate services/web/sbom.cdx.json --standard cra \
+    -o sarif -O web.sarif --sarif-category sbom-tools/cra/web
+  ```
+- **At most 25,000 results per run**, the most GitHub accepts (it shows the
+  5,000 most severe). A run that would hold more keeps the most severe and
+  says in `invocations[0].toolExecutionNotifications`, and on stderr, how many
+  it omitted; `-o json` has the full list. `--sarif-max-results <n>` sets the
+  cap (`0` for none).
+- **Passed checks are no results**, so they raise no alert.
+  `validate --sarif-include-passes` adds each as a result of `kind: "pass"` at
+  level `none`, located and fingerprinted like a violation.
+- **`diff` reports into the new SBOM.** Its results point into the new file: a
+  removed component at the new SBOM's document line. The old SBOM's own CRA
+  findings are not results; `diff -o json` and the text reports keep both
+  sides.
+- **TUI exports carry no physical location**: the TUI's SARIF export (`e`,
+  then `s`) does not keep the SBOM file, so code scanning drops its results.
+  Produce SARIF for code scanning with the CLI.
+
+Upgrading from v0.3: SARIF results now carry locations and fingerprints, and
+every check has its own SARIF rule. The first upload after upgrading re-keys
+existing code-scanning alerts. `diff -o sarif` reports into the new SBOM
+only: the old SBOM's CRA findings are no longer results, and removed
+components point at the new SBOM. A run keeps at most 25,000 results unless
+`--sarif-max-results` says otherwise.
+
+The field-by-field mapping is in
+[docs/compliance-output.md](docs/compliance-output.md#sarif). Uploading to
+code scanning from a workflow, choosing categories, and troubleshooting are
+covered in [docs/github-code-scanning.md](docs/github-code-scanning.md).
 
 ## CI/CD Integration
 
@@ -931,21 +1067,22 @@ jobs:
 | Code | Meaning |
 |------|---------|
 | `0` | Success (no changes detected, or run without `--fail-on-change`) |
-| `1` | Changes detected (`--fail-on-change`) / compliance errors (`validate`) / quality score below `--min-score` or non-compliant with `--fail-on-noncompliant` (`quality`) / no query matches |
-| `2` | New vulnerabilities introduced (`--fail-on-vuln`) / compliance warnings (`validate --fail-on-warning`); also command-line parse errors |
-| `3` | Operational error (I/O, parse, config, invalid flag values) |
+| `1` | Changes detected (`--fail-on-change`) / compliance errors, or a not-applicable standard under `--require-applicable` (`validate`) / quality score below `--min-score` or non-compliant with `--fail-on-noncompliant` (`quality`) / no query matches |
+| `2` | New vulnerabilities introduced (`--fail-on-vuln`) / compliance warnings (`validate --fail-on-warning`) |
+| `3` | Usage error (unknown flag or value, missing argument) or operational error (I/O, parse, config, invalid flag values) |
 | `4` | VEX coverage gaps found (`--fail-on-vex-gap`) |
 | `5` | License policy violations found (`license-check`) |
 | `6` | Actively exploited (KEV) vulnerability introduced (`--fail-on-kev`) |
 | `7` | Supported ML performance metric regressed (`--fail-on-ml-regression`) |
 
 Gate codes only apply to runs that completed successfully and produced their
-report. Every operational error — I/O, parse failures, an unsupported `-o`
-format for the command, an invalid `--as-of`/`--cra-product-class` value, a
-broken explicit `--cra-sidecar`, or an invalid config file — exits `3`, and
-command-line parse errors exit `2` — CI pipelines should therefore only
-interpret a nonzero exit as a gate verdict when the expected report output was
-produced.
+report. Every usage error (an unknown flag or standard, an invalid flag value,
+a missing argument) and every operational error — I/O, parse failures, an
+unsupported `-o` format for the command, an invalid `--as-of`/
+`--cra-product-class` value, a broken explicit `--cra-sidecar`, or an invalid
+config file — exits `3`, in every command. `--help` and `--version` exit `0`.
+CI pipelines should therefore only interpret a nonzero exit as a gate verdict
+when the expected report output was produced.
 
 ML regression directions are explicit. Higher is better for `accuracy`, `f1`,
 `f1_score`, `precision`, `recall`, `auc`, `roc_auc`, `bleu`, and `rouge`.
@@ -1022,6 +1159,10 @@ cargo bench
   keys, filtered to the current context
 - [Changelog](CHANGELOG.md) — user-visible changes per release, with
   breaking changes called out first
+- [Migrating to 0.4](docs/MIGRATING-0.4.md) — every breaking change in
+  v0.4.0, who it affects and what to do
+- [GitHub code scanning](docs/github-code-scanning.md) — uploading SARIF
+  from a workflow, categories, limits and troubleshooting
 - [Releases](https://github.com/sbom-tool/sbom-tools/releases)
 
 ## Contributing

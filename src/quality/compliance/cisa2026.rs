@@ -21,6 +21,18 @@
 //! is invisible to a document checker (e.g., detached signatures, SPDX 2.x
 //! fields that do not exist), so absence must not hard-fail the run.
 //!
+//! Evidence gates (as in the FSCT profile): SPDX 2.x has no field for an
+//! in-document signature, the lifecycle phase, or a completeness
+//! declaration, so these rules do not run on SPDX 2.x input (see
+//! `is_spdx2`):
+//! - `SBOM-CISA2026-SIGNATURE`
+//! - `SBOM-CISA2026-GENERATION-CONTEXT`
+//! - `SBOM-CISA2026-COVERAGE`
+//!
+//! Firing them anyway meant an SPDX 2.x SBOM could never pass
+//! `--fail-on-warning`, however complete. CycloneDX and SPDX 3 input is
+//! still checked.
+//!
 //! Escape hatches: several 2026 elements require the author to *explicitly*
 //! state that information is unknown instead of omitting it (Component
 //! Version, Component Producer, Component Hash Value, Component License).
@@ -30,26 +42,6 @@
 
 use super::*;
 
-/// Parse a dotted spec version ("1.6", "3.0.1") into numeric
-/// `(major, minor, patch)`. Missing trailing segments count as zero; a
-/// present-but-non-numeric segment (or an empty string) yields `None` so the
-/// caller can skip the comparison instead of false-failing synthetic
-/// documents that carry no version. (Same skip-when-unparseable posture as
-/// the BSI TR-03183-2 §4 gate in `bsi.rs`.)
-fn parse_spec_version(v: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = v.trim().split('.');
-    let major: u64 = parts.next()?.parse().ok()?;
-    let minor: u64 = match parts.next() {
-        Some(s) => s.parse().ok()?,
-        None => 0,
-    };
-    let patch: u64 = match parts.next() {
-        Some(s) => s.parse().ok()?,
-        None => 0,
-    };
-    Some((major, minor, patch))
-}
-
 /// Explicit-unknown sentinel: the marker an SBOM author uses to state that a
 /// value is unknown rather than silently omitting it. The 2026 elements'
 /// escape hatches ("the SBOM author should indicate the information is
@@ -57,9 +49,7 @@ fn parse_spec_version(v: &str) -> Option<(u64, u64, u64)> {
 /// is deliberately the complement of `known_value` (which treats the same
 /// sentinels as absent for the NTIA-style presence gates).
 fn is_unknown_marker(value: &str) -> bool {
-    value.eq_ignore_ascii_case("NOASSERTION")
-        || value.eq_ignore_ascii_case("NONE")
-        || value.eq_ignore_ascii_case("UNKNOWN")
+    is_declared_unknown(value)
 }
 
 /// Heuristic for the SBOM Tool Version element: whether a Tool creator's
@@ -90,6 +80,45 @@ fn is_ascii_hex(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Why a hash algorithm falls short of the Component Hash Algorithm element,
+/// or `None` when it is acceptable. "The algorithm should be approved by a
+/// relevant authority, such as NIST": MD5 was never FIPS-approved; SHA-1 is
+/// deprecated with withdrawal slated by 2030; an unrecognized algorithm
+/// cannot be mapped to an IANA Hash Function Textual Name.
+fn hash_algorithm_shortfall(algorithm: &crate::model::HashAlgorithm) -> Option<String> {
+    use crate::model::HashAlgorithm;
+    match algorithm {
+        HashAlgorithm::Md5 => Some("MD5 (not NIST-approved)".to_string()),
+        HashAlgorithm::Sha1 => Some("SHA-1 (deprecated; NIST withdrawal by 2030)".to_string()),
+        HashAlgorithm::Other(name) => Some(format!("{name} (not a recognized hash function name)")),
+        _ => None,
+    }
+}
+
+/// Whether the document is SPDX 2.x, whose data model has no field for
+/// three pieces of evidence the 2026 elements ask for:
+/// - an in-document signature (SBOM Author Signature): SPDX 2.x defines no
+///   signature field, so its signatures live in detached files or
+///   envelopes, unlike CycloneDX JSF `signature` or SPDX 3 `verifiedUsing`;
+/// - the lifecycle phase (SBOM Generation Context): SPDX 2.x has no
+///   counterpart of CycloneDX `metadata.lifecycles` or SPDX 3 `sbomType`,
+///   only free-text comments;
+/// - a completeness declaration (Coverage): SPDX 2.x has no counterpart of
+///   CycloneDX `compositions` or SPDX 3 relationship `completeness`; a
+///   `NONE`/`NOASSERTION` relationship target speaks for one relationship,
+///   not for the inventory.
+///
+/// The rules looking for that evidence are gated off for SPDX 2.x, as the
+/// FSCT profile gates attributes a format cannot express. Unparseable SPDX
+/// versions count as 2.x: the SPDX 3 parser always records a 3.x version.
+fn is_spdx2(sbom: &NormalizedSbom) -> bool {
+    sbom.document.format == SbomFormat::Spdx
+        && sbom
+            .document
+            .spec_version_parsed()
+            .is_none_or(|v| v.major < 3)
+}
+
 impl ComplianceChecker {
     // ════════════════════════════════════════════════════════════════════
     // CISA 2026 Minimum Elements (successor to NTIA 2021)
@@ -105,20 +134,31 @@ impl ComplianceChecker {
     /// Explicitly Identifying Unknown Information declaration check.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn check_cisa2026(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        use crate::model::{
-            CompletenessDeclaration, ComponentType, CreatorType, ExternalRefType, HashAlgorithm,
-            HashProvenance,
-        };
+        use crate::model::{CompletenessDeclaration, CreatorType, ExternalRefType, HashProvenance};
+
+        // The per-component elements below have nothing to judge without a
+        // package-scoped component.
+        violations.extend(inventory_absent_violation(
+            sbom,
+            "SBOM-CISA2026-INVENTORY",
+            "CISA 2026 Minimum Elements: component inventory",
+        ));
+
+        // Signature, generation context and coverage evidence cannot be
+        // expressed in SPDX 2.x; those checks skip it (see module docs).
+        let spdx2 = is_spdx2(sbom);
 
         // SBOM Author (Error) — "the name of the entity that creates the
         // SBOM data": the entity operating the generation tool, not the tool
         // itself, so a tool-only creator list fails. Deliberately stricter
         // than SBOM-NTIA-AUTHOR, which passes on any non-empty creator list.
+        // The author must also be identified: an empty or placeholder name
+        // (NOASSERTION, TBD) names no entity.
         let has_person_or_org = sbom
             .document
             .creators
             .iter()
-            .any(|c| c.creator_type != CreatorType::Tool);
+            .any(|c| c.creator_type != CreatorType::Tool && creator_identified(c));
         if !has_person_or_org {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
@@ -134,22 +174,24 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // SBOM Author Signature (Warning — evidence-limited). In-document
         // evidence exists only as a CycloneDX JSF signature or an SPDX 3
         // verifiedUsing signature entry; SPDX 2.x cannot express a signature
-        // in-document and detached signatures are invisible to a document
-        // checker, so absence must not hard-fail the run. Presence is
-        // structural (algorithm + non-empty value) — nothing is
-        // cryptographically verified.
+        // in-document, so the check skips it, and detached signatures are
+        // invisible to a document checker, so absence must not hard-fail the
+        // run. Presence is structural (algorithm + non-empty value) — nothing
+        // is cryptographically verified.
         let has_signature = sbom
             .document
             .signature
             .as_ref()
             .is_some_and(|s| s.has_value);
-        if !has_signature {
+        if !has_signature && !spdx2 {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
@@ -164,6 +206,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -175,12 +219,12 @@ impl ComplianceChecker {
         // the concrete floor — CycloneDX 1.4+ / SPDX 2.2+ — is tool policy
         // mirroring the repo's EO 14028 machine-readable gate, and the
         // message says so. Unparseable/absent spec versions skip the gate
-        // rather than false-failing (parse_spec_version).
+        // rather than false-failing (`DocumentMetadata::spec_version_parsed`).
         let minimum = match sbom.document.format {
-            SbomFormat::CycloneDx => (1, 4, 0),
-            SbomFormat::Spdx => (2, 2, 0),
+            SbomFormat::CycloneDx => crate::model::SpecVersion::new(1, 4, 0),
+            SbomFormat::Spdx => crate::model::SpecVersion::new(2, 2, 0),
         };
-        if let Some(actual) = parse_spec_version(&sbom.document.spec_version)
+        if let Some(actual) = sbom.document.spec_version_parsed()
             && actual < minimum
         {
             violations.push(Violation {
@@ -200,6 +244,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -207,10 +253,10 @@ impl ComplianceChecker {
         // lifecycle phase at generation time ("before build" / "build" /
         // "after build", or a more specific identifier — free-form names are
         // accepted per the element). Only CycloneDX 1.5+ metadata.lifecycles
-        // populates the field; SPDX 2.x has no standard field and its
-        // parsers yield None, so an Error would condemn every SPDX 2.x SBOM
-        // regardless of author diligence.
-        if known_value(sbom.document.lifecycle_phase.as_deref()).is_none() {
+        // populates the field. SPDX 2.x has no standard field, so the check
+        // skips it; SPDX 3 sbomType is not parsed yet, which keeps this a
+        // Warning rather than an Error.
+        if !spdx2 && known_value(sbom.document.lifecycle_phase.as_deref()).is_none() {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
@@ -224,6 +270,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -247,6 +295,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -273,6 +323,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         } else if !tool_creators
             .iter()
@@ -292,6 +344,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -331,6 +385,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -351,30 +407,34 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
 
-            // File/snippet inventory entries are name+hash records, not
-            // packages: the producer / version / identifier / hash / license
-            // elements below do not apply to them (same carve-out as the
-            // NTIA-path checks — without it a file-cataloguing SBOM emits
-            // thousands of spurious Errors).
-            if matches!(comp.component_type, ComponentType::File) {
+            // File/snippet inventory entries (name+hash records) and
+            // cryptographic assets are not packages: the producer / version /
+            // identifier / hash / license elements below do not apply to them
+            // (same carve-out as the NTIA-path checks — without it a
+            // file-cataloguing SBOM emits thousands of spurious Errors).
+            if !comp.component_type.is_package_scoped() {
                 continue;
             }
 
             // Component Producer (Error) — the 2026 rename of the ambiguous
             // "Supplier Name". Author/originator (SPDX PackageOriginator) is
             // the closest evidence for "the entity that creates, defines,
-            // and identifies components"; supplier is accepted; an explicit
-            // unknown-provenance marker satisfies the element's escape hatch
-            // ("the SBOM author should explicitly mark the component as of
-            // unknown provenance"). Only silent absence fails.
-            let producer_named = has_known_supplier(&comp.supplier, &comp.author);
+            // and identifies components"; supplier and manufacturer are
+            // accepted; an explicit unknown-provenance marker satisfies the
+            // element's escape hatch ("the SBOM author should explicitly mark
+            // the component as of unknown provenance"). Only silent absence
+            // fails.
+            let producer_named = has_known_producer(comp);
             let producer_marked_unknown = comp
                 .supplier
-                .as_ref()
-                .is_some_and(|s| is_unknown_marker(s.name.trim()))
+                .iter()
+                .chain(&comp.manufacturer)
+                .any(|o| is_unknown_marker(o.name.trim()))
                 || comp
                     .author
                     .as_deref()
@@ -384,8 +444,8 @@ impl ComplianceChecker {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::SupplierInfo,
                     message: format!(
-                        "[CISA 2026] Component '{}' names no producer (author/originator or \
-                         supplier) and is not explicitly marked as of unknown provenance",
+                        "[CISA 2026] Component '{}' names no producer (author/originator, \
+                         manufacturer or supplier) and is not explicitly marked as of unknown provenance",
                         comp.name
                     ),
                     element: Some(comp.name.clone()),
@@ -394,17 +454,17 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
 
             // Component Version (Error). Explicit-unknown markers
             // (NOASSERTION/'unknown') satisfy the 2026 escape hatch and pass
-            // — the honesty requirement is the point of the Major Update —
-            // so only silent absence (no version string at all) fails.
-            let version_declared = comp
-                .version
-                .as_deref()
-                .is_some_and(|v| !v.trim().is_empty());
+            // — the honesty requirement is the point of the Major Update.
+            // Silent absence fails, and so do placeholders such as "TBD" or
+            // "N/A": they neither give a version nor state it is unknown.
+            let version_declared = value_state(comp.version.as_deref()) != ValueState::Missing;
             if !version_declared {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
@@ -420,6 +480,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
 
@@ -443,6 +505,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
 
@@ -477,6 +541,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             } else if !has_hex_value && !hash_marked_unknown {
                 violations.push(Violation {
@@ -493,28 +559,26 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             } else {
-                // Hash-value evidence is sound — assess the algorithms.
-                // "The algorithm should be approved by a relevant authority,
-                // such as NIST" is a 'should', hence Warning: MD5 was never
-                // FIPS-approved; SHA-1 is deprecated with withdrawal slated
-                // by 2030; an unrecognized algorithm cannot be mapped to an
-                // IANA Hash Function Textual Name.
+                // Hash-value evidence is sound — assess the algorithms (see
+                // `hash_algorithm_shortfall`). "Should be approved by a
+                // relevant authority" is a 'should', hence Warning. One
+                // strong hash (an acceptable algorithm with an ASCII-hex
+                // value) satisfies the element: the cyclonedx-maven-plugin,
+                // for one, emits MD5 and SHA-1 beside SHA-256 and SHA-512 by
+                // default, and weak digests next to a strong one take nothing
+                // away. Components with only weak hashes still warn.
                 let offending: Vec<String> = authored
                     .iter()
-                    .filter_map(|h| match &h.algorithm {
-                        HashAlgorithm::Md5 => Some("MD5 (not NIST-approved)".to_string()),
-                        HashAlgorithm::Sha1 => {
-                            Some("SHA-1 (deprecated; NIST withdrawal by 2030)".to_string())
-                        }
-                        HashAlgorithm::Other(name) => {
-                            Some(format!("{name} (not a recognized hash function name)"))
-                        }
-                        _ => None,
-                    })
+                    .filter_map(|h| hash_algorithm_shortfall(&h.algorithm))
                     .collect();
-                if !offending.is_empty() {
+                let has_strong_hash = authored.iter().any(|h| {
+                    hash_algorithm_shortfall(&h.algorithm).is_none() && is_ascii_hex(h.value.trim())
+                });
+                if !offending.is_empty() && !has_strong_hash {
                     violations.push(Violation {
                         severity: ViolationSeverity::Warning,
                         category: ViolationCategory::IntegrityInfo,
@@ -532,6 +596,8 @@ impl ComplianceChecker {
                         component_id: Some(comp.canonical_id.value().to_string()),
                         counts: None,
                         standard_refs: Vec::new(),
+                        remediation: None,
+                        finding_detail: None,
                     });
                 }
             }
@@ -563,6 +629,8 @@ impl ComplianceChecker {
                     component_id: Some(comp.canonical_id.value().to_string()),
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
         }
@@ -574,7 +642,9 @@ impl ComplianceChecker {
         // dependency graph, or link to separate SBOM documents per
         // dependency (the element's linking allowance — an external
         // reference of BOM type is accepted as alternative evidence).
-        if sbom.components.len() > 1 && sbom.edges.is_empty() {
+        // Dependency relationships between packages: crypto assets, files
+        // and services need not join the graph.
+        if package_components(sbom).nth(1).is_some() && sbom.edges.is_empty() {
             let has_external_sbom_link = sbom.components.values().any(|c| {
                 c.external_refs
                     .iter()
@@ -594,6 +664,8 @@ impl ComplianceChecker {
                     component_id: None,
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
         }
@@ -606,8 +678,10 @@ impl ComplianceChecker {
         // repositories / binary analysis for that. A declared-incomplete
         // inventory still warns (the 2026 Coverage element expects all
         // components including transitive dependencies) but with a message
-        // acknowledging the declaration is honest.
+        // acknowledging the declaration is honest. SPDX 2.x cannot declare
+        // completeness at all, so the check skips it.
         match sbom.document.completeness_declaration {
+            _ if spdx2 => {}
             CompletenessDeclaration::Unknown | CompletenessDeclaration::NotSpecified => {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
@@ -624,6 +698,8 @@ impl ComplianceChecker {
                     component_id: None,
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
             CompletenessDeclaration::Incomplete
@@ -647,6 +723,8 @@ impl ComplianceChecker {
                     component_id: None,
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
             CompletenessDeclaration::Complete => {}

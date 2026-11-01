@@ -1,0 +1,200 @@
+---
+source: tests/compliance_snapshots.rs
+---
+fixture: showcase/graph-baseline.cdx.json
+as_of: 2026-10-12T00:00:00Z
+
+[Minimum] compliant · E0 W1 I0
+  W SBOM-QUALITY-CREATOR  -
+[Standard] NON-COMPLIANT · E1 W6 I0
+  E SBOM-QUALITY-CREATOR  -
+  W SBOM-QUALITY-LICENSE  pkg:generic/acme-graph-app@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/api-gateway@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/audit-sdk@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/auth-service@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/policy-engine@1.0.0
+  W SBOM-QUALITY-SERIAL  -
+[NtiaMinimum] NON-COMPLIANT · E6 W0 I0
+  E SBOM-NTIA-AUTHOR  -
+  E SBOM-NTIA-SUPPLIER  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/api-gateway@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/audit-sdk@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/auth-service@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/policy-engine@1.0.0
+[CraPhase1] NON-COMPLIANT · E1 W15 I9
+  E SBOM-CRA-CREATOR  -
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/acme-graph-app@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/api-gateway@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/audit-sdk@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/auth-service@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/policy-engine@1.0.0
+  I SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE  - (3/5)
+  I SBOM-CRA-ART-13-8  -
+  I SBOM-CRA-DOC-INTEGRITY  -
+  I SBOM-CRA-VULN-STATEMENT  -
+  W SBOM-CRA-ANNEX-I-SUPPLY-CHAIN  - (2/2)
+  W SBOM-CRA-ART-13-16  -
+  W SBOM-CRA-ART-13-17-CONTACT  -
+  W SBOM-CRA-ART-13-5  - (5/5)
+  W SBOM-CRA-ART-14-EARLY-WARNING  -
+  W SBOM-CRA-ART-14-ENISA  -
+  W SBOM-CRA-ART-14-NOTIFICATION  -
+  W SBOM-CRA-ART-14-PSIRT  -
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/acme-graph-app@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/api-gateway@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/audit-sdk@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/auth-service@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/policy-engine@1.0.0
+  W SBOM-CRA-SBOM-FRESHNESS  -
+  W SBOM-CRA-SERIAL  -
+[CraPhase2] NON-COMPLIANT · E2 W17 I10
+  E SBOM-CRA-ANNEX-I-SUPPLY-CHAIN  - (2/2)
+  E SBOM-CRA-CREATOR  -
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/acme-graph-app@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/api-gateway@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/audit-sdk@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/auth-service@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/policy-engine@1.0.0
+  I SBOM-CRA-ANNEX-V  -
+  I SBOM-CRA-ART-13-8  -
+  I SBOM-CRA-DOC-INTEGRITY  -
+  I SBOM-CRA-LIFECYCLE  -
+  I SBOM-CRA-VULN-STATEMENT  -
+  W SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE  - (3/5)
+  W SBOM-CRA-ART-13-16  -
+  W SBOM-CRA-ART-13-17-CONTACT  -
+  W SBOM-CRA-ART-13-2  -
+  W SBOM-CRA-ART-13-5  - (5/5)
+  W SBOM-CRA-ART-14-EARLY-WARNING  -
+  W SBOM-CRA-ART-14-ENISA  -
+  W SBOM-CRA-ART-14-NOTIFICATION  -
+  W SBOM-CRA-ART-14-PSIRT  -
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/acme-graph-app@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/api-gateway@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/audit-sdk@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/auth-service@1.0.0
+  W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/policy-engine@1.0.0
+  W SBOM-CRA-CVD-POLICY  -
+  W SBOM-CRA-SBOM-FRESHNESS  -
+  W SBOM-CRA-SERIAL  -
+[FdaMedicalDevice] NON-COMPLIANT · E11 W4 I0
+  E SBOM-FDA-CREATOR  -
+  E SBOM-FDA-HASH  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-FDA-HASH  pkg:generic/api-gateway@1.0.0
+  E SBOM-FDA-HASH  pkg:generic/audit-sdk@1.0.0
+  E SBOM-FDA-HASH  pkg:generic/auth-service@1.0.0
+  E SBOM-FDA-HASH  pkg:generic/policy-engine@1.0.0
+  E SBOM-FDA-SUPPLIER  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-FDA-SUPPLIER  pkg:generic/api-gateway@1.0.0
+  E SBOM-FDA-SUPPLIER  pkg:generic/audit-sdk@1.0.0
+  E SBOM-FDA-SUPPLIER  pkg:generic/auth-service@1.0.0
+  E SBOM-FDA-SUPPLIER  pkg:generic/policy-engine@1.0.0
+  W SBOM-FDA-CONTACT  -
+  W SBOM-FDA-NAMESPACE  -
+  W SBOM-FDA-SUPPLIER  -
+  W SBOM-FDA-SUPPORT  -
+[NistSsdf] NON-COMPLIANT · E2 W3 I2
+  E SBOM-SSDF-PS1  -
+  E SBOM-SSDF-PS2  - (5/5)
+  I SBOM-SSDF-PO3  -
+  I SBOM-SSDF-PW6  -
+  W SBOM-SSDF-PO1  -
+  W SBOM-SSDF-PS1-TOOL  -
+  W SBOM-SSDF-PS3  - (5/5)
+[Eo14028] NON-COMPLIANT · E2 W3 I0
+  E SBOM-EO14028-CREATOR  -
+  E SBOM-EO14028-SUPPLIER  - (5/5)
+  W SBOM-EO14028-AUTOGEN  -
+  W SBOM-EO14028-DISCLOSURE  -
+  W SBOM-EO14028-INTEGRITY  - (5/5)
+[Cnsa2] NON-COMPLIANT · E1 W0 I0
+  E SBOM-CNSA2-000  -
+[NistPqc] NON-COMPLIANT · E1 W0 I0
+  E SBOM-PQC-000  -
+[BsiTr03183_2] NON-COMPLIANT · E3 W3 I0
+  E SBOM-BSI-TR-03183-2-4  -
+  E SBOM-BSI-TR-03183-2-5-1  -
+  E SBOM-BSI-TR-03183-2-LICENSE  - (5/5)
+  W SBOM-BSI-TR-03183-2-5-4-MISSING  - (5/5)
+  W SBOM-BSI-TR-03183-2-5-5-COMPLETENESS  -
+  W SBOM-BSI-TR-03183-2-CREATOR  - (5/5)
+[CraOssSteward] NON-COMPLIANT · E1 W6 I5
+  E SBOM-CRA-ART-24  -
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/acme-graph-app@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/api-gateway@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/audit-sdk@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/auth-service@1.0.0
+  I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/policy-engine@1.0.0
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:generic/acme-graph-app@1.0.0
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:generic/api-gateway@1.0.0
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:generic/audit-sdk@1.0.0
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:generic/auth-service@1.0.0
+  W SBOM-CRA-ART-24-SUPPLIER  pkg:generic/policy-engine@1.0.0
+  W SBOM-CRA-CVD-POLICY  -
+[EuccSubstantial] NON-COMPLIANT · E4 W1 I0
+  E SBOM-EUCC-ITSEF  -
+  E SBOM-EUCC-PP  -
+  E SBOM-EUCC-TOE  -
+  E SBOM-EUCC-VALIDITY  -
+  W SBOM-EUCC-CERTREF  -
+[EuAiAct] not applicable · E0 W0 I0
+[BsiSbomForAi] not applicable · E0 W0 I0
+[Cisa2026] NON-COMPLIANT · E17 W3 I0
+  E SBOM-CISA2026-AUTHOR  -
+  E SBOM-CISA2026-HASH  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-CISA2026-HASH  pkg:generic/api-gateway@1.0.0
+  E SBOM-CISA2026-HASH  pkg:generic/audit-sdk@1.0.0
+  E SBOM-CISA2026-HASH  pkg:generic/auth-service@1.0.0
+  E SBOM-CISA2026-HASH  pkg:generic/policy-engine@1.0.0
+  E SBOM-CISA2026-LICENSE  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-CISA2026-LICENSE  pkg:generic/api-gateway@1.0.0
+  E SBOM-CISA2026-LICENSE  pkg:generic/audit-sdk@1.0.0
+  E SBOM-CISA2026-LICENSE  pkg:generic/auth-service@1.0.0
+  E SBOM-CISA2026-LICENSE  pkg:generic/policy-engine@1.0.0
+  E SBOM-CISA2026-PRODUCER  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-CISA2026-PRODUCER  pkg:generic/api-gateway@1.0.0
+  E SBOM-CISA2026-PRODUCER  pkg:generic/audit-sdk@1.0.0
+  E SBOM-CISA2026-PRODUCER  pkg:generic/auth-service@1.0.0
+  E SBOM-CISA2026-PRODUCER  pkg:generic/policy-engine@1.0.0
+  E SBOM-CISA2026-TOOL  -
+  W SBOM-CISA2026-COVERAGE  -
+  W SBOM-CISA2026-GENERATION-CONTEXT  -
+  W SBOM-CISA2026-SIGNATURE  -
+[PciDss632] compliant · E0 W0 I2
+  I SBOM-PCI-6-3-2-COMPLETENESS  -
+  I SBOM-PCI-6-3-2-VULN-EVIDENCE  -
+[Fsct] NON-COMPLIANT · E5 W7 I4
+  E SBOM-FSCT-AUTHOR  -
+  E SBOM-FSCT-COPYRIGHT-PRIMARY  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-FSCT-HASH  - (5/5)
+  E SBOM-FSCT-LICENSE-PRIMARY  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-FSCT-SUPPLIER  - (5/5)
+  I SBOM-FSCT-COPYRIGHT-ALL  - (5/5)
+  I SBOM-FSCT-LICENSE-ALL  - (5/5)
+  I SBOM-FSCT-SBOM-TYPE  -
+  I SBOM-FSCT-SIGNATURE  -
+  W SBOM-FSCT-AUTHOR-TOOL  -
+  W SBOM-FSCT-COMPLETENESS  -
+  W SBOM-FSCT-COPYRIGHT-COVERAGE  - (0/5)
+  W SBOM-FSCT-HASH-PRIMARY-SHA2  pkg:generic/acme-graph-app@1.0.0
+  W SBOM-FSCT-IDENTIFIER-MULTI  - (5/5)
+  W SBOM-FSCT-LICENSE-COVERAGE  - (0/5)
+  W SBOM-FSCT-UPSTREAM-SBOM  -
+[Comprehensive] NON-COMPLIANT · E6 W11 I0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/acme-graph-app@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/api-gateway@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/audit-sdk@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/auth-service@1.0.0
+  E SBOM-NTIA-SUPPLIER  pkg:generic/policy-engine@1.0.0
+  E SBOM-QUALITY-CREATOR  -
+  W SBOM-QUALITY-HASH  pkg:generic/acme-graph-app@1.0.0
+  W SBOM-QUALITY-HASH  pkg:generic/api-gateway@1.0.0
+  W SBOM-QUALITY-HASH  pkg:generic/audit-sdk@1.0.0
+  W SBOM-QUALITY-HASH  pkg:generic/auth-service@1.0.0
+  W SBOM-QUALITY-HASH  pkg:generic/policy-engine@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/acme-graph-app@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/api-gateway@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/audit-sdk@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/auth-service@1.0.0
+  W SBOM-QUALITY-LICENSE  pkg:generic/policy-engine@1.0.0
+  W SBOM-QUALITY-SERIAL  -

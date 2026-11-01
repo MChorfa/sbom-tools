@@ -14,12 +14,13 @@ use crate::model::{
     CryptoFunction, CryptoMaterialState, CryptoMaterialType, CryptoMode, CryptoPadding,
     CryptoPrimitive, CryptoProperties, CvssScore, CvssVersion, DependencyEdge, DependencyScope,
     DependencyType, DocumentMetadata, ExecutionEnvironment, ExternalRefType, ExternalReference,
-    Hash, HashAlgorithm, Ikev2TransformTypes, ImplementationPlatform, LicenseExpression,
-    NormalizedSbom, Organization, Property, ProtocolProperties, ProtocolType,
-    RelatedCryptoMaterialProperties, Remediation, RemediationType, SbomFormat, SecuredBy, Severity,
-    SignatureInfo, VexJustification, VexResponse, VexState, VexStatus, VulnerabilityRef,
-    VulnerabilitySource,
+    Hash, HashAlgorithm, Ikev2Transform, Ikev2TransformKind, Ikev2TransformTypes,
+    ImplementationPlatform, LicenseExpression, NormalizedSbom, Organization, Property,
+    ProtocolProperties, ProtocolType, RelatedCryptoAsset, RelatedCryptoMaterialProperties,
+    Remediation, RemediationType, SbomFormat, SecuredBy, Severity, SignatureInfo, VexState,
+    VulnerabilityRef, VulnerabilitySource, ikev2_key_exchange_group, is_usable_purl,
 };
+use crate::parsers::cyclonedx_analysis;
 use crate::parsers::traits::{ParseError, SbomParser};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -76,7 +77,9 @@ impl CycloneDxParser {
         let cdx: CycloneDxBomXml =
             quick_xml::de::from_str(content).map_err(|e| ParseError::XmlError(e.to_string()))?;
 
-        // Convert XML structure to common BOM structure
+        // Convert XML structure to common BOM structure. Metadata,
+        // compositions and the signature land in the same fields the JSON
+        // path fills, so `convert_metadata` treats both encodings alike.
         let bom = CycloneDxBom {
             bom_format: Some("CycloneDX".to_string()),
             spec_version: xml_spec_version(cdx.xmlns.as_deref(), cdx.version.as_deref()),
@@ -84,13 +87,13 @@ impl CycloneDxParser {
             version: cdx.version.as_deref().and_then(|v| v.parse().ok()),
             metadata: cdx.metadata.map(|m| CdxMetadata {
                 timestamp: m.timestamp,
-                tools: m.tools.map(|t| t.tool),
-                authors: None,
-                manufacturer: None,
-                manufacture: None,
+                tools: m.tools.map(CdxToolsXml::into_tools),
+                authors: m.authors.map(|w| w.author),
+                manufacturer: m.manufacturer,
+                manufacture: m.manufacture,
                 component: m.component.map(Into::into),
-                lifecycles: None,
-                distribution_constraints: None,
+                lifecycles: m.lifecycles.map(|w| w.lifecycle),
+                distribution_constraints: m.distribution_constraints,
             }),
             components: cdx
                 .components
@@ -104,9 +107,15 @@ impl CycloneDxParser {
             vulnerabilities: cdx
                 .vulnerabilities
                 .map(|v| v.vulnerability.into_iter().map(Into::into).collect()),
-            compositions: None,
-            signature: None,
-            citations: None,
+            compositions: cdx
+                .compositions
+                .map(|c| c.composition.into_iter().map(Into::into).collect()),
+            // JSON carries one JSF signature object; XML may append several
+            // enveloped signatures, and the first stands for the document.
+            signature: cdx.signatures.into_iter().next().map(Into::into),
+            citations: cdx
+                .citations
+                .map(|c| c.citation.into_iter().map(Into::into).collect()),
             // CDXA declarations exist in the 1.6 XML schema too, but their
             // XML normalization is deferred: phase 1 ingests JSON only.
             declarations: None,
@@ -143,14 +152,14 @@ impl CycloneDxParser {
         if let Some(meta) = &cdx.metadata
             && let Some(meta_comp) = &meta.component
         {
-            let comp = self.convert_component(meta_comp);
+            let mut comp = self.convert_component(meta_comp);
             let bom_ref = meta_comp
                 .bom_ref
                 .clone()
                 .unwrap_or_else(|| comp.name.clone());
-            let canonical_id = comp.canonical_id.clone();
+            let canonical_id = sbom.claim_canonical_id(&mut comp);
             id_map.insert(bom_ref, canonical_id.clone());
-            if let Some(purl) = &meta_comp.purl {
+            if let Some(purl) = meta_comp.purl.as_ref().filter(|p| is_usable_purl(p)) {
                 purl_fallbacks.push((purl.clone(), canonical_id.clone()));
             }
             primary_id = Some(canonical_id.clone());
@@ -164,10 +173,10 @@ impl CycloneDxParser {
                     ExternalRefType::SecurityContact => {
                         sbom.document.security_contact = Some(ext_ref.url.clone());
                     }
-                    ExternalRefType::Advisories | ExternalRefType::Support => {
-                        if sbom.document.vulnerability_disclosure_url.is_none() {
-                            sbom.document.vulnerability_disclosure_url = Some(ext_ref.url.clone());
-                        }
+                    ExternalRefType::Advisories | ExternalRefType::Support
+                        if sbom.document.vulnerability_disclosure_url.is_none() =>
+                    {
+                        sbom.document.vulnerability_disclosure_url = Some(ext_ref.url.clone());
                     }
                     _ => {}
                 }
@@ -229,7 +238,7 @@ impl CycloneDxParser {
         }
         while let Some((parent, mut cdx_comp)) = comp_stack.pop() {
             let children = cdx_comp.components.take();
-            let comp = self.convert_component(&cdx_comp);
+            let mut comp = self.convert_component(&cdx_comp);
             let bom_ref = cdx_comp
                 .bom_ref
                 .clone()
@@ -242,9 +251,9 @@ impl CycloneDxParser {
                 };
                 scope_map.insert(bom_ref.clone(), scope);
             }
-            let canonical_id = comp.canonical_id.clone();
+            let canonical_id = sbom.claim_canonical_id(&mut comp);
             id_map.insert(bom_ref, canonical_id.clone());
-            if let Some(purl) = &cdx_comp.purl {
+            if let Some(purl) = cdx_comp.purl.as_ref().filter(|p| is_usable_purl(p)) {
                 purl_fallbacks.push((purl.clone(), canonical_id.clone()));
             }
             if let Some(parent_id) = parent {
@@ -272,9 +281,9 @@ impl CycloneDxParser {
         }
         while let Some((parent, mut svc)) = svc_stack.pop() {
             let children = svc.services.take();
-            let comp = self.convert_service(&svc);
+            let mut comp = self.convert_service(&svc);
             let bom_ref = svc.bom_ref.clone().unwrap_or_else(|| comp.name.clone());
-            let canonical_id = comp.canonical_id.clone();
+            let canonical_id = sbom.claim_canonical_id(&mut comp);
             id_map.insert(bom_ref, canonical_id.clone());
             if let Some(parent_id) = parent {
                 sbom.add_edge(DependencyEdge::new(
@@ -600,9 +609,9 @@ impl CycloneDxParser {
             other => ComponentType::Other(other.to_string()),
         };
 
-        // Set CPEs
+        // Set CPEs (validated; refreshes the canonical ID)
         if let Some(cpe) = &cdx.cpe {
-            comp.identifiers.cpe.push(cpe.clone());
+            comp.add_cpe(cpe.clone());
         }
 
         // Set SWHIDs (CycloneDX 1.6+, CRA [PRE-7-RQ-07])
@@ -641,40 +650,16 @@ impl CycloneDxParser {
         }
 
         // Set hashes
-        if let Some(hashes) = &cdx.hashes {
-            for h in hashes {
-                let algorithm = match h.alg.to_uppercase().as_str() {
-                    "MD5" => HashAlgorithm::Md5,
-                    "SHA-1" => HashAlgorithm::Sha1,
-                    "SHA-256" => HashAlgorithm::Sha256,
-                    "SHA-384" => HashAlgorithm::Sha384,
-                    "SHA-512" => HashAlgorithm::Sha512,
-                    "SHA3-256" => HashAlgorithm::Sha3_256,
-                    "SHA3-384" => HashAlgorithm::Sha3_384,
-                    "SHA3-512" => HashAlgorithm::Sha3_512,
-                    "BLAKE2B-256" => HashAlgorithm::Blake2b256,
-                    "BLAKE2B-384" => HashAlgorithm::Blake2b384,
-                    "BLAKE2B-512" => HashAlgorithm::Blake2b512,
-                    "BLAKE3" => HashAlgorithm::Blake3,
-                    "STREEBOG-256" => HashAlgorithm::Streebog256,
-                    "STREEBOG-512" => HashAlgorithm::Streebog512,
-                    other => HashAlgorithm::Other(other.to_string()),
-                };
-                comp.hashes.push(Hash::new(algorithm, h.content.clone()));
-            }
-        }
+        comp.hashes
+            .extend(convert_cdx_hashes(cdx.hashes.as_deref()));
 
         // Set external references
-        if let Some(ext_refs) = &cdx.external_references {
-            for ext_ref in ext_refs {
-                comp.external_refs.push(ExternalReference {
-                    ref_type: map_cdx_external_ref_type(&ext_ref.ref_type),
-                    url: ext_ref.url.clone(),
-                    comment: ext_ref.comment.clone(),
-                    hashes: Vec::new(),
-                });
-            }
-        }
+        comp.external_refs.extend(
+            cdx.external_references
+                .iter()
+                .flatten()
+                .map(convert_cdx_external_reference),
+        );
 
         // Set properties as extensions. Both fields are optional in the
         // schema: value-less properties keep their name; name-less ones
@@ -694,7 +679,29 @@ impl CycloneDxParser {
         // Set description
         comp.description.clone_from(&cdx.description);
         comp.group.clone_from(&cdx.group);
-        comp.author.clone_from(&cdx.author);
+        // The deprecated `author` string wins; otherwise the CycloneDX 1.6+
+        // `authors` that replace it, named (or, lacking a name, by email).
+        comp.author = cdx.author.clone().or_else(|| {
+            let names: Vec<&str> = cdx
+                .authors
+                .iter()
+                .flatten()
+                .filter_map(|a| a.name.as_deref().or(a.email.as_deref()))
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .collect();
+            (!names.is_empty()).then(|| names.join("; "))
+        });
+        // As for the supplier, a manufacturer may carry only a URL.
+        comp.manufacturer = cdx
+            .manufacturer
+            .as_ref()
+            .and_then(|m| {
+                m.name
+                    .clone()
+                    .or_else(|| m.url.as_ref().and_then(|u| u.first().cloned()))
+            })
+            .map(Organization::new);
         comp.copyright.clone_from(&cdx.copyright);
 
         // Set 1.7+ fields
@@ -880,7 +887,9 @@ impl CycloneDxParser {
             .clone_from(&cdx.parameter_set_identifier);
         algo.classical_security_level = cdx.classical_security_level;
         algo.nist_quantum_security_level = cdx.nist_quantum_security_level;
-        algo.elliptic_curve.clone_from(&cdx.elliptic_curve);
+        // CycloneDX 1.7 `ellipticCurve` wins over the 1.6 `curve` it
+        // deprecates; a blank 1.7 value must not hide a real 1.6 one.
+        algo.elliptic_curve = first_non_blank([&cdx.elliptic_curve, &cdx.curve]);
 
         if let Some(mode) = cdx.mode.as_deref() {
             algo.mode = Some(match mode {
@@ -995,13 +1004,21 @@ impl CycloneDxParser {
             .as_deref()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
-        cert.signature_algorithm_ref
-            .clone_from(&cdx.signature_algorithm_ref);
-        cert.subject_public_key_ref
-            .clone_from(&cdx.subject_public_key_ref);
+        cert.related_crypto_assets =
+            convert_related_crypto_assets(&cdx.related_cryptographic_assets);
+        // The deprecated single-ref fields stay populated for consumers that
+        // read them, falling back to the first matching 1.7 typed reference.
+        cert.signature_algorithm_ref = cdx
+            .signature_algorithm_ref
+            .clone()
+            .or_else(|| first_related_ref(&cert.related_crypto_assets, "algorithm"));
+        cert.subject_public_key_ref = cdx
+            .subject_public_key_ref
+            .clone()
+            .or_else(|| first_related_ref(&cert.related_crypto_assets, "publicKey"));
         cert.certificate_format.clone_from(&cdx.certificate_format);
-        cert.certificate_extension
-            .clone_from(&cdx.certificate_extension);
+        cert.certificate_extension =
+            first_non_blank([&cdx.certificate_file_extension, &cdx.certificate_extension]);
         cert
     }
 
@@ -1036,7 +1053,12 @@ impl CycloneDxParser {
         let mut mat = RelatedCryptoMaterialProperties::new(material_type);
         mat.id.clone_from(&cdx.id);
         mat.size = cdx.size;
-        mat.algorithm_ref.clone_from(&cdx.algorithm_ref);
+        mat.related_crypto_assets =
+            convert_related_crypto_assets(&cdx.related_cryptographic_assets);
+        mat.algorithm_ref = cdx
+            .algorithm_ref
+            .clone()
+            .or_else(|| first_related_ref(&mat.related_crypto_assets, "algorithm"));
         mat.format.clone_from(&cdx.format);
 
         if let Some(state) = cdx.state.as_deref() {
@@ -1074,6 +1096,66 @@ impl CycloneDxParser {
         mat
     }
 
+    fn convert_ikev2_transform_types(cdx: &CdxIkev2TransformTypes) -> Ikev2TransformTypes {
+        let lists = [
+            (Ikev2TransformKind::Encr, &cdx.encr),
+            (Ikev2TransformKind::Prf, &cdx.prf),
+            (Ikev2TransformKind::Integ, &cdx.integ),
+            (Ikev2TransformKind::Ke, &cdx.ke),
+            (Ikev2TransformKind::Auth, &cdx.auth),
+            (Ikev2TransformKind::Addke1, &cdx.addke1),
+            (Ikev2TransformKind::Addke2, &cdx.addke2),
+            (Ikev2TransformKind::Addke3, &cdx.addke3),
+            (Ikev2TransformKind::Addke4, &cdx.addke4),
+            (Ikev2TransformKind::Addke5, &cdx.addke5),
+            (Ikev2TransformKind::Addke6, &cdx.addke6),
+            (Ikev2TransformKind::Addke7, &cdx.addke7),
+        ];
+        let transforms: Vec<Ikev2Transform> = lists
+            .into_iter()
+            .flat_map(|(kind, entries)| {
+                entries.iter().map(move |t| Ikev2Transform {
+                    kind,
+                    name: first_non_blank([&t.name]),
+                    key_length: t.key_length,
+                    group: t.group,
+                    algorithm_ref: first_non_blank([&t.algorithm]),
+                })
+            })
+            .filter(|t| t.name.is_some() || t.group.is_some() || t.algorithm_ref.is_some())
+            .collect();
+
+        // One display/compat identifier per transform: reference, else name,
+        // else the key-exchange group.
+        let ids = |kind: Ikev2TransformKind| -> Vec<String> {
+            transforms
+                .iter()
+                .filter(|t| t.kind == kind)
+                .filter_map(|t| {
+                    t.algorithm_ref
+                        .clone()
+                        .or_else(|| t.name.clone())
+                        .or_else(|| {
+                            t.group.map(|g| match ikev2_key_exchange_group(g) {
+                                Some((family, Some(param))) => format!("{family}-{param}"),
+                                Some((family, None)) => family.to_string(),
+                                None => format!("IKEv2 group {g}"),
+                            })
+                        })
+                })
+                .collect()
+        };
+
+        Ikev2TransformTypes {
+            encr: ids(Ikev2TransformKind::Encr),
+            prf: ids(Ikev2TransformKind::Prf),
+            integ: ids(Ikev2TransformKind::Integ),
+            ke: ids(Ikev2TransformKind::Ke),
+            auth: ids(Ikev2TransformKind::Auth),
+            transforms,
+        }
+    }
+
     fn convert_protocol_properties(cdx: &CdxProtocolProperties) -> ProtocolProperties {
         let protocol_type =
             cdx.protocol_type
@@ -1089,6 +1171,14 @@ impl CycloneDxParser {
                     "ikev2" => ProtocolType::Ikev2,
                     "zrtp" => ProtocolType::Zrtp,
                     "mikey" => ProtocolType::Mikey,
+                    "ike" => ProtocolType::Ike,
+                    "sstp" => ProtocolType::Sstp,
+                    "wpa" => ProtocolType::Wpa,
+                    "quic" => ProtocolType::Quic,
+                    "eap-aka" => ProtocolType::EapAka,
+                    "eap-aka-prime" => ProtocolType::EapAkaPrime,
+                    "prins" => ProtocolType::Prins,
+                    "5g-aka" => ProtocolType::FiveGAka,
                     "unknown" => ProtocolType::Unknown,
                     other => ProtocolType::Other(other.to_string()),
                 });
@@ -1103,31 +1193,43 @@ impl CycloneDxParser {
                     name: s.name.clone(),
                     algorithms: s.algorithms.clone().unwrap_or_default(),
                     identifiers: s.identifiers.clone().unwrap_or_default(),
+                    tls_groups: s.tls_groups.clone().unwrap_or_default(),
+                    tls_signature_schemes: s.tls_signature_schemes.clone().unwrap_or_default(),
                 })
                 .collect();
         }
 
         if let Some(ike) = &cdx.ikev2_transform_types {
-            proto.ikev2_transform_types = Some(Ikev2TransformTypes {
-                encr: ike.encr.clone().unwrap_or_default(),
-                prf: ike.prf.clone().unwrap_or_default(),
-                integ: ike.integ.clone().unwrap_or_default(),
-                ke: ike.ke.clone().unwrap_or_default(),
-            });
+            proto.ikev2_transform_types = Some(Self::convert_ikev2_transform_types(ike));
         }
 
-        proto.crypto_ref_array = cdx.crypto_ref_array.clone().unwrap_or_default();
+        // `cryptoRefArray` (1.6) and `relatedCryptographicAssets` (1.7) may
+        // both be present while the former is deprecated: judge the union.
+        proto.related_crypto_assets =
+            convert_related_crypto_assets(&cdx.related_cryptographic_assets);
+        let mut refs: Vec<String> = Vec::new();
+        for r in cdx
+            .crypto_ref_array
+            .iter()
+            .flatten()
+            .chain(proto.related_crypto_assets.iter().map(|a| &a.bom_ref))
+        {
+            if !refs.contains(r) {
+                refs.push(r.clone());
+            }
+        }
+        proto.crypto_ref_array = refs;
         proto
     }
 
     /// Convert a `CycloneDX` service (SaaSBOM, 1.4+) to a normalized
     /// Component. The normalized model has no first-class service kind, so
-    /// services map to `ComponentType::Other("service")`, with provider →
+    /// services map to `ComponentType::Service`, with provider →
     /// supplier and endpoints preserved as external references.
     fn convert_service(&self, svc: &CdxService) -> Component {
         let format_id = svc.bom_ref.clone().unwrap_or_else(|| svc.name.clone());
         let mut comp = Component::new(svc.name.clone(), format_id);
-        comp.component_type = ComponentType::Other("service".to_string());
+        comp.component_type = ComponentType::Service;
 
         if let Some(version) = &svc.version {
             comp = comp.with_version(version.clone());
@@ -1170,16 +1272,12 @@ impl CycloneDxParser {
                 hashes: Vec::new(),
             });
         }
-        if let Some(ext_refs) = &svc.external_references {
-            for ext_ref in ext_refs {
-                comp.external_refs.push(ExternalReference {
-                    ref_type: map_cdx_external_ref_type(&ext_ref.ref_type),
-                    url: ext_ref.url.clone(),
-                    comment: ext_ref.comment.clone(),
-                    hashes: Vec::new(),
-                });
-            }
-        }
+        comp.external_refs.extend(
+            svc.external_references
+                .iter()
+                .flatten()
+                .map(convert_cdx_external_reference),
+        );
         if let Some(props) = &svc.properties {
             for prop in props {
                 let Some(name) = prop.name.clone() else {
@@ -1310,72 +1408,18 @@ impl CycloneDxParser {
             vuln_ref.cwes = cwes.iter().map(|c| format!("CWE-{c}")).collect();
         }
 
-        // Parse remediation
-        if let Some(recommendation) = &vuln.recommendation {
-            vuln_ref.remediation = Some(Remediation {
-                remediation_type: RemediationType::Upgrade,
-                description: Some(recommendation.clone()),
-                fixed_version: None,
-            });
-        }
+        // Parse remediation (see `cdx_remediation`)
+        vuln_ref.remediation = cdx_remediation(vuln);
 
-        // Parse analysis (VEX)
+        // Parse analysis (VEX), the way the CycloneDX VEX reader of `--vex`
+        // reads it too (see `cyclonedx_analysis`).
         let vex_status = vuln.analysis.as_ref().map(|analysis| {
-            // CycloneDX impactAnalysisState. "exploitable" must NOT collapse
-            // to UnderInvestigation (that would understate a live threat);
-            // unknown states stay UnderInvestigation (an honest "we don't
-            // know", not a fabricated safe claim).
-            let status = match analysis.state.as_deref() {
-                Some("not_affected") | Some("false_positive") => VexState::NotAffected,
-                Some("affected") | Some("exploitable") => VexState::Affected,
-                Some("fixed") | Some("resolved") | Some("resolved_with_pedigree") => {
-                    VexState::Fixed
-                }
-                _ => VexState::UnderInvestigation,
-            };
-
-            // Unknown/unrecognized justification must NOT fabricate a
-            // not-affected claim: an unrecognized string yields None, never
-            // ComponentNotPresent (the strongest "it isn't even here" claim).
-            let justification = analysis
-                .justification
-                .as_ref()
-                .and_then(|j| match j.as_str() {
-                    "code_not_present" => Some(VexJustification::VulnerableCodeNotPresent),
-                    "code_not_reachable" => Some(VexJustification::VulnerableCodeNotInExecutePath),
-                    "requires_configuration" | "requires_dependency" | "requires_environment" => {
-                        Some(VexJustification::VulnerableCodeCannotBeControlledByAdversary)
-                    }
-                    "protected_by_mitigating_control" => {
-                        Some(VexJustification::InlineMitigationsAlreadyExist)
-                    }
-                    _ => None,
-                });
-
-            let responses: Vec<VexResponse> = analysis
-                .response
-                .as_ref()
-                .map(|rs| {
-                    rs.iter()
-                        .map(|r| match r.as_str() {
-                            "can_not_fix" => VexResponse::CanNotFix,
-                            "will_not_fix" => VexResponse::WillNotFix,
-                            "rollback" => VexResponse::Rollback,
-                            "workaround_available" => VexResponse::Workaround,
-                            _ => VexResponse::Update,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            VexStatus {
-                status,
-                justification,
-                action_statement: None,
-                impact_statement: analysis.detail.clone(),
-                responses,
-                detail: analysis.detail.clone(),
-            }
+            cyclonedx_analysis::vex_status(
+                analysis.state.as_deref(),
+                analysis.justification.as_deref(),
+                analysis.response.as_deref().unwrap_or_default(),
+                analysis.detail.as_deref(),
+            )
         });
 
         // Apply vulnerability to affected components. Dedup targets by
@@ -1466,28 +1510,184 @@ fn xml_depth_within_limit(content: &str) -> Result<(), ParseError> {
     }
 }
 
+/// Convert CycloneDX `hashes[]` entries (`{alg, content}`) to the model.
+/// Shared by components and external references, JSON and XML alike.
+fn convert_cdx_hashes(hashes: Option<&[CdxHash]>) -> Vec<Hash> {
+    hashes
+        .unwrap_or_default()
+        .iter()
+        .map(|h| {
+            let algorithm = match h.alg.to_uppercase().as_str() {
+                "MD5" => HashAlgorithm::Md5,
+                "SHA-1" => HashAlgorithm::Sha1,
+                "SHA-256" => HashAlgorithm::Sha256,
+                "SHA-384" => HashAlgorithm::Sha384,
+                "SHA-512" => HashAlgorithm::Sha512,
+                "SHA3-256" => HashAlgorithm::Sha3_256,
+                "SHA3-384" => HashAlgorithm::Sha3_384,
+                "SHA3-512" => HashAlgorithm::Sha3_512,
+                "BLAKE2B-256" => HashAlgorithm::Blake2b256,
+                "BLAKE2B-384" => HashAlgorithm::Blake2b384,
+                "BLAKE2B-512" => HashAlgorithm::Blake2b512,
+                "BLAKE3" => HashAlgorithm::Blake3,
+                "STREEBOG-256" => HashAlgorithm::Streebog256,
+                "STREEBOG-512" => HashAlgorithm::Streebog512,
+                other => HashAlgorithm::Other(other.to_string()),
+            };
+            Hash::new(algorithm, h.content.clone())
+        })
+        .collect()
+}
+
+/// Convert one CycloneDX `externalReferences[]` entry: its type, URL and
+/// comment, and the hashes of the referenced content
+/// (`externalReference.hashes`, in every schema version from 1.4 to 1.7),
+/// which the CRA document-integrity check reads on attestation and
+/// certification references.
+fn convert_cdx_external_reference(r: &CdxExternalReference) -> ExternalReference {
+    ExternalReference {
+        ref_type: map_cdx_external_ref_type(&r.ref_type),
+        url: r.url.clone(),
+        comment: r.comment.clone(),
+        hashes: convert_cdx_hashes(r.hashes.as_deref()),
+    }
+}
+
 /// Map a CycloneDX external-reference type string to the normalized enum.
-/// Shared by the component and service conversion paths.
+/// Shared by every conversion path that reads `externalReferences` —
+/// components, services and CDXA declarations, JSON and XML alike.
+///
+/// The vocabulary is the `externalReference.type` enum of the CycloneDX
+/// schemas (`definitions.externalReference.properties.type` in
+/// bom-1.4…1.7.schema.json, `externalReferenceType` in the XSDs). 1.4 has
+/// 16 values; 1.5 adds `distribution-intake`, `security-contact`,
+/// `model-card` and the assurance-evidence types from `log` to `poam`; 1.6
+/// adds `source-distribution`, `electronic-signature`, `digital-signature`
+/// and `rfc-9116`; 1.7 adds `patent`, `patent-family`, `patent-assertion`
+/// and `citation`.
+///
+/// Every value with a model variant maps to it, and the variant displays as
+/// that same value, so a CycloneDX document round-trips through the model.
+/// The rest stay `Other`, verbatim: `source-distribution` (the model's
+/// `SourceDistribution` is CycloneDX `distribution`, which is also how the
+/// SPDX 2.x parser stores a download location), `poam`,
+/// `electronic-signature`, `digital-signature`, `rfc-9116`, `other`, and any
+/// unlisted string.
+///
+/// Until v0.4.0 only 16 values were mapped. Among the ones that were not,
+/// `attestation`, `certification-report`, `risk-assessment`,
+/// `vulnerability-assertion`, `exploitability-statement` and `build-system`
+/// are what the CRA, EUCC, SSDF and PCI DSS checks look for, so no CycloneDX
+/// document could satisfy those checks through its external references.
 fn map_cdx_external_ref_type(ref_type: &str) -> ExternalRefType {
     match ref_type {
+        // CycloneDX 1.4
         "vcs" => ExternalRefType::Vcs,
         "issue-tracker" => ExternalRefType::IssueTracker,
         "website" => ExternalRefType::Website,
         "advisories" => ExternalRefType::Advisories,
         "bom" => ExternalRefType::Bom,
-        "model-card" => ExternalRefType::ModelCard,
+        "mailing-list" => ExternalRefType::MailingList,
+        "social" => ExternalRefType::Social,
+        "chat" => ExternalRefType::Chat,
         "documentation" => ExternalRefType::Documentation,
         "support" => ExternalRefType::Support,
-        "security-contact" => ExternalRefType::SecurityContact,
+        "distribution" => ExternalRefType::SourceDistribution,
         "license" => ExternalRefType::License,
         "build-meta" => ExternalRefType::BuildMeta,
+        "build-system" => ExternalRefType::BuildSystem,
         "release-notes" => ExternalRefType::ReleaseNotes,
-        "citation" => ExternalRefType::Citation,
+        // CycloneDX 1.5
+        "distribution-intake" => ExternalRefType::BinaryDistribution,
+        "security-contact" => ExternalRefType::SecurityContact,
+        "model-card" => ExternalRefType::ModelCard,
+        "log" => ExternalRefType::Log,
+        "configuration" => ExternalRefType::Configuration,
+        "evidence" => ExternalRefType::Evidence,
+        "formulation" => ExternalRefType::Formulation,
+        "attestation" => ExternalRefType::Attestation,
+        "threat-model" => ExternalRefType::ThreatModel,
+        "adversary-model" => ExternalRefType::AdversaryModel,
+        "risk-assessment" => ExternalRefType::RiskAssessment,
+        "vulnerability-assertion" => ExternalRefType::VulnerabilityAssertion,
+        "exploitability-statement" => ExternalRefType::ExploitabilityStatement,
+        "pentest-report" => ExternalRefType::Pentest,
+        "static-analysis-report" => ExternalRefType::StaticAnalysis,
+        "dynamic-analysis-report" => ExternalRefType::DynamicAnalysis,
+        "runtime-analysis-report" => ExternalRefType::RuntimeAnalysis,
+        "component-analysis-report" => ExternalRefType::ComponentAnalysis,
+        "maturity-report" => ExternalRefType::Maturity,
+        "certification-report" => ExternalRefType::Certification,
+        "codified-infrastructure" => ExternalRefType::Codified,
+        "quality-metrics" => ExternalRefType::QualityMetrics,
+        // CycloneDX 1.7
         "patent" => ExternalRefType::Patent,
-        "patent-assertion" => ExternalRefType::PatentAssertion,
         "patent-family" => ExternalRefType::PatentFamily,
+        "patent-assertion" => ExternalRefType::PatentAssertion,
+        "citation" => ExternalRefType::Citation,
         other => ExternalRefType::Other(other.to_string()),
     }
+}
+
+/// The remediation a CycloneDX vulnerability declares, if any.
+///
+/// CycloneDX carries remediation details only as free text —
+/// `recommendation` ("how the vulnerability can be remediated or
+/// mitigated") and, since 1.5, `workaround` — and declares the remediation
+/// route in `analysis.response`. It has no fixed-version field: an
+/// `affects[].versions[]` entry with status `unaffected` may also be a
+/// version that predates the flaw, so it is not read as "fixed in", and
+/// `fixed_version` stays unset.
+///
+/// - The description is the `recommendation`, else the `workaround` text;
+///   blank text counts as none.
+/// - The type follows the declared response: `update` ("update to a
+///   different revision or release") is an upgrade, `workaround_available`
+///   a workaround. Without either, a recommendation keeps its long-standing
+///   upgrade type and a lone workaround text is a workaround.
+/// - A response of `update` or `workaround_available` with neither text is
+///   a remediation without details, which CRA Phase 2 reports
+///   (SBOM-CRA-VULN-METADATA-REMEDIATION: Annex I Part II (4) asks for
+///   information that helps users remediate). `rollback` has no remediation type in the
+///   model, and `can_not_fix` / `will_not_fix` state that no remediation
+///   will come, so they create no record.
+fn cdx_remediation(vuln: &CdxVulnerability) -> Option<Remediation> {
+    let responses = vuln
+        .analysis
+        .as_ref()
+        .and_then(|a| a.response.as_deref())
+        .unwrap_or_default();
+    let declared = |response: &str| responses.iter().any(|r| r == response);
+    let declared_type = if declared("update") {
+        Some(RemediationType::Upgrade)
+    } else if declared("workaround_available") {
+        Some(RemediationType::Workaround)
+    } else {
+        None
+    };
+    let text = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    let (default_type, description) = match (text(&vuln.recommendation), text(&vuln.workaround)) {
+        (Some(recommendation), _) => (RemediationType::Upgrade, Some(recommendation)),
+        (None, Some(workaround)) => (RemediationType::Workaround, Some(workaround)),
+        (None, None) => {
+            return declared_type.map(|remediation_type| Remediation {
+                remediation_type,
+                description: None,
+                fixed_version: None,
+            });
+        }
+    };
+    Some(Remediation {
+        remediation_type: declared_type.unwrap_or(default_type),
+        description,
+        fixed_version: None,
+    })
 }
 
 /// Risk ordering for component-level VEX resolution: higher = more actionable.
@@ -2055,12 +2255,7 @@ fn convert_declarations(
         organization.contacts = o.contact.iter().flatten().map(contact).collect();
         organization
     };
-    let ext_ref = |r: &CdxExternalReference| ExternalReference {
-        ref_type: map_cdx_external_ref_type(&r.ref_type),
-        url: r.url.clone(),
-        comment: r.comment.clone(),
-        hashes: Vec::new(),
-    };
+    let ext_ref = convert_cdx_external_reference;
     let ext_refs = |list: &Option<Vec<CdxExternalReference>>| -> Vec<ExternalReference> {
         list.iter().flatten().map(ext_ref).collect()
     };
@@ -2432,6 +2627,10 @@ struct CdxComponent {
     swhid: Vec<String>,
     description: Option<String>,
     author: Option<String>,
+    /// CycloneDX 1.6+; deprecates `author`.
+    authors: Option<Vec<CdxAuthor>>,
+    /// CycloneDX 1.6+: the organization that created the component.
+    manufacturer: Option<CdxSupplier>,
     copyright: Option<String>,
     licenses: Option<Vec<CdxLicenseChoice>>,
     supplier: Option<CdxSupplier>,
@@ -2516,12 +2715,13 @@ struct CdxHash {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 struct CdxExternalReference {
     #[serde(rename = "type")]
     ref_type: String,
     url: String,
     comment: Option<String>,
+    /// Hashes of the referenced content.
+    hashes: Option<Vec<CdxHash>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2920,7 +3120,24 @@ struct CdxAlgorithmProperties {
     certification_level: Option<Vec<String>>,
     classical_security_level: Option<u32>,
     nist_quantum_security_level: Option<u8>,
+    /// CycloneDX 1.7 named curve (`ellipticCurve`).
     elliptic_curve: Option<String>,
+    /// CycloneDX 1.6 named curve, deprecated in 1.7 in favor of
+    /// `ellipticCurve`. A separate field rather than a serde alias: a 1.7
+    /// document carrying both keys would otherwise fail as a duplicate.
+    curve: Option<String>,
+}
+
+/// The first candidate that is present and non-blank, trimmed. Used to
+/// merge a CycloneDX 1.7 field with the deprecated 1.6 field it replaces,
+/// in precedence order.
+fn first_non_blank<const N: usize>(candidates: [&Option<String>; N]) -> Option<String> {
+    candidates
+        .into_iter()
+        .flatten()
+        .map(|s| s.trim())
+        .find(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2933,7 +3150,108 @@ struct CdxCertificateProperties {
     signature_algorithm_ref: Option<String>,
     subject_public_key_ref: Option<String>,
     certificate_format: Option<String>,
+    /// Deprecated in 1.7 in favor of `certificateFileExtension`.
     certificate_extension: Option<String>,
+    /// CycloneDX 1.7.
+    certificate_file_extension: Option<String>,
+    /// CycloneDX 1.7; supersedes `signatureAlgorithmRef` and
+    /// `subjectPublicKeyRef`.
+    #[serde(default, deserialize_with = "deserialize_related_crypto_assets")]
+    related_cryptographic_assets: Vec<CdxRelatedCryptoAsset>,
+}
+
+/// CycloneDX 1.7 `relatedCryptographicAsset`.
+#[derive(Debug, Deserialize)]
+struct CdxRelatedCryptoAsset {
+    #[serde(rename = "type")]
+    asset_type: Option<String>,
+    #[serde(rename = "ref")]
+    ref_field: Option<String>,
+}
+
+/// `relatedCryptographicAssets` is a bare array in JSON but, in XML, a
+/// wrapper element around repeated `<relatedCryptographicAsset>` children.
+/// Anything else in the wrapper is ignored rather than failing the document.
+fn deserialize_related_crypto_assets<'de, D>(
+    deserializer: D,
+) -> Result<Vec<CdxRelatedCryptoAsset>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
+    use std::fmt;
+
+    struct RelatedAssetsVisitor;
+
+    impl<'de> Visitor<'de> for RelatedAssetsVisitor {
+        type Value = Vec<CdxRelatedCryptoAsset>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("an array of related cryptographic assets")
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+
+        // An empty XML wrapper element.
+        fn visit_str<E>(self, _: &str) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut assets = Vec::new();
+            while let Some(asset) = seq.next_element()? {
+                assets.push(asset);
+            }
+            Ok(assets)
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut assets = Vec::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "relatedCryptographicAsset" {
+                    assets.push(map.next_value()?);
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(assets)
+        }
+    }
+
+    deserializer.deserialize_any(RelatedAssetsVisitor)
+}
+
+/// Typed related-asset references with a usable (non-blank) bom-ref; an
+/// entry without one names nothing that could be resolved or judged.
+fn convert_related_crypto_assets(cdx: &[CdxRelatedCryptoAsset]) -> Vec<RelatedCryptoAsset> {
+    cdx.iter()
+        .filter_map(|a| {
+            Some(RelatedCryptoAsset {
+                asset_type: a.asset_type.clone(),
+                bom_ref: first_non_blank([&a.ref_field])?,
+            })
+        })
+        .collect()
+}
+
+/// The bom-ref of the first related asset of the given kind.
+fn first_related_ref(assets: &[RelatedCryptoAsset], kind: &str) -> Option<String> {
+    assets
+        .iter()
+        .find(|a| a.is_type(kind))
+        .map(|a| a.bom_ref.clone())
 }
 
 #[derive(Debug, Deserialize)]
@@ -2951,6 +3269,9 @@ struct CdxRelatedCryptoMaterialProperties {
     activation_date: Option<String>,
     update_date: Option<String>,
     expiration_date: Option<String>,
+    /// CycloneDX 1.7; supersedes `algorithmRef`.
+    #[serde(default, deserialize_with = "deserialize_related_crypto_assets")]
+    related_cryptographic_assets: Vec<CdxRelatedCryptoAsset>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2968,7 +3289,11 @@ struct CdxProtocolProperties {
     version: Option<String>,
     cipher_suites: Option<Vec<CdxCipherSuite>>,
     ikev2_transform_types: Option<CdxIkev2TransformTypes>,
+    /// Deprecated in 1.7 in favor of `relatedCryptographicAssets`.
     crypto_ref_array: Option<Vec<String>>,
+    /// CycloneDX 1.7.
+    #[serde(default, deserialize_with = "deserialize_related_crypto_assets")]
+    related_cryptographic_assets: Vec<CdxRelatedCryptoAsset>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2977,15 +3302,170 @@ struct CdxCipherSuite {
     name: Option<String>,
     algorithms: Option<Vec<String>>,
     identifiers: Option<Vec<String>>,
+    /// CycloneDX 1.7: TLS named groups, by IANA name or codepoint.
+    tls_groups: Option<Vec<String>>,
+    /// CycloneDX 1.7: TLS signature schemes, by IANA name or codepoint.
+    tls_signature_schemes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CdxIkev2TransformTypes {
-    encr: Option<Vec<String>>,
-    prf: Option<Vec<String>>,
-    integ: Option<Vec<String>>,
-    ke: Option<Vec<String>>,
+    #[serde(default)]
+    encr: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    prf: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    integ: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    ke: Vec<CdxIkev2Transform>,
+    /// CycloneDX 1.7.
+    #[serde(default)]
+    auth: Vec<CdxIkev2Transform>,
+    /// RFC 9370 additional key exchanges ADDKE1–ADDKE7 (Transform Types
+    /// 6–12). CycloneDX 1.7 has no field for them, so they are read from
+    /// keys named after the IANA abbreviations, shaped like `ke`.
+    #[serde(default)]
+    addke1: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    addke2: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    addke3: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    addke4: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    addke5: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    addke6: Vec<CdxIkev2Transform>,
+    #[serde(default)]
+    addke7: Vec<CdxIkev2Transform>,
+}
+
+/// One IKEv2 transform entry. CycloneDX 1.6 gives a bare bom-ref string
+/// (deprecated in 1.7); 1.7 gives an object `{name, keyLength | group,
+/// algorithm}`. In XML the 1.6 form is the element's text. Hand-written
+/// because quick-xml cannot buffer an untagged enum.
+#[derive(Debug, Default)]
+struct CdxIkev2Transform {
+    name: Option<String>,
+    key_length: Option<u32>,
+    group: Option<u32>,
+    algorithm: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for CdxIkev2Transform {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{IgnoredAny, MapAccess, Visitor};
+        use std::fmt;
+
+        struct TransformVisitor;
+
+        impl<'de> Visitor<'de> for TransformVisitor {
+            type Value = CdxIkev2Transform;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an IKEv2 transform bom-ref or object")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(CdxIkev2Transform {
+                    algorithm: Some(v.to_string()),
+                    ..CdxIkev2Transform::default()
+                })
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(CdxIkev2Transform::default())
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut t = CdxIkev2Transform::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => t.name = map.next_value()?,
+                        "keyLength" => t.key_length = map.next_value::<LooseU32>()?.0,
+                        "group" => t.group = map.next_value::<LooseU32>()?.0,
+                        // `$text`: an XML element carrying the 1.6 bom-ref.
+                        "algorithm" | "$text" => t.algorithm = map.next_value()?,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(t)
+            }
+        }
+
+        deserializer.deserialize_any(TransformVisitor)
+    }
+}
+
+/// An integer given as a JSON number or as XML text; anything unparsable or
+/// out of range is `None` rather than failing the document.
+struct LooseU32(Option<u32>);
+
+impl<'de> Deserialize<'de> for LooseU32 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Visitor;
+        use std::fmt;
+
+        struct LooseU32Visitor;
+
+        impl<'de> Visitor<'de> for LooseU32Visitor {
+            type Value = LooseU32;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an unsigned integer")
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(LooseU32(u32::try_from(v).ok()))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+                Ok(LooseU32(u32::try_from(v).ok()))
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(LooseU32(None))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(LooseU32(v.trim().parse().ok()))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(LooseU32(None))
+            }
+
+            // quick-xml presents an element's text as a `$text` entry.
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut value = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "$text" {
+                        value = map.next_value::<LooseU32>()?.0;
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(LooseU32(value))
+            }
+        }
+
+        deserializer.deserialize_any(LooseU32Visitor)
+    }
 }
 
 // ── Dependencies ────────────────────────────────────────────────────────
@@ -3012,6 +3492,9 @@ struct CdxVulnerability {
     references: Option<Vec<CdxVulnReference>>,
     description: Option<String>,
     recommendation: Option<String>,
+    /// CycloneDX 1.5+: a temporary bypass that reduces the vulnerability's
+    /// likelihood or impact.
+    workaround: Option<String>,
     ratings: Option<Vec<CdxRating>>,
     cwes: Option<Vec<u32>>,
     affects: Option<Vec<CdxAffects>>,
@@ -3122,21 +3605,217 @@ struct CycloneDxBomXml {
     dependencies: Option<CdxDependenciesXml>,
     /// Vulnerabilities wrapper element
     vulnerabilities: Option<CdxVulnerabilitiesXml>,
+    /// Compositions wrapper element
+    compositions: Option<CdxCompositionsXml>,
+    /// Citations wrapper element (1.7+)
+    citations: Option<CdxCitationsXml>,
+    /// Enveloped XML Signatures: CycloneDX XML is signed with XML-DSig
+    /// (`<ds:Signature>`, admitted by the root's `##other` extension point),
+    /// where JSON uses JSF. Element names match on their local name, so any
+    /// namespace prefix is accepted.
+    #[serde(rename = "Signature", default)]
+    signatures: Vec<CdxXmlSignature>,
 }
 
 /// Metadata element for XML format
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CdxMetadataXml {
     timestamp: Option<String>,
+    /// Lifecycles wrapper element (1.5+)
+    lifecycles: Option<CdxLifecyclesXml>,
     tools: Option<CdxToolsXml>,
+    /// The people/organizations responsible for the BOM
+    authors: Option<CdxAuthorsXml>,
     component: Option<CdxComponentXml>,
+    /// Organization that created the BOM (1.6+)
+    manufacturer: Option<CdxOrgEntity>,
+    /// Deprecated pre-1.6 spelling, accepted as a fallback as in JSON
+    manufacture: Option<CdxOrgEntity>,
+    /// Distribution constraints (1.7+) with TLP classification
+    distribution_constraints: Option<CdxDistributionConstraints>,
 }
 
-/// Tools wrapper element for XML format
+/// `<authors>` wrapper element of the XML metadata or of a component.
+#[derive(Debug, Deserialize)]
+struct CdxAuthorsXml {
+    #[serde(default)]
+    author: Vec<CdxAuthor>,
+}
+
+/// Lifecycles wrapper element for XML format: repeated `<lifecycle>`
+/// elements, each a `<phase>` or a `<name>` with optional `<description>`.
+#[derive(Debug, Deserialize)]
+struct CdxLifecyclesXml {
+    #[serde(rename = "lifecycle", default)]
+    lifecycle: Vec<CdxLifecycle>,
+}
+
+/// Tools wrapper element for XML format: the legacy repeated `<tool>`
+/// (deprecated since 1.5) or the 1.5+ `<components>` / `<services>` lists.
 #[derive(Debug, Deserialize)]
 struct CdxToolsXml {
     #[serde(rename = "tool", default)]
     tool: Vec<CdxTool>,
+    components: Option<CdxToolComponentsXml>,
+    services: Option<CdxToolServicesXml>,
+}
+
+impl CdxToolsXml {
+    /// Flatten either form into tool entries, components before services
+    /// like the JSON path's `deserialize_tools`.
+    fn into_tools(self) -> Vec<CdxTool> {
+        let components = self
+            .components
+            .into_iter()
+            .flat_map(|w| w.component)
+            .map(|c| CdxTool {
+                name: c.name,
+                version: c.version,
+            });
+        let services = self
+            .services
+            .into_iter()
+            .flat_map(|w| w.service)
+            .map(|s| CdxTool {
+                name: s.name,
+                version: s.version,
+            });
+        self.tool
+            .into_iter()
+            .chain(components)
+            .chain(services)
+            .collect()
+    }
+}
+
+/// `<tools><components>` wrapper element (1.5+)
+#[derive(Debug, Deserialize)]
+struct CdxToolComponentsXml {
+    #[serde(rename = "component", default)]
+    component: Vec<CdxToolComponent>,
+}
+
+/// `<tools><services>` wrapper element (1.5+)
+#[derive(Debug, Deserialize)]
+struct CdxToolServicesXml {
+    #[serde(rename = "service", default)]
+    service: Vec<CdxToolService>,
+}
+
+/// Compositions wrapper element for XML format
+#[derive(Debug, Deserialize)]
+struct CdxCompositionsXml {
+    #[serde(rename = "composition", default)]
+    composition: Vec<CdxCompositionXml>,
+}
+
+/// Composition element for XML format. Only `aggregate` is read: assembly
+/// references feed no check, so a malformed `<assembly>` cannot fail the
+/// document.
+#[derive(Debug, Deserialize)]
+struct CdxCompositionXml {
+    aggregate: Option<String>,
+}
+
+impl From<CdxCompositionXml> for CdxComposition {
+    fn from(xml: CdxCompositionXml) -> Self {
+        Self {
+            aggregate: xml.aggregate,
+            assemblies: None,
+        }
+    }
+}
+
+/// Citations wrapper element for XML format (1.7+)
+#[derive(Debug, Deserialize)]
+struct CdxCitationsXml {
+    #[serde(rename = "citation", default)]
+    citation: Vec<CdxCitationXml>,
+}
+
+/// Citation element for XML format: the bom-ref is an attribute, and the
+/// JSON Pointers and path expressions are wrapped (`<pointers><pointer>`,
+/// `<expressions><expression>`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxCitationXml {
+    #[serde(rename = "@bom-ref")]
+    bom_ref: Option<String>,
+    pointers: Option<CdxCitationPointersXml>,
+    expressions: Option<CdxCitationExpressionsXml>,
+    timestamp: Option<String>,
+    attributed_to: Option<String>,
+    process: Option<String>,
+    note: Option<String>,
+}
+
+/// `<pointers>` wrapper element of an XML citation
+#[derive(Debug, Deserialize)]
+struct CdxCitationPointersXml {
+    #[serde(rename = "pointer", default)]
+    pointer: Vec<String>,
+}
+
+/// `<expressions>` wrapper element of an XML citation
+#[derive(Debug, Deserialize)]
+struct CdxCitationExpressionsXml {
+    #[serde(rename = "expression", default)]
+    expression: Vec<String>,
+}
+
+impl From<CdxCitationXml> for CdxCitation {
+    fn from(xml: CdxCitationXml) -> Self {
+        Self {
+            bom_ref: xml.bom_ref,
+            pointers: xml.pointers.map(|w| w.pointer),
+            expressions: xml.expressions.map(|w| w.expression),
+            timestamp: xml.timestamp,
+            attributed_to: xml.attributed_to,
+            process: xml.process,
+            note: xml.note,
+        }
+    }
+}
+
+/// Enveloped XML-DSig `<Signature>` element. Read for its shape only, as
+/// the JSF signature is in JSON: the declared method and whether a value is
+/// present. Nothing is canonicalized or verified.
+#[derive(Debug, Deserialize)]
+struct CdxXmlSignature {
+    #[serde(rename = "SignedInfo")]
+    signed_info: Option<CdxXmlSignedInfo>,
+    #[serde(rename = "SignatureValue")]
+    signature_value: Option<String>,
+}
+
+/// `<SignedInfo>` of an XML-DSig signature
+#[derive(Debug, Deserialize)]
+struct CdxXmlSignedInfo {
+    #[serde(rename = "SignatureMethod")]
+    signature_method: Option<CdxXmlSignatureMethod>,
+}
+
+/// `<SignatureMethod Algorithm="…"/>` of an XML-DSig signature
+#[derive(Debug, Deserialize)]
+struct CdxXmlSignatureMethod {
+    #[serde(rename = "@Algorithm")]
+    algorithm: Option<String>,
+}
+
+impl From<CdxXmlSignature> for CdxSignature {
+    fn from(xml: CdxXmlSignature) -> Self {
+        Self {
+            // The algorithm URI as declared (e.g.
+            // `http://www.w3.org/2001/04/xmldsig-more#rsa-sha256`), kept
+            // verbatim just as JSON keeps the JSF algorithm name.
+            algorithm: xml
+                .signed_info
+                .and_then(|si| si.signature_method)
+                .and_then(|m| m.algorithm),
+            value: xml.signature_value,
+        }
+    }
 }
 
 /// Components wrapper element for XML format
@@ -3167,6 +3846,10 @@ struct CdxComponentXml {
     swhid: Vec<String>,
     description: Option<String>,
     author: Option<String>,
+    /// CycloneDX 1.6+; deprecates `author`.
+    authors: Option<CdxAuthorsXml>,
+    /// CycloneDX 1.6+.
+    manufacturer: Option<CdxSupplier>,
     copyright: Option<String>,
     licenses: Option<CdxLicensesXml>,
     supplier: Option<CdxSupplier>,
@@ -3176,13 +3859,20 @@ struct CdxComponentXml {
     properties: Option<CdxPropertiesXml>,
     /// Package URL Version Range syntax (1.7+)
     version_range: Option<String>,
+    /// `isExternal` attribute (1.7+): an XML Schema boolean, false when
+    /// absent. Read as text, so a malformed value cannot fail the document.
+    #[serde(rename = "@isExternal")]
+    is_external: Option<String>,
+    /// ML model card (CycloneDX 1.5+)
+    #[serde(rename = "modelCard")]
+    model_card: Option<CdxModelCardXml>,
     /// Dataset metadata (CycloneDX 1.5+): repeated `<data>` componentData
     /// elements directly under `<component>` (no wrapper element in XML).
     #[serde(rename = "data", default)]
     data: Vec<CdxDataXml>,
     /// Cryptographic properties (1.6+, camelCase in XML)
     #[serde(rename = "cryptoProperties")]
-    crypto_properties: Option<CdxCryptoProperties>,
+    crypto_properties: Option<CdxCryptoPropertiesXml>,
     /// Nested component assemblies (recursive)
     components: Option<CdxComponentsXml>,
 }
@@ -3221,11 +3911,7 @@ impl From<CdxComponentXml> for CdxComponent {
             wrapper
                 .reference
                 .into_iter()
-                .map(|r| CdxExternalReference {
-                    ref_type: r.ref_type,
-                    url: r.url,
-                    comment: r.comment,
-                })
+                .map(CdxExternalReference::from)
                 .collect()
         });
 
@@ -3253,21 +3939,27 @@ impl From<CdxComponentXml> for CdxComponent {
             swhid: xml.swhid,
             description: xml.description,
             author: xml.author,
+            authors: xml.authors.map(|w| w.author),
+            manufacturer: xml.manufacturer,
             copyright: xml.copyright,
             licenses,
             supplier: xml.supplier,
             hashes,
             external_references,
             properties,
-            is_external: false,
+            // XML Schema booleans are `true`/`1` and `false`/`0`; anything
+            // else is taken as the default, false.
+            is_external: xml
+                .is_external
+                .as_deref()
+                .is_some_and(|v| matches!(v.trim(), "true" | "1")),
             version_range: xml.version_range,
-            // XML deserialization of modelCard is not supported yet; ML-model
-            // metadata is only parsed from JSON documents. Dataset evidence
-            // (`<data>` componentData) IS parsed, so the AI compliance gates
-            // see XML AI-BOM datasets exactly like their JSON equivalents.
-            model_card: None,
+            // The model card and the dataset evidence (`<data>`
+            // componentData) read like their JSON forms, so the AI
+            // compliance gates see an XML AI-BOM as its JSON twin.
+            model_card: xml.model_card.map(Into::into),
             data_components: xml.data.into_iter().map(CdxDataComponent::from).collect(),
-            crypto_properties: xml.crypto_properties,
+            crypto_properties: xml.crypto_properties.map(Into::into),
             components: xml
                 .components
                 .map(|w| w.component.into_iter().map(Into::into).collect()),
@@ -3321,6 +4013,28 @@ struct CdxExternalReferenceXml {
     ref_type: String,
     url: String,
     comment: Option<String>,
+    /// `<hashes><hash alg="…">…</hash></hashes>` of the referenced content.
+    hashes: Option<CdxHashesXml>,
+}
+
+impl From<CdxExternalReferenceXml> for CdxExternalReference {
+    fn from(xml: CdxExternalReferenceXml) -> Self {
+        Self {
+            ref_type: xml.ref_type,
+            url: xml.url,
+            comment: xml.comment,
+            hashes: xml.hashes.map(|wrapper| {
+                wrapper
+                    .hash
+                    .into_iter()
+                    .map(|h| CdxHash {
+                        alg: h.alg,
+                        content: h.content,
+                    })
+                    .collect()
+            }),
+        }
+    }
 }
 
 /// Properties wrapper element for XML format
@@ -3425,6 +4139,380 @@ impl From<CdxGovPartyXml> for CdxGovParty {
     }
 }
 
+/// modelCard element for XML format (CycloneDX 1.5+): the fields of the
+/// JSON model card, with each list wrapped (`<datasets>`,
+/// `<performanceMetrics><performanceMetric>`, `<useCases><useCase>`,
+/// `<technicalLimitations><technicalLimitation>`, …). It converts into the
+/// JSON structures, so both encodings build the same model metadata.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxModelCardXml {
+    model_parameters: Option<CdxModelParametersXml>,
+    quantitative_analysis: Option<CdxQuantitativeAnalysisXml>,
+    considerations: Option<CdxConsiderationsXml>,
+}
+
+impl From<CdxModelCardXml> for CdxMlModelCard {
+    fn from(xml: CdxModelCardXml) -> Self {
+        Self {
+            model_parameters: xml.model_parameters.map(Into::into),
+            considerations: xml.considerations.map(Into::into),
+            quantitative_analysis: xml.quantitative_analysis.map(|q| CdxQuantitativeAnalysis {
+                performance_metrics: q.performance_metrics.map_or_else(Vec::new, |w| {
+                    w.performance_metric.into_iter().map(Into::into).collect()
+                }),
+            }),
+        }
+    }
+}
+
+/// `<modelParameters>` of an XML model card
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxModelParametersXml {
+    approach: Option<CdxMlApproach>,
+    task: Option<String>,
+    architecture_family: Option<String>,
+    model_architecture: Option<String>,
+    datasets: Option<CdxModelDatasetsXml>,
+}
+
+impl From<CdxModelParametersXml> for CdxModelParameters {
+    fn from(xml: CdxModelParametersXml) -> Self {
+        Self {
+            approach: xml.approach,
+            task: xml.task,
+            architecture_family: xml.architecture_family,
+            model_architecture: xml.model_architecture,
+            architecture: None,
+            datasets: xml.datasets.map_or_else(Vec::new, |w| {
+                w.datasets
+                    .into_iter()
+                    .map(|dataset| match dataset {
+                        CdxModelDatasetXml::Ref(reference) => {
+                            CdxDatasetChoice::Reference { reference }
+                        }
+                        CdxModelDatasetXml::Dataset(inline) => CdxDatasetChoice::Inline(inline),
+                    })
+                    .collect()
+            }),
+        }
+    }
+}
+
+/// `<datasets>` of XML model parameters: data references (`<ref>`) and
+/// inline componentData (`<dataset>`), in any order.
+#[derive(Debug, Deserialize)]
+struct CdxModelDatasetsXml {
+    #[serde(rename = "$value", default)]
+    datasets: Vec<CdxModelDatasetXml>,
+}
+
+/// One `<datasets>` entry: the XSD choice of `<ref>` and `<dataset>`
+#[derive(Debug, Deserialize)]
+enum CdxModelDatasetXml {
+    #[serde(rename = "ref")]
+    Ref(String),
+    #[serde(rename = "dataset")]
+    Dataset(CdxDatasetInline),
+}
+
+/// `<quantitativeAnalysis>` of an XML model card
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxQuantitativeAnalysisXml {
+    performance_metrics: Option<CdxPerformanceMetricsXml>,
+}
+
+/// `<performanceMetrics>` wrapper element of an XML model card
+#[derive(Debug, Deserialize)]
+struct CdxPerformanceMetricsXml {
+    #[serde(rename = "performanceMetric", default)]
+    performance_metric: Vec<CdxPerformanceMetricXml>,
+}
+
+/// `<performanceMetric>` of an XML model card: the value is element text
+#[derive(Debug, Deserialize)]
+struct CdxPerformanceMetricXml {
+    #[serde(rename = "type")]
+    metric_type: Option<String>,
+    value: Option<String>,
+    slice: Option<String>,
+}
+
+impl From<CdxPerformanceMetricXml> for CdxPerformanceMetric {
+    fn from(xml: CdxPerformanceMetricXml) -> Self {
+        Self {
+            metric_type: xml.metric_type,
+            value: xml.value,
+            slice: xml.slice,
+        }
+    }
+}
+
+/// `<considerations>` of an XML model card
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxConsiderationsXml {
+    use_cases: Option<CdxUseCasesXml>,
+    technical_limitations: Option<CdxTechnicalLimitationsXml>,
+    ethical_considerations: Option<CdxEthicalConsiderationsXml>,
+    environmental_considerations: Option<CdxEnvironmentalConsiderationsXml>,
+    fairness_assessments: Option<CdxFairnessAssessmentsXml>,
+}
+
+impl From<CdxConsiderationsXml> for CdxConsiderations {
+    fn from(xml: CdxConsiderationsXml) -> Self {
+        Self {
+            technical_limitations: xml
+                .technical_limitations
+                .map_or_else(Vec::new, |w| w.technical_limitation),
+            environmental_considerations: xml.environmental_considerations.map(|env| {
+                CdxEnvironmentalConsiderations {
+                    energy_consumptions: env
+                        .energy_consumptions
+                        .into_iter()
+                        .flat_map(|w| w.energy_consumption)
+                        .collect(),
+                }
+            }),
+            fairness_assessments: xml.fairness_assessments.map_or_else(Vec::new, |w| {
+                w.fairness_assessment
+                    .into_iter()
+                    .map(CdxFairnessAssessment::Structured)
+                    .collect()
+            }),
+            ethical_considerations: xml.ethical_considerations.map_or_else(Vec::new, |w| {
+                w.ethical_consideration
+                    .into_iter()
+                    .map(CdxEthicalConsideration::Structured)
+                    .collect()
+            }),
+            use_cases: xml.use_cases.map_or_else(Vec::new, |w| w.use_case),
+        }
+    }
+}
+
+/// `<useCases>` wrapper element of XML model-card considerations
+#[derive(Debug, Deserialize)]
+struct CdxUseCasesXml {
+    #[serde(rename = "useCase", default)]
+    use_case: Vec<String>,
+}
+
+/// `<technicalLimitations>` wrapper element of XML model-card considerations
+#[derive(Debug, Deserialize)]
+struct CdxTechnicalLimitationsXml {
+    #[serde(rename = "technicalLimitation", default)]
+    technical_limitation: Vec<String>,
+}
+
+/// `<ethicalConsiderations>` wrapper element of XML model-card considerations
+#[derive(Debug, Deserialize)]
+struct CdxEthicalConsiderationsXml {
+    #[serde(rename = "ethicalConsideration", default)]
+    ethical_consideration: Vec<CdxEthicalObj>,
+}
+
+/// `<fairnessAssessments>` wrapper element of XML model-card considerations
+#[derive(Debug, Deserialize)]
+struct CdxFairnessAssessmentsXml {
+    #[serde(rename = "fairnessAssessment", default)]
+    fairness_assessment: Vec<CdxFairnessObj>,
+}
+
+/// `<environmentalConsiderations>` of XML model-card considerations:
+/// repeated `<energyConsumptions>` wrappers of `<energyConsumption>`
+/// elements, read with the JSON energy-consumption structure.
+#[derive(Debug, Deserialize)]
+struct CdxEnvironmentalConsiderationsXml {
+    #[serde(rename = "energyConsumptions", default)]
+    energy_consumptions: Vec<CdxEnergyConsumptionsXml>,
+}
+
+/// `<energyConsumptions>` wrapper element of XML environmental considerations
+#[derive(Debug, Deserialize)]
+struct CdxEnergyConsumptionsXml {
+    #[serde(rename = "energyConsumption", default)]
+    energy_consumption: Vec<CdxEnergyConsumption>,
+}
+
+/// cryptoProperties element for XML format (1.6+). Algorithm and protocol
+/// properties lay out their lists differently from JSON and have XML shapes
+/// of their own. Certificate and related-material properties, and IKEv2
+/// transform types, read with the JSON structures, which accept their XML
+/// forms (`deserialize_related_crypto_assets`, `CdxIkev2Transform`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxCryptoPropertiesXml {
+    asset_type: Option<String>,
+    oid: Option<String>,
+    algorithm_properties: Option<CdxAlgorithmPropertiesXml>,
+    certificate_properties: Option<CdxCertificateProperties>,
+    related_crypto_material_properties: Option<CdxRelatedCryptoMaterialProperties>,
+    protocol_properties: Option<CdxProtocolPropertiesXml>,
+}
+
+impl From<CdxCryptoPropertiesXml> for CdxCryptoProperties {
+    fn from(xml: CdxCryptoPropertiesXml) -> Self {
+        Self {
+            asset_type: xml.asset_type,
+            oid: xml.oid,
+            algorithm_properties: xml.algorithm_properties.map(Into::into),
+            certificate_properties: xml.certificate_properties,
+            related_crypto_material_properties: xml.related_crypto_material_properties,
+            protocol_properties: xml.protocol_properties.map(Into::into),
+        }
+    }
+}
+
+/// algorithmProperties element for XML format: `<certificationLevel>`
+/// repeats directly, while the crypto functions are wrapped
+/// (`<cryptoFunctions><cryptoFunction>`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxAlgorithmPropertiesXml {
+    primitive: Option<String>,
+    /// CycloneDX 1.7.
+    algorithm_family: Option<String>,
+    parameter_set_identifier: Option<String>,
+    /// CycloneDX 1.6, deprecated in 1.7 in favor of `ellipticCurve`.
+    curve: Option<String>,
+    /// CycloneDX 1.7.
+    elliptic_curve: Option<String>,
+    execution_environment: Option<String>,
+    implementation_platform: Option<String>,
+    certification_level: Option<Vec<String>>,
+    mode: Option<String>,
+    padding: Option<String>,
+    crypto_functions: Option<CdxCryptoFunctionsXml>,
+    classical_security_level: Option<u32>,
+    nist_quantum_security_level: Option<u8>,
+}
+
+impl From<CdxAlgorithmPropertiesXml> for CdxAlgorithmProperties {
+    fn from(xml: CdxAlgorithmPropertiesXml) -> Self {
+        Self {
+            primitive: xml.primitive,
+            algorithm_family: xml.algorithm_family,
+            parameter_set_identifier: xml.parameter_set_identifier,
+            mode: xml.mode,
+            padding: xml.padding,
+            crypto_functions: xml.crypto_functions.map(|w| w.crypto_function),
+            execution_environment: xml.execution_environment,
+            implementation_platform: xml.implementation_platform,
+            certification_level: xml.certification_level,
+            classical_security_level: xml.classical_security_level,
+            nist_quantum_security_level: xml.nist_quantum_security_level,
+            elliptic_curve: xml.elliptic_curve,
+            curve: xml.curve,
+        }
+    }
+}
+
+/// `<cryptoFunctions>` wrapper element of XML algorithm properties
+#[derive(Debug, Deserialize)]
+struct CdxCryptoFunctionsXml {
+    #[serde(rename = "cryptoFunction", default)]
+    crypto_function: Vec<String>,
+}
+
+/// protocolProperties element for XML format: cipher suites are wrapped
+/// (`<cipherSuites><cipherSuite>`), and the references JSON lists in
+/// `cryptoRefArray` repeat as `<cryptoRef>` elements.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdxProtocolPropertiesXml {
+    #[serde(rename = "type")]
+    protocol_type: Option<String>,
+    version: Option<String>,
+    cipher_suites: Option<CdxCipherSuitesXml>,
+    ikev2_transform_types: Option<CdxIkev2TransformTypes>,
+    /// Deprecated in 1.7 in favor of `relatedCryptographicAssets`.
+    crypto_ref: Option<Vec<String>>,
+    /// CycloneDX 1.7.
+    #[serde(default, deserialize_with = "deserialize_related_crypto_assets")]
+    related_cryptographic_assets: Vec<CdxRelatedCryptoAsset>,
+}
+
+impl From<CdxProtocolPropertiesXml> for CdxProtocolProperties {
+    fn from(xml: CdxProtocolPropertiesXml) -> Self {
+        Self {
+            protocol_type: xml.protocol_type,
+            version: xml.version,
+            cipher_suites: xml
+                .cipher_suites
+                .map(|w| w.cipher_suite.into_iter().map(Into::into).collect()),
+            ikev2_transform_types: xml.ikev2_transform_types,
+            crypto_ref_array: xml.crypto_ref,
+            related_cryptographic_assets: xml.related_cryptographic_assets,
+        }
+    }
+}
+
+/// `<cipherSuites>` wrapper element of XML protocol properties
+#[derive(Debug, Deserialize)]
+struct CdxCipherSuitesXml {
+    #[serde(rename = "cipherSuite", default)]
+    cipher_suite: Vec<CdxCipherSuiteXml>,
+}
+
+/// cipherSuite element for XML format: the algorithm references, the
+/// identifiers and the 1.7 TLS groups and signature schemes are wrapped
+/// (`<algorithms><algorithm>`, `<identifiers><identifier>`,
+/// `<tlsGroups><group>`, `<tlsSignatureSchemes><signatureScheme>`).
+#[derive(Debug, Deserialize)]
+struct CdxCipherSuiteXml {
+    name: Option<String>,
+    algorithms: Option<CdxCipherSuiteAlgorithmsXml>,
+    identifiers: Option<CdxCipherSuiteIdentifiersXml>,
+    #[serde(rename = "tlsGroups")]
+    tls_groups: Option<CdxTlsGroupsXml>,
+    #[serde(rename = "tlsSignatureSchemes")]
+    tls_signature_schemes: Option<CdxTlsSignatureSchemesXml>,
+}
+
+impl From<CdxCipherSuiteXml> for CdxCipherSuite {
+    fn from(xml: CdxCipherSuiteXml) -> Self {
+        Self {
+            name: xml.name,
+            algorithms: xml.algorithms.map(|w| w.algorithm),
+            identifiers: xml.identifiers.map(|w| w.identifier),
+            tls_groups: xml.tls_groups.map(|w| w.group),
+            tls_signature_schemes: xml.tls_signature_schemes.map(|w| w.signature_scheme),
+        }
+    }
+}
+
+/// `<tlsGroups>` wrapper element of an XML cipher suite (CycloneDX 1.7)
+#[derive(Debug, Deserialize)]
+struct CdxTlsGroupsXml {
+    #[serde(rename = "group", default)]
+    group: Vec<String>,
+}
+
+/// `<tlsSignatureSchemes>` wrapper element of an XML cipher suite
+/// (CycloneDX 1.7)
+#[derive(Debug, Deserialize)]
+struct CdxTlsSignatureSchemesXml {
+    #[serde(rename = "signatureScheme", default)]
+    signature_scheme: Vec<String>,
+}
+
+/// `<algorithms>` wrapper element of an XML cipher suite
+#[derive(Debug, Deserialize)]
+struct CdxCipherSuiteAlgorithmsXml {
+    #[serde(rename = "algorithm", default)]
+    algorithm: Vec<String>,
+}
+
+/// `<identifiers>` wrapper element of an XML cipher suite
+#[derive(Debug, Deserialize)]
+struct CdxCipherSuiteIdentifiersXml {
+    #[serde(rename = "identifier", default)]
+    identifier: Vec<String>,
+}
+
 /// Dependencies wrapper element for XML format
 #[derive(Debug, Deserialize)]
 struct CdxDependenciesXml {
@@ -3480,6 +4568,7 @@ struct CdxVulnerabilityXml {
     references: Option<CdxVulnReferencesXml>,
     description: Option<String>,
     recommendation: Option<String>,
+    workaround: Option<String>,
     ratings: Option<CdxRatingsXml>,
     cwes: Option<CdxCwesXml>,
     affects: Option<CdxAffectsXml>,
@@ -3553,6 +4642,7 @@ impl From<CdxVulnerabilityXml> for CdxVulnerability {
             references: xml.references.map(|r| r.reference),
             description: xml.description,
             recommendation: xml.recommendation,
+            workaround: xml.workaround,
             ratings: xml.ratings.map(|r| r.rating),
             cwes: xml.cwes.map(|c| c.cwe),
             affects: xml.affects.map(|a| {
@@ -3638,11 +4728,7 @@ impl From<CdxServiceXml> for CdxService {
                 wrapper
                     .reference
                     .into_iter()
-                    .map(|r| CdxExternalReference {
-                        ref_type: r.ref_type,
-                        url: r.url,
-                        comment: r.comment,
-                    })
+                    .map(CdxExternalReference::from)
                     .collect()
             }),
             properties: xml.properties.map(|wrapper| {
@@ -3679,6 +4765,580 @@ mod tests {
 
     /// CDXA was introduced in 1.6: the gate must reject every earlier or
     /// unparseable specVersion and accept 1.6+.
+    /// CycloneDX 1.6+ component `<authors>` and `<manufacturer>` in XML.
+    #[test]
+    fn xml_component_authors_and_manufacturer() {
+        let sbom = parse(
+            r#"<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="library">
+      <name>lib</name>
+      <manufacturer><name>Maker GmbH</name></manufacturer>
+      <authors><author><name>Jane Dev</name></author><author><name>Joe Dev</name></author></authors>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let lib = component(&sbom, "lib");
+        assert_eq!(lib.author.as_deref(), Some("Jane Dev; Joe Dev"));
+        assert_eq!(
+            lib.manufacturer.as_ref().map(|m| m.name.as_str()),
+            Some("Maker GmbH")
+        );
+    }
+
+    /// XML repeats `<encr>`/`<ke>`/… directly under `ikev2TransformTypes`;
+    /// each is the 1.6 bom-ref text or a 1.7 element with child fields.
+    #[test]
+    fn xml_ikev2_transforms_both_forms() {
+        let sbom = parse(
+            r#"<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="cryptographic-asset" bom-ref="p">
+      <name>ipsec</name>
+      <cryptoProperties><assetType>protocol</assetType>
+        <protocolProperties><type>ikev2</type>
+          <ikev2TransformTypes>
+            <encr><name>ENCR_AES_CBC</name><keyLength>128</keyLength></encr>
+            <encr>legacy-encr-ref</encr>
+            <ke><group>37</group></ke>
+            <esn>true</esn>
+            <auth><name>Digital Signature</name><algorithm>sig</algorithm></auth>
+          </ikev2TransformTypes>
+        </protocolProperties>
+      </cryptoProperties>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let ike = component(&sbom, "ipsec")
+            .crypto_properties
+            .as_ref()
+            .and_then(|cp| cp.protocol_properties.as_ref())
+            .and_then(|p| p.ikev2_transform_types.clone())
+            .expect("IKEv2 transform types");
+        assert_eq!(ike.encr, ["ENCR_AES_CBC", "legacy-encr-ref"]);
+        assert_eq!(ike.ke, ["ML-KEM-1024"]);
+        assert_eq!(ike.auth, ["sig"]);
+        assert_eq!(ike.transforms[0].key_length, Some(128));
+        assert_eq!(ike.transforms[2].group, Some(37));
+    }
+
+    /// RFC 9370 additional key exchanges have no CycloneDX 1.7 field; they
+    /// are read from `addke1`…`addke7`, shaped like `ke`, in JSON and XML
+    /// alike, into the typed transforms only — never into the KE list.
+    #[test]
+    fn ikev2_additional_key_exchanges_json_and_xml() {
+        let json = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.7","components":[
+                {"type":"cryptographic-asset","name":"ipsec","cryptoProperties":{
+                    "assetType":"protocol","protocolProperties":{"type":"ikev2",
+                    "ikev2TransformTypes":{"ke":[{"group":20}],
+                        "addke1":[{"group":37},{"group":0}],"addke3":["kem-ref"]}}}}]}"#,
+        );
+        let xml = parse(
+            r#"<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="cryptographic-asset" bom-ref="p">
+      <name>ipsec</name>
+      <cryptoProperties><assetType>protocol</assetType>
+        <protocolProperties><type>ikev2</type>
+          <ikev2TransformTypes>
+            <ke><group>20</group></ke>
+            <addke1><group>37</group></addke1>
+            <addke1><group>0</group></addke1>
+            <addke3>kem-ref</addke3>
+          </ikev2TransformTypes>
+        </protocolProperties>
+      </cryptoProperties>
+    </component>
+  </components>
+</bom>"#,
+        );
+        for sbom in [&json, &xml] {
+            let ike = component(sbom, "ipsec")
+                .crypto_properties
+                .as_ref()
+                .and_then(|cp| cp.protocol_properties.as_ref())
+                .and_then(|p| p.ikev2_transform_types.clone())
+                .expect("IKEv2 transform types");
+            let transforms: Vec<_> = ike
+                .transforms
+                .iter()
+                .map(|t| (t.kind, t.group, t.algorithm_ref.as_deref()))
+                .collect();
+            assert_eq!(
+                transforms,
+                [
+                    (Ikev2TransformKind::Ke, Some(20), None),
+                    (Ikev2TransformKind::Addke1, Some(37), None),
+                    (Ikev2TransformKind::Addke1, Some(0), None),
+                    (Ikev2TransformKind::Addke3, None, Some("kem-ref")),
+                ]
+            );
+            assert_eq!(ike.ke, ["ECDH-secp384r1"]);
+        }
+    }
+
+    /// In XML, `relatedCryptographicAssets` wraps repeated
+    /// `<relatedCryptographicAsset>` elements (bom-1.7.xsd), and the 1.6
+    /// `<curve>` is read as in JSON. An empty wrapper parses to nothing.
+    #[test]
+    fn xml_related_crypto_assets_and_curve() {
+        let sbom = parse(
+            r#"<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="cryptographic-asset" bom-ref="alg">
+      <name>ka</name>
+      <cryptoProperties><assetType>algorithm</assetType>
+        <algorithmProperties><primitive>key-agree</primitive><curve>secp256r1</curve></algorithmProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset" bom-ref="c1">
+      <name>cert</name>
+      <cryptoProperties><assetType>certificate</assetType>
+        <certificateProperties><relatedCryptographicAssets>
+          <relatedCryptographicAsset><type>algorithm</type><ref>alg</ref></relatedCryptographicAsset>
+          <relatedCryptographicAsset><type>publicKey</type><ref>pk</ref></relatedCryptographicAsset>
+        </relatedCryptographicAssets></certificateProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset" bom-ref="c2">
+      <name>empty</name>
+      <cryptoProperties><assetType>certificate</assetType>
+        <certificateProperties><relatedCryptographicAssets/></certificateProperties>
+      </cryptoProperties>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let cp = |name: &str| component(&sbom, name).crypto_properties.clone().unwrap();
+        assert_eq!(
+            cp("ka")
+                .algorithm_properties
+                .unwrap()
+                .elliptic_curve
+                .as_deref(),
+            Some("secp256r1")
+        );
+        let cert = cp("cert").certificate_properties.unwrap();
+        assert_eq!(cert.signature_algorithm_ref.as_deref(), Some("alg"));
+        assert_eq!(cert.subject_public_key_ref.as_deref(), Some("pk"));
+        assert!(
+            cp("empty")
+                .certificate_properties
+                .unwrap()
+                .related_crypto_assets
+                .is_empty()
+        );
+    }
+
+    /// XML `algorithmProperties` read like JSON: `<certificationLevel>`
+    /// repeats directly, and `<cryptoFunctions>` wraps `<cryptoFunction>`
+    /// elements (which used to fail the whole document).
+    #[test]
+    fn xml_algorithm_properties_read_like_json() {
+        let xml = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="cryptographic-asset" bom-ref="aes">
+      <name>AES-256-GCM</name>
+      <cryptoProperties>
+        <assetType>algorithm</assetType>
+        <algorithmProperties>
+          <primitive>ae</primitive>
+          <algorithmFamily>AES</algorithmFamily>
+          <parameterSetIdentifier>256</parameterSetIdentifier>
+          <executionEnvironment>software-encrypted-ram</executionEnvironment>
+          <implementationPlatform>x86_64</implementationPlatform>
+          <certificationLevel>fips140-3-l1</certificationLevel>
+          <certificationLevel>cc-eal4</certificationLevel>
+          <mode>gcm</mode>
+          <cryptoFunctions>
+            <cryptoFunction>keygen</cryptoFunction>
+            <cryptoFunction>encrypt</cryptoFunction>
+            <cryptoFunction>decrypt</cryptoFunction>
+            <cryptoFunction>tag</cryptoFunction>
+          </cryptoFunctions>
+          <classicalSecurityLevel>256</classicalSecurityLevel>
+          <nistQuantumSecurityLevel>1</nistQuantumSecurityLevel>
+        </algorithmProperties>
+        <oid>2.16.840.1.101.3.4.1.46</oid>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset" bom-ref="rsa">
+      <name>RSA-3072</name>
+      <cryptoProperties>
+        <assetType>algorithm</assetType>
+        <algorithmProperties>
+          <primitive>pke</primitive>
+          <algorithmFamily>RSA</algorithmFamily>
+          <parameterSetIdentifier>3072</parameterSetIdentifier>
+          <padding>oaep</padding>
+          <cryptoFunctions><cryptoFunction>encrypt</cryptoFunction></cryptoFunctions>
+        </algorithmProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset" bom-ref="ecdh">
+      <name>ECDH-P256</name>
+      <cryptoProperties>
+        <assetType>algorithm</assetType>
+        <algorithmProperties>
+          <primitive>key-agree</primitive>
+          <curve>secp256r1</curve>
+          <ellipticCurve>secg/secp256r1</ellipticCurve>
+        </algorithmProperties>
+      </cryptoProperties>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let json = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.7","version":1,"components":[
+                {"type":"cryptographic-asset","bom-ref":"aes","name":"AES-256-GCM",
+                 "cryptoProperties":{"assetType":"algorithm","algorithmProperties":{
+                    "primitive":"ae","algorithmFamily":"AES","parameterSetIdentifier":"256",
+                    "executionEnvironment":"software-encrypted-ram",
+                    "implementationPlatform":"x86_64",
+                    "certificationLevel":["fips140-3-l1","cc-eal4"],"mode":"gcm",
+                    "cryptoFunctions":["keygen","encrypt","decrypt","tag"],
+                    "classicalSecurityLevel":256,"nistQuantumSecurityLevel":1},
+                    "oid":"2.16.840.1.101.3.4.1.46"}},
+                {"type":"cryptographic-asset","bom-ref":"rsa","name":"RSA-3072",
+                 "cryptoProperties":{"assetType":"algorithm","algorithmProperties":{
+                    "primitive":"pke","algorithmFamily":"RSA","parameterSetIdentifier":"3072",
+                    "padding":"oaep","cryptoFunctions":["encrypt"]}}},
+                {"type":"cryptographic-asset","bom-ref":"ecdh","name":"ECDH-P256",
+                 "cryptoProperties":{"assetType":"algorithm","algorithmProperties":{
+                    "primitive":"key-agree","curve":"secp256r1",
+                    "ellipticCurve":"secg/secp256r1"}}}]}"#,
+        );
+        for name in ["AES-256-GCM", "RSA-3072", "ECDH-P256"] {
+            assert_eq!(
+                component(&xml, name).crypto_properties,
+                component(&json, name).crypto_properties,
+                "{name}"
+            );
+        }
+        let algo = |name: &str| {
+            component(&xml, name)
+                .crypto_properties
+                .clone()
+                .and_then(|cp| cp.algorithm_properties)
+                .expect("algorithm properties")
+        };
+        let aes = algo("AES-256-GCM");
+        assert_eq!(
+            aes.crypto_functions,
+            [
+                CryptoFunction::Keygen,
+                CryptoFunction::Encrypt,
+                CryptoFunction::Decrypt,
+                CryptoFunction::Tag
+            ]
+        );
+        assert_eq!(
+            aes.certification_level,
+            [CertificationLevel::Fips140_3L1, CertificationLevel::CcEal4]
+        );
+        assert_eq!(aes.nist_quantum_security_level, Some(1));
+        assert_eq!(algo("RSA-3072").padding, Some(CryptoPadding::Oaep));
+        assert_eq!(
+            algo("ECDH-P256").elliptic_curve.as_deref(),
+            Some("secg/secp256r1")
+        );
+    }
+
+    /// XML `protocolProperties` read like JSON: `<cipherSuites>` wraps
+    /// `<cipherSuite>` elements whose algorithm references, identifiers and
+    /// 1.7 TLS groups and signature schemes are wrapped too, and the
+    /// `cryptoRefArray` references repeat as `<cryptoRef>`, merged with the
+    /// 1.7 related assets. Suites used to come out as one empty suite and
+    /// the references were dropped.
+    #[test]
+    fn xml_protocol_properties_read_like_json() {
+        let xml = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="cryptographic-asset" bom-ref="tls">
+      <name>TLS 1.3</name>
+      <cryptoProperties>
+        <assetType>protocol</assetType>
+        <protocolProperties>
+          <type>tls</type>
+          <version>1.3</version>
+          <cipherSuites>
+            <cipherSuite>
+              <name>TLS_AES_256_GCM_SHA384</name>
+              <algorithms><algorithm>aes</algorithm><algorithm>sha384</algorithm></algorithms>
+              <identifiers><identifier>0x13</identifier><identifier>0x02</identifier></identifiers>
+              <tlsGroups><group>MLKEM1024</group><group>0x11EC</group></tlsGroups>
+              <tlsSignatureSchemes><signatureScheme>mldsa87</signatureScheme></tlsSignatureSchemes>
+            </cipherSuite>
+            <cipherSuite>
+              <name>TLS_CHACHA20_POLY1305_SHA256</name>
+              <algorithms><algorithm>chacha</algorithm></algorithms>
+            </cipherSuite>
+          </cipherSuites>
+          <cryptoRef>cert</cryptoRef>
+          <cryptoRef>key</cryptoRef>
+          <relatedCryptographicAssets>
+            <relatedCryptographicAsset><type>publicKey</type><ref>key</ref></relatedCryptographicAsset>
+            <relatedCryptographicAsset><type>algorithm</type><ref>aes</ref></relatedCryptographicAsset>
+          </relatedCryptographicAssets>
+        </protocolProperties>
+        <oid>1.3.18.0.2.32.104</oid>
+      </cryptoProperties>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let json = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.7","version":1,"components":[
+                {"type":"cryptographic-asset","bom-ref":"tls","name":"TLS 1.3",
+                 "cryptoProperties":{"assetType":"protocol","protocolProperties":{
+                    "type":"tls","version":"1.3","cipherSuites":[
+                        {"name":"TLS_AES_256_GCM_SHA384","algorithms":["aes","sha384"],
+                         "identifiers":["0x13","0x02"],"tlsGroups":["MLKEM1024","0x11EC"],
+                         "tlsSignatureSchemes":["mldsa87"]},
+                        {"name":"TLS_CHACHA20_POLY1305_SHA256","algorithms":["chacha"]}],
+                    "cryptoRefArray":["cert","key"],
+                    "relatedCryptographicAssets":[{"type":"publicKey","ref":"key"},
+                        {"type":"algorithm","ref":"aes"}]},
+                    "oid":"1.3.18.0.2.32.104"}}]}"#,
+        );
+        assert_eq!(
+            component(&xml, "TLS 1.3").crypto_properties,
+            component(&json, "TLS 1.3").crypto_properties
+        );
+        let proto = component(&xml, "TLS 1.3")
+            .crypto_properties
+            .clone()
+            .and_then(|cp| cp.protocol_properties)
+            .expect("protocol properties");
+        assert_eq!(
+            proto.cipher_suites,
+            [
+                CipherSuite {
+                    name: Some("TLS_AES_256_GCM_SHA384".to_string()),
+                    algorithms: vec!["aes".to_string(), "sha384".to_string()],
+                    identifiers: vec!["0x13".to_string(), "0x02".to_string()],
+                    tls_groups: vec!["MLKEM1024".to_string(), "0x11EC".to_string()],
+                    tls_signature_schemes: vec!["mldsa87".to_string()],
+                },
+                CipherSuite {
+                    name: Some("TLS_CHACHA20_POLY1305_SHA256".to_string()),
+                    algorithms: vec!["chacha".to_string()],
+                    ..CipherSuite::default()
+                },
+            ]
+        );
+        assert_eq!(proto.crypto_ref_array, ["cert", "key", "aes"]);
+    }
+
+    /// Unexpected content in the XML crypto lists is ignored instead of
+    /// failing the document: empty wrappers, text where the items belong,
+    /// and unknown child elements.
+    #[test]
+    fn xml_crypto_lists_tolerate_unexpected_content() {
+        let sbom = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="cryptographic-asset">
+      <name>empty</name>
+      <cryptoProperties><assetType>algorithm</assetType>
+        <algorithmProperties><cryptoFunctions/></algorithmProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset">
+      <name>text</name>
+      <cryptoProperties><assetType>algorithm</assetType>
+        <algorithmProperties><cryptoFunctions>sign verify</cryptoFunctions></algorithmProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset">
+      <name>unknown-child</name>
+      <cryptoProperties><assetType>algorithm</assetType>
+        <algorithmProperties><cryptoFunctions>
+          <note>vendor note</note><cryptoFunction>sign</cryptoFunction>
+        </cryptoFunctions></algorithmProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset">
+      <name>proto</name>
+      <cryptoProperties><assetType>protocol</assetType>
+        <protocolProperties><type>tls</type>
+          <cipherSuites>
+            stray text
+            <cipherSuite/>
+            <cipherSuite>
+              <name>S</name><algorithms/><identifiers>0x13</identifiers><extra>1</extra>
+              <tlsGroups>x25519</tlsGroups><tlsSignatureSchemes/>
+            </cipherSuite>
+            <cipherSuite>
+              <tlsGroups><note>vendor note</note><group>x25519</group></tlsGroups>
+            </cipherSuite>
+          </cipherSuites>
+        </protocolProperties>
+      </cryptoProperties>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let functions = |name: &str| {
+            component(&sbom, name)
+                .crypto_properties
+                .clone()
+                .and_then(|cp| cp.algorithm_properties)
+                .map(|a| a.crypto_functions)
+                .expect("algorithm properties")
+        };
+        assert!(functions("empty").is_empty());
+        assert!(functions("text").is_empty());
+        assert_eq!(functions("unknown-child"), [CryptoFunction::Sign]);
+        let suites = component(&sbom, "proto")
+            .crypto_properties
+            .clone()
+            .and_then(|cp| cp.protocol_properties)
+            .map(|p| p.cipher_suites)
+            .expect("protocol properties");
+        assert_eq!(
+            suites,
+            [
+                CipherSuite::default(),
+                CipherSuite {
+                    name: Some("S".to_string()),
+                    ..CipherSuite::default()
+                },
+                CipherSuite {
+                    tls_groups: vec!["x25519".to_string()],
+                    ..CipherSuite::default()
+                },
+            ]
+        );
+    }
+
+    /// Every 1.7 crypto element of an XSD-valid document parses, whether or
+    /// not the model reads it.
+    #[test]
+    fn xml_17_crypto_elements_parse_whether_read_or_not() {
+        let sbom = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="cryptographic-asset" bom-ref="cert">
+      <name>cert</name>
+      <cryptoProperties>
+        <assetType>certificate</assetType>
+        <certificateProperties>
+          <serialNumber>01:02</serialNumber>
+          <subjectName>CN=a</subjectName>
+          <certificateFormat>X.509</certificateFormat>
+          <certificateFileExtension>pem</certificateFileExtension>
+          <fingerprint alg="SHA-256">a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2</fingerprint>
+          <certificateState><state>active</state><reason>issued</reason></certificateState>
+          <creationDate>2026-01-01T00:00:00Z</creationDate>
+          <certificateExtensions>
+            <certificateExtension>
+              <commonExtensionName>keyUsage</commonExtensionName>
+              <commonExtensionValue>digitalSignature</commonExtensionValue>
+            </certificateExtension>
+            <certificateExtension><customExtensionName>x</customExtensionName></certificateExtension>
+          </certificateExtensions>
+        </certificateProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset" bom-ref="key">
+      <name>key</name>
+      <cryptoProperties>
+        <assetType>related-crypto-material</assetType>
+        <relatedCryptoMaterialProperties>
+          <type>public-key</type>
+          <value>MIIB</value>
+          <size>256</size>
+          <fingerprint alg="SHA-256">d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5</fingerprint>
+        </relatedCryptoMaterialProperties>
+      </cryptoProperties>
+    </component>
+    <component type="cryptographic-asset" bom-ref="tls">
+      <name>tls</name>
+      <cryptoProperties>
+        <assetType>protocol</assetType>
+        <protocolProperties>
+          <type>tls</type>
+          <cipherSuites>
+            <cipherSuite>
+              <name>TLS_AES_256_GCM_SHA384</name>
+              <identifiers><identifier>0x13</identifier><identifier>0x02</identifier></identifiers>
+              <tlsGroups><group>x25519mlkem768</group></tlsGroups>
+              <tlsSignatureSchemes><signatureScheme>mldsa87</signatureScheme></tlsSignatureSchemes>
+            </cipherSuite>
+          </cipherSuites>
+          <cryptoRef>cert</cryptoRef>
+        </protocolProperties>
+      </cryptoProperties>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let cp = |name: &str| {
+            component(&sbom, name)
+                .crypto_properties
+                .clone()
+                .expect("crypto properties")
+        };
+        assert_eq!(
+            cp("cert")
+                .certificate_properties
+                .and_then(|c| c.certificate_extension)
+                .as_deref(),
+            Some("pem")
+        );
+        assert_eq!(
+            cp("key")
+                .related_crypto_material_properties
+                .and_then(|m| m.size),
+            Some(256)
+        );
+        let proto = cp("tls").protocol_properties.expect("protocol properties");
+        assert_eq!(proto.cipher_suites[0].identifiers, ["0x13", "0x02"]);
+        assert_eq!(proto.cipher_suites[0].tls_groups, ["x25519mlkem768"]);
+        assert_eq!(proto.cipher_suites[0].tls_signature_schemes, ["mldsa87"]);
+        assert_eq!(proto.crypto_ref_array, ["cert"]);
+    }
+
+    /// The 1.7 `isExternal` attribute is an XML Schema boolean: `true` or `1`
+    /// is true; absent, `false`, or malformed it is the default false, and a
+    /// malformed value does not fail the document.
+    #[test]
+    fn xml_is_external_reads_schema_booleans() {
+        let sbom = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="library" isExternal="true">
+      <name>a</name><versionRange>vers:npm/&gt;=1.0.0|&lt;2.0.0</versionRange>
+    </component>
+    <component type="library" isExternal="1"><name>b</name></component>
+    <component type="library" isExternal="false"><name>c</name></component>
+    <component type="library"><name>d</name></component>
+    <component type="library" isExternal="True"><name>e</name></component>
+  </components>
+</bom>"#,
+        );
+        let external: Vec<bool> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(|name| component(&sbom, name).is_external)
+            .collect();
+        assert_eq!(external, [true, true, false, false, false]);
+        assert_eq!(
+            component(&sbom, "a").version_range.as_deref(),
+            Some("vers:npm/>=1.0.0|<2.0.0")
+        );
+    }
+
     #[test]
     fn cdxa_version_gate() {
         assert!(!cdx_supports_cdxa("1.4"));
@@ -4013,6 +5673,222 @@ mod tests {
         );
     }
 
+    /// Review finding V10: XML metadata reaches the document fields JSON
+    /// fills. Authors become Person creators, `manufacturer` an Organization
+    /// creator (winning over the deprecated `manufacture`), the first
+    /// lifecycle names the phase, the first composition's aggregate sets the
+    /// completeness declaration, and the TLP is read.
+    #[test]
+    fn xml_metadata_maps_to_the_json_document_fields() {
+        let sbom = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <metadata>
+    <lifecycles>
+      <lifecycle><name>staging</name><description>Pre-release soak</description></lifecycle>
+      <lifecycle><phase>operations</phase></lifecycle>
+    </lifecycles>
+    <tools><tool><vendor>Example</vendor><name>legacy-gen</name><version>1.0</version></tool></tools>
+    <authors>
+      <author><name>Jane Doe</name><email>jane@example.com</email></author>
+      <author><email>ops@example.com</email></author>
+    </authors>
+    <manufacturer>
+      <name>Maker Corp</name>
+      <url>https://maker.example</url>
+      <contact><name>SBOM desk</name></contact>
+      <contact><email>sbom@maker.example</email></contact>
+    </manufacturer>
+    <manufacture><name>Legacy Corp</name></manufacture>
+    <distributionConstraints><tlp>AMBER</tlp></distributionConstraints>
+  </metadata>
+  <compositions>
+    <composition><aggregate>incomplete_first_party_only</aggregate></composition>
+    <composition><aggregate>complete</aggregate></composition>
+  </compositions>
+</bom>"#,
+        );
+        let doc = &sbom.document;
+        let creators: Vec<(&CreatorType, &str, Option<&str>)> = doc
+            .creators
+            .iter()
+            .map(|c| (&c.creator_type, c.name.as_str(), c.email.as_deref()))
+            .collect();
+        assert_eq!(
+            creators,
+            [
+                (&CreatorType::Tool, "legacy-gen 1.0", None),
+                (&CreatorType::Person, "Jane Doe", Some("jane@example.com")),
+                (
+                    &CreatorType::Person,
+                    "ops@example.com",
+                    Some("ops@example.com")
+                ),
+                (
+                    &CreatorType::Organization,
+                    "Maker Corp",
+                    Some("sbom@maker.example")
+                ),
+            ]
+        );
+        assert_eq!(doc.lifecycle_phase.as_deref(), Some("staging"));
+        assert_eq!(
+            doc.completeness_declaration,
+            CompletenessDeclaration::IncompleteFirstPartyOnly
+        );
+        assert_eq!(doc.distribution_classification.as_deref(), Some("AMBER"));
+    }
+
+    /// The 1.5+ `<tools>` form lists components, then services, like the
+    /// JSON object form; tool detail beyond name and version is ignored, and
+    /// an empty `<tools/>` names no tool.
+    #[test]
+    fn xml_tools_components_and_services_become_tool_creators() {
+        let tools = |metadata: &str| -> Vec<String> {
+            parse(&format!(
+                r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.5" version="1">
+  <metadata>{metadata}</metadata>
+</bom>"#
+            ))
+            .document
+            .creators
+            .into_iter()
+            .filter(|c| c.creator_type == CreatorType::Tool)
+            .map(|c| c.name)
+            .collect()
+        };
+        assert_eq!(
+            tools(
+                r#"<tools>
+      <components>
+        <component type="application" bom-ref="gen">
+          <group>org.example</group>
+          <name>gen</name>
+          <version>2.0</version>
+          <hashes><hash alg="SHA-256">aa</hash></hashes>
+        </component>
+        <component type="library"><name>plugin</name></component>
+      </components>
+      <services>
+        <service><name>enricher</name><version>2026.09</version></service>
+      </services>
+    </tools>"#
+            ),
+            ["gen 2.0", "plugin", "enricher 2026.09"]
+        );
+        assert!(tools("<tools/>").is_empty());
+    }
+
+    /// An enveloped XML-DSig signature maps to the document signature the
+    /// way JSF does in JSON: the declared SignatureMethod algorithm and
+    /// whether a SignatureValue is present. Nothing is verified. Prefixed
+    /// and default-namespace spellings both count, the first of several
+    /// signatures stands for the document, and an unsigned BOM has none.
+    #[test]
+    fn xml_enveloped_signature_reads_method_and_value_presence() {
+        let signature = |xml: &str| {
+            parse(&format!(
+                r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.6" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" version="1">
+  <components><component type="library"><name>lib</name></component></components>
+  {xml}
+</bom>"#
+            ))
+            .document
+            .signature
+            .map(|s| (s.algorithm, s.has_value))
+        };
+        let rsa = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+        let signed = Some((rsa.to_string(), true));
+        assert_eq!(
+            signature(&format!(
+                r#"<ds:Signature>
+    <ds:SignedInfo><ds:SignatureMethod Algorithm="{rsa}"/></ds:SignedInfo>
+    <ds:SignatureValue Id="sv">
+      QUJD
+      REVG
+    </ds:SignatureValue>
+    <ds:KeyInfo><ds:KeyName>release</ds:KeyName></ds:KeyInfo>
+  </ds:Signature>"#
+            )),
+            signed
+        );
+        assert_eq!(
+            signature(&format!(
+                r#"<Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+    <SignedInfo><SignatureMethod Algorithm="{rsa}"/></SignedInfo>
+    <SignatureValue>QUJD</SignatureValue>
+  </Signature>"#
+            )),
+            signed
+        );
+        assert_eq!(
+            signature("<ds:Signature><ds:SignedInfo/><ds:SignatureValue/></ds:Signature>"),
+            Some(("unknown".to_string(), false))
+        );
+        assert_eq!(
+            signature(&format!(
+                r#"<ds:Signature><ds:SignatureValue>QUJD</ds:SignatureValue></ds:Signature>
+  <ds:Signature><ds:SignedInfo><ds:SignatureMethod Algorithm="{rsa}"/></ds:SignedInfo></ds:Signature>"#
+            )),
+            Some(("unknown".to_string(), true))
+        );
+        assert_eq!(signature(""), None);
+    }
+
+    /// Composition assemblies feed no check, so only the aggregate is read
+    /// from XML: an `<assembly>` without its `ref` cannot fail a document.
+    #[test]
+    fn xml_composition_reads_only_the_aggregate() {
+        let sbom = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <compositions>
+    <composition>
+      <aggregate>complete</aggregate>
+      <assemblies><assembly ref="lib"/><assembly/></assemblies>
+    </composition>
+  </compositions>
+</bom>"#,
+        );
+        assert_eq!(
+            sbom.document.completeness_declaration,
+            CompletenessDeclaration::Complete
+        );
+    }
+
+    /// 1.7 `<citations>` read as in JSON: pointers and expressions unwrap,
+    /// and the document keeps the same citations and citation count.
+    #[test]
+    fn xml_citations_match_the_json_citations() {
+        let xml = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <citations>
+    <citation bom-ref="c1">
+      <pointers><pointer>/components</pointer><pointer>/metadata/component</pointer></pointers>
+      <timestamp>2026-04-01T14:00:00Z</timestamp>
+      <attributedTo>app</attributedTo>
+      <note>Inventory by scanner</note>
+    </citation>
+    <citation>
+      <expressions><expression>/bom/components/component[1]</expression></expressions>
+      <timestamp>2026-04-01T15:00:00Z</timestamp>
+      <process>workflow</process>
+    </citation>
+  </citations>
+</bom>"#,
+        );
+        let json = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.7","version":1,"citations":[
+                {"bom-ref":"c1","pointers":["/components","/metadata/component"],
+                 "timestamp":"2026-04-01T14:00:00Z","attributedTo":"app",
+                 "note":"Inventory by scanner"},
+                {"expressions":["/bom/components/component[1]"],
+                 "timestamp":"2026-04-01T15:00:00Z","process":"workflow"}]}"#,
+        );
+        assert_eq!(xml.document.citations_count, 2);
+        assert_eq!(xml.document.citations_count, json.document.citations_count);
+        assert!(xml.extensions.cyclonedx.is_some());
+        assert_eq!(xml.extensions.cyclonedx, json.extensions.cyclonedx);
+    }
+
     #[test]
     fn test_xml_spec_version_from_xmlns() {
         let sbom = parse(
@@ -4033,6 +5909,128 @@ mod tests {
                 .swhid
                 .iter()
                 .any(|s| s.to_string().contains("swh:1:rel:"))
+        );
+    }
+
+    /// The XML `<modelCard>` must build the model metadata its JSON twin
+    /// builds. Regression: the XML converter hardcoded `model_card: None`,
+    /// so an XML AI-BOM lost its architecture, training datasets, use cases,
+    /// limitations, metrics and training energy, and the EU AI Act and
+    /// BSI-AI profiles reported gaps the JSON encoding of the same model
+    /// fills (found by the rule-matrix format axis).
+    #[test]
+    fn xml_model_card_reads_like_json() {
+        let json = parse_json(
+            r#"{
+              "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+              "components": [{
+                "type": "machine-learning-model", "bom-ref": "m1", "name": "m1",
+                "modelCard": {
+                  "modelParameters": {
+                    "approach": { "type": "supervised" },
+                    "task": "text-classification",
+                    "architectureFamily": "transformer",
+                    "modelArchitecture": "BERT-base",
+                    "datasets": [{ "ref": "ds-1" }, { "name": "inline-corpus" }]
+                  },
+                  "quantitativeAnalysis": {
+                    "performanceMetrics": [
+                      { "type": "accuracy", "value": "0.97", "slice": "overall" }
+                    ]
+                  },
+                  "considerations": {
+                    "useCases": ["triage", "moderation"],
+                    "technicalLimitations": ["English only", "short texts"],
+                    "ethicalConsiderations": [
+                      { "name": "bias risk", "mitigationStrategy": "human review" }
+                    ],
+                    "fairnessAssessments": [
+                      { "groupAtRisk": "minors", "mitigationStrategy": "age gating" }
+                    ],
+                    "environmentalConsiderations": {
+                      "energyConsumptions": [{
+                        "activity": "training",
+                        "energyProviders": [{ "organization": { "name": "Grid" }, "energySource": "wind", "energyProvided": { "value": 1.5, "unit": "MWh" } }],
+                        "activityEnergyCost": { "value": 1.5, "unit": "MWh" }
+                      }]
+                    }
+                  }
+                }
+              }]
+            }"#,
+        );
+        let xml = parse(
+            r#"<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="machine-learning-model" bom-ref="m1">
+      <name>m1</name>
+      <modelCard>
+        <modelParameters>
+          <approach><type>supervised</type></approach>
+          <task>text-classification</task>
+          <architectureFamily>transformer</architectureFamily>
+          <modelArchitecture>BERT-base</modelArchitecture>
+          <datasets>
+            <ref>ds-1</ref>
+            <dataset><type>dataset</type><name>inline-corpus</name></dataset>
+          </datasets>
+        </modelParameters>
+        <quantitativeAnalysis>
+          <performanceMetrics>
+            <performanceMetric>
+              <type>accuracy</type><value>0.97</value><slice>overall</slice>
+            </performanceMetric>
+          </performanceMetrics>
+        </quantitativeAnalysis>
+        <considerations>
+          <useCases><useCase>triage</useCase><useCase>moderation</useCase></useCases>
+          <technicalLimitations>
+            <technicalLimitation>English only</technicalLimitation>
+            <technicalLimitation>short texts</technicalLimitation>
+          </technicalLimitations>
+          <ethicalConsiderations>
+            <ethicalConsideration>
+              <name>bias risk</name><mitigationStrategy>human review</mitigationStrategy>
+            </ethicalConsideration>
+          </ethicalConsiderations>
+          <environmentalConsiderations>
+            <energyConsumptions>
+              <energyConsumption>
+                <activity>training</activity>
+                <energyProviders>
+                  <organization><name>Grid</name></organization>
+                  <energySource>wind</energySource>
+                  <energyProvided><value>1.5</value><unit>MWh</unit></energyProvided>
+                </energyProviders>
+                <activityEnergyCost><value>1.5</value><unit>MWh</unit></activityEnergyCost>
+              </energyConsumption>
+            </energyConsumptions>
+          </environmentalConsiderations>
+          <fairnessAssessments>
+            <fairnessAssessment>
+              <groupAtRisk>minors</groupAtRisk><mitigationStrategy>age gating</mitigationStrategy>
+            </fairnessAssessment>
+          </fairnessAssessments>
+        </considerations>
+      </modelCard>
+    </component>
+  </components>
+</bom>"#,
+        );
+        let from_json = component(&json, "m1").ml_model.clone();
+        let from_xml = component(&xml, "m1").ml_model.clone();
+        let ml = from_xml
+            .as_ref()
+            .expect("the XML model card builds ml_model");
+        assert_eq!(ml.architecture_family.as_deref(), Some("transformer"));
+        assert_eq!(ml.architecture_name.as_deref(), Some("BERT-base"));
+        assert_eq!(ml.training_datasets.len(), 2);
+        assert_eq!(ml.use_cases, vec!["triage", "moderation"]);
+        assert_eq!(ml.limitations.as_deref(), Some("English only; short texts"));
+        assert_eq!(ml.energy_kwh_training, Some(1500.0));
+        assert_eq!(
+            from_xml, from_json,
+            "the XML model card must build the JSON twin's model metadata"
         );
     }
 
@@ -4237,6 +6235,114 @@ mod tests {
         CycloneDxParser::new()
             .parse_str(json)
             .expect("JSON should parse")
+    }
+
+    fn parsed_curve(algorithm_properties: &str) -> Option<String> {
+        let sbom = parse_json(&format!(
+            r#"{{"bomFormat":"CycloneDX","specVersion":"1.7",
+                "components":[{{"type":"cryptographic-asset","name":"ka",
+                    "cryptoProperties":{{"assetType":"algorithm",
+                        "algorithmProperties":{algorithm_properties}}}}}]}}"#
+        ));
+        component(&sbom, "ka")
+            .crypto_properties
+            .as_ref()
+            .and_then(|cp| cp.algorithm_properties.as_ref())
+            .and_then(|a| a.elliptic_curve.clone())
+    }
+
+    /// The 1.6 `curve` and the 1.7 `ellipticCurve` that deprecates it both
+    /// populate `elliptic_curve`; when both are present the document still
+    /// parses (no duplicate-field error) and the 1.7 value wins, unless it
+    /// is blank (issue #374).
+    #[test]
+    fn elliptic_curve_reads_16_curve_with_17_precedence() {
+        assert_eq!(
+            parsed_curve(r#"{"primitive":"key-agree","curve":"secp256r1"}"#).as_deref(),
+            Some("secp256r1")
+        );
+        assert_eq!(
+            parsed_curve(r#"{"primitive":"key-agree","ellipticCurve":"secg/secp256r1"}"#)
+                .as_deref(),
+            Some("secg/secp256r1")
+        );
+        assert_eq!(
+            parsed_curve(
+                r#"{"primitive":"key-agree","curve":"secp256r1","ellipticCurve":"secg/secp384r1"}"#
+            )
+            .as_deref(),
+            Some("secg/secp384r1")
+        );
+        assert_eq!(
+            parsed_curve(r#"{"primitive":"key-agree","curve":"secp256r1","ellipticCurve":"  "}"#)
+                .as_deref(),
+            Some("secp256r1")
+        );
+        assert_eq!(
+            parsed_curve(r#"{"primitive":"key-agree","curve":""}"#),
+            None
+        );
+    }
+
+    /// 1.6 string refs and 1.7 objects may be mixed; malformed numbers and
+    /// empty objects are dropped instead of failing the document.
+    #[test]
+    fn ikev2_transforms_tolerate_mixed_and_malformed_entries() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.7","components":[
+                {"type":"cryptographic-asset","name":"ipsec","cryptoProperties":{
+                    "assetType":"protocol","protocolProperties":{"type":"ikev2",
+                    "ikev2TransformTypes":{
+                        "encr":["ref-a",{"name":"ENCR_AES_GCM_16","keyLength":-5},{}],
+                        "ke":[{"group":"19"},{"group":4294967296}]}}}}]}"#,
+        );
+        let ike = component(&sbom, "ipsec")
+            .crypto_properties
+            .as_ref()
+            .and_then(|cp| cp.protocol_properties.as_ref())
+            .and_then(|p| p.ikev2_transform_types.clone())
+            .expect("IKEv2 transform types");
+        assert_eq!(ike.encr, ["ref-a", "ENCR_AES_GCM_16"]);
+        assert_eq!(ike.transforms[1].key_length, None);
+        assert_eq!(ike.ke, ["ECDH-secp256r1"], "out-of-range group dropped");
+    }
+
+    /// A document mid-migration carries both the deprecated 1.6 ref fields
+    /// and the 1.7 `relatedCryptographicAssets`: protocol refs are the
+    /// deduplicated union, explicit 1.6 single refs are kept, 1.7 file
+    /// extension wins, and entries without a usable ref are dropped.
+    #[test]
+    fn related_crypto_assets_merge_with_deprecated_fields() {
+        let sbom = parse_json(
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.7","components":[
+                {"type":"cryptographic-asset","name":"proto","cryptoProperties":{
+                    "assetType":"protocol","protocolProperties":{"type":"tls","version":"1.3",
+                    "cryptoRefArray":["a","b"],
+                    "relatedCryptographicAssets":[{"type":"algorithm","ref":"b"},
+                        {"type":"algorithm","ref":"c"},{"type":"algorithm","ref":" "},
+                        {"type":"algorithm"}]}}},
+                {"type":"cryptographic-asset","name":"cert","cryptoProperties":{
+                    "assetType":"certificate","certificateProperties":{
+                    "signatureAlgorithmRef":"legacy-sig","certificateExtension":"crt",
+                    "certificateFileExtension":"pem",
+                    "relatedCryptographicAssets":[{"type":"Algorithm","ref":"new-sig"},
+                        {"type":"publicKey","ref":"pk"}]}}}]}"#,
+        );
+        let cp = |name: &str| component(&sbom, name).crypto_properties.clone().unwrap();
+
+        let proto = cp("proto").protocol_properties.unwrap();
+        assert_eq!(proto.crypto_ref_array, ["a", "b", "c"]);
+        assert_eq!(
+            proto.related_crypto_assets.len(),
+            2,
+            "ref-less entries dropped"
+        );
+
+        let cert = cp("cert").certificate_properties.unwrap();
+        assert_eq!(cert.signature_algorithm_ref.as_deref(), Some("legacy-sig"));
+        assert_eq!(cert.signature_algorithm_refs(), ["legacy-sig", "new-sig"]);
+        assert_eq!(cert.subject_public_key_ref.as_deref(), Some("pk"));
+        assert_eq!(cert.certificate_extension.as_deref(), Some("pem"));
     }
 
     /// Real-world emitters (and the repo's own demo fixtures) reference
@@ -4677,7 +6783,7 @@ mod tests {
         );
         assert_eq!(sbom.component_count(), 3, "app + 2 services");
         let svc = component(&sbom, "api-gateway");
-        assert!(matches!(&svc.component_type, ComponentType::Other(t) if t == "service"));
+        assert_eq!(svc.component_type, ComponentType::Service);
         assert_eq!(
             svc.supplier.as_ref().map(|s| s.name.as_str()),
             Some("Acme SaaS")
@@ -4777,5 +6883,365 @@ mod tests {
             "id-less vulnerability must fall back to its reference id"
         );
         component(&sbom, "api");
+    }
+
+    /// The `externalReference.type` enum of bom-1.7.schema.json, which
+    /// contains every value of 1.4, 1.5 and 1.6.
+    const CDX_EXTERNAL_REF_TYPES: &[&str] = &[
+        "vcs",
+        "issue-tracker",
+        "website",
+        "advisories",
+        "bom",
+        "mailing-list",
+        "social",
+        "chat",
+        "documentation",
+        "support",
+        "source-distribution",
+        "distribution",
+        "distribution-intake",
+        "license",
+        "build-meta",
+        "build-system",
+        "release-notes",
+        "security-contact",
+        "model-card",
+        "log",
+        "configuration",
+        "evidence",
+        "formulation",
+        "attestation",
+        "threat-model",
+        "adversary-model",
+        "risk-assessment",
+        "vulnerability-assertion",
+        "exploitability-statement",
+        "pentest-report",
+        "static-analysis-report",
+        "dynamic-analysis-report",
+        "runtime-analysis-report",
+        "component-analysis-report",
+        "maturity-report",
+        "certification-report",
+        "codified-infrastructure",
+        "quality-metrics",
+        "poam",
+        "electronic-signature",
+        "digital-signature",
+        "rfc-9116",
+        "patent",
+        "patent-family",
+        "patent-assertion",
+        "citation",
+        "other",
+    ];
+
+    /// The CycloneDX values the model has no variant for.
+    const CDX_TYPES_WITHOUT_VARIANT: &[&str] = &[
+        "source-distribution",
+        "poam",
+        "electronic-signature",
+        "digital-signature",
+        "rfc-9116",
+        "other",
+    ];
+
+    /// Every CycloneDX external-reference type maps to the variant that
+    /// displays as it, so the CycloneDX writer emits the same value back;
+    /// the six values without a variant stay `Other`, verbatim.
+    #[test]
+    fn every_cyclonedx_external_ref_type_round_trips() {
+        assert_eq!(CDX_EXTERNAL_REF_TYPES.len(), 47, "bom-1.7 has 47 types");
+        for value in CDX_EXTERNAL_REF_TYPES {
+            let mapped = map_cdx_external_ref_type(value);
+            assert_eq!(mapped.to_string(), *value, "{value} must display as itself");
+            assert_eq!(
+                matches!(mapped, ExternalRefType::Other(_)),
+                CDX_TYPES_WITHOUT_VARIANT.contains(value),
+                "{value}: mapped to {mapped:?}"
+            );
+        }
+        // The evidence kinds the CRA, EUCC and SSDF checks read.
+        for (value, expected) in [
+            ("attestation", ExternalRefType::Attestation),
+            ("certification-report", ExternalRefType::Certification),
+            ("risk-assessment", ExternalRefType::RiskAssessment),
+            (
+                "vulnerability-assertion",
+                ExternalRefType::VulnerabilityAssertion,
+            ),
+            (
+                "exploitability-statement",
+                ExternalRefType::ExploitabilityStatement,
+            ),
+            ("build-system", ExternalRefType::BuildSystem),
+        ] {
+            assert_eq!(map_cdx_external_ref_type(value), expected);
+        }
+    }
+
+    /// `externalReferences[].hashes` are kept, from JSON and XML, on
+    /// components and services alike (they were dropped until v0.4.0).
+    #[test]
+    fn external_reference_hashes_are_kept() {
+        let digest = "9a3f2c1b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170f6e5d4c";
+        let json = format!(
+            r#"{{
+              "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+              "components": [{{"type": "application", "bom-ref": "app", "name": "app",
+                "externalReferences": [{{"type": "attestation",
+                  "url": "https://example.com/eu-doc.pdf",
+                  "hashes": [{{"alg": "SHA-256", "content": "{digest}"}},
+                             {{"alg": "SHA-512", "content": "{digest}{digest}"}}]}},
+                  {{"type": "vcs", "url": "https://example.com/app.git"}}]}}],
+              "services": [{{"bom-ref": "svc", "name": "api",
+                "externalReferences": [{{"type": "certification-report",
+                  "url": "https://example.com/cert.pdf",
+                  "hashes": [{{"alg": "SHA-256", "content": "{digest}"}}]}}]}}]
+            }}"#
+        );
+        let xml = format!(
+            r#"<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="application" bom-ref="app">
+      <name>app</name>
+      <externalReferences>
+        <reference type="attestation">
+          <url>https://example.com/eu-doc.pdf</url>
+          <hashes><hash alg="SHA-256">{digest}</hash><hash alg="SHA-512">{digest}{digest}</hash></hashes>
+        </reference>
+        <reference type="vcs"><url>https://example.com/app.git</url></reference>
+      </externalReferences>
+    </component>
+  </components>
+  <services>
+    <service bom-ref="svc">
+      <name>api</name>
+      <externalReferences>
+        <reference type="certification-report">
+          <url>https://example.com/cert.pdf</url>
+          <hashes><hash alg="SHA-256">{digest}</hash></hashes>
+        </reference>
+      </externalReferences>
+    </service>
+  </services>
+</bom>"#
+        );
+        let from_json = CycloneDxParser::new()
+            .parse_str(&json)
+            .expect("JSON should parse");
+        let from_xml = parse(&xml);
+        let digest512 = format!("{digest}{digest}");
+        for (label, sbom) in [("JSON", &from_json), ("XML", &from_xml)] {
+            let refs = &component(sbom, "app").external_refs;
+            assert_eq!(refs[0].ref_type, ExternalRefType::Attestation, "{label}");
+            assert_eq!(
+                refs[0]
+                    .hashes
+                    .iter()
+                    .map(|h| (h.algorithm.clone(), h.value.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (HashAlgorithm::Sha256, digest),
+                    (HashAlgorithm::Sha512, digest512.as_str()),
+                ],
+                "{label}: attestation hashes"
+            );
+            assert!(refs[1].hashes.is_empty(), "{label}: a hash-less reference");
+            let service_refs = &component(sbom, "api").external_refs;
+            assert_eq!(service_refs[0].ref_type, ExternalRefType::Certification);
+            assert_eq!(service_refs[0].hashes.len(), 1, "{label}: service hashes");
+        }
+    }
+
+    /// The remediation record follows the vulnerability's remediation text
+    /// (`recommendation`, else `workaround`) and its declared
+    /// `analysis.response`, in JSON and XML alike. No CycloneDX field is a
+    /// fixed version, so none is ever set.
+    #[test]
+    fn remediation_follows_text_and_declared_response() {
+        // (id, recommendation, workaround, responses, expected type and description)
+        type Case = (
+            &'static str,
+            Option<&'static str>,
+            Option<&'static str>,
+            &'static [&'static str],
+            Option<(RemediationType, Option<&'static str>)>,
+        );
+        let cases: &[Case] = &[
+            (
+                "CVE-1",
+                Some("Upgrade to 2.0"),
+                None,
+                &[],
+                Some((RemediationType::Upgrade, Some("Upgrade to 2.0"))),
+            ),
+            (
+                "CVE-2",
+                None,
+                Some("Disable the parser"),
+                &[],
+                Some((RemediationType::Workaround, Some("Disable the parser"))),
+            ),
+            (
+                "CVE-3",
+                Some("Apply the vendor mitigation"),
+                Some("Disable the parser"),
+                &["workaround_available"],
+                Some((
+                    RemediationType::Workaround,
+                    Some("Apply the vendor mitigation"),
+                )),
+            ),
+            (
+                "CVE-4",
+                None,
+                None,
+                &["update"],
+                Some((RemediationType::Upgrade, None)),
+            ),
+            (
+                "CVE-5",
+                None,
+                Some("  "),
+                &["workaround_available"],
+                Some((RemediationType::Workaround, None)),
+            ),
+            ("CVE-6", None, None, &["will_not_fix", "can_not_fix"], None),
+            ("CVE-7", None, None, &["rollback"], None),
+            ("CVE-8", None, None, &[], None),
+        ];
+        let json_vulns: Vec<serde_json::Value> = cases
+            .iter()
+            .map(|(id, recommendation, workaround, responses, _)| {
+                let mut v = serde_json::json!({ "id": id, "affects": [{ "ref": "lib" }] });
+                if let Some(text) = recommendation {
+                    v["recommendation"] = serde_json::json!(text);
+                }
+                if let Some(text) = workaround {
+                    v["workaround"] = serde_json::json!(text);
+                }
+                if !responses.is_empty() {
+                    v["analysis"] =
+                        serde_json::json!({ "state": "exploitable", "response": responses });
+                }
+                v
+            })
+            .collect();
+        let json = serde_json::json!({
+            "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+            "components": [{ "type": "library", "bom-ref": "lib", "name": "lib", "version": "1.0" }],
+            "vulnerabilities": json_vulns,
+        })
+        .to_string();
+        let xml_vulns: String = cases
+            .iter()
+            .map(|(id, recommendation, workaround, responses, _)| {
+                let recommendation = recommendation
+                    .map(|t| format!("<recommendation>{t}</recommendation>"))
+                    .unwrap_or_default();
+                let workaround = workaround
+                    .map(|t| format!("<workaround>{t}</workaround>"))
+                    .unwrap_or_default();
+                let analysis = if responses.is_empty() {
+                    String::new()
+                } else {
+                    let responses: String = responses
+                        .iter()
+                        .map(|r| format!("<response>{r}</response>"))
+                        .collect();
+                    format!("<analysis><state>exploitable</state><responses>{responses}</responses></analysis>")
+                };
+                format!(
+                    "<vulnerability><id>{id}</id>{recommendation}{workaround}{analysis}\
+                     <affects><target><ref>lib</ref></target></affects></vulnerability>"
+                )
+            })
+            .collect();
+        let xml = format!(
+            r#"<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components><component type="library" bom-ref="lib"><name>lib</name><version>1.0</version></component></components>
+  <vulnerabilities>{xml_vulns}</vulnerabilities>
+</bom>"#
+        );
+        let from_json = CycloneDxParser::new()
+            .parse_str(&json)
+            .expect("JSON should parse");
+        let from_xml = parse(&xml);
+        for (label, sbom) in [("JSON", &from_json), ("XML", &from_xml)] {
+            let lib = component(sbom, "lib");
+            for (id, _, _, _, expected) in cases {
+                let vuln = lib
+                    .vulnerabilities
+                    .iter()
+                    .find(|v| v.id == *id)
+                    .unwrap_or_else(|| panic!("{label}: {id} attached"));
+                let got = vuln.remediation.as_ref().map(|r| {
+                    assert_eq!(r.fixed_version, None, "{label} {id}: no fixed version");
+                    (r.remediation_type.clone(), r.description.as_deref())
+                });
+                assert_eq!(got, *expected, "{label} {id}");
+            }
+        }
+    }
+
+    /// JSON and XML read every external-reference type the same way.
+    #[test]
+    fn external_ref_types_read_alike_from_json_and_xml() {
+        let json_refs: Vec<serde_json::Value> = CDX_EXTERNAL_REF_TYPES
+            .iter()
+            .map(|t| serde_json::json!({ "type": t, "url": format!("https://example.com/{t}") }))
+            .collect();
+        let json = serde_json::json!({
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.7",
+            "version": 1,
+            "components": [{
+                "type": "library",
+                "bom-ref": "lib",
+                "name": "lib",
+                "externalReferences": json_refs,
+            }],
+        })
+        .to_string();
+        let xml_refs: String = CDX_EXTERNAL_REF_TYPES
+            .iter()
+            .map(|t| {
+                format!(r#"<reference type="{t}"><url>https://example.com/{t}</url></reference>"#)
+            })
+            .collect();
+        let xml = format!(
+            r#"<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.7" version="1">
+  <components>
+    <component type="library" bom-ref="lib">
+      <name>lib</name>
+      <externalReferences>{xml_refs}</externalReferences>
+    </component>
+  </components>
+</bom>"#
+        );
+        let from_json = CycloneDxParser::new()
+            .parse_str(&json)
+            .expect("JSON should parse");
+        let from_xml = parse(&xml);
+        let types = |sbom: &NormalizedSbom| -> Vec<ExternalRefType> {
+            component(sbom, "lib")
+                .external_refs
+                .iter()
+                .map(|r| r.ref_type.clone())
+                .collect()
+        };
+        assert_eq!(types(&from_json), types(&from_xml));
+        assert_eq!(
+            types(&from_json),
+            CDX_EXTERNAL_REF_TYPES
+                .iter()
+                .map(|t| map_cdx_external_ref_type(t))
+                .collect::<Vec<_>>()
+        );
     }
 }

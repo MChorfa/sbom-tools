@@ -13,8 +13,9 @@
 //!   guarantee. Passing every check does not certify an AI-BOM as BSI/G7
 //!   conformant; it reports which minimum elements are declared.
 //! - When the SBOM carries no ML-model or dataset metadata the profile is
-//!   *not applicable* and returns a single informational finding rather than
-//!   failing every non-AI SBOM (mirrors the EU-AI-Act non-AI guard exactly).
+//!   *not applicable*: the result's applicability says so, with the reason,
+//!   and no finding is reported, rather than failing every non-AI SBOM
+//!   (mirrors the EU-AI-Act non-AI guard exactly).
 //! - Some clusters (data-flow, AI-specific security controls, exploitability
 //!   references) have no home in the model yet; those elements emit an
 //!   informational "not declared" finding so the readiness scorecard stays
@@ -28,16 +29,19 @@ use super::ai_shared::{ai_bom_scope, has_model_card_ref, push_untyped_ml_warning
 use super::*;
 use crate::model::{ComponentType, CreatorType, HashAlgorithm};
 
+/// Why the profile does not apply to an SBOM without AI/ML content: the
+/// result's not-applicable reason.
+const NOT_APPLICABLE_REASON: &str = "[BSI-AI] Not applicable: SBOM contains no \
+     machine-learning-model components, ML-model metadata, or AI-dataset evidence, so BSI/G7 \
+     SBOM-for-AI minimum-elements readiness cannot be assessed (readiness profile, not a \
+     legal-conformity guarantee)";
+
 impl ComplianceChecker {
     // ════════════════════════════════════════════════════════════════════
     // BSI/G7 SBOM-for-AI Minimum Elements readiness
     // ════════════════════════════════════════════════════════════════════
 
-    pub(crate) fn check_bsi_sbom_for_ai(
-        &self,
-        sbom: &NormalizedSbom,
-        violations: &mut Vec<Violation>,
-    ) {
+    pub(crate) fn check_bsi_sbom_for_ai(&self, sbom: &NormalizedSbom, findings: &mut Findings) {
         // ML-model and dataset components drive the readiness checks. The
         // classification and the N/A gate are shared with the EU-AI-Act
         // profile (compliance/ai_shared.rs) so the two profiles scope
@@ -47,27 +51,14 @@ impl ComplianceChecker {
         // dataset and must not fail the MUST dataset elements).
         let scope = ai_bom_scope(sbom);
 
-        // N/A gate: no AI/ML content at all → single informational finding,
-        // never a failure (a non-AI SBOM is simply out of scope here). Mirrors
-        // the EU-AI-Act non-AI guard exactly.
+        // N/A gate: no AI/ML content at all → the profile does not apply,
+        // never a failure (a non-AI SBOM is simply out of scope here).
+        // Mirrors the EU-AI-Act non-AI guard exactly.
         if !scope.is_applicable() {
-            violations.push(Violation {
-                severity: ViolationSeverity::Info,
-                category: ViolationCategory::DocumentMetadata,
-                message: "[BSI-AI] Not applicable: SBOM contains no machine-learning-model \
-                          components, ML-model metadata, or AI-dataset evidence, so BSI/G7 \
-                          SBOM-for-AI minimum-elements readiness cannot be assessed (readiness \
-                          profile, not a legal-conformity guarantee)"
-                    .to_string(),
-                element: None,
-                requirement: "BSI/G7 SBOM-for-AI: applicability".to_string(),
-                rule_id: "SBOM-BSIAI-NA",
-                component_id: None,
-                counts: None,
-                standard_refs: Vec::new(),
-            });
+            findings.not_applicable(NOT_APPLICABLE_REASON);
             return;
         }
+        let violations = &mut findings.violations;
 
         // Evasion guard: ML-looking components (pkg:huggingface PURL or
         // model-card reference) that are neither typed machine-learning-model
@@ -89,7 +80,7 @@ impl ComplianceChecker {
 
         self.check_bsiai_metadata_cluster(sbom, violations);
         self.check_bsiai_system_level_cluster(sbom, &ml_components, violations);
-        self.check_bsiai_models_cluster(&ml_components, violations);
+        self.check_bsiai_models_cluster(sbom, &ml_components, violations);
         self.check_bsiai_datasets_cluster(&dataset_components, violations);
         self.check_bsiai_infrastructure_cluster(sbom, &ml_components, violations);
         self.check_bsiai_security_cluster(violations);
@@ -113,6 +104,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -134,6 +127,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -153,6 +148,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -173,6 +170,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -190,6 +189,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -227,18 +228,16 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
         // Producer / supplier of the AI system (SHOULD). Satisfied when the
         // primary component (or, lacking one, any ML component) declares a
         // supplier/author, or the document carries an organization creator.
-        let producer_known = sbom
-            .primary_component()
-            .is_some_and(|c| c.supplier.is_some() || c.author.is_some())
-            || ml_components
-                .iter()
-                .any(|c| c.supplier.is_some() || c.author.is_some())
+        let producer_known = sbom.primary_component().is_some_and(has_known_producer)
+            || ml_components.iter().any(|c| has_known_producer(c))
             || sbom
                 .document
                 .creators
@@ -257,6 +256,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -274,6 +275,8 @@ impl ComplianceChecker {
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
 
@@ -282,6 +285,7 @@ impl ComplianceChecker {
     /// card, architecture, training datasets, limitations, and license.
     fn check_bsiai_models_cluster(
         &self,
+        sbom: &NormalizedSbom,
         ml_components: &[&crate::model::Component],
         violations: &mut Vec<Violation>,
     ) {
@@ -298,10 +302,13 @@ impl ComplianceChecker {
 
         for c in ml_components {
             let ml = c.ml_model.as_ref();
-            if c.name.trim().is_empty() {
+            // Name, version and license need real values: a placeholder
+            // (TBD, N/A) or a sentinel (NOASSERTION) declares nothing, as
+            // in every other profile's presence checks.
+            if !has_known_name(c) {
                 without_name.push(c.canonical_id.to_string());
             }
-            if c.version.as_ref().is_none_or(|v| v.trim().is_empty()) {
+            if !has_known_value(&c.version) {
                 without_version.push(c.name.clone());
             }
             if !c.identifiers.has_cra_identifier() {
@@ -331,8 +338,9 @@ impl ComplianceChecker {
             if !has_architecture {
                 without_architecture.push(c.name.clone());
             }
-            // Training datasets referenced (AI-003).
-            if ml.is_none_or(|m| m.training_datasets.is_empty()) {
+            // Training datasets referenced (AI-003): modelParameters.datasets or
+            // dataset-evidenced components nested under the model.
+            if !super::ai_shared::declares_training_datasets(sbom, c) {
                 without_datasets.push(c.name.clone());
             }
             // Limitations stated (AI-008).
@@ -340,7 +348,7 @@ impl ComplianceChecker {
                 without_limitations.push(c.name.clone());
             }
             // License present.
-            if c.licenses.declared.is_empty() && c.licenses.concluded.is_none() {
+            if !has_known_license(c) {
                 without_license.push(c.name.clone());
             }
         }
@@ -466,7 +474,7 @@ impl ComplianceChecker {
         let mut without_provenance = Vec::new();
 
         for c in dataset_components {
-            if c.name.trim().is_empty() {
+            if !has_known_name(c) {
                 without_name.push(c.canonical_id.to_string());
             }
             if !c.identifiers.has_cra_identifier() {
@@ -475,7 +483,7 @@ impl ComplianceChecker {
             if c.hashes.is_empty() {
                 without_hash.push(c.name.clone());
             }
-            if c.licenses.declared.is_empty() && c.licenses.concluded.is_none() {
+            if !has_known_license(c) {
                 without_license.push(c.name.clone());
             }
             let ds = c.dataset.as_ref();
@@ -606,6 +614,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }
@@ -626,6 +636,8 @@ impl ComplianceChecker {
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
         violations.push(Violation {
             severity: ViolationSeverity::Info,
@@ -639,8 +651,18 @@ impl ComplianceChecker {
             component_id: None,
             counts: None,
             standard_refs: Vec::new(),
+            remediation: None,
+            finding_detail: None,
         });
     }
+}
+
+/// Whether a model or dataset carries a real name: one the component-name
+/// checks accept (`known_component_name`: not empty, not `NOASSERTION`, and
+/// `NONE` / `UNKNOWN` only when the PURL names the package so) that is not a
+/// placeholder such as `TBD` or `N/A` either.
+fn has_known_name(c: &crate::model::Component) -> bool {
+    known_component_name(c) && !is_placeholder(&c.name)
 }
 
 /// NIST-approved cryptographic hash gate (SHA-256 or stronger). Reuses the
@@ -699,6 +721,8 @@ fn push_model_finding(
             total,
         }),
         standard_refs: Vec::new(),
+        remediation: None,
+        finding_detail: None,
     });
 }
 
@@ -708,6 +732,14 @@ mod tests {
     use crate::model::{
         Component, DatasetInfo, DatasetRef, Hash, HashAlgorithm, MlModelInfo, Organization,
     };
+
+    /// Pinned to the shared test clock (tests/common/clock.rs).
+    fn checker(level: ComplianceLevel) -> ComplianceChecker {
+        let as_of = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+            .expect("valid instant")
+            .with_timezone(&chrono::Utc);
+        ComplianceChecker::new(level).with_as_of(as_of)
+    }
 
     fn full_ml_component(name: &str) -> Component {
         let mut c = Component::new(name.to_string(), name.to_string())
@@ -778,17 +810,17 @@ mod tests {
         sw.component_type = ComponentType::Library;
         add(&mut sbom, sw);
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         assert!(result.is_compliant, "non-AI SBOM must not fail BSI-AI");
-        assert_eq!(result.error_count, 0);
-        assert_eq!(
-            result.violations.len(),
-            1,
-            "exactly one informational N/A finding"
+        assert!(
+            result.violations.is_empty(),
+            "N/A is the result's applicability, not a finding: {:?}",
+            result.violations
         );
-        let v = &result.violations[0];
-        assert_eq!(v.rule_id, "SBOM-BSIAI-NA");
-        assert_eq!(v.severity, ViolationSeverity::Info);
+        assert_eq!(
+            result.applicability,
+            Applicability::NotApplicable(NOT_APPLICABLE_REASON.to_string())
+        );
     }
 
     #[test]
@@ -814,7 +846,7 @@ mod tests {
             DependencyType::DependsOn,
         ));
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         // No Error-severity (MUST) findings on a well-documented AI-BOM.
         assert!(
             result.is_compliant,
@@ -845,7 +877,7 @@ mod tests {
         let mut sbom = NormalizedSbom::default();
         add(&mut sbom, bare_ml_component("model-a"));
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
         // Bare model has no version, identifier, hash, model card, architecture,
         // datasets, limitations, or license.
@@ -873,7 +905,7 @@ mod tests {
             .push(Hash::new(HashAlgorithm::Md5, "abc".to_string()));
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
         assert!(
             ids.contains(&"SBOM-BSIAI-MODEL-HASH-ALGO"),
@@ -897,7 +929,7 @@ mod tests {
         });
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         assert!(
             !result
                 .violations
@@ -921,15 +953,14 @@ mod tests {
         cfg.component_type = ComponentType::Data;
         add(&mut sbom, cfg);
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         assert!(
             result.is_compliant,
             "web app with config data component must not fail BSI-AI; got {:?}",
             result.violations
         );
-        assert_eq!(result.error_count, 0);
-        assert_eq!(result.violations.len(), 1, "single N/A finding expected");
-        assert_eq!(result.violations[0].rule_id, "SBOM-BSIAI-NA");
+        assert!(!result.is_applicable());
+        assert!(result.violations.is_empty(), "{:?}", result.violations);
     }
 
     #[test]
@@ -946,7 +977,7 @@ mod tests {
         });
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         let ids: Vec<_> = result.violations.iter().map(|v| v.rule_id).collect();
         assert!(
             !ids.contains(&"SBOM-BSIAI-NA"),
@@ -977,7 +1008,7 @@ mod tests {
         });
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         assert!(
             !result
                 .violations
@@ -996,7 +1027,7 @@ mod tests {
             .with_purl("pkg:huggingface/google-bert/bert-base-uncased@1.0.0".to_string());
         add(&mut sbom, c);
 
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         assert!(
             !result
                 .violations
@@ -1023,7 +1054,7 @@ mod tests {
             c.dataset = Some(DatasetInfo::default());
             c
         });
-        let result = ComplianceChecker::new(ComplianceLevel::BsiSbomForAi).check(&sbom);
+        let result = checker(ComplianceLevel::BsiSbomForAi).check(&sbom);
         for v in &result.violations {
             assert!(
                 super::super::rule_meta(v.rule_id).is_some(),

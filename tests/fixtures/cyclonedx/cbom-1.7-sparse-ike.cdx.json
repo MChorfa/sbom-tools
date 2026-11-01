@@ -1,0 +1,51 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:2f7c9a41-6e3b-4d58-a0c2-93e1b5d7f046",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-09-16T00:00:00Z",
+    "tools": { "components": [{ "type": "application", "name": "ike-scanner", "version": "1.0.0" }] }
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ike",
+      "name": "IKEv1",
+      "cryptoProperties": { "assetType": "protocol", "protocolProperties": { "type": "ike", "version": "1.0" } }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ssh",
+      "name": "SSH",
+      "cryptoProperties": { "assetType": "protocol", "protocolProperties": { "type": "ssh", "version": "2.0" } }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/hmac-sha1",
+      "name": "HMAC_SHA1",
+      "cryptoProperties": { "assetType": "algorithm", "algorithmProperties": { "primitive": "mac" } }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/modp1024",
+      "name": "modp1024",
+      "cryptoProperties": { "assetType": "algorithm", "algorithmProperties": { "primitive": "key-agree" } }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/aes-128-cbc",
+      "name": "AES-128-CBC",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": { "primitive": "block-cipher", "algorithmFamily": "AES", "parameterSetIdentifier": "128", "mode": "cbc" }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/3des",
+      "name": "3DES",
+      "cryptoProperties": { "assetType": "algorithm", "algorithmProperties": { "primitive": "block-cipher" } }
+    }
+  ]
+}

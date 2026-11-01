@@ -56,6 +56,45 @@ pub enum VerifyAction {
         )]
         format: String,
     },
+    /// Validate a versioned pipeline shard receipt
+    Receipt {
+        /// Receipt JSON file (pipeline-shard-receipt/v1)
+        file: PathBuf,
+        /// Output format (table or json)
+        #[arg(
+            short = 'f',
+            long = "output",
+            alias = "format",
+            default_value = "table"
+        )]
+        format: String,
+    },
+    /// Aggregate receipts from a JSON file or directory using a strict policy JSON file.
+    ReceiptAggregate {
+        /// Receipt JSON file, or a directory whose *.json files are all receipts
+        receipts: PathBuf,
+        /// Aggregate policy JSON file (aggregate-policy/v1)
+        #[arg(long)]
+        policy: PathBuf,
+        /// Output format (table or json)
+        #[arg(
+            short = 'f',
+            long = "output",
+            alias = "format",
+            default_value = "table"
+        )]
+        format: String,
+    },
+    /// Generate an unsigned receipt from a strict, digest-free JSON descriptor.
+    ReceiptGenerate {
+        /// Descriptor JSON file (pipeline-shard-receipt-input/v1); relative
+        /// source_root/artifact_root paths resolve against the working directory
+        #[arg(long)]
+        input: PathBuf,
+        /// Path for the new receipt; an existing file is never overwritten
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 /// Run the verify command.
@@ -219,5 +258,152 @@ pub fn run_verify(action: VerifyAction, quiet: bool) -> Result<i32> {
                 Ok(exit_codes::SUCCESS)
             }
         }
+        VerifyAction::Receipt { file, format } => {
+            let json = format == "json";
+            let verdict = contract_verdict(crate::verification::check_receipt(&file))?;
+            if json {
+                let value = serde_json::json!({
+                    "file": file.display().to_string(),
+                    "valid": verdict.is_ok(),
+                    "error": verdict.as_ref().err(),
+                });
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            match verdict {
+                Ok(()) => {
+                    if !quiet && !json {
+                        println!("Receipt valid: {}", file.display());
+                    }
+                    Ok(exit_codes::SUCCESS)
+                }
+                Err(message) => {
+                    eprintln!("receipt verification failed: {message}");
+                    Ok(exit_codes::CHANGES_DETECTED)
+                }
+            }
+        }
+        VerifyAction::ReceiptAggregate {
+            receipts,
+            policy,
+            format,
+        } => {
+            let json = format == "json";
+            let verdict = aggregate_receipt_files(&receipts, &policy)?;
+            if json {
+                let value = match &verdict {
+                    Ok(summary) => serde_json::json!({
+                        "valid": true,
+                        "receipt_count": summary.receipt_count,
+                        "artifact_count": summary.artifact_count,
+                        "error": null,
+                    }),
+                    Err(message) => serde_json::json!({
+                        "valid": false,
+                        "receipt_count": null,
+                        "artifact_count": null,
+                        "error": message,
+                    }),
+                };
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            match verdict {
+                Ok(_) => {
+                    if !quiet && !json {
+                        println!("Receipts valid");
+                    }
+                    Ok(exit_codes::SUCCESS)
+                }
+                Err(message) => {
+                    eprintln!("receipt aggregation failed: {message}");
+                    Ok(exit_codes::CHANGES_DETECTED)
+                }
+            }
+        }
+        VerifyAction::ReceiptGenerate { input, output } => {
+            let verdict = contract_verdict(
+                crate::verification::read_contract_json::<
+                    crate::verification::ReceiptGenerationInput,
+                >(&input)
+                .and_then(crate::verification::generate_receipt_from_descriptor)
+                .and_then(|receipt| crate::verification::write_receipt(&output, &receipt)),
+            )?;
+            match verdict {
+                Ok(()) => {
+                    if !quiet {
+                        println!("Receipt generated: {}", output.display());
+                    }
+                    Ok(exit_codes::SUCCESS)
+                }
+                Err(message) => {
+                    eprintln!("receipt generation failed: {message}");
+                    Ok(exit_codes::CHANGES_DETECTED)
+                }
+            }
+        }
     }
+}
+
+/// Split a receipt result into the exit contract: a `Contract` violation is a
+/// verdict (`Ok(Err(message))`, exit 1); I/O and malformed JSON stay
+/// operational errors (`Err`, exit 3).
+fn contract_verdict<T>(
+    result: Result<T, crate::verification::ReceiptError>,
+) -> Result<std::result::Result<T, String>> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(crate::verification::ReceiptError::Contract(message)) => Ok(Err(message)),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Load the policy and every receipt, then aggregate. Policy and receipt
+/// contract violations are verdicts; unreadable or malformed files are
+/// operational errors.
+fn aggregate_receipt_files(
+    receipts: &std::path::Path,
+    policy: &std::path::Path,
+) -> Result<std::result::Result<crate::verification::AggregateVerification, String>> {
+    let policy = match contract_verdict(crate::verification::read_contract_json::<
+        crate::verification::AggregatePolicy,
+    >(policy))?
+    {
+        Ok(policy) => policy,
+        Err(message) => return Ok(Err(message)),
+    };
+    let mut loaded = Vec::new();
+    for path in receipt_paths(receipts)? {
+        match contract_verdict(crate::verification::read_receipt(&path))? {
+            Ok(receipt) => loaded.push(receipt),
+            Err(message) => return Ok(Err(message)),
+        }
+    }
+    contract_verdict(crate::verification::aggregate_receipts(&loaded, &policy))
+}
+
+fn receipt_paths(path: &std::path::Path) -> Result<Vec<PathBuf>> {
+    if path.is_file() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    if !path.is_dir() {
+        anyhow::bail!(
+            "receipt input is not a file or directory: {}",
+            path.display()
+        );
+    }
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() && entry.path().extension().is_some_and(|ext| ext == "json")
+        {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    if paths.is_empty() {
+        anyhow::bail!(
+            "receipt directory contains no JSON files: {}",
+            path.display()
+        );
+    }
+    Ok(paths)
 }

@@ -1,0 +1,24 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "file-only",
+  "documentNamespace": "https://example.com/spdx/file-only-6f1b2c3d",
+  "creationInfo": {
+    "created": "2026-10-01T00:00:00Z",
+    "creators": ["Organization: Example Corp (sbom@example.com)", "Tool: example-generator-1.0.0"]
+  },
+  "documentDescribes": ["SPDXRef-File-main"],
+  "files": [
+    {
+      "SPDXID": "SPDXRef-File-main",
+      "fileName": "./src/main.c",
+      "checksums": [{ "algorithm": "SHA256", "checksumValue": "3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a" }],
+      "licenseConcluded": "MIT",
+      "copyrightText": "NOASSERTION"
+    }
+  ],
+  "relationships": [
+    { "spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-File-main" }
+  ]
+}

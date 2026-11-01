@@ -26,7 +26,7 @@
 //! warning instead of letting "untype your models" evade the assessment.
 
 use super::{Violation, ViolationCategory, ViolationSeverity, truncate_list};
-use crate::model::{Component, ComponentType, ExternalRefType, NormalizedSbom};
+use crate::model::{Component, ComponentType, DependencyType, ExternalRefType, NormalizedSbom};
 
 /// The AI-BOM scope of an SBOM, as seen by the AI compliance profiles.
 pub(crate) struct AiBomScope<'a> {
@@ -52,9 +52,9 @@ pub(crate) struct AiBomScope<'a> {
 }
 
 impl AiBomScope<'_> {
-    /// Whether the AI profiles apply to this SBOM at all. Non-applicable
-    /// SBOMs get the single informational N/A finding
-    /// (`SBOM-AIACT-NA` / `SBOM-BSIAI-NA`) and never fail.
+    /// Whether the AI profiles apply to this SBOM at all. For a
+    /// non-applicable SBOM the profiles report no finding: their result is
+    /// not applicable, with the reason, and never fails.
     pub(crate) fn is_applicable(&self) -> bool {
         !self.ml_components.is_empty()
             || !self.dataset_components.is_empty()
@@ -72,6 +72,7 @@ pub(crate) fn ai_bom_scope(sbom: &NormalizedSbom) -> AiBomScope<'_> {
         dataset_components: Vec::new(),
         untyped_ml_components: Vec::new(),
     };
+    // All components: the loop selects ML models and datasets by type.
     for c in sbom.components.values() {
         let is_ml = c.component_type == ComponentType::MachineLearningModel || c.ml_model.is_some();
         if is_ml {
@@ -90,6 +91,38 @@ pub(crate) fn ai_bom_scope(sbom: &NormalizedSbom) -> AiBomScope<'_> {
         }
     }
     scope
+}
+
+/// Whether an ML model declares its training datasets.
+///
+/// Two spec-legal shapes count:
+///
+/// 1. `modelCard.modelParameters.datasets` (or the SPDX 3.0 `trainedOn`
+///    relationship) — parsed into [`crate::model::MlModelInfo::training_datasets`].
+/// 2. Dataset components nested under the model (CycloneDX `component.components`,
+///    surfaced as a `contains` edge) that carry real dataset evidence
+///    ([`Component::dataset`], i.e. a `data[]` block). Generators such as
+///    Manifest `aibom-gen` emit datasets this way instead of via `modelParameters`.
+///
+/// A bare nested `type: data` component with no `data[]` block is **not**
+/// accepted, consistent with [`ai_bom_scope`]: CycloneDX `data` also covers
+/// configuration bundles, so the type alone is not dataset evidence.
+pub(crate) fn declares_training_datasets(sbom: &NormalizedSbom, model: &Component) -> bool {
+    if model
+        .ml_model
+        .as_ref()
+        .is_some_and(|m| !m.training_datasets.is_empty())
+    {
+        return true;
+    }
+    sbom.get_dependencies(&model.canonical_id)
+        .into_iter()
+        .filter(|e| e.relationship == DependencyType::Contains)
+        .any(|e| {
+            sbom.components
+                .get(&e.to)
+                .is_some_and(|child| child.dataset.is_some())
+        })
 }
 
 /// Whether a component references a model card via an external reference
@@ -153,6 +186,8 @@ pub(crate) fn push_untyped_ml_warning(
         component_id: None,
         counts: None,
         standard_refs: Vec::new(),
+        remediation: None,
+        finding_detail: None,
     });
 }
 
@@ -181,6 +216,77 @@ mod tests {
         let scope = ai_bom_scope(&sbom);
         assert!(scope.dataset_components.is_empty());
         assert!(!scope.is_applicable());
+    }
+
+    #[test]
+    fn nested_dataset_with_evidence_satisfies_training_datasets() {
+        use crate::model::DependencyEdge;
+        let mut sbom = NormalizedSbom::default();
+        let mut model = component("llm");
+        model.component_type = ComponentType::MachineLearningModel;
+        let model_id = model.canonical_id.clone();
+        let mut data = component("alpaca");
+        data.component_type = ComponentType::Data;
+        data.dataset = Some(DatasetInfo::default());
+        let data_id = data.canonical_id.clone();
+        add(&mut sbom, model);
+        add(&mut sbom, data);
+        sbom.add_edge(DependencyEdge::new(
+            model_id.clone(),
+            data_id,
+            DependencyType::Contains,
+        ));
+
+        let model = &sbom.components[&model_id];
+        assert!(
+            declares_training_datasets(&sbom, model),
+            "a contained dataset component with evidence must count as a training dataset"
+        );
+    }
+
+    #[test]
+    fn bare_nested_data_component_does_not_satisfy_training_datasets() {
+        use crate::model::DependencyEdge;
+        // The Manifest aibom-gen shape: `type: data` children with properties
+        // only and no `data[]` block. Consistent with ai_bom_scope, the type
+        // alone is not dataset evidence.
+        let mut sbom = NormalizedSbom::default();
+        let mut model = component("llm");
+        model.component_type = ComponentType::MachineLearningModel;
+        let model_id = model.canonical_id.clone();
+        let mut data = component("alpaca");
+        data.component_type = ComponentType::Data;
+        let data_id = data.canonical_id.clone();
+        add(&mut sbom, model);
+        add(&mut sbom, data);
+        sbom.add_edge(DependencyEdge::new(
+            model_id.clone(),
+            data_id,
+            DependencyType::Contains,
+        ));
+
+        let model = &sbom.components[&model_id];
+        assert!(!declares_training_datasets(&sbom, model));
+    }
+
+    #[test]
+    fn model_parameters_datasets_satisfy_training_datasets() {
+        let mut sbom = NormalizedSbom::default();
+        let mut model = component("llm");
+        model.component_type = ComponentType::MachineLearningModel;
+        let mut ml = MlModelInfo::default();
+        ml.training_datasets.push(crate::model::DatasetRef {
+            reference: Some("ds-1".into()),
+            name: None,
+            purl: None,
+        });
+        model.ml_model = Some(ml);
+        let model_id = model.canonical_id.clone();
+        add(&mut sbom, model);
+        assert!(declares_training_datasets(
+            &sbom,
+            &sbom.components[&model_id]
+        ));
     }
 
     #[test]

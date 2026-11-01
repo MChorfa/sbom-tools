@@ -22,7 +22,7 @@ use sbom_tools::{
         MatrixConfig, MultiDiffConfig, OutputConfig, QueryConfig, TimelineConfig, ViewConfig,
         WatchConfig,
     },
-    pipeline::dirs,
+    pipeline::{dirs, exit_codes},
     quality::{ScoringProfile, StandardSelector},
     reports::{ReportFormat, ReportType},
     watch::parse_duration,
@@ -53,11 +53,12 @@ const fn build_long_version() -> &'static str {
 #[command(after_help = "EXIT CODES:
     0  Success / gate passed
     1  Gate failed: --fail-on-change, --min-score, --fail-on-noncompliant,
-       query with no matches, vex status/filter --actionable-only,
-       verify audit-hashes gate
-    2  Command-line usage error; also vulnerabilities introduced
-       (diff/view --fail-on-vuln)
-    3  Operational error (I/O, parse, config, invalid values)
+       validate errors (or N/A under --require-applicable), query with no
+       matches, vex status/filter --actionable-only, verify audit-hashes gate
+    2  Vulnerabilities introduced (diff/view --fail-on-vuln); compliance
+       warnings (validate --fail-on-warning)
+    3  Usage error (unknown flag or value, missing argument) or operational
+       error (I/O, parse, config, invalid values)
     4  VEX gaps found (--fail-on-vex-gap)
     5  License policy violations found (license-check)
     6  Actively exploited (KEV) vulnerability introduced (--fail-on-kev)
@@ -341,8 +342,9 @@ fn seed_vex_enrichment(
 #[command(after_help = "EXIT CODES:
     0  Success (changes alone exit 0 without --fail-on-change)
     1  Changes detected (--fail-on-change)
-    2  Vulnerabilities introduced (--fail-on-vuln); also CLI usage errors
-    3  Operational error (I/O, parse, config, invalid values)
+    2  Vulnerabilities introduced (--fail-on-vuln)
+    3  Usage error (unknown flag or value, missing argument) or operational
+       error (I/O, parse, config, invalid values)
     4  VEX gaps found (--fail-on-vex-gap)
     6  Actively exploited (KEV) vulnerability introduced (--fail-on-kev)
     7  ML performance metric regressed (--fail-on-ml-regression)
@@ -368,6 +370,27 @@ struct DiffArgs {
     /// Output file path (stdout if not specified)
     #[arg(short = 'O', long)]
     output_file: Option<PathBuf>,
+
+    /// Directory the SBOM path in `-o sarif` output is relative to. Defaults
+    /// to the repository the SBOM file is in (the nearest ancestor holding a
+    /// `.git`), else the current directory. Only `-o sarif` reads it
+    #[arg(long, value_name = "DIR")]
+    sarif_base: Option<PathBuf>,
+
+    /// Code-scanning category of `-o sarif` output (its
+    /// `automationDetails.id`). Defaults to one per command and standard set
+    /// or profile, such as `sbom-tools/cra+ntia/`; give each SBOM its own
+    /// when one workflow uploads results for several SBOMs checked the same
+    /// way. Only `-o sarif` reads it
+    #[arg(long, value_name = "CATEGORY")]
+    sarif_category: Option<String>,
+
+    /// The most results one `-o sarif` run keeps (default 25000, the most
+    /// GitHub code scanning accepts; 0 keeps every result). Beyond it the
+    /// least severe are omitted, with a warning in the run and on stderr.
+    /// Only `-o sarif` reads it
+    #[arg(long, value_name = "N")]
+    sarif_max_results: Option<usize>,
 
     /// Report types to include
     #[arg(long, default_value = "all")]
@@ -490,6 +513,27 @@ struct ViewArgs {
     #[arg(short = 'O', long)]
     output_file: Option<PathBuf>,
 
+    /// Directory the SBOM path in `-o sarif` output is relative to. Defaults
+    /// to the repository the SBOM file is in (the nearest ancestor holding a
+    /// `.git`), else the current directory. Only `-o sarif` reads it
+    #[arg(long, value_name = "DIR")]
+    sarif_base: Option<PathBuf>,
+
+    /// Code-scanning category of `-o sarif` output (its
+    /// `automationDetails.id`). Defaults to one per command and standard set
+    /// or profile, such as `sbom-tools/cra+ntia/`; give each SBOM its own
+    /// when one workflow uploads results for several SBOMs checked the same
+    /// way. Only `-o sarif` reads it
+    #[arg(long, value_name = "CATEGORY")]
+    sarif_category: Option<String>,
+
+    /// The most results one `-o sarif` run keeps (default 25000, the most
+    /// GitHub code scanning accepts; 0 keeps every result). Beyond it the
+    /// least severe are omitted, with a warning in the run and on stderr.
+    /// Only `-o sarif` reads it
+    #[arg(long, value_name = "N")]
+    sarif_max_results: Option<usize>,
+
     /// Validate against NTIA minimum elements
     #[arg(long)]
     validate_ntia: bool,
@@ -521,6 +565,8 @@ struct ViewArgs {
 
     /// CRA Annex III/IV product class (drives severity calibration).
     /// One of: default, important-class-1, important-class-2, critical.
+    /// Implementing Regulation (EU) 2025/2392 gives the technical
+    /// description of each class's product categories.
     /// Sidecar `productClass` wins over this flag.
     #[arg(long, value_name = "CLASS")]
     cra_product_class: Option<String>,
@@ -532,23 +578,36 @@ struct ViewArgs {
 /// Arguments for the `validate` subcommand
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
-    0  Compliant (no errors; no warnings with --fail-on-warning)
-    1  Compliance errors found (non-compliant)
-    2  Compliance warnings found (only with --fail-on-warning); also
-       command-line parse errors
-    3  Operational error (unsupported output format, invalid --as-of /
-       --cra-product-class / --cra-sidecar, broken config file, I/O)
+    0  Compliant (no errors; no warnings with --fail-on-warning). A standard
+       that does not apply to the SBOM (N/A) also exits 0, unless
+       --require-applicable
+    1  Compliance errors found (non-compliant), or a standard is N/A under
+       --require-applicable
+    2  Compliance warnings found (only with --fail-on-warning)
+    3  Usage error (unknown flag or standard, invalid flag value, missing
+       argument) or operational error (unsupported output format, invalid
+       --as-of / --cra-product-class / --cra-sidecar, broken config file, I/O)
 
-    The gate codes (0/1/warning-2) only apply to runs that completed a
+    The gate codes (0/1/2) only apply to runs that completed a
     validation — a nonzero exit is only a compliance verdict when the
     expected report was produced.
+
+JSON OUTPUT:
+    -o json emits the sbom-tools/compliance/v2 envelope (one object for any
+    number of standards; schema: schemas/compliance/v2.schema.json). The
+    pre-0.4 layout stays available with --json-schema v1 until v0.5.0.
+    Checks the SBOM passed (e.g. a NIST-approved PQC algorithm) are listed
+    under passed[], never as violations; -o sarif reports them only with
+    --sarif-include-passes.
 
 EXAMPLES:
     sbom-tools validate app.cdx.json                              # NTIA minimum
     sbom-tools validate app.cdx.json --standard cra,eo14028       # Multi-standard
+    sbom-tools validate app.cdx.json --standard ntia -o json      # JSON envelope v2
     sbom-tools validate app.cdx.json --standard ntia -o sarif     # SARIF for CI
     sbom-tools validate app.cdx.json --standard ntia -o oscal-json # OSCAL assessment results
-    sbom-tools validate app.cdx.json --fail-on-warning            # Strict CI gate")]
+    sbom-tools validate app.cdx.json --fail-on-warning            # Strict CI gate
+    sbom-tools validate ai.cdx.json --standard ai-act --require-applicable")]
 struct ValidateArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
@@ -581,9 +640,47 @@ struct ValidateArgs {
     #[arg(short = 'O', long)]
     output_file: Option<PathBuf>,
 
+    /// Directory the SBOM path in `-o sarif` output is relative to. Defaults
+    /// to the repository the SBOM file is in (the nearest ancestor holding a
+    /// `.git`), else the current directory. Only `-o sarif` reads it
+    #[arg(long, value_name = "DIR")]
+    sarif_base: Option<PathBuf>,
+
+    /// Code-scanning category of `-o sarif` output (its
+    /// `automationDetails.id`). Defaults to one per command and standard set
+    /// or profile, such as `sbom-tools/cra+ntia/`; give each SBOM its own
+    /// when one workflow uploads results for several SBOMs checked the same
+    /// way. Only `-o sarif` reads it
+    #[arg(long, value_name = "CATEGORY")]
+    sarif_category: Option<String>,
+
+    /// The most results one `-o sarif` run keeps (default 25000, the most
+    /// GitHub code scanning accepts; 0 keeps every result). Beyond it the
+    /// least severe are omitted, with a warning in the run and on stderr.
+    /// Only `-o sarif` reads it
+    #[arg(long, value_name = "N")]
+    sarif_max_results: Option<usize>,
+
     /// Exit with non-zero code when warnings are found (not just errors)
     #[arg(long)]
     fail_on_warning: bool,
+
+    /// Exit 1 (non-compliant) when a selected standard does not apply to the
+    /// SBOM, e.g. ai-act or bsi-ai on an SBOM without ML components. Without
+    /// it, such a standard is reported as N/A and exits 0
+    #[arg(long)]
+    require_applicable: bool,
+
+    /// Layout of `-o json`: v2 (default) is the sbom-tools/compliance/v2
+    /// envelope; v1 is the deprecated pre-0.4 layout, removed in v0.5.0
+    #[arg(long, value_enum, default_value_t = cli::ValidateJsonSchema::V2, value_name = "VERSION")]
+    json_schema: cli::ValidateJsonSchema,
+
+    /// With `-o sarif`, also report every check the SBOM passed (e.g. an
+    /// approved post-quantum algorithm) as a result of kind "pass", level
+    /// "none". Off by default: code scanning lists every result as an alert
+    #[arg(long)]
+    sarif_include_passes: bool,
 
     /// Output only a compact JSON summary (overrides --output)
     #[arg(long)]
@@ -598,6 +695,8 @@ struct ValidateArgs {
 
     /// CRA Annex III/IV product class (drives severity calibration).
     /// One of: default, important-class-1, important-class-2, critical.
+    /// Implementing Regulation (EU) 2025/2392 gives the technical
+    /// description of each class's product categories.
     /// Sidecar `productClass` wins over this flag.
     #[arg(long, value_name = "CLASS")]
     cra_product_class: Option<String>,
@@ -615,8 +714,8 @@ struct ValidateArgs {
 /// `diff-multi`, `timeline` and `matrix` have no summary/markdown/SARIF
 /// renderers — offering the full [`ReportFormat`] list in `--help` advertised
 /// formats that failed at runtime. Restricting the parser here makes `--help`
-/// honest and turns a bad value into a clap usage error (exit 2) listing the
-/// real choices, instead of an operational error (exit 3) after the SBOMs are
+/// honest and turns a bad value into a clap usage error listing the real
+/// choices before any SBOM is read, instead of a failure after the SBOMs are
 /// parsed. `cli::multi` still gates at runtime, which also covers a format
 /// arriving from the config file.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -643,7 +742,7 @@ impl From<MultiOutputFormat> for ReportFormat {
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
     Gates: 1 changes (--fail-on-change), 2 vulnerabilities (--fail-on-vuln),
-    4 VEX gaps (--fail-on-vex-gap). Operational errors exit 3.
+    4 VEX gaps (--fail-on-vex-gap). Usage and operational errors exit 3.
 
 EXAMPLES:
     sbom-tools diff-multi baseline.json target1.json target2.json
@@ -717,7 +816,7 @@ struct DiffMultiArgs {
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
     Gates: 1 changes (--fail-on-change), 2 vulnerabilities (--fail-on-vuln),
-    4 VEX gaps (--fail-on-vex-gap). Operational errors exit 3.
+    4 VEX gaps (--fail-on-vex-gap). Usage and operational errors exit 3.
 
 EXAMPLES:
     sbom-tools timeline v1.0.json v1.1.json v1.2.json             # Version evolution
@@ -784,7 +883,7 @@ struct TimelineArgs {
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
     Gates: 1 changes (--fail-on-change), 2 vulnerabilities (--fail-on-vuln),
-    4 VEX gaps (--fail-on-vex-gap). Operational errors exit 3.
+    4 VEX gaps (--fail-on-vex-gap). Usage and operational errors exit 3.
 
 EXAMPLES:
     sbom-tools matrix v1.json v2.json v3.json                     # NxN comparison
@@ -856,8 +955,8 @@ struct MatrixArgs {
 #[command(after_help = "EXIT CODES:
     0  Score meets --min-score (or no threshold) and, with --fail-on-noncompliant, the SBOM is compliant
     1  Overall score below --min-score, OR (with --fail-on-noncompliant) the SBOM is non-compliant
-    2  Command-line parse errors
-    3  Operational error (unsupported output format, invalid --as-of /
+    3  Usage error (unknown flag or value, missing argument) or operational
+       error (unsupported output format, invalid --as-of /
        --cra-product-class / --cra-sidecar, broken config file, I/O)
 
     The gate codes (0/1) only apply to runs that completed an assessment —
@@ -884,14 +983,36 @@ struct QualityArgs {
     profile: ScoringProfile,
 
     /// Output format (summary, json, sarif, sbomqs-json; auto = summary).
-    /// sbomqs-json emits interlynk-io/sbomqs `score --json`-shaped 0-10
-    /// scores for side-by-side comparison with sbomqs output.
+    /// sbomqs-json emits 0-10 scores in the shape of interlynk-io/sbomqs
+    /// v2.1.2 `score --legacy --json`, for side-by-side comparison with
+    /// sbomqs output.
     #[arg(short, long, default_value = "auto")]
     output: ReportFormat,
 
     /// Output file path (stdout if not specified)
     #[arg(short = 'O', long)]
     output_file: Option<PathBuf>,
+
+    /// Directory the SBOM path in `-o sarif` output is relative to. Defaults
+    /// to the repository the SBOM file is in (the nearest ancestor holding a
+    /// `.git`), else the current directory. Only `-o sarif` reads it
+    #[arg(long, value_name = "DIR")]
+    sarif_base: Option<PathBuf>,
+
+    /// Code-scanning category of `-o sarif` output (its
+    /// `automationDetails.id`). Defaults to one per command and standard set
+    /// or profile, such as `sbom-tools/cra+ntia/`; give each SBOM its own
+    /// when one workflow uploads results for several SBOMs checked the same
+    /// way. Only `-o sarif` reads it
+    #[arg(long, value_name = "CATEGORY")]
+    sarif_category: Option<String>,
+
+    /// The most results one `-o sarif` run keeps (default 25000, the most
+    /// GitHub code scanning accepts; 0 keeps every result). Beyond it the
+    /// least severe are omitted, with a warning in the run and on stderr.
+    /// Only `-o sarif` reads it
+    #[arg(long, value_name = "N")]
+    sarif_max_results: Option<usize>,
 
     /// Show detailed recommendations
     #[arg(long)]
@@ -918,6 +1039,8 @@ struct QualityArgs {
 
     /// CRA Annex III/IV product class (drives severity calibration).
     /// One of: default, important-class-1, important-class-2, critical.
+    /// Implementing Regulation (EU) 2025/2392 gives the technical
+    /// description of each class's product categories.
     /// Sidecar `productClass` wins over this flag.
     #[arg(long, value_name = "CLASS")]
     cra_product_class: Option<String>,
@@ -939,7 +1062,7 @@ struct QualityArgs {
 #[command(after_help = "EXIT CODES:
     0  At least one component matched the filter
     1  No components matched the filter
-    3  Error occurred
+    3  Usage or operational error
 
 EXAMPLES:
     sbom-tools query log4j fleet/*.json                            # Search by name
@@ -1343,13 +1466,55 @@ enum VerifyAction {
         )]
         format: TableJsonFormat,
     },
+    /// Validate a versioned pipeline shard receipt
+    Receipt {
+        /// Receipt JSON file (pipeline-shard-receipt/v1)
+        file: PathBuf,
+        /// Output format (table or json)
+        #[arg(
+            short = 'f',
+            long = "output",
+            alias = "format",
+            value_enum,
+            default_value = "table"
+        )]
+        format: TableJsonFormat,
+    },
+    /// Aggregate receipts from a JSON file or directory using a strict policy JSON file.
+    ReceiptAggregate {
+        /// Receipt JSON file, or a directory whose *.json files are all receipts
+        receipts: PathBuf,
+        /// Aggregate policy JSON file (aggregate-policy/v1)
+        #[arg(long)]
+        policy: PathBuf,
+        /// Output format (table or json)
+        #[arg(
+            short = 'f',
+            long = "output",
+            alias = "format",
+            value_enum,
+            default_value = "table"
+        )]
+        format: TableJsonFormat,
+    },
+    /// Generate an unsigned receipt from a strict, digest-free JSON descriptor.
+    ReceiptGenerate {
+        /// Descriptor JSON file (pipeline-shard-receipt-input/v1); relative
+        /// source_root/artifact_root paths resolve against the working directory
+        #[arg(long)]
+        input: PathBuf,
+        /// Path for the new receipt; an existing file is never overwritten
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 /// Arguments for the `license-check` subcommand
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
     0    License policy passed
-    3    Operational error (unreadable SBOM, parse failure, invalid policy file)
+    3    Usage or operational error (unknown flag, unreadable SBOM, parse
+         failure, invalid policy file)
     5    License policy violations (denied licenses; review-needed under --strict;
          propagation conflicts under --check-propagation)
 
@@ -1477,7 +1642,9 @@ struct ConvertArgs {
     /// SBOM file to convert
     file: PathBuf,
 
-    /// Target format: cyclonedx (1.7 JSON) or spdx (2.3 JSON)
+    /// Target format: cyclonedx (1.7 JSON), spdx (2.3 JSON), or normalized
+    /// (the canonical-model JSON payload, identical to what the C ABI and the
+    /// language bindings return)
     #[arg(long = "to")]
     to: String,
 
@@ -1538,6 +1705,8 @@ struct CraDocsArgs {
 
     /// CRA Annex III/IV product class.
     /// One of: default, important-class-1, important-class-2, critical.
+    /// Implementing Regulation (EU) 2025/2392 gives the technical
+    /// description of each class's product categories.
     /// Sidecar `productClass` wins.
     #[arg(long, value_name = "CLASS")]
     cra_product_class: Option<String>,
@@ -1757,21 +1926,47 @@ fn main() {
     reset_sigpipe();
 
     // Central operational-error exit: every anyhow error (I/O, parse, config,
-    // unsupported output format, invalid flag values) leaves with code 3, so
-    // it can never collide with gate codes (1 = verdict gates, 2 = clap usage
-    // errors and diff/view --fail-on-vuln, 4 = --fail-on-vex-gap, 5 =
-    // license-check denial, 6 = --fail-on-kev, 7 = diff ML regression).
+    // unsupported output format, invalid flag values) leaves with code 3 —
+    // as do clap usage errors (`exit_on_clap_error`) — so it can never
+    // collide with gate codes (1 = verdict gates, 2 = diff/view
+    // --fail-on-vuln and validate --fail-on-warning, 4 = --fail-on-vex-gap,
+    // 5 = license-check denial, 6 = --fail-on-kev, 7 = diff ML regression).
     if let Err(err) = run() {
         // Mirror the format the default `fn main() -> Result` termination
         // prints: message plus the "Caused by:" chain.
         eprintln!("Error: {err:?}");
-        std::process::exit(3);
+        std::process::exit(exit_codes::ERROR);
     }
 }
 
+/// Print a clap error and exit with the documented code.
+///
+/// `--help`, `--version` and the `help` subcommand are requests, not errors:
+/// their text goes to stdout and the exit code is 0. Every other clap error
+/// is a usage error and exits 3, including help printed because a required
+/// argument or subcommand is missing. Clap's own `Error::exit` uses 2, which
+/// is also the `validate --fail-on-warning` and `--fail-on-vuln` gate code,
+/// so a mistyped standard used to pass a pipeline that tolerates warnings.
+/// The message keeps clap's formatting; only the exit code differs.
+fn exit_on_clap_error(err: &clap::Error) -> ! {
+    use clap::error::ErrorKind;
+    // A closed stream is no reason to panic (clap's `Error::exit` also
+    // ignores this result).
+    let _ = err.print();
+    let code = match err.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => exit_codes::SUCCESS,
+        _ => exit_codes::ERROR,
+    };
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    std::process::exit(code);
+}
+
 fn run() -> Result<()> {
-    let matches = Cli::command().get_matches();
-    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    let matches = Cli::command()
+        .try_get_matches()
+        .unwrap_or_else(|e| exit_on_clap_error(&e));
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| exit_on_clap_error(&e));
 
     // Initialize logging. ANSI escapes only when stderr is a live terminal
     // and neither --no-color nor the NO_COLOR convention (set to a non-empty
@@ -1850,6 +2045,11 @@ fn run() -> Result<()> {
                         stream_stdin: true,
                     },
                     export_template: cli.export_template.clone(),
+                    sarif_base: args.sarif_base.or_else(|| app.output.sarif_base.clone()),
+                    sarif_category: args
+                        .sarif_category
+                        .or_else(|| app.output.sarif_category.clone()),
+                    sarif_max_results: args.sarif_max_results.or(app.output.sarif_max_results),
                 },
                 matching: MatchingConfig {
                     fuzzy_preset: resolve(
@@ -1951,6 +2151,11 @@ fn run() -> Result<()> {
                     no_color: resolve_bool(cli.no_color, app.output.no_color),
                     streaming: sbom_tools::config::StreamingConfig::default(),
                     export_template: cli.export_template.clone(),
+                    sarif_base: args.sarif_base.or_else(|| app.output.sarif_base.clone()),
+                    sarif_category: args
+                        .sarif_category
+                        .or_else(|| app.output.sarif_category.clone()),
+                    sarif_max_results: args.sarif_max_results.or(app.output.sarif_max_results),
                 },
                 validate_ntia: args.validate_ntia,
                 min_severity: args.severity.or_else(|| app.filtering.min_severity.clone()),
@@ -2017,6 +2222,15 @@ fn run() -> Result<()> {
                 args.cra_product_class
                     .or_else(|| app.compliance.cra_product_class.clone()),
                 args.as_of.as_deref(),
+                args.require_applicable,
+                args.json_schema,
+                args.sarif_base.or_else(|| app.output.sarif_base.clone()),
+                args.sarif_category
+                    .or_else(|| app.output.sarif_category.clone()),
+                args.sarif_include_passes,
+                args.sarif_max_results
+                    .or(app.output.sarif_max_results)
+                    .unwrap_or(sbom_tools::reports::DEFAULT_SARIF_MAX_RESULTS),
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
@@ -2039,6 +2253,9 @@ fn run() -> Result<()> {
                     file: args.output_file,
                     no_color: resolve_bool(cli.no_color, app.output.no_color),
                     export_template: cli.export_template.clone(),
+                    sarif_base: None,
+                    sarif_category: None,
+                    sarif_max_results: None,
                     ..Default::default()
                 },
                 matching: MatchingConfig {
@@ -2116,6 +2333,9 @@ fn run() -> Result<()> {
                     file: args.output_file,
                     no_color: resolve_bool(cli.no_color, app.output.no_color),
                     export_template: cli.export_template.clone(),
+                    sarif_base: None,
+                    sarif_category: None,
+                    sarif_max_results: None,
                     ..Default::default()
                 },
                 matching: MatchingConfig {
@@ -2190,6 +2410,9 @@ fn run() -> Result<()> {
                     file: args.output_file,
                     no_color: resolve_bool(cli.no_color, app.output.no_color),
                     export_template: cli.export_template.clone(),
+                    sarif_base: None,
+                    sarif_category: None,
+                    sarif_max_results: None,
                     ..Default::default()
                 },
                 matching: MatchingConfig {
@@ -2295,6 +2518,12 @@ fn run() -> Result<()> {
                     .or_else(|| app.compliance.cra_product_class.clone()),
                 args.as_of,
                 enrichment,
+                args.sarif_base.or_else(|| app.output.sarif_base.clone()),
+                args.sarif_category
+                    .or_else(|| app.output.sarif_category.clone()),
+                args.sarif_max_results
+                    .or(app.output.sarif_max_results)
+                    .unwrap_or(sbom_tools::reports::DEFAULT_SARIF_MAX_RESULTS),
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
@@ -2353,6 +2582,9 @@ fn run() -> Result<()> {
                     no_color: resolve_bool(cli.no_color, app.output.no_color),
                     streaming: sbom_tools::config::StreamingConfig::default(),
                     export_template: None,
+                    sarif_base: None,
+                    sarif_category: None,
+                    sarif_max_results: None,
                 },
                 enrichment,
                 limit: args.limit,
@@ -2459,6 +2691,9 @@ fn run() -> Result<()> {
                     no_color: resolve_bool(cli.no_color, app.output.no_color),
                     streaming: sbom_tools::config::StreamingConfig::default(),
                     export_template: None,
+                    sarif_base: None,
+                    sarif_category: None,
+                    sarif_max_results: None,
                 },
                 enrichment,
                 webhook_url: args.webhook,
@@ -2610,6 +2845,22 @@ fn run() -> Result<()> {
                     model_dir,
                     format: format.as_str().to_string(),
                 },
+                VerifyAction::Receipt { file, format } => cli::VerifyAction::Receipt {
+                    file,
+                    format: format.as_str().to_string(),
+                },
+                VerifyAction::ReceiptAggregate {
+                    receipts,
+                    policy,
+                    format,
+                } => cli::VerifyAction::ReceiptAggregate {
+                    receipts,
+                    policy,
+                    format: format.as_str().to_string(),
+                },
+                VerifyAction::ReceiptGenerate { input, output } => {
+                    cli::VerifyAction::ReceiptGenerate { input, output }
+                }
             };
 
             let exit_code = cli::run_verify(cli_action, cli.quiet)?;
@@ -2838,7 +3089,7 @@ mod tests {
 
     /// The phantom `--no-fail-on-change` flag must not be advertised anywhere
     /// (it never existed), and the root exit-code table must document the
-    /// central operational-error code 3.
+    /// central code 3 for usage and operational errors.
     #[test]
     fn help_text_matches_reality() {
         let mut cmd = Cli::command();
@@ -2849,8 +3100,10 @@ mod tests {
             "phantom flag in root help"
         );
         assert!(
-            root.contains("Operational error"),
-            "root help must document exit 3"
+            root.contains(
+                "3  Usage error (unknown flag or value, missing argument) or operational"
+            ),
+            "root help must document exit 3 for usage and operational errors"
         );
         let diff = cmd
             .find_subcommand_mut("diff")

@@ -40,7 +40,7 @@ ENISA / industry guidance. Use it to:
 The `--cra-product-class` flag (or sidecar `productClass`) drives the
 [CRA-P3.2 calibration table](#cra-p32-product-class-severity-calibration)
 that scales severity for vendor-hash, EOL, cycles, DoC, EUCC, PSIRT,
-and module-attestation checks.
+and module-certificate checks.
 
 ## Reverse map
 
@@ -60,7 +60,7 @@ that ends up in SARIF `properties.standardHelpUris`.
 
 | Requirement string                                              | CRA anchor                        | prEN 40000-1-3      | BSI TR-03183-2 § | sidecar field that clears it                              |
 |-----------------------------------------------------------------|-----------------------------------|---------------------|------------------|-----------------------------------------------------------|
-| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)                        | —                   | —                | `riskAssessmentUrl` + `riskAssessmentMethodology`         |
+| `CRA Art. 13(2): Documented risk assessment`                    | Art. 13(2)                        | —                   | —                | `riskAssessmentUrl` (or a `risk-assessment` external reference) |
 | `CRA Art. 13(7) / Annex I Part II (1): SBOM freshness`          | Art. 13(7); Annex I Part II (1)   | PRE-7-RQ-04         | §3.1             | regenerate SBOM on each release                           |
 | `CRA Annex I Part II (1): Machine-readable SBOM format`         | Annex I Part II (1)               | PRE-7-RQ-04         | §4               | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
 | `CRA Art. 13(5): Third-party due diligence (license tracking)`  | Art. 13(5)                        | PRE-7-RQ-05         | §5.2.2           | populate component `license` fields                       |
@@ -68,13 +68,61 @@ that ends up in SARIF `properties.standardHelpUris`.
 | `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` | Annex I Part II (5); Art. 13(8) | RLS-2-RQ-02      | —                | `coordinatedDisclosurePolicyUrl`                          |
 | `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)                        | PRE-7-RQ-06         | —                | `supportEndDate` + EOL enrichment                         |
 | `CRA Art. 13(8) / 13(19): Support period disclosure`            | Art. 13(8); Art. 13(19); Annex II (7) | PRE-7-RQ-06     | —                | `supportEndDate`                                          |
-| `CRA Annex I Part II (1): Documented vulnerability information` | Annex I Part II (1)               | RLS-2-RQ-04         | —                | OSV / KEV / VEX enrichment                                |
+| `CRA Annex I Part II (1): Documented vulnerability information` | Annex I Part II (1)               | RLS-2-RQ-04         | —                | embedded vulnerabilities (or OSV / KEV / VEX enrichment), or a `vulnerability-assertion` / `exploitability-statement` external reference |
 | `CRA Annex II (7): Component lifecycle monitoring/status`       | Art. 13(8); Annex II (7)          | PRE-7-RQ-06         | —                | EOL enrichment + transitive supplier coverage             |
 | `CRA Art. 13(15): Product identification`                       | Art. 13(15); Annex II (3)         | PRE-7-RQ-06         | §5.2.2           | SBOM `metadata.component.name` + sidecar `productName`    |
 | `CRA Annex I Part II (1): Component version`                    | Annex I Part II (1)               | PRE-7-RQ-06         | §5.2.2           | component `version` fields                                |
 | `CRA Annex I Part II (1): Component supplier information`       | Annex I Part II (1)               | PRE-7-RQ-03         | §5.2.2           | component `supplier` fields                               |
-| `CRA Annex I Part II (4): Vulnerability metadata completeness`  | Annex I Part II (4)               | —                   | —                | vulnerability severity/CVSS + remediation detail          |
+| `CRA Annex I Part II (4): Vulnerability metadata completeness`  | Annex I Part II (4)               | —                   | —                | vulnerability severity/CVSS + remediation detail, or a [justified VEX `not_affected` statement](#vex-not_affected-statements) |
 | `CRA Art. 13(16): Manufacturer identification`                  | Art. 13(16); Annex II (1)         | —                   | §5.2.1           | `manufacturerName` + `manufacturerEmail`                  |
+
+#### VEX `not_affected` statements
+
+The two per-vulnerability Annex I Part II (4) checks, severity or CVSS
+(`SBOM-CRA-VULN-METADATA`) and remediation detail
+(`SBOM-CRA-VULN-METADATA-REMEDIATION`), skip a vulnerability whose own VEX
+statement is `not_affected` and names a justification: CycloneDX
+`analysis.justification`, OpenVEX `justification` or SPDX 3.0
+`justificationType`. The Commission services' CRA FAQ (version 1.4, 4
+September 2026) does not ask for a patch for every vulnerability (FAQ
+4.3.1): "When discovering a vulnerability, manufacturers are expected to
+determine its relevance for their product, and assess the resulting risk,
+in the framework of the manufacturer's risk assessment." Its example is a
+Wi-Fi router whose library has a buffer overflow that "cannot be exploited,
+as the library functions are never called in the firmware. The
+manufacturer may be expected, for example, to document the vulnerability,
+but may decide not to fix it with a dedicated update." FAQ 4.2.2 lists what
+that case-by-case assessment weighs: "the extent to which the vulnerable
+code is invoked or loaded when the product is in use; the level and type of
+access required to carry out the exploit; whether compensating controls are
+already in place to mitigate exploitation". A VEX justification records
+that reason, and Annex I Part II (4) concerns "fixed vulnerabilities". The
+FAQ does not mention VEX.
+
+A bare `not_affected` claim does not count, nor does an impact statement or
+`detail` text without a justification, a justification on any other state,
+or a statement on another vulnerability of the same component (the
+component-level VEX status sums up all of a component's statements). Every
+CycloneDX justification counts: the SBOM parser and the reader of a
+CycloneDX VEX document passed with `--vex` map all nine the same way, each
+to the closest of the five model justifications (see the table below). The
+CSAF reader ignores `flags` and `threats`, so a CSAF `known_not_affected`
+entry does not count yet. Before v0.4.0 every unrated vulnerability warned.
+Sources: the FAQ as
+the Commission's Markdown conversion
+(<https://ec.europa.eu/newsroom/dae/redirection/document/123307>) and PDF
+(<https://ec.europa.eu/newsroom/dae/redirection/document/122331>).
+
+| CycloneDX `analysis.justification` (schema 1.6/1.7 definition) | Model justification (CISA, OpenVEX, SPDX 3.0) |
+|---|---|
+| `code_not_present` ("The code has been removed or tree-shaked.") | `VulnerableCodeNotPresent` |
+| `code_not_reachable` ("The vulnerable code is not invoked at runtime.") | `VulnerableCodeNotInExecutePath` |
+| `requires_configuration`, `requires_dependency`, `requires_environment` (exploitability requires an option, a dependency or an environment that is not there) | `VulnerableCodeCannotBeControlledByAdversary` |
+| `protected_at_perimeter` ("Attacks are blocked at physical, logical, or network perimeter.") | `VulnerableCodeCannotBeControlledByAdversary`: the protection is outside the product |
+| `protected_by_compiler` ("Exploitability requires a compiler flag to be set/unset."), `protected_at_runtime` ("Exploits are prevented at runtime."), `protected_by_mitigating_control` ("Preventative measures have been implemented …") | `InlineMitigationsAlreadyExist` |
+
+The `detail` text becomes the statement's impact statement (and its
+detail) in either path; it is no justification.
 
 ### CRA Article 14 (reporting obligations, applicable from 2026-09-11)
 
@@ -83,7 +131,7 @@ that ends up in SARIF `properties.standardHelpUris`.
 | `CRA Art. 14: PSIRT contact for external vulnerability reports` | Art. 14    | RLS-2-RQ-03         | `psirtUrl`                            |
 | `CRA Art. 14(2)(a): 24-hour early-warning channel`          | Art. 14(2)(a) / 14(4)(a) | RLS-2-RQ-03 | `earlyWarningContact`                 |
 | `CRA Art. 14(2)(b): 72-hour notification channel`           | Art. 14(2)(b) / 14(4)(b) | RLS-2-RQ-03 | `incidentReportContact`               |
-| `CRA Art. 14(7): ENISA single reporting platform`           | Art. 14(7)     | RLS-2-RQ-03-RE      | `enisaReportingPlatformId`            |
+| `CRA Art. 14(7): ENISA single reporting platform`           | Art. 14(7)     | RLS-2-RQ-03-RE      | `enisaReportingPlatformId` (the CSIRT designated as coordinator is enough) |
 
 Pre-deadline findings are emitted as `Info`; post-deadline they become
 `Warning` (or `Error` at `ImportantClass2`/`Critical` per the
@@ -91,9 +139,31 @@ Pre-deadline findings are emitted as `Info`; post-deadline they become
 The 2026-09-11 deadline is compared against the *evaluation instant* — the
 wall clock by default, or `--as-of <RFC 3339>` for reproducible CI runs.
 
-Art. 14(7) is the exception: the ENISA single reporting platform has no
-published endpoint yet, so the missing-`enisaReportingPlatformId` finding
-stays `Info` on both sides of the deadline.
+Art. 14(7) follows the same dates — `Info` before 2026-09-11, `Warning` from
+then on — but is never escalated to `Error`, at any product class. Art.
+14(1) and (3) require every notification "via the single reporting platform
+established pursuant to Article 16", and Art. 14(7) through "the electronic
+notification end-point of the CSIRT designated as coordinator of the Member
+State where the manufacturers have their main establishment"; Art. 14
+applies from 11 September 2026 (Art. 71(2)), the day ENISA launched the
+platform ("The CRA Single Reporting Platform is launched", ENISA, 11
+September 2026, <https://www.enisa.europa.eu/cra-srp/>; portal
+<https://portal.cra-srp.enisa.europa.eu/>).
+
+Naming the CSIRT designated as coordinator in `enisaReportingPlatformId`
+satisfies the finding. Do not register on the platform early to clear it:
+no registration is needed before a notification is due. The CRA names no
+manufacturer identifier on the platform, and ENISA's SRP FAQ (updated 15
+October 2026,
+<https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/frequently-asked-questions>)
+advises manufacturers "to register and initiate the validation process
+only when they need to submit a notification" (FAQ 9). It makes them
+"responsible for identifying the correct CSIRT designated as coordinator
+(CDaC) in accordance with Art. 14(7) of the CRA and selecting it when
+submitting a notification through the SRP" (FAQ 18), in general the CSIRT
+of the Member State of the main establishment. A registration already made
+may be recorded instead. Before v0.4.0 the finding was `Info` on both sides
+of the deadline.
 
 ### CRA Annexes
 
@@ -107,8 +177,31 @@ stays `Info` on both sides of the deadline.
 | `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | sidecar EUCC evidence fields, a `Certification`/`Attestation` external ref with `eucc`/`common-criteria` URL, or a [CDXA attestation](#attestation-evidence-cyclonedx-16-declarations) naming EUCC / Common Criteria |
 | `CRA Annex VII: Technical documentation`                    | Annex VII                | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
 | `CRA Annex V: EU Declaration of Conformity reference`       | Annex V                  | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
-| `CRA Annex VIII: <Module> attestation reference`            | Annex VIII (Module B+C/H/EUCC) | —             | Module-specific `Attestation`/`Certification` external ref |
+| `CRA Annex VIII: <Module> certificate reference`            | Annex VIII (Module B+C/H/EUCC) | —             | `Certification` external ref (the notified-body or certification-body certificate; an `Attestation` ref does not count) |
 | `CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware component inventory` | Annex I Part II   | PRE-8-RQ-02         | producer + identifier + firmware version on hardware    |
+
+External-reference types. The `Attestation`, `Certification`,
+`RiskAssessment`, `VulnerabilityAssertion` and `ExploitabilityStatement`
+references these checks read come from CycloneDX
+`externalReferences[].type` `attestation`, `certification-report`,
+`risk-assessment`, `vulnerability-assertion` and `exploitability-statement`,
+and from SPDX 3.0 `externalRef[].externalRefType` `secureSoftwareAttestation`,
+`certificationReport`, `riskAssessment`, `vulnerabilityDisclosureReport` and
+`vulnerabilityExploitabilityAssessment`. SPDX 2.3 has no external-reference
+category for any of them (its OTHER category with a
+`declaration-of-conformity` type is still read as an Annex V reference).
+Before v0.4.0 the parsers did not map these types, so only the sidecar keys
+and CDXA attestations could satisfy the checks.
+
+Annex VIII is stricter than Annex V. A route beyond Module A rests on
+notified-body or certification-body evidence — the EU-type examination
+certificate (Module B+C), the quality-system approval (Module H) or the EUCC
+certificate — so `SBOM-CRA-ANNEX-VIII` and the `conformity_summary` Module B
+and Module H rows accept only a `Certification` reference
+(`certification-report`, SPDX 3.0 `certificationReport`). An `Attestation`
+reference may be a self-attestation: it still serves as the Annex V
+Declaration of Conformity reference (and the Module C production-conformity
+statement), but not as the route's certificate.
 
 ### Article 24 — open-source software steward floor
 
@@ -118,7 +211,7 @@ stays `Info` on both sides of the deadline.
 | `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Annex I Part II (5) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` |
 
 Article 24 *suppresses* manufacturer-only checks (Art. 13(16) email,
-Annex V DoC, Annex VIII attestation, Article 14 channels, hardware
+Annex V DoC, Annex VIII certificate, Article 14 channels, hardware
 [PRE-8-RQ-02], vendor-hash carry-through).
 
 ## CRA-P3.2 product-class severity calibration
@@ -127,6 +220,23 @@ When `--cra-product-class` (or sidecar `productClass`) is set, the
 severity of certain checks scales per Annex III/IV class. Selecting a
 class also implies a default conformity-assessment route (Annex VIII),
 overridable via sidecar `conformityAssessmentRoute`.
+
+The classes are those of the CRA: `important-class-1` is Annex III class I
+(19 product categories, from identity management systems and browsers to
+operating systems, routers and connected toys), `important-class-2` is
+Annex III class II (hypervisors and container runtimes, firewalls and
+intrusion detection/prevention systems, tamper-resistant microprocessors
+and microcontrollers), and `critical` is Annex IV (hardware devices with
+security boxes, smart meter gateways, smartcards and secure elements).
+Whether a product falls into a category follows from its core
+functionality (Art. 7(1), 8(1)) and from **Commission Implementing
+Regulation (EU) 2025/2392** of 28 November 2025 on the technical
+description of the categories of important and critical products with
+digital elements (OJ L, 2025/2392, 1.12.2025;
+<https://eur-lex.europa.eu/eli/reg_impl/2025/2392/oj/eng>), adopted under
+Art. 7(4): its Annex I describes the class I and class II categories, its
+Annex II the critical ones. sbom-tools does not classify a product; pick
+the class from those descriptions.
 
 | Check                          | Default | Important-1 | Important-2 | Critical |
 |--------------------------------|---------|-------------|-------------|----------|
@@ -137,7 +247,7 @@ overridable via sidecar `conformityAssessmentRoute`.
 | Annex V DoC reference          | Info    | Warning     | Error       | Error    |
 | EUCC reference                 | n/a     | n/a         | Info        | Error    |
 | PSIRT documented               | Warning | Warning     | Error       | Error    |
-| Module attestation reference   | n/a     | Warning (B+C) | Error (B+C/H) | Error (EUCC) |
+| Module certificate reference   | n/a     | Warning (B+C) | Error (B+C/H) | Error (EUCC) |
 
 Default conformity routes per class:
 
@@ -171,12 +281,12 @@ violation messages.
 | `SBOM-CRA-ANNEX-IV` — EUCC / Common Criteria reference (only fires at Important-2 / Critical) | yes | CRA-family standard that also names EUCC / Common Criteria |
 | `SBOM-EUCC-CERTREF` (under `--standard eucc`)                      | yes                 | same as above                                       |
 | `conformity_summary` → "EU Declaration of Conformity" row          | yes                 | any CRA-family attestation                          |
-| `conformity_summary` → Module B / Module C / Module H rows          | yes                 | any CRA-family attestation                          |
+| `conformity_summary` → Module B / Module C / Module H rows          | yes                 | any CRA-family attestation (the external-reference fallback: a `Certification` ref for Module B and H, an `Attestation` or `Certification` ref for Module C) |
 | `conformity_summary` → EUCC certificate + Target-of-Evaluation rows | yes                 | CRA-family standard that also names EUCC / Common Criteria |
 | `SBOM-CRA-ANNEX-V` — Annex V DoC violation                         | no                  | `Attestation`/`Certification` external ref or sidecar `ceMarkingReference` |
-| `SBOM-CRA-ANNEX-VIII` — module attestation violation               | no                  | `Attestation`/`Certification` external ref          |
+| `SBOM-CRA-ANNEX-VIII` — module certificate violation               | no                  | `Certification` external ref (an `Attestation` ref does not count) |
 | `SBOM-EUCC-PP` / `-TOE` / `-ITSEF` / `-VALIDITY`                   | no                  | dedicated sidecar EUCC fields                       |
-| `SBOM-CRA-ART-14` channels + the `conformity_summary` PSIRT row     | no                  | sidecar fields                                      |
+| `SBOM-CRA-ART-14-PSIRT` / `-EARLY-WARNING` / `-NOTIFICATION` / `-ENISA` channels + the `conformity_summary` PSIRT row | no | sidecar fields |
 
 The `conformity_summary` block is the Annex VIII checklist emitted next to
 `violations` by `validate --standard cra -o json`. It only appears once a
@@ -274,12 +384,16 @@ with `2.`. CSAF emit support: `sbom-tools vex export --format csaf`
 |-------------------------------------------|-----------------------------------------------|
 | `vulnerabilities[].cve`                   | `Vulnerability.id`                            |
 | `vulnerabilities[].ids[].text` (fallback) | `Vulnerability.id` (e.g., GHSA)               |
-| `product_status.known_affected`           | `VexState::Affected`                          |
-| `product_status.known_not_affected`       | `VexState::NotAffected`                       |
-| `product_status.fixed`, `first_fixed`, `last_affected` | `VexState::Fixed`                |
+| `product_status.known_affected`, `first_affected`, `last_affected` | `VexState::Affected`  |
+| `product_status.known_not_affected`       | `VexState::NotAffected`, with no justification |
+| `product_status.fixed`, `first_fixed`, `recommended` | `VexState::Fixed`                  |
 | `product_status.under_investigation`      | `VexState::UnderInvestigation`                |
-| `product_status.recommended`              | `VexState::Affected` (with note)              |
+| `vulnerabilities[].flags`, `threats`, `notes` | not read                                  |
 | `product_tree.full_product_names[].product_identification_helper.purl` | `(vuln_id, purl)` lookup key |
+
+Because `flags` are not read, a `known_not_affected` entry carries no
+justification, and the CRA vulnerability checks do not take it as evidence
+(see [VEX `not_affected` statements](#vex-not_affected-statements)).
 
 ## CLI cheat sheet
 
@@ -371,10 +485,11 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
   string → `(StandardKind, id)` mapping. Drives SARIF
   `properties.standardIds`.
 - `StandardKind::canonical_help_uri()` in `src/quality/compliance/mod.rs` —
-  `(StandardKind, id)` → URL. Drives SARIF `helpUri` and
-  `properties.standardHelpUris`.
-- `rule_help_uri()` in `src/reports/sarif.rs` — rule-ID prefix → URL
-  for `runs[].tool.driver.rules[].helpUri`.
+  `(StandardKind, id)` → URL. Drives SARIF `helpUri` (a rule links the
+  first of its references that has a URL) and `properties.standardHelpUris`.
+- `rule_help_uri()` in `src/reports/sarif/rules.rs` — rule-ID prefix → URL,
+  the `runs[].tool.driver.rules[].helpUri` of a rule none of whose
+  references has a URL, and of the rules outside the registry.
 - `ComplianceChecker::class_severity()` in `src/quality/compliance/mod.rs` —
   P3.2 calibration table.
 - `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V DoC + Annex VII tech-doc dossier

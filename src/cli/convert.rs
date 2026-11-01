@@ -26,7 +26,9 @@ pub fn run_convert(
     quiet: bool,
 ) -> Result<i32> {
     let Some(emit_target) = EmitTarget::parse(target) else {
-        eprintln!("error: unknown conversion target '{target}'. Supported: cyclonedx, spdx.");
+        eprintln!(
+            "error: unknown conversion target '{target}'. Supported: cyclonedx, spdx, normalized."
+        );
         return Ok(exit_codes::ERROR);
     };
 
@@ -49,7 +51,9 @@ pub fn run_convert(
     };
 
     // Fidelity report always goes to stderr so it never pollutes piped output.
-    if !quiet {
+    // The normalized payload is the canonical model itself, so there is nothing
+    // to report.
+    if !quiet && emit_target != EmitTarget::Normalized {
         eprint!("{}", report.render());
         if report.is_lossy() {
             eprintln!(

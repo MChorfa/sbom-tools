@@ -99,3 +99,26 @@ fn c_header_signatures_snapshot_is_enforced() {
         );
     }
 }
+
+/// `convert --to normalized` must emit exactly the bytes the ABI returns for
+/// the same input (issue #366): both go through
+/// `serialization::NormalizedSbomPayload`, and this pins that they stay
+/// wired to the same serializer.
+#[test]
+fn cli_normalized_payload_is_byte_identical_to_abi_payload() {
+    for name in ["demo-new.cdx.json", "cyclonedx/cbom-1.6.cdx.json"] {
+        let path = fixture_path(name);
+        let c_path = into_c_string(path.to_string_lossy().as_ref());
+        let abi = consume_result(sbom_tools_parse_sbom_path_json(c_path.as_ptr()))
+            .expect("ABI normalized payload");
+
+        let sbom = sbom_tools::parse_sbom(&path).expect("parse fixture");
+        let (cli, _) = sbom_tools::serialization::emit(
+            &sbom,
+            sbom_tools::serialization::EmitTarget::Normalized,
+        )
+        .expect("emit normalized");
+
+        assert_eq!(cli, abi, "{name}: CLI and ABI normalized payloads diverged");
+    }
+}

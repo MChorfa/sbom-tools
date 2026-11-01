@@ -1,0 +1,109 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:9d2f4b71-0c3e-4a58-b6e1-2a7c8f5d9e34",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-09-29T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "related-assets-service",
+      "name": "related-assets-service",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/rsa-2048",
+      "name": "RSA-2048",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "algorithmFamily": "RSA",
+          "parameterSetIdentifier": "2048"
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/algorithm/ml-dsa-87",
+      "name": "ML-DSA-87",
+      "cryptoProperties": {
+        "assetType": "algorithm",
+        "algorithmProperties": {
+          "primitive": "signature",
+          "algorithmFamily": "ML-DSA",
+          "parameterSetIdentifier": "87",
+          "nistQuantumSecurityLevel": 5
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/key/server-public-key",
+      "name": "server-public-key",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "size": 2048,
+          "relatedCryptographicAssets": [
+            { "type": "algorithm", "ref": "crypto/algorithm/rsa-2048" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/mixed-cert",
+      "name": "mixed-cert",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN=mixed.example.com",
+          "issuerName": "CN=Example CA",
+          "certificateFormat": "X.509",
+          "certificateFileExtension": "pem",
+          "relatedCryptographicAssets": [
+            { "type": "algorithm", "ref": "crypto/algorithm/ml-dsa-87" },
+            { "type": "algorithm", "ref": "crypto/algorithm/rsa-2048" },
+            { "type": "publicKey", "ref": "crypto/key/server-public-key" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/certificate/pqc-cert",
+      "name": "pqc-cert",
+      "cryptoProperties": {
+        "assetType": "certificate",
+        "certificateProperties": {
+          "subjectName": "CN=pqc.example.com",
+          "issuerName": "CN=Example CA",
+          "certificateFormat": "X.509",
+          "relatedCryptographicAssets": [
+            { "type": "algorithm", "ref": "crypto/algorithm/ml-dsa-87" }
+          ]
+        }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ssh",
+      "name": "ssh-endpoint",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": {
+          "type": "ssh",
+          "version": "2.0",
+          "relatedCryptographicAssets": [
+            { "type": "algorithm", "ref": "crypto/algorithm/rsa-2048" }
+          ]
+        }
+      }
+    }
+  ]
+}

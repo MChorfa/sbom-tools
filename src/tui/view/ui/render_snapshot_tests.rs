@@ -34,9 +34,35 @@ fn key(code: KeyCode) -> KeyEvent {
 /// Render one view tab at a given size and return the trimmed buffer text.
 fn render_tab(active_tab: ViewTab, width: u16, height: u16) -> String {
     let mut app = demo_view_app(active_tab);
+    pin_view_reports(&mut app);
     render_to_text(width, height, |frame| {
         render(frame, &mut app);
     })
+}
+
+/// Keep render fixtures independent of the calendar: the constructor scores
+/// quality (SBOM age) and the compliance tab checks every standard at the
+/// wall clock, so recompute both at the shared test clock
+/// (tests/common/clock.rs).
+fn pin_view_reports(app: &mut ViewApp) {
+    use crate::quality::{ComplianceChecker, ComplianceLevel, QualityScorer};
+    let as_of = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+        .expect("valid instant")
+        .with_timezone(&chrono::Utc);
+    let profile = crate::tui::scoring_profile_for(app.bom_profile);
+    app.quality_report = QualityScorer::new(profile)
+        .with_as_of(as_of)
+        .score(&app.sbom);
+    app.compliance_results = Some(
+        ComplianceLevel::all()
+            .iter()
+            .map(|level| {
+                ComplianceChecker::new(*level)
+                    .with_as_of(as_of)
+                    .check(&app.sbom)
+            })
+            .collect(),
+    );
 }
 
 /// The SBOM-profile view tabs (the demo fixture is a plain SBOM).
@@ -455,31 +481,12 @@ fn compliance_selector_exposes_every_standard() {
 
 #[test]
 fn compliance_overview_marks_na_standards_muted_not_green() {
-    use crate::quality::{
-        ComplianceLevel, ComplianceResult, Violation, ViolationCategory, ViolationSeverity,
-    };
+    use crate::quality::{ComplianceLevel, ComplianceResult};
 
     // Readiness N/A results keep `is_compliant = true` and warning_count = 0
     // by contract — indistinguishable from a clean pass unless the renderer
     // checks `is_applicable()` first. The cross-standard overview must show
     // them as muted "not applicable", matching the tab strip one panel up.
-    fn na_marker(level: ComplianceLevel, rule_id: &'static str) -> ComplianceResult {
-        ComplianceResult::new(
-            level,
-            vec![Violation {
-                severity: ViolationSeverity::Info,
-                category: ViolationCategory::DocumentMetadata,
-                message: "SBOM contains no AI components".to_string(),
-                element: None,
-                requirement: "Applicability".to_string(),
-                rule_id,
-                component_id: None,
-                counts: None,
-                standard_refs: Vec::new(),
-            }],
-        )
-    }
-
     let mut app = demo_view_app(ViewTab::Compliance);
     // Synthetic per-standard results: everything clean except the two AI
     // readiness profiles, which are N/A. Selecting a clean standard (index 0)
@@ -487,8 +494,9 @@ fn compliance_overview_marks_na_standards_muted_not_green() {
     let results: Vec<ComplianceResult> = ComplianceLevel::all()
         .iter()
         .map(|level| match level {
-            ComplianceLevel::EuAiAct => na_marker(*level, "SBOM-AIACT-NA"),
-            ComplianceLevel::BsiSbomForAi => na_marker(*level, "SBOM-BSIAI-NA"),
+            ComplianceLevel::EuAiAct | ComplianceLevel::BsiSbomForAi => {
+                ComplianceResult::not_applicable(*level, "SBOM contains no AI components")
+            }
             _ => ComplianceResult::new(*level, Vec::new()),
         })
         .collect();
@@ -521,6 +529,51 @@ fn compliance_overview_marks_na_standards_muted_not_green() {
             && !ai_line.contains("warnings"),
         "N/A standard must not render as a pass in the overview: {ai_line}"
     );
+}
+
+/// Passed checks are no violations: the compliance view counts them on the
+/// verdict line, in the full and the compact layout, and lists none.
+#[test]
+fn compliance_verdict_counts_passed_checks_and_lists_none() {
+    use crate::quality::{ComplianceLevel, ComplianceResult, PassedCheck};
+
+    let pass = |name: &str| PassedCheck {
+        rule_id: "SBOM-PQC-009",
+        message: format!("'{name}' uses NIST-approved PQC algorithm (FIPS 203/204/205)"),
+        element: Some(name.to_string()),
+        component_id: Some(format!("crypto/algorithm/{name}")),
+        finding_detail: None,
+        requirement: "FIPS 203/204/205: approved".to_string(),
+        standard_refs: Vec::new(),
+    };
+    let mut app = demo_view_app(ViewTab::Compliance);
+    let pqc_idx = ComplianceLevel::all()
+        .iter()
+        .position(|l| *l == ComplianceLevel::NistPqc)
+        .expect("NIST PQC must be in ComplianceLevel::all()");
+    let results: Vec<ComplianceResult> = ComplianceLevel::all()
+        .iter()
+        .map(|level| {
+            let result = ComplianceResult::new(*level, Vec::new());
+            if *level == ComplianceLevel::NistPqc {
+                result.with_passed(vec![pass("ML-KEM-1024"), pass("ML-DSA-87")])
+            } else {
+                result
+            }
+        })
+        .collect();
+    app.compliance_results = Some(results);
+    app.compliance_state.selected_standard = pqc_idx;
+
+    // 120x40 renders the full breakdown, 80x24 the compact verdict line.
+    for (width, height) in [(120, 40), (80, 24)] {
+        let text = render_to_text(width, height, |frame| render(frame, &mut app));
+        assert!(text.contains("2 passed"), "{width}x{height}:\n{text}");
+        assert!(
+            !text.contains("NIST-approved"),
+            "no pass is listed as a violation ({width}x{height}):\n{text}"
+        );
+    }
 }
 
 #[test]
@@ -921,9 +974,25 @@ fn view_overview_eol_compact_snapshot() {
 }
 
 /// Build a `ViewApp` on the CBOM fixture with a deterministic tab.
+///
+/// The crypto tabs judge certificate expiry at the wall clock (the TUI has
+/// no clock seam), and the fixture's one certificate expires on 2028-01-01,
+/// so its expiry moves out of reach here to keep renders date-independent.
 fn cbom_view_app(active_tab: ViewTab) -> ViewApp {
     pin_theme();
-    let (sbom, profile) = crate::tui::test_support::cbom_single();
+    let (mut sbom, profile) = crate::tui::test_support::cbom_single();
+    let far_future = chrono::DateTime::parse_from_rfc3339("2099-01-01T23:59:59Z")
+        .expect("valid instant")
+        .with_timezone(&chrono::Utc);
+    for comp in sbom.components.values_mut() {
+        if let Some(cert) = comp
+            .crypto_properties
+            .as_mut()
+            .and_then(|p| p.certificate_properties.as_mut())
+        {
+            cert.not_valid_after = Some(far_future);
+        }
+    }
     let mut app = ViewApp::new(sbom, crate::tui::test_support::CBOM, profile);
     app.active_tab = active_tab;
     app
@@ -1606,6 +1675,8 @@ fn pqc_cnsa_cell_ignores_non_error_violations() {
                     component_id: None,
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 }],
             ),
             ComplianceResult::new(ComplianceLevel::NistPqc, vec![]),

@@ -14,6 +14,12 @@ impl ComplianceChecker {
     // notified-body auditors expect to see in a Common Criteria
     // submission. Does NOT perform a Common Criteria evaluation —
     // that's out of scope for SBOM tooling.
+    //
+    // Nor does it judge the SBOM's content: no inventory, component or
+    // dependency check runs here, so a document listing no components
+    // passes once the certificate evidence is complete. The CRA profiles
+    // judge the SBOM itself (SBOM-CRA-INVENTORY and the rest); the scope is
+    // pinned by eucc_runs_no_inventory_check in tests/rule_matrix_eucc.rs.
 
     pub(crate) fn check_eucc_substantial(
         &self,
@@ -37,6 +43,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -55,6 +63,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -73,6 +83,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
 
@@ -89,6 +101,8 @@ impl ComplianceChecker {
                     component_id: None,
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
             Some(until) if until <= self.now() => {
@@ -105,6 +119,8 @@ impl ComplianceChecker {
                     component_id: None,
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
             Some(until) if until <= self.now() + chrono::Duration::days(180) => {
@@ -121,6 +137,8 @@ impl ComplianceChecker {
                     component_id: None,
                     counts: None,
                     standard_refs: Vec::new(),
+                    remediation: None,
+                    finding_detail: None,
                 });
             }
             Some(_) => {}
@@ -170,6 +188,8 @@ impl ComplianceChecker {
                 component_id: None,
                 counts: None,
                 standard_refs: Vec::new(),
+                remediation: None,
+                finding_detail: None,
             });
         }
     }

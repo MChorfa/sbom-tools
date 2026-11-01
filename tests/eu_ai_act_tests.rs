@@ -6,11 +6,15 @@
 //! is N/A (never fails), the high-risk sidecar flag escalates severity, and the
 //! SARIF output carries SBOM-AIACT-* rules.
 
+#[path = "common/clock.rs"]
+mod clock;
+
 use std::path::Path;
 
+use clock::checker;
 use sbom_tools::model::CraSidecarMetadata;
 use sbom_tools::parsers::parse_sbom;
-use sbom_tools::quality::{ComplianceChecker, ComplianceLevel, ViolationSeverity};
+use sbom_tools::quality::{Applicability, ComplianceLevel, ViolationSeverity};
 use sbom_tools::reports::generate_compliance_sarif;
 
 fn fixture(rel: &str) -> std::path::PathBuf {
@@ -23,7 +27,7 @@ fn fixture(rel: &str) -> std::path::PathBuf {
 fn fully_documented_aibom_passes_annex_iv_readiness() {
     let sbom = parse_sbom(&fixture("cyclonedx/aibom-complete.cdx.json"))
         .expect("parse aibom-complete fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(
         result.is_compliant,
@@ -37,10 +41,7 @@ fn fully_documented_aibom_passes_annex_iv_readiness() {
     );
     // It is an AI SBOM, so it must NOT report the not-applicable finding.
     assert!(
-        !result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        result.is_applicable(),
         "AI SBOM must not be marked not-applicable"
     );
 }
@@ -48,16 +49,17 @@ fn fully_documented_aibom_passes_annex_iv_readiness() {
 #[test]
 fn non_ai_sbom_is_not_applicable_and_does_not_fail() {
     let sbom = parse_sbom(&fixture("cyclonedx/minimal.cdx.json")).expect("parse minimal fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(result.is_compliant, "non-AI SBOM must not fail AI-Act");
-    assert_eq!(result.error_count, 0);
     assert!(
-        result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-AIACT-NA" && v.severity == ViolationSeverity::Info),
-        "non-AI SBOM should report a single informational N/A finding"
+        matches!(result.applicability, Applicability::NotApplicable(_)),
+        "a non-AI SBOM is not applicable"
+    );
+    assert!(
+        result.violations.is_empty(),
+        "N/A is the result's applicability, not a finding: {:?}",
+        result.violations
     );
 }
 
@@ -68,18 +70,15 @@ fn web_app_with_config_data_component_is_not_applicable() {
     // as an AI training dataset).
     let sbom = parse_sbom(&fixture("cyclonedx/webapp-data-config.cdx.json"))
         .expect("parse webapp-data-config fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(result.is_compliant, "web-app SBOM must not fail AI-Act");
-    assert_eq!(result.error_count, 0);
-    assert_eq!(
-        result.violations.len(),
-        1,
-        "exactly one informational N/A finding expected; got {:?}",
+    assert!(!result.is_applicable(), "a config bundle is no AI content");
+    assert!(
+        result.violations.is_empty(),
+        "no finding expected; got {:?}",
         result.violations
     );
-    assert_eq!(result.violations[0].rule_id, "SBOM-AIACT-NA");
-    assert_eq!(result.violations[0].severity, ViolationSeverity::Info);
 }
 
 #[test]
@@ -88,13 +87,10 @@ fn application_typed_component_with_model_card_is_applicable() {
     // component type; the profile must see it (previously "Not applicable").
     let sbom = parse_sbom(&fixture("cyclonedx/mistyped-mlbom.cdx.json"))
         .expect("parse mistyped-mlbom fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(
-        !result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        result.is_applicable(),
         "SBOM with modelCard metadata must not be N/A; got {:?}",
         result.violations
     );
@@ -116,7 +112,7 @@ fn model_card_external_ref_and_description_satisfy_general_description() {
     // lacking a general description.
     let sbom = parse_sbom(&fixture("cyclonedx/mlbom-extref-card.cdx.json"))
         .expect("parse mlbom-extref-card fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(
         !result
@@ -134,13 +130,10 @@ fn untyped_huggingface_model_is_applicable_with_mistyped_ml_warning() {
     // modelCard) keeps the profile applicable and is surfaced.
     let sbom = parse_sbom(&fixture("cyclonedx/untyped-hf-model.cdx.json"))
         .expect("parse untyped-hf-model fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(
-        !result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        result.is_applicable(),
         "huggingface PURL must keep the profile applicable; got {:?}",
         result.violations
     );
@@ -161,13 +154,10 @@ fn dataset_only_sbom_is_applicable_without_model_energy_info() {
     // the model-energy recommendation must not fire with zero ML models.
     let sbom = parse_sbom(&fixture("cyclonedx/minimal-dataset.cdx.json"))
         .expect("parse minimal-dataset fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(
-        !result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        result.is_applicable(),
         "dataset evidence keeps the profile applicable; got {:?}",
         result.violations
     );
@@ -189,7 +179,7 @@ fn xml_dataset_evidence_reaches_annex_iv_dataset_checks() {
     // now be assessed like its JSON twin.
     let sbom = parse_sbom(&fixture("cyclonedx/aibom-dataset-gap.cdx.xml"))
         .expect("parse aibom-dataset-gap XML fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(
         result
@@ -210,7 +200,7 @@ fn huggingface_dataset_with_evidence_is_not_flagged_as_untyped_ml() {
     // dataset be retyped as machine-learning-model.
     let sbom = parse_sbom(&fixture("cyclonedx/hf-dataset-aibom.cdx.json"))
         .expect("parse hf-dataset-aibom fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
 
     assert!(
         !result
@@ -221,10 +211,7 @@ fn huggingface_dataset_with_evidence_is_not_flagged_as_untyped_ml() {
         result.violations
     );
     assert!(
-        !result
-            .violations
-            .iter()
-            .any(|v| v.rule_id == "SBOM-AIACT-NA"),
+        result.is_applicable(),
         "the HF dataset must keep the profile applicable; got {:?}",
         result.violations
     );
@@ -237,7 +224,7 @@ fn high_risk_flag_escalates_to_errors() {
     let sbom = parse_sbom(&fixture("cyclonedx/minimal-mlbom.cdx.json"))
         .expect("parse minimal-mlbom fixture");
 
-    let baseline = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let baseline = checker(ComplianceLevel::EuAiAct).check(&sbom);
     assert!(
         baseline.warning_count > 0,
         "minimal mlbom should have readiness gaps to escalate"
@@ -247,7 +234,7 @@ fn high_risk_flag_escalates_to_errors() {
         is_high_risk_ai: true,
         ..Default::default()
     };
-    let escalated = ComplianceChecker::new(ComplianceLevel::EuAiAct)
+    let escalated = checker(ComplianceLevel::EuAiAct)
         .with_sidecar(sidecar)
         .check(&sbom);
     assert!(
@@ -260,7 +247,7 @@ fn high_risk_flag_escalates_to_errors() {
 fn compliance_sarif_emits_aiact_rules() {
     let sbom = parse_sbom(&fixture("cyclonedx/minimal-mlbom.cdx.json"))
         .expect("parse minimal-mlbom fixture");
-    let result = ComplianceChecker::new(ComplianceLevel::EuAiAct).check(&sbom);
+    let result = checker(ComplianceLevel::EuAiAct).check(&sbom);
     let sarif = generate_compliance_sarif(&result).expect("generate SARIF");
     let value: serde_json::Value = serde_json::from_str(&sarif).expect("valid SARIF JSON");
 

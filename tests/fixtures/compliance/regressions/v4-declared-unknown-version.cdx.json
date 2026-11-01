@@ -1,0 +1,105 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:9f0a1b2c-3d4e-4f5a-8b6c-7d8e9f0a1b2c",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-01T00:00:00Z",
+    "authors": [
+      {
+        "name": "Example Corp",
+        "email": "sbom@example.com"
+      }
+    ],
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "example-generator",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "manufacturer": {
+      "name": "Example Corp",
+      "url": [
+        "https://example.com"
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "app",
+      "name": "app",
+      "version": "1.0.0",
+      "purl": "pkg:generic/app@1.0.0",
+      "supplier": {
+        "name": "Example Corp"
+      }
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "liba",
+      "name": "liba",
+      "version": "NOASSERTION",
+      "purl": "pkg:npm/liba",
+      "supplier": {
+        "name": "Alpha Inc"
+      },
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "libb",
+      "name": "libb",
+      "version": "NOASSERTION",
+      "purl": "pkg:npm/libb",
+      "supplier": {
+        "name": "Beta Inc"
+      },
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "app",
+      "dependsOn": [
+        "liba",
+        "libb"
+      ]
+    },
+    {
+      "ref": "liba",
+      "dependsOn": []
+    },
+    {
+      "ref": "libb",
+      "dependsOn": []
+    }
+  ]
+}

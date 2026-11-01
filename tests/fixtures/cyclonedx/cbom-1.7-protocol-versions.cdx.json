@@ -1,0 +1,39 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:8b2e6f14-3d9a-4c71-b5e0-71a4c9d2e863",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-04T00:00:00Z",
+    "tools": { "components": [{ "type": "application", "name": "protocol-scanner", "version": "1.0.0" }] }
+  },
+  "components": [
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ike",
+      "name": "IKEv1",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": { "type": "ike", "version": "1.0" }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/ssh",
+      "name": "SSH",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": { "type": "ssh", "version": "2.0" }
+      }
+    },
+    {
+      "type": "cryptographic-asset",
+      "bom-ref": "crypto/protocol/quic",
+      "name": "QUIC",
+      "cryptoProperties": {
+        "assetType": "protocol",
+        "protocolProperties": { "type": "quic" }
+      }
+    }
+  ]
+}

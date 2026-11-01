@@ -1,0 +1,65 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "zlib-source",
+  "documentNamespace": "https://example.com/spdx/zlib-source-5a1b",
+  "creationInfo": {
+    "created": "2026-10-01T00:00:00Z",
+    "creators": [
+      "Organization: Example Corp (sbom@example.com)",
+      "Tool: example-generator-1.0.0"
+    ]
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-app"
+  ],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-app",
+      "name": "app",
+      "versionInfo": "1.0.0",
+      "supplier": "Organization: Example Corp",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "APPLICATION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        }
+      ],
+      "licenseDeclared": "MIT",
+      "licenseConcluded": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/app@1.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-zlib",
+      "name": "zlib",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "SOURCE",
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-app"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-app",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-zlib"
+    }
+  ]
+}
