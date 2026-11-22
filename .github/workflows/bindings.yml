@@ -1,10 +1,8 @@
-name: Bindings
+name: Bindings fork validation
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches: [test/dagger-bindings-cache]
 
 permissions: read-all
 
@@ -19,8 +17,9 @@ jobs:
         run: ./scripts/check-binding-constants.sh
 
   dagger-rust-sdk:
-    name: Dagger CI (workspace check + staticlib + FFI tests + Go bindings)
+    name: Dagger optimized (Ubuntu)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,10 +27,67 @@ jobs:
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
+      - name: Set the SDK build directory
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/sbom-dagger-client" >> "$GITHUB_ENV"
       - name: Cache Rust
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Run Dagger Rust SDK pipeline
-        run: ./scripts/run-dagger-ci.sh
+      - name: Full pipeline with fresh caches
+        run: /usr/bin/time -p ./scripts/run-dagger-ci.sh
+      - name: Full pipeline with identical source
+        run: /usr/bin/time -p ./scripts/run-dagger-ci.sh
+      - name: Full pipeline after changing the Rust library
+        run: |
+          cat >> crates/sbom-tools-ffi/src/lib.rs <<'RUST'
+          #[unsafe(no_mangle)]
+          pub extern "C" fn sbom_tools_dagger_cache_probe() -> u32 {
+              42
+          }
+          RUST
+          cat > bindings/go/dagger_cache_probe.go <<'GO'
+          package sbomtools
+
+          /*
+          #include <stdint.h>
+          extern uint32_t sbom_tools_dagger_cache_probe(void);
+          */
+          import "C"
+
+          func daggerCacheProbe() uint32 {
+              return uint32(C.sbom_tools_dagger_cache_probe())
+          }
+          GO
+          cat > bindings/go/dagger_cache_probe_test.go <<'GO'
+          package sbomtools
+
+          import "testing"
+
+          func TestDaggerCacheUsesCurrentRustLibrary(t *testing.T) {
+              if got := daggerCacheProbe(); got != 42 {
+                  t.Fatalf("current Rust library returned %d, want 42", got)
+              }
+          }
+          GO
+          /usr/bin/time -p ./scripts/run-dagger-ci.sh
+
+  dagger-baseline:
+    name: Dagger baseline (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the serial Dagger graph
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fa8fb5d9495a63f517453bf971cd31f5695968aa
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - name: Set the SDK build directory
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/sbom-dagger-client" >> "$GITHUB_ENV"
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Serial pipeline with fresh caches
+        run: /usr/bin/time -p ./scripts/run-dagger-ci.sh
 
   rust-ffi:
     name: Rust FFI
