@@ -1,8 +1,9 @@
 //! Registry-driven per-rule matrix for `ComplianceLevel::EuccSubstantial`
 //! (Reg. (EU) 2024/482, reference-only profile).
 //!
-//! EUCC shares the CRA-family `COMPLIANCE_SARIF_RULE_IDS` catalogue; its
-//! universe is that slice's `SBOM-EUCC-*` ids. Every id gets a firing
+//! The universe is every registered `SBOM-EUCC-*` rule but the fallback,
+//! which `run_matrix` requires to be the level's rule list
+//! (`rules_for_level`). Every id gets a firing
 //! fixture and a silent fixture (rendered in each of the four encodings and
 //! run through the real parser, with the evidence fields in an attached CRA
 //! sidecar), or an explicit skip-with-reason.
@@ -23,17 +24,18 @@ use rule_matrix::{
 use sbom_tools::model::CraSidecarMetadata;
 use sbom_tools::parsers::parse_sbom_str;
 use sbom_tools::quality::{
-    COMPLIANCE_SARIF_RULE_IDS, ComplianceLevel, ComplianceResult, ViolationSeverity as Sev,
+    ComplianceLevel, ComplianceResult, ViolationSeverity as Sev, all_rule_ids,
+    generic_rule_id_for_level,
 };
 
 const LEVEL: ComplianceLevel = ComplianceLevel::EuccSubstantial;
 
-/// The EUCC rules of the shared CRA-family SARIF catalogue.
+/// The registered EUCC rules but the fallback rule, which no check emits.
 fn eucc_universe() -> Vec<&'static str> {
-    COMPLIANCE_SARIF_RULE_IDS
+    all_rule_ids()
         .iter()
         .copied()
-        .filter(|id| id.starts_with("SBOM-EUCC-"))
+        .filter(|id| id.starts_with("SBOM-EUCC-") && *id != generic_rule_id_for_level(LEVEL))
         .collect()
 }
 
@@ -208,6 +210,18 @@ fn eucc_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                     )];
                 }),
             )
+            // A dependency's own certificate does not cover the product,
+            // even when the dependency sits in no relationship.
+            .with_firing(
+                "EUCC certificate reference on an orphan dependency only",
+                Sev::Warning,
+                broken(|s| {
+                    s.primary_mut().external_refs.clear();
+                    let mut upstream = ComponentFixture::conforming("libupstream");
+                    upstream.external_refs = vec![eucc_certificate_ref()];
+                    s.components.push(upstream);
+                }),
+            )
             .with_silent(
                 "attestation reference to a Common Criteria certificate",
                 broken(|s| {
@@ -216,6 +230,24 @@ fn eucc_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                         "https://common-criteria.example/certificates/CC-2026-0042.pdf".to_string(),
                     )];
                 }),
+            )
+            // The keywords the CRA Annex IV check reads (one test for both;
+            // until v0.4.0 this check did not read commoncriteria).
+            .with_silent(
+                "certification-report reference to a commoncriteria URL",
+                broken(|s| {
+                    s.primary_mut().external_refs = vec![(
+                        "certification-report".to_string(),
+                        "https://www.commoncriteriaportal.org/files/epfiles/acme-hsm-cert.pdf"
+                            .to_string(),
+                    )];
+                }),
+            )
+            .case_differs(
+                "certification-report reference to a commoncriteria URL",
+                &[Encoding::Spdx23Json],
+                Outcome::Fires(Sev::Warning),
+                SPDX23_NO_CERTIFICATE_REFERENCE,
             )
             .case_differs(
                 "silent",

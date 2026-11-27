@@ -197,6 +197,8 @@ fn unknown_flag_exits_3_in_every_command() {
         vec!["tailor", sbom],
         vec!["cra-docs", sbom],
         vec!["cra-standards-watch"],
+        vec!["rules"],
+        vec!["rules", "explain", "SBOM-CRA-ART-24"],
         vec!["watch", "--dir", "."],
         vec!["config", "show"],
         vec!["config-schema"],
@@ -228,6 +230,7 @@ fn help_and_version_exit_0_on_stdout() {
         vec!["validate", "--help"],
         vec!["diff", "-h"],
         vec!["vex", "help", "status"],
+        vec!["rules", "explain", "-h"],
     ] {
         let output = run(&args);
         assert_eq!(
@@ -256,6 +259,7 @@ fn missing_arguments_exit_3_even_when_clap_prints_help() {
         vec!["validate"],
         vec!["diff", old.as_str()],
         vec!["query"],
+        vec!["rules", "explain"],
     ] {
         assert_usage_error(&args, &run(&args));
     }
@@ -524,6 +528,8 @@ fn json_schema_v1_keeps_the_pre_0_4_shape() {
 
     // The v1 layout predates passed checks: they simply stop appearing
     // there (they used to be Info violations), and no `passed` field joins.
+    // `evaluated`, the checks a standard did not evaluate (PQC's federal TLS
+    // check, outside deadline mode), is a field of its own and stays.
     let cbom = fixture_path("cyclonedx/cbom-quantum-ready.cdx.json");
     let cbom_raw = std::fs::read_to_string(&cbom).expect("fixture readable");
     let cbom_sbom = sbom_tools::parse_sbom_str(&cbom_raw).expect("fixture parses");
@@ -531,6 +537,7 @@ fn json_schema_v1_keeps_the_pre_0_4_shape() {
         .with_as_of(as_of)
         .check(&cbom_sbom);
     assert!(!pqc.passed.is_empty(), "the fixture passes PQC checks");
+    assert!(!pqc.evaluated.is_empty(), "PQC skips its federal TLS check");
     pqc.passed.clear();
     let cbom = cbom.to_str().expect("utf-8");
     let pqc_v1 = run(&[
@@ -554,6 +561,10 @@ fn json_schema_v1_keeps_the_pre_0_4_shape() {
     );
     let json: Value = serde_json::from_str(&stdout(&pqc_v1)).expect("v1 is JSON");
     assert!(json.get("passed").is_none(), "{json}");
+    assert_eq!(
+        json["evaluated"][0]["rule_id"], "SBOM-PQC-PROTO-003",
+        "{json}"
+    );
     assert_eq!(json["info_count"], 0, "{json}");
 
     // The deprecation note goes to stderr, never into the JSON.
@@ -1023,6 +1034,18 @@ fn cra_docs_rejects_typod_cra_product_class() {
 }
 
 #[test]
+fn diff_rejects_typod_cra_product_class() {
+    let output = base_command()
+        .arg("diff")
+        .arg(fixture_path("demo-old.cdx.json"))
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["-o", "json", "--cra-product-class", "critcal"])
+        .output()
+        .expect("diff command should run");
+    assert_rejects_typod_product_class(&output, "diff");
+}
+
+#[test]
 fn validate_accepts_valid_cra_product_class() {
     // Accepting case for the strict parser: a canonical spelling still runs
     // (exit code reflects compliance, not a parse failure).
@@ -1087,6 +1110,75 @@ fn quality_accepts_as_of_like_validate() {
         Some(0),
         "quality --as-of must parse and run; stderr:\n{}",
         stderr(&output)
+    );
+}
+
+/// Every compliance-checking command takes `validate`'s `--as-of` (one
+/// shared definition and parser): `view` and `diff` (and their TUIs) and
+/// `cra-docs` pin the clock of their compliance checks with it.
+#[test]
+fn every_compliance_command_parses_as_of_like_validate() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let old = fixture_arg("demo-old.cdx.json");
+    let new = fixture_arg("demo-new.cdx.json");
+    let dossier = dir.path().join("dossier");
+    let dossier = dossier.to_str().expect("UTF-8 temp path");
+    let commands: [&[&str]; 4] = [
+        &["validate", &new, "--standard", "cra", "--summary"],
+        &["view", &new, "-o", "json"],
+        &["diff", &old, &new, "-o", "json"],
+        &["cra-docs", &new, "--output", dossier, "--force"],
+    ];
+    for args in commands {
+        let ok = base_command()
+            .args(args)
+            .args(["--as-of", "2027-01-01"])
+            .output()
+            .expect("command should run");
+        assert_ne!(
+            ok.status.code(),
+            Some(3),
+            "{}: --as-of 2027-01-01 must parse; stderr:\n{}",
+            args[0],
+            stderr(&ok)
+        );
+        let bad = base_command()
+            .args(args)
+            .args(["--as-of", "not-a-date"])
+            .output()
+            .expect("command should run");
+        assert_eq!(bad.status.code(), Some(3), "{}", args[0]);
+        let err = stderr(&bad);
+        assert!(
+            err.contains("invalid --as-of") && err.contains("RFC 3339"),
+            "{}: error must explain the accepted forms: {err}",
+            args[0]
+        );
+    }
+}
+
+/// `--standard cra,cra-phase2` names CRA Phase 2 twice: it is checked once,
+/// with a warning on stderr naming the repeat.
+#[test]
+fn validate_checks_a_twice_selected_standard_once() {
+    let output = base_command()
+        .env("RUST_LOG", "warn")
+        .arg("validate")
+        .arg(fixture_path("demo-new.cdx.json"))
+        .args(["--standard", "cra,cra-phase2", "--summary"])
+        .output()
+        .expect("validate command should run");
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("summary should be JSON");
+    assert!(
+        json.is_object(),
+        "one standard checked, one summary object: {json}"
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("standard cra") && err.contains("selected more than once"),
+        "the dropped repeat must be named on stderr: {err}"
     );
 }
 
@@ -1468,6 +1560,52 @@ fn validate_text_output_cannot_forge_ci_annotations() {
     );
 }
 
+/// A value a check read is SBOM text: `-o json` carries it as read, like the
+/// message and the element, and the text report neutralizes it.
+#[test]
+fn observed_values_are_raw_in_json_and_neutralized_in_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A component whose bom-ref is its name reads as missing a bom-ref, and
+    // the finding observes the bom-ref.
+    let crafted = "::warning::forged\u{1b}[31m\u{7}\nx";
+    let document = serde_json::json!({
+        "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+        "metadata": {"timestamp": "2026-01-01T00:00:00Z", "authors": [{"name": "Example"}]},
+        "components": [{"type": "library", "bom-ref": crafted, "name": crafted,
+                        "version": "1.0.0", "purl": "pkg:npm/x@1.0.0",
+                        "supplier": {"name": "Example"}}]
+    });
+    let sbom = dir.path().join("crafted.cdx.json");
+    std::fs::write(&sbom, document.to_string()).expect("write fixture");
+    let validate = |extra: &[&str]| {
+        base_command()
+            .arg("validate")
+            .arg(&sbom)
+            .args(["--standard", "ntia", "--as-of", AS_OF])
+            .args(extra)
+            .output()
+            .expect("validate should run")
+    };
+
+    let json: Value = serde_json::from_str(&stdout(&validate(&["-o", "json"])))
+        .expect("validate -o json is JSON");
+    let observed: Vec<&str> = json["results"][0]["violations"]
+        .as_array()
+        .expect("violations")
+        .iter()
+        .filter(|v| v["rule_id"] == "SBOM-NTIA-ELEMENT-ID")
+        .filter_map(|v| v["observed"].as_str())
+        .collect();
+    assert_eq!(observed, [crafted], "{json}");
+
+    let text = stdout(&validate(&[]));
+    assert!(
+        text.contains("\n  observed: \"\\::warning::forged[31m\\nx\" in bom-ref\n"),
+        "{text}"
+    );
+    assert_no_injected_lines(&text);
+}
+
 /// Two SBOMs whose names, versions, suppliers, licenses and vulnerability IDs
 /// try every way SBOM text can break out of its field: a line break followed
 /// by a workflow command, a value that starts with one (a field printed first
@@ -1646,8 +1784,16 @@ fn every_text_output_neutralizes_sbom_text() {
 
 /// Every finding line (one starting with a `markers` prefix) is followed,
 /// `offset` lines later, by a non-empty `fix:` line with its remediation.
+/// The finding's `observed:` and `deadline:` lines, when it has them, come
+/// before the `fix:` line and do not count toward the offset.
 fn assert_fix_line_per_finding(label: &str, text: &str, markers: &[&str], offset: usize) {
-    let lines: Vec<&str> = text.lines().collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !(line.starts_with("observed: ") || line.starts_with("deadline: "))
+        })
+        .collect();
     let findings: Vec<usize> = lines
         .iter()
         .enumerate()
@@ -1666,6 +1812,205 @@ fn assert_fix_line_per_finding(label: &str, text: &str, markers: &[&str], offset
             "{label}: finding {:?} has no fix line (got {fix:?})",
             lines[i]
         );
+    }
+}
+
+/// SBOM text cannot open an HTML tag or an autolink in the Markdown and HTML
+/// reports. The Markdown tables of `view` and `diff` used to print `<` as is,
+/// and GitHub renders raw HTML in a table cell; a backslash in the text must
+/// not cancel the escape either.
+#[test]
+fn markdown_and_html_reports_cannot_open_a_tag() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let html = "<img src=x onerror=alert(1)> \\<b>bold</b> <https://e.example>";
+    let doc = |suffix: &str, added: bool| {
+        let mut components = vec![json!({"type": "library", "bom-ref": "c-html", "name": html,
+            "version": format!("1.0{suffix}"), "purl": format!("pkg:npm/html@1.0{suffix}"),
+            "supplier": {"name": html}, "licenses": [{"license": {"name": html}}]})];
+        if added {
+            components.push(json!({"type": "library", "bom-ref": "c-new",
+                                   "name": format!("{html} added"), "version": html}));
+        }
+        json!({"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+               "metadata": {"timestamp": "2026-01-01T00:00:00Z"},
+               "components": components})
+    };
+    let write = |file: &str, value: serde_json::Value| {
+        let path = dir.path().join(file);
+        std::fs::write(&path, value.to_string()).expect("write fixture");
+        path
+    };
+    let (old, new) = (
+        write("old.cdx.json", doc("", false)),
+        write("new.cdx.json", doc(".1", true)),
+    );
+    let (old, new) = (old.to_str().expect("utf-8"), new.to_str().expect("utf-8"));
+
+    for (args, markdown) in [
+        (vec!["view", new, "-o", "markdown"], true),
+        (vec!["diff", old, new, "-o", "markdown"], true),
+        (vec!["view", new, "-o", "html"], false),
+        (vec!["diff", old, new, "-o", "html"], false),
+    ] {
+        let output = base_command()
+            .args(&args)
+            .output()
+            .expect("command should run");
+        let out = stdout(&output);
+        let label = format!("{} -o {}", args[0], args[args.len() - 1]);
+        assert!(
+            out.contains("img src=x"),
+            "{label}: the text must still be shown:\n{out}"
+        );
+        if !markdown {
+            assert!(!out.contains("<img"), "{label}: a live tag:\n{out}");
+            continue;
+        }
+        // The reports emit no HTML of their own, so every `<` comes from the
+        // SBOM and must follow an odd run of backslashes.
+        for (at, _) in out.match_indices('<') {
+            let (before, after) = out.split_at(at);
+            let run = before.chars().rev().take_while(|&c| c == '\\').count();
+            assert_eq!(
+                run % 2,
+                1,
+                "{label}: a live `<` in the line {:?}",
+                format!(
+                    "{}{}",
+                    before.rsplit('\n').next().unwrap_or(""),
+                    after.split('\n').next().unwrap_or("")
+                )
+            );
+        }
+    }
+}
+
+/// A file name can come from a pull request like the SBOM itself, so every
+/// text output cleans it as it cleans SBOM text. `quality` used to print it
+/// raw in its report header. Unix only: Windows refuses control characters
+/// in file names.
+#[cfg(unix)]
+#[test]
+fn text_outputs_neutralize_the_sbom_file_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let hostile = "x\n::error file=main.rs,line=1::FORGED\u{1b}[31m\u{7}\u{202E}";
+    let copy = |fixture: &str, suffix: &str| {
+        let path = dir.path().join(format!("{hostile}{suffix}"));
+        std::fs::copy(fixtures.join(fixture), &path).expect("copy fixture");
+        path.to_str().expect("utf-8").to_string()
+    };
+    let new = copy("demo-new.cdx.json", ".cdx.json");
+    let old = copy("demo-old.cdx.json", "-old.cdx.json");
+    let ai = copy("aibom/Llama-3.2-1B-Instruct.cdx.json", "-ai.cdx.json");
+
+    let runs: Vec<Vec<&str>> = vec![
+        vec!["validate", &new, "--standard", "ntia"],
+        vec!["view", &new, "-o", "summary"],
+        vec!["view", &new, "-o", "table"],
+        vec!["diff", &old, &new, "-o", "summary"],
+        vec!["diff", &old, &new, "-o", "side-by-side"],
+        vec!["quality", &new],
+        vec!["quality", &ai, "--profile", "ai-readiness"],
+        vec!["license-check", &new],
+        vec!["vex", "status", &new],
+        vec!["query", "lodash", &new, "-o", "table"],
+    ];
+    for args in &runs {
+        let label = args
+            .iter()
+            .map(|a| if a.contains("FORGED") { "<sbom>" } else { a })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let output = base_command()
+            .env("RUST_LOG", "info")
+            .args(args)
+            .output()
+            .expect("command should run");
+        let code = output.status.code();
+        assert!(
+            !matches!(code, None | Some(3 | 101)),
+            "{label}: exit {code:?}\n{}",
+            stderr(&output)
+        );
+        let out = stdout(&output);
+        assert_neutralized(&label, "stdout", &out);
+        assert_neutralized(&label, "stderr", &stderr(&output));
+        if args[0] == "quality" {
+            assert!(
+                out.contains("SBOM Quality Report: x\\n::error file=main.rs"),
+                "{label}: the header must show the name, escaped:\n{out}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Error messages and status lines quote file names too: a file that fails
+/// to parse or is missing, the sidecar `verify hash` picks up, and the file
+/// `convert` writes. They used to print the name raw on stderr. Unix only, as
+/// above.
+#[cfg(unix)]
+#[test]
+fn error_and_status_messages_neutralize_file_names() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let hostile = "x\n::error file=main.rs,line=1::FORGED\u{1b}[31m\u{7}\u{202E}";
+    let path = |suffix: &str| {
+        dir.path()
+            .join(format!("{hostile}{suffix}"))
+            .to_str()
+            .expect("utf-8")
+            .to_string()
+    };
+    let (good, bad, missing, out) = (
+        path(".cdx.json"),
+        path("-bad.cdx.json"),
+        path("-missing.cdx.json"),
+        path("-out.spdx.json"),
+    );
+    std::fs::copy(fixtures.join("demo-new.cdx.json"), &good).expect("copy fixture");
+    std::fs::write(&bad, "{ not an SBOM").expect("write fixture");
+    let digest = sha256_hex(&std::fs::read(&good).expect("read fixture"));
+    std::fs::write(format!("{good}.sha256"), format!("{digest}\n")).expect("write sidecar");
+
+    for (args, expected) in [
+        (vec!["validate", &bad, "--standard", "ntia"], 3),
+        (vec!["view", &bad, "-o", "summary"], 3),
+        (vec!["quality", &bad], 3),
+        (vec!["diff", &bad, &good, "-o", "summary"], 3),
+        (vec!["license-check", &bad], 3),
+        (vec!["validate", &missing, "--standard", "ntia"], 3),
+        (vec!["verify", "hash", &good], 0),
+        (vec!["convert", &good, "--to", "spdx", "-O", &out], 0),
+    ] {
+        let label = args
+            .iter()
+            .map(|a| if a.contains("FORGED") { "<file>" } else { a })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let output = base_command()
+            .env("RUST_LOG", "info")
+            .args(&args)
+            .output()
+            .expect("command should run");
+        let err = stderr(&output);
+        assert_eq!(output.status.code(), Some(expected), "{label}:\n{err}");
+        assert!(
+            err.contains("FORGED"),
+            "{label}: the name must be shown:\n{err}"
+        );
+        assert_neutralized(&label, "stdout", &stdout(&output));
+        assert_neutralized(&label, "stderr", &err);
     }
 }
 
@@ -1730,6 +2075,49 @@ fn validate_remediation_follows_the_input_format() {
     }
 }
 
+/// `validate` text names the rule of each finding, so it matches the SARIF
+/// alert and the JSON entry, and lists the checks the standard did not
+/// evaluate, with the reason.
+#[test]
+fn validate_text_names_rules_and_lists_checks_not_evaluated() {
+    let sbom = fixture_path("spdx/minimal.spdx.json");
+    let text = stdout(
+        &base_command()
+            .arg("validate")
+            .arg(&sbom)
+            .args(["--standard", "cisa-2026", "--as-of", AS_OF])
+            .output()
+            .expect("validate should run"),
+    );
+    let findings: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            ["[ERROR] ", "[WARN] ", "[INFO] "]
+                .iter()
+                .any(|m| l.starts_with(m))
+        })
+        .collect();
+    assert!(!findings.is_empty(), "{text}");
+    for line in findings {
+        let rule = line
+            .split(" | ")
+            .next()
+            .and_then(|head| head.split_once("] "))
+            .map(|(_, rule)| rule);
+        assert!(
+            rule.is_some_and(|r| r.starts_with("SBOM-CISA2026-")),
+            "the finding line names no rule: {line:?}"
+        );
+    }
+    assert!(
+        text.contains(
+            "\nNot evaluated:\n  SBOM-CISA2026-SIGNATURE: SPDX 2.x cannot carry a document \
+             signature\n"
+        ),
+        "{text}"
+    );
+}
+
 /// The `diff` table report sanitized names but kept their newlines.
 #[test]
 fn diff_table_output_cannot_forge_ci_annotations() {
@@ -1751,4 +2139,145 @@ fn diff_table_output_cannot_forge_ci_annotations() {
         "the added component must be listed, escaped:\n{text}"
     );
     assert_no_injected_lines(&text);
+}
+
+// ---------------------------------------------------------------------------
+// `--fail-on-vuln` fails closed when OSV enrichment cannot run
+// ---------------------------------------------------------------------------
+
+/// A config file that turns OSV enrichment on and points it at a closed local
+/// port, so it fails without touching the network. (Enrichment flags on the
+/// command line would replace the file's `enrichment` section.)
+#[cfg(feature = "enrichment")]
+fn unreachable_osv_config(dir: &Path) -> PathBuf {
+    let path = dir.join("sbom-tools.yaml");
+    std::fs::write(
+        &path,
+        "enrichment:\n  enabled: true\n  api_base: http://127.0.0.1:1\n",
+    )
+    .expect("write config");
+    path
+}
+
+#[cfg(feature = "enrichment")]
+fn run_with_unreachable_osv(args: &[&str]) -> Output {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config = unreachable_osv_config(dir.path());
+    base_command()
+        .env_remove("SBOM_TOOLS_OFFLINE")
+        // A proxy would answer for the closed port.
+        .env("NO_PROXY", "127.0.0.1")
+        .env("no_proxy", "127.0.0.1")
+        .arg("--config")
+        .arg(&config)
+        .args(args)
+        .output()
+        .expect("run sbom-tools")
+}
+
+/// An OSV endpoint that answers the availability probe and then fails every
+/// query: enrichment "runs" and finds nothing.
+#[cfg(feature = "enrichment")]
+#[test]
+fn diff_fail_on_vuln_does_not_pass_when_osv_queries_fail() {
+    use httpmock::prelude::*;
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET);
+        then.status(404);
+    });
+    server.mock(|when, then| {
+        when.method(POST);
+        then.status(500);
+    });
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config = dir.path().join("sbom-tools.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "enrichment:\n  enabled: true\n  bypass_cache: true\n  api_base: {}\n  cache_dir: {}\n",
+            server.base_url(),
+            dir.path().join("cache").display()
+        ),
+    )
+    .expect("write config");
+    let old = fixture_path("demo-old.cdx.json");
+    let new = fixture_path("demo-new.cdx.json");
+    let gated = base_command()
+        .env_remove("SBOM_TOOLS_OFFLINE")
+        .env("NO_PROXY", "127.0.0.1")
+        .env("no_proxy", "127.0.0.1")
+        .arg("--config")
+        .arg(&config)
+        .args(["diff", old.to_str().unwrap(), new.to_str().unwrap()])
+        .args(["--fail-on-vuln", "-o", "json"])
+        .output()
+        .expect("run sbom-tools");
+    assert_vuln_gate_refused(&gated);
+    assert!(
+        stderr(&gated).contains("vulnerability enrichment is incomplete"),
+        "stderr: {}",
+        stderr(&gated)
+    );
+}
+
+#[cfg(feature = "enrichment")]
+fn assert_vuln_gate_refused(output: &Output) {
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a vulnerability gate with no OSV data is an operational error\nstderr: {}",
+        stderr(output)
+    );
+    assert!(
+        stderr(output).contains("--fail-on-vuln requires vulnerability data"),
+        "stderr: {}",
+        stderr(output)
+    );
+}
+
+#[cfg(feature = "enrichment")]
+#[test]
+fn diff_fail_on_vuln_does_not_pass_when_osv_is_unreachable() {
+    let old = fixture_path("demo-old.cdx.json");
+    let new = fixture_path("demo-new.cdx.json");
+    let (old, new) = (old.to_str().unwrap(), new.to_str().unwrap());
+
+    let gated = run_with_unreachable_osv(&["diff", old, new, "--fail-on-vuln", "-o", "json"]);
+    assert_vuln_gate_refused(&gated);
+
+    // Without the gate a failed enrichment stays a warning.
+    let ungated = run_with_unreachable_osv(&["diff", old, new, "-o", "json"]);
+    assert_ne!(
+        ungated.status.code(),
+        Some(3),
+        "stderr: {}",
+        stderr(&ungated)
+    );
+}
+
+#[cfg(feature = "enrichment")]
+#[test]
+fn view_fail_on_vuln_does_not_pass_when_osv_is_unreachable() {
+    let sbom = fixture_path("demo-new.cdx.json");
+    let gated = run_with_unreachable_osv(&[
+        "view",
+        sbom.to_str().unwrap(),
+        "--fail-on-vuln",
+        "-o",
+        "json",
+    ]);
+    assert_vuln_gate_refused(&gated);
+}
+
+#[cfg(feature = "enrichment")]
+#[test]
+fn multi_sbom_fail_on_vuln_does_not_pass_when_osv_is_unreachable() {
+    let old = fixture_path("demo-old.cdx.json");
+    let new = fixture_path("demo-new.cdx.json");
+    let (old, new) = (old.to_str().unwrap(), new.to_str().unwrap());
+    for command in ["diff-multi", "timeline"] {
+        let gated = run_with_unreachable_osv(&[command, old, new, "--fail-on-vuln", "-o", "json"]);
+        assert_vuln_gate_refused(&gated);
+    }
 }

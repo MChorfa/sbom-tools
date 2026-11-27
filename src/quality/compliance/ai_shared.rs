@@ -24,6 +24,14 @@
 //! since HuggingFace hosts datasets as well as models — are collected
 //! separately so the profiles stay applicable and can surface a mistyped-ML
 //! warning instead of letting "untype your models" evade the assessment.
+//!
+//! The profiles read the scope, and whether a model declares its training
+//! datasets, from the evidence layer (`evidence::AiFacts` and
+//! `ComponentView::declares_training_datasets`), which derives them once per
+//! run from the functions here. The AI-readiness scorer calls these
+//! functions directly.
+
+use std::borrow::Cow;
 
 use super::{Violation, ViolationCategory, ViolationSeverity, truncate_list};
 use crate::model::{Component, ComponentType, DependencyType, ExternalRefType, NormalizedSbom};
@@ -59,6 +67,18 @@ impl AiBomScope<'_> {
         !self.ml_components.is_empty()
             || !self.dataset_components.is_empty()
             || !self.untyped_ml_components.is_empty()
+    }
+
+    /// The number of components in the scope. A model that also carries
+    /// dataset evidence is in both lists and counts once.
+    pub(crate) fn component_count(&self) -> usize {
+        let both = self
+            .dataset_components
+            .iter()
+            .filter(|d| self.ml_components.iter().any(|m| std::ptr::eq(*m, **d)))
+            .count();
+        self.ml_components.len() + self.dataset_components.len() - both
+            + self.untyped_ml_components.len()
     }
 }
 
@@ -152,24 +172,21 @@ fn looks_like_ml_content(c: &Component) -> bool {
 
 /// Push the shared mistyped-ML warning when the scope contains ML-looking
 /// components that are neither typed `machine-learning-model` nor carry
-/// ML-model metadata. `profile_tag` is the message prefix (`AI-Act` /
-/// `BSI-AI`); `rule_id` must be the per-profile registered rule
+/// ML-model metadata ([`AiBomScope::untyped_ml_components`]): `untyped`
+/// names them, in scope order. `profile_tag` is the message prefix
+/// (`AI-Act` / `BSI-AI`); `rule_id` must be the per-profile registered rule
 /// (`SBOM-AIACT-UNTYPED-ML` / `SBOM-BSIAI-UNTYPED-ML`).
-pub(crate) fn push_untyped_ml_warning(
-    scope: &AiBomScope<'_>,
+pub(crate) fn push_untyped_ml_warning<'n>(
+    untyped: impl IntoIterator<Item = &'n str>,
     profile_tag: &str,
     requirement: &str,
     rule_id: &'static str,
     violations: &mut Vec<Violation>,
 ) {
-    if scope.untyped_ml_components.is_empty() {
+    let names: Vec<String> = untyped.into_iter().map(str::to_string).collect();
+    if names.is_empty() {
         return;
     }
-    let names: Vec<String> = scope
-        .untyped_ml_components
-        .iter()
-        .map(|c| c.name.clone())
-        .collect();
     violations.push(Violation {
         severity: ViolationSeverity::Warning,
         category: ViolationCategory::ComponentIdentification,
@@ -185,9 +202,13 @@ pub(crate) fn push_untyped_ml_warning(
         rule_id,
         component_id: None,
         counts: None,
-        standard_refs: Vec::new(),
+        standard_refs: Cow::Borrowed(&[]),
         remediation: None,
         finding_detail: None,
+        severity_override: None,
+        deadline: None,
+        field: None,
+        observed: None,
     });
 }
 

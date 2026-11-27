@@ -14,7 +14,7 @@
 
 use crate::model::{ConformityRoute, CraProductClass, CraSidecarMetadata, NormalizedSbom};
 use crate::pipeline::parse_sbom_with_context;
-use crate::quality::{ComplianceChecker, ComplianceLevel, ComplianceResult};
+use crate::quality::{ComplianceLevel, ComplianceResult};
 use crate::reports::escape::{
     escape_markdown_inline, markdown_link_destination, markdown_url_or_text,
 };
@@ -45,23 +45,34 @@ pub fn run_cra_docs(
         output_dir,
         cra_sidecar_path,
         cra_product_class,
+        None,
         false,
+        super::PqcOptions::default(),
+        &super::RuleOptions::default(),
     )
 }
 
-/// [`run_cra_docs`] with an explicit overwrite decision.
+/// [`run_cra_docs`] with an explicit overwrite decision, evaluation clock
+/// (`--as-of`, judged like `validate --as-of`; the wall clock when `None`),
+/// the shared PQC flags (`pqc`), which the dossier's CRA check does not
+/// read but which are held to the rules every command applies, and the
+/// rule settings and component scope (`rules`), which its CRA check
+/// applies as `validate --standard cra` does.
 ///
 /// The generated dossier is a *starting point* the operator completes by
 /// hand (`_TBD_` placeholders), so a re-run must not silently clobber those
 /// edits: when `force` is false and any dossier file already exists, this
 /// errors listing the existing files; `--force` overwrites them.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub fn run_cra_docs_with_force(
     sbom_path: PathBuf,
     output_dir: PathBuf,
     cra_sidecar_path: Option<PathBuf>,
     cra_product_class: Option<String>,
+    as_of: Option<&str>,
     force: bool,
+    pqc: super::PqcOptions,
+    rules: &super::RuleOptions,
 ) -> Result<()> {
     if !force {
         let existing: Vec<String> = DOSSIER_FILES
@@ -79,36 +90,36 @@ pub fn run_cra_docs_with_force(
         }
     }
 
+    // The run `validate --standard cra` would use (shared helper): the
+    // pinned clock, the product class (strict parse) and the CRA sidecar
+    // (explicit, else found next to the SBOM; a sidecar that fails to load
+    // is a hard error).
+    let run = super::compliance_run_config_for(
+        &sbom_path,
+        cra_sidecar_path.as_deref(),
+        cra_product_class.as_deref(),
+        as_of,
+        pqc,
+        rules,
+    )?;
+    run.warn_on_unmatched_rules(
+        &[ComplianceLevel::CraPhase2],
+        "the dossier's CRA Phase 2 checks",
+    );
+
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
     let sbom = parsed.sbom();
+    let sidecar = run.sidecar();
 
-    // Sidecar resolution (shared with validate/quality/view): an explicit
-    // path that fails to load is a hard error; auto-discovery is best-effort.
-    let sidecar = super::load_cra_sidecar(cra_sidecar_path.as_deref(), &sbom_path)?;
-
-    // Effective product class: sidecar wins, else CLI flag, else Default.
-    // An explicitly passed unrecognized class is a hard error (strict parse).
-    let cli_class = super::parse_cra_product_class(cra_product_class.as_deref())?;
-    let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
-    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
-        && cli != side
-    {
-        tracing::warn!(
-            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
-            cli.label(),
-            side.label()
-        );
-    }
-    let effective_class = sidecar_class
-        .or(cli_class)
+    // The dossier names a product class: the sidecar's, else the CLI flag's,
+    // else Default.
+    let effective_class = run
+        .effective_product_class()
         .unwrap_or(CraProductClass::Default);
 
-    // Build a compliance result so the dossier can summarise readiness.
-    let mut checker = ComplianceChecker::new(ComplianceLevel::CraPhase2);
-    if let Some(sc) = sidecar.clone() {
-        checker = checker.with_sidecar(sc);
-    }
-    checker = checker.with_product_class(effective_class);
+    // Build a compliance result so the dossier can summarise readiness with
+    // the verdict `validate --standard cra` reports for the same inputs.
+    let checker = run.checker(ComplianceLevel::CraPhase2);
     let compliance = checker.check(sbom);
     let route = checker.effective_route();
 
@@ -117,15 +128,15 @@ pub fn run_cra_docs_with_force(
 
     write_doc(
         &output_dir.join(DOSSIER_FILES[0]),
-        &render_doc(sbom, sidecar.as_ref(), effective_class, route),
+        &render_doc(sbom, sidecar, effective_class, route),
     )?;
     write_doc(
         &output_dir.join(DOSSIER_FILES[1]),
-        &render_tech_doc(sbom, sidecar.as_ref(), effective_class, route, &compliance),
+        &render_tech_doc(sbom, sidecar, effective_class, route, &compliance),
     )?;
     write_doc(
         &output_dir.join(DOSSIER_FILES[2]),
-        &render_vuln_policy(sbom, sidecar.as_ref()),
+        &render_vuln_policy(sbom, sidecar),
     )?;
 
     println!(
@@ -147,15 +158,18 @@ fn render_doc(
     class: CraProductClass,
     route: ConformityRoute,
 ) -> String {
+    // The sidecar's manufacturerName, as for the product name, else the
+    // manufacturer the Art. 13(16) check accepts, from the same sources in
+    // the same order (`manufacturer_name`: an organization creator, the
+    // product's supplier, the described product's manufacturer or
+    // supplier). Placeholders name nobody. The sidecar comes first because
+    // it is the manufacturer's own statement for the dossier; the check
+    // only asks whether any source names the manufacturer, so the order
+    // changes no verdict. Until v0.4.0 only the first organization creator
+    // was read, whatever its name.
     let manufacturer = sidecar
         .and_then(|s| s.manufacturer_name.as_deref())
-        .or_else(|| {
-            sbom.document
-                .creators
-                .iter()
-                .find(|c| matches!(c.creator_type, crate::model::CreatorType::Organization))
-                .map(|c| c.name.as_str())
-        })
+        .or_else(|| crate::quality::manufacturer_name(sbom))
         .map_or_else(
             || "_TBD: manufacturer name_".to_string(),
             escape_markdown_inline,
@@ -604,6 +618,7 @@ fn render_vuln_policy(sbom: &NormalizedSbom, sidecar: Option<&CraSidecarMetadata
 mod tests {
     use super::*;
     use crate::model::Component;
+    use crate::quality::ComplianceChecker;
     use tempfile::tempdir;
 
     #[test]
@@ -656,8 +671,17 @@ mod tests {
         );
 
         // --force overwrites.
-        run_cra_docs_with_force(sbom_path, out.clone(), None, None, true)
-            .expect("forced rerun succeeds");
+        run_cra_docs_with_force(
+            sbom_path,
+            out.clone(),
+            None,
+            None,
+            None,
+            true,
+            crate::cli::PqcOptions::default(),
+            &crate::cli::RuleOptions::default(),
+        )
+        .expect("forced rerun succeeds");
         assert_ne!(std::fs::read_to_string(&doc).unwrap(), "HAND-EDITED");
     }
 
@@ -685,6 +709,82 @@ mod tests {
         assert!(doc.contains("EU-DoC-2026-001"));
         assert!(doc.contains("Important Class I"));
         assert!(doc.contains("Module A"));
+    }
+
+    /// Without a sidecar name, the dossier names the manufacturer the CRA
+    /// Art. 13(16) check accepts, from the same sources in the same order:
+    /// an organization creator, the product's supplier, the described
+    /// product's manufacturer or supplier. A placeholder names nobody, and
+    /// `_TBD_` stays only when no source names one. Until v0.4.0 only the
+    /// first organization creator was read, whatever its name.
+    #[test]
+    fn doc_names_the_manufacturer_the_art_13_16_check_accepts() {
+        use crate::model::{Creator, CreatorType, Organization};
+        let manufacturer_line = |sbom: &NormalizedSbom, sidecar: Option<&CraSidecarMetadata>| {
+            let doc = render_doc(
+                sbom,
+                sidecar,
+                CraProductClass::Default,
+                ConformityRoute::ModuleA,
+            );
+            let manufacturer = doc
+                .split("**2. Manufacturer**\n")
+                .nth(1)
+                .expect("the manufacturer section");
+            manufacturer
+                .lines()
+                .next()
+                .expect("the name line")
+                .to_string()
+        };
+        let mut sbom = NormalizedSbom::default();
+        let mut product = Component::new("router-os".to_string(), "router-os".to_string());
+        product.supplier = Some(Organization::new("Acme Networks GmbH".to_string()));
+        let product_id = product.canonical_id.clone();
+        sbom.add_component(product);
+        sbom.set_primary_component(product_id);
+        assert_eq!(
+            manufacturer_line(&sbom, None),
+            "- Name: Acme Networks GmbH",
+            "the described product's supplier"
+        );
+
+        sbom.document.supplier = Some(Organization::new("Acme Holding AG".to_string()));
+        assert_eq!(manufacturer_line(&sbom, None), "- Name: Acme Holding AG");
+
+        sbom.document.creators = vec![Creator {
+            creator_type: CreatorType::Organization,
+            name: "NOASSERTION".to_string(),
+            email: None,
+        }];
+        assert_eq!(
+            manufacturer_line(&sbom, None),
+            "- Name: Acme Holding AG",
+            "a placeholder creator names nobody"
+        );
+        sbom.document.creators[0].name = "Acme Security Team".to_string();
+        assert_eq!(manufacturer_line(&sbom, None), "- Name: Acme Security Team");
+
+        let sidecar = CraSidecarMetadata {
+            manufacturer_name: Some("ExCorp".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            manufacturer_line(&sbom, Some(&sidecar)),
+            "- Name: ExCorp",
+            "the sidecar's manufacturerName comes first, as the product name's does"
+        );
+
+        let mut unnamed = NormalizedSbom::default();
+        let mut product = Component::new("router-os".to_string(), "router-os".to_string());
+        product.supplier = Some(Organization::new("TBD".to_string()));
+        let product_id = product.canonical_id.clone();
+        unnamed.add_component(product);
+        unnamed.set_primary_component(product_id);
+        assert_eq!(
+            manufacturer_line(&unnamed, None),
+            "- Name: _TBD: manufacturer name_"
+        );
     }
 
     #[test]

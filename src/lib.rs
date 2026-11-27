@@ -179,6 +179,13 @@
 //! }
 //! ```
 //!
+//! To check with a run's inputs (the evaluation clock, the CRA sidecar and
+//! the product class that the CLI takes as `--as-of`, `--cra-sidecar` and
+//! `--cra-product-class`), build a
+//! [`ComplianceRunConfig`](quality::ComplianceRunConfig) and check through
+//! it: it hands each standard the inputs that standard reads, as every CLI
+//! command and TUI does.
+//!
 //! ## Feature Flags
 //!
 //! `sbom-tools` uses feature flags to manage optional functionality and dependencies.
@@ -261,8 +268,9 @@ pub use error::{ErrorContext, OptionContext, Result, SbomDiffError};
 pub use ffi::{
     SbomToolsErrorCode, SbomToolsScoringProfile, SbomToolsStringResult,
     sbom_tools_abi_version_json, sbom_tools_detect_format_json, sbom_tools_diff_sboms_json,
-    sbom_tools_parse_sbom_path_json, sbom_tools_parse_sbom_str_json, sbom_tools_score_sbom_json,
-    sbom_tools_string_result_free,
+    sbom_tools_parse_sbom_path_json, sbom_tools_parse_sbom_str_json, sbom_tools_rule_catalog_json,
+    sbom_tools_score_sbom_json, sbom_tools_score_sbom_with_options_json,
+    sbom_tools_string_result_free, sbom_tools_validate_json,
 };
 pub use matching::{
     ComponentMatcher, FuzzyMatchConfig, FuzzyMatcher, MatchResult, MatchTier, MatchingRulesConfig,

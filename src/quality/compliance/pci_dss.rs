@@ -27,9 +27,15 @@
 //!
 //! The rule catalogue for this profile lives in the registry (`SBOM-PCI-*`,
 //! see `PCIDSS_SARIF_RULE_IDS`).
+//!
+//! The checks read the run's evidence (see [`super::evidence`]), never the
+//! SBOM itself.
 
+use super::shared::{
+    future_timestamp_violation_of, unparseable_timestamp_of, unreachable_contact_note_of,
+};
 use super::*;
-use crate::model::{CompletenessDeclaration, ExternalRefType, Severity};
+use crate::model::{CompletenessDeclaration, Severity};
 
 /// Tool-policy staleness threshold for the Req. 6.3.2 "is maintained"
 /// advisory. PCI DSS text prescribes no regeneration cadence; this cutoff is
@@ -47,33 +53,37 @@ impl ComplianceChecker {
     /// vulnerability-management proxies.
     pub(crate) fn check_pci_dss_6_3_2(
         &self,
-        sbom: &NormalizedSbom,
-        violations: &mut Vec<Violation>,
+        ctx: &ComplianceContext<'_, '_>,
+        findings: &mut Findings,
     ) {
-        self.check_pci_inventory(sbom, violations);
-        self.check_pci_components(sbom, violations);
-        self.check_pci_third_party(sbom, violations);
-        self.check_pci_completeness(sbom, violations);
-        self.check_pci_freshness(sbom, violations);
-        self.check_pci_vuln_evidence(sbom, violations);
-        self.check_pci_risk_ranking(sbom, violations);
+        let violations = &mut findings.violations;
+        self.check_pci_inventory(ctx, violations);
+        self.check_pci_components(ctx, violations);
+        self.check_pci_third_party(ctx, violations);
+        self.check_pci_completeness(ctx, violations);
+        self.check_pci_freshness(ctx, violations);
+        self.check_pci_vuln_evidence(ctx, violations);
+        self.check_pci_risk_ranking(ctx, violations);
     }
 
     /// SBOM-PCI-6-3-2-INVENTORY (Error): the document must be a non-empty
     /// inventory that identifies the bespoke/custom application it
     /// describes. An empty or headless document cannot serve as the
     /// Req. 6.3.2 inventory.
-    fn check_pci_inventory(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+    fn check_pci_inventory(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+    ) {
         // A file- or crypto-only document is no software inventory either:
         // the per-component rules exempt those entries, so it used to pass.
-        if let Some(mut absent) = inventory_absent_violation(
-            sbom,
+        if let Some(mut absent) = ctx.inventory_absent_violation(
             "SBOM-PCI-6-3-2-INVENTORY",
             "PCI DSS v4.0.1 Req. 6.3.2 / TP 6.3.2.b: non-empty software inventory",
         ) {
             absent.message = format!("[PCI DSS 6.3.2] {}", absent.message);
             violations.push(absent);
-        } else if sbom.primary_component().is_none() {
+        } else if ctx.ev.primary().is_none() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
@@ -87,9 +97,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-PCI-6-3-2-INVENTORY",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }
@@ -106,40 +120,43 @@ impl ComplianceChecker {
     /// the generic-path carve-out for SBOM-NTIA-*/SBOM-CRA-COMPONENT-*
     /// (generic.rs), except that the PCI registry text extends the
     /// exemption to the name rule as well.
-    fn check_pci_components(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        let primary_id = sbom.primary_component_id.as_ref();
-        for (id, comp) in &sbom.components {
-            if !comp.component_type.is_package_scoped() {
-                continue;
-            }
-
+    fn check_pci_components(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+    ) {
+        for comp in ctx.package_components() {
             // Name: an unnamed entry cannot be correlated with vendor
             // advisories or patches.
-            if !known_component_name(comp) {
+            if !comp.name_known() {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::ComponentIdentification,
                     message: format!(
                         "[PCI DSS 6.3.2] Inventoried component '{}' has no usable name; an \
                          unnamed entry cannot be correlated with vendor advisories or patches",
-                        comp.identifiers.format_id
+                        comp.format_id()
                     ),
-                    element: Some(comp.identifiers.format_id.clone()),
+                    element: Some(comp.format_id().to_string()),
                     requirement: "PCI DSS v4.0.1 Req. 6.3.2: component name".to_string(),
                     rule_id: "SBOM-PCI-6-3-2-NAME",
-                    component_id: Some(comp.canonical_id.value().to_string()),
+                    component_id: Some(comp.canonical_id().value().to_string()),
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: observed(comp.name()),
                 });
             }
 
             // Version: patch management — the requirement's stated purpose —
             // is impossible without versions. A version range is acceptable
             // only for external (environment-provided) components.
-            let version_ok = has_known_value(&comp.version)
-                || (comp.is_external && has_known_value(&comp.version_range));
+            let version_ok = comp.version().is_known()
+                || (comp.is_external() && comp.version_range().is_known());
             if !version_ok {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
@@ -148,23 +165,27 @@ impl ComplianceChecker {
                         "[PCI DSS 6.3.2] Component '{}' has no concrete version; patch \
                          management — the requirement's stated purpose — is impossible \
                          without one",
-                        comp.name
+                        comp.name()
                     ),
-                    element: Some(comp.name.clone()),
+                    element: Some(comp.name().to_string()),
                     requirement: "PCI DSS v4.0.1 Req. 6.3.2: component version".to_string(),
                     rule_id: "SBOM-PCI-6-3-2-VERSION",
-                    component_id: Some(comp.canonical_id.value().to_string()),
+                    component_id: Some(comp.canonical_id().value().to_string()),
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: comp.version().raw.and_then(observed),
                 });
             }
 
             // Unique identifier: enabling evidence for the "facilitate
             // vulnerability and patch management" clause. PCI DSS prescribes
             // no identifier scheme, hence Warning, not Error.
-            if !comp.identifiers.has_cra_identifier() {
+            if !comp.ids().any() {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::ComponentIdentification,
@@ -173,18 +194,22 @@ impl ComplianceChecker {
                          identifier (PURL/CPE/SWHID/SWID), so the inventory cannot be \
                          machine-correlated with vulnerability sources; PCI DSS prescribes no \
                          identifier scheme — this is enabling evidence, not a mandated field",
-                        comp.name
+                        comp.name()
                     ),
-                    element: Some(comp.name.clone()),
+                    element: Some(comp.name().to_string()),
                     requirement: "PCI DSS v4.0.1 Req. 6.3.2 / TP 6.3.2.a: unique identifier for \
                          vulnerability correlation"
                         .to_string(),
                     rule_id: "SBOM-PCI-6-3-2-IDENTIFIER",
-                    component_id: Some(comp.canonical_id.value().to_string()),
+                    component_id: Some(comp.canonical_id().value().to_string()),
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
 
@@ -194,11 +219,9 @@ impl ComplianceChecker {
             // cannot express bespoke-ness for the rest, so every non-primary
             // entry is treated as potentially third-party and the finding
             // stays an evidence-limited Warning.
-            let is_primary = primary_id.is_some_and(|p| p == id);
-            let supplier_evidence = has_known_producer(comp)
-                || has_known_value(&comp.group)
-                || comp.ecosystem.is_some();
-            if !is_primary && !supplier_evidence {
+            let supplier_evidence =
+                comp.producer().is_known() || comp.group().is_known() || comp.ecosystem_declared();
+            if !comp.is_primary() && !supplier_evidence {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::SupplierInfo,
@@ -208,18 +231,22 @@ impl ComplianceChecker {
                          security-patch availability cannot be monitored; the SBOM model \
                          cannot mark entries as bespoke, so this is inferred for every \
                          non-primary component",
-                        comp.name
+                        comp.name()
                     ),
-                    element: Some(comp.name.clone()),
+                    element: Some(comp.name().to_string()),
                     requirement: "PCI DSS v4.0.1 Req. 6.3.2: third-party component \
                                   supplier/source"
                         .to_string(),
                     rule_id: "SBOM-PCI-6-3-2-SUPPLIER",
-                    component_id: Some(comp.canonical_id.value().to_string()),
+                    component_id: Some(comp.canonical_id().value().to_string()),
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: comp.producer().observed.and_then(observed),
                 });
             }
         }
@@ -231,27 +258,26 @@ impl ComplianceChecker {
     /// against the software is assessor work — and suppressed when the
     /// document self-declares the inventory Complete (a genuinely
     /// dependency-free application).
-    fn check_pci_third_party(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+    fn check_pci_third_party(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+    ) {
         // Headless/empty documents already fail SBOM-PCI-6-3-2-INVENTORY;
         // this inference is only meaningful once a primary application
         // component is identified.
-        let Some(primary_id) = sbom.primary_component_id.as_ref() else {
-            return;
-        };
-        if sbom.primary_component().is_none() {
+        if ctx.ev.primary().is_none() {
             return;
         }
-        if sbom.document.completeness_declaration == CompletenessDeclaration::Complete {
+        if *ctx.ev.document().completeness == CompletenessDeclaration::Complete {
             return;
         }
 
         // File/snippet records are not package inventory entries; only
         // package-level components count as enumerated third-party software.
-        let non_primary: Vec<_> = sbom
-            .components
-            .iter()
-            .filter(|(id, comp)| *id != primary_id && comp.component_type.is_package_scoped())
-            .map(|(_, comp)| comp)
+        let non_primary: Vec<_> = ctx
+            .package_components()
+            .filter(|comp| !comp.is_primary())
             .collect();
 
         let (message, requirement) = if non_primary.is_empty() {
@@ -262,10 +288,9 @@ impl ComplianceChecker {
                  Complete); the real comparison against the software is assessor work",
                 "PCI DSS v4.0.1 Req. 6.3.2 / TP 6.3.2.b: third-party components enumerated",
             )
-        } else if !non_primary
-            .iter()
-            .any(|comp| has_known_producer(comp) || comp.ecosystem.is_some() || comp.is_external)
-        {
+        } else if !non_primary.iter().any(|comp| {
+            comp.producer().is_known() || comp.ecosystem_declared() || comp.is_external()
+        }) {
             (
                 "[PCI DSS TP 6.3.2.b] No component beyond the primary carries supplier, \
                  ecosystem, or external-dependency evidence, so third-party components cannot \
@@ -286,9 +311,13 @@ impl ComplianceChecker {
             rule_id: "SBOM-PCI-6-3-2-THIRD-PARTY",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -298,8 +327,12 @@ impl ComplianceChecker {
     /// explicitly unknown aggregate) and `NotSpecified` (completeness was
     /// declared but with an unrecognized value, or a no-assertion value) are
     /// informational.
-    fn check_pci_completeness(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        let declaration = &sbom.document.completeness_declaration;
+    fn check_pci_completeness(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+    ) {
+        let declaration = ctx.ev.document().completeness;
         let (severity, message) = match declaration {
             CompletenessDeclaration::Complete => return,
             CompletenessDeclaration::Incomplete
@@ -335,9 +368,13 @@ impl ComplianceChecker {
             rule_id: "SBOM-PCI-6-3-2-COMPLETENESS",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -348,14 +385,22 @@ impl ComplianceChecker {
     /// timestamp is an Info advisory only, and the threshold is explicitly
     /// tool policy, not PCI DSS text: the SBOM proves generation time, not the
     /// inventory process.
-    fn check_pci_freshness(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        if !sbom.document.has_known_timestamp() {
+    fn check_pci_freshness(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+    ) {
+        let doc = ctx.ev.document();
+        if !doc.has_known_timestamp {
+            let gap = unparseable_timestamp_of(doc.created_unparsed)
+                .unwrap_or_else(|| "no creation timestamp".to_string());
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[PCI DSS 6.3.2] SBOM has no creation timestamp, so nothing evidences \
-                          when the inventory was last maintained"
-                    .to_string(),
+                message: format!(
+                    "[PCI DSS 6.3.2] SBOM has {gap}, so nothing evidences when the inventory \
+                     was last maintained"
+                ),
                 element: None,
                 requirement: "PCI DSS v4.0.1 Req. 6.3.2: inventory 'is maintained' — creation \
                               timestamp"
@@ -363,15 +408,19 @@ impl ComplianceChecker {
                 rule_id: "SBOM-PCI-6-3-2-FRESHNESS",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: doc.created_unparsed.and_then(observed),
             });
             return;
         }
-        let now = self.now();
-        if let Some(future) = future_timestamp_violation(
-            sbom,
+        let now = ctx.ev.as_of();
+        if let Some(future) = future_timestamp_violation_of(
+            Some(doc.created),
             now,
             "SBOM-PCI-6-3-2-FRESHNESS",
             "[PCI DSS 6.3.2]",
@@ -380,7 +429,7 @@ impl ComplianceChecker {
             violations.push(future);
             return;
         }
-        let age_days = (now - sbom.document.created).num_days();
+        let age_days = (now - doc.created).num_days();
         if age_days > PCI_STALE_AFTER_DAYS {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
@@ -397,9 +446,16 @@ impl ComplianceChecker {
                 rule_id: "SBOM-PCI-6-3-2-FRESHNESS",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: observed(
+                    &doc.created
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                ),
             });
         }
     }
@@ -412,44 +468,48 @@ impl ComplianceChecker {
     /// a disclosure URL. Absence is NOT a Req. 6.3.2 failure — the inventory
     /// may feed an external scanner, and actual use is assessor-verified —
     /// so the rule only surfaces the missing hooks at Info.
-    fn check_pci_vuln_evidence(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        let has_embedded_vulns = sbom
-            .components
-            .values()
-            .any(|c| !c.vulnerabilities.is_empty());
-        let has_hook_ref = sbom.components.values().any(|c| {
-            c.external_refs.iter().any(|r| {
-                matches!(
-                    r.ref_type,
-                    ExternalRefType::Advisories
-                        | ExternalRefType::VulnerabilityAssertion
-                        | ExternalRefType::Bom
-                        | ExternalRefType::SecurityContact
-                )
-            })
-        });
-        let has_contact = has_known_value(&sbom.document.security_contact)
-            || has_known_value(&sbom.document.vulnerability_disclosure_url);
+    fn check_pci_vuln_evidence(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+    ) {
+        let ev = ctx.ev;
+        let doc = ev.document();
+        let has_embedded_vulns = !ev.vulnerabilities().is_empty();
+        // A contact (an advisories or security-contact reference, the
+        // document's security contact or disclosure URL) counts only when it
+        // reaches someone (`known_contact`), as for the CRA and EO 14028
+        // checks; a VDR or linked BOM is a document, not a contact. A
+        // reference on any component counts.
+        let has_hook_ref = ev.vulnerability_hook_reference();
+        let has_contact = doc.security_contact_reaches || doc.vulnerability_disclosure_url_reaches;
         if has_embedded_vulns || has_hook_ref || has_contact {
             return;
         }
+        let unreachable_contact = ev.manufacturer().unreachable_contact;
         violations.push(Violation {
             severity: ViolationSeverity::Info,
             category: ViolationCategory::SecurityInfo,
-            message: "[PCI DSS TP 6.3.2.a] SBOM carries no vulnerability-management hooks (no \
-                      embedded vulnerability data, no advisories / vulnerability-assertion / \
-                      linked-VDR external reference, no security contact or disclosure URL); \
-                      this is not a Req. 6.3.2 failure — the inventory may feed an external \
-                      scanner, and actual use of the inventory is assessor-verified"
-                .to_string(),
+            message: format!(
+                "[PCI DSS TP 6.3.2.a] SBOM carries no vulnerability-management hooks (no \
+                 embedded vulnerability data, no advisories / vulnerability-assertion / \
+                 linked-VDR external reference, no security contact or disclosure URL); this \
+                 is not a Req. 6.3.2 failure — the inventory may feed an external scanner, and \
+                 actual use of the inventory is assessor-verified{}",
+                unreachable_contact_note_of(unreachable_contact)
+            ),
             element: None,
             requirement: "PCI DSS v4.0.1 TP 6.3.2.a: vulnerability-management hooks".to_string(),
             rule_id: "SBOM-PCI-6-3-2-VULN-EVIDENCE",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: unreachable_contact.and_then(observed),
         });
     }
 
@@ -467,24 +527,42 @@ impl ComplianceChecker {
     ///
     /// Emitted only when vulnerability data is present: with none, the rule
     /// is not applicable and stays silent (no vacuous pass/fail).
-    fn check_pci_risk_ranking(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        let all = sbom.all_vulnerabilities();
-        if all.is_empty() {
+    fn check_pci_risk_ranking(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+    ) {
+        let all = ctx.ev.vulnerabilities();
+        // A vulnerability whose own VEX statement is a justified
+        // not_affected does not apply to the product, so it needs no risk
+        // ranking to be managed: the CRA and FDA vulnerability checks skip
+        // it the same way (`justified_not_affected`). Until v0.4.0 every
+        // entry counted, whatever its VEX state.
+        let open: Vec<_> = all.iter().filter(|f| !f.justified_not_affected).collect();
+        if open.is_empty() {
             return;
         }
-        let unranked: Vec<String> = all
+        let unranked: Vec<String> = open
             .iter()
-            .filter(|(_, vuln)| {
+            .filter(|f| {
                 !matches!(
-                    vuln.severity,
+                    f.vuln.severity,
                     Some(Severity::Critical | Severity::High | Severity::Medium | Severity::Low)
-                ) && vuln.cvss.is_empty()
+                ) && f.vuln.cvss.is_empty()
             })
-            .map(|(comp, vuln)| format!("{} ({})", vuln.id, comp.name))
+            .map(|f| format!("{} ({})", f.vuln.id, ctx.ev.component(f.component).name()))
             .collect();
         if unranked.is_empty() {
             return;
         }
+        let not_affected_note = match all.len() - open.len() {
+            0 => String::new(),
+            1 => "; 1 more entry has a justified not_affected VEX statement and needs none"
+                .to_string(),
+            n => format!(
+                "; {n} more entries have a justified not_affected VEX statement and need none"
+            ),
+        };
         violations.push(Violation {
             severity: ViolationSeverity::Warning,
             category: ViolationCategory::SecurityInfo,
@@ -492,9 +570,10 @@ impl ComplianceChecker {
                 "[PCI DSS 6.3.1 / 11.3.1.1] {affected}/{total} embedded vulnerability entries \
                  carry no risk ranking (no Critical/High/Medium/Low severity and no CVSS \
                  score): {list} — unranked entries cannot be managed per the entity's \
-                 Req. 6.3.1 risk rankings and the Req. 11.3.1.1 targeted risk analysis",
+                 Req. 6.3.1 risk rankings and the Req. 11.3.1.1 targeted risk \
+                 analysis{not_affected_note}",
                 affected = unranked.len(),
-                total = all.len(),
+                total = open.len(),
                 list = truncate_list(&unranked, 5),
             ),
             element: None,
@@ -504,11 +583,15 @@ impl ComplianceChecker {
             component_id: None,
             counts: Some(ViolationCounts {
                 affected: unranked.len(),
-                total: all.len(),
+                total: open.len(),
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 }
@@ -517,8 +600,8 @@ impl ComplianceChecker {
 mod tests {
     use super::*;
     use crate::model::{
-        Component, CvssScore, CvssVersion, ExternalReference, Organization, VulnerabilityRef,
-        VulnerabilitySource,
+        Component, CvssScore, CvssVersion, ExternalRefType, ExternalReference, Organization,
+        VulnerabilityRef, VulnerabilitySource,
     };
 
     fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
@@ -1077,6 +1160,79 @@ mod tests {
                 .iter()
                 .any(|v| v.rule_id == "SBOM-PCI-11-3-1-1-SEVERITY"),
             "a severity-ranked entry is ranked"
+        );
+    }
+
+    /// An entry whose own VEX statement is a justified not_affected needs no
+    /// ranking: it is left out of the counts, and the message says how many
+    /// were. A bare not_affected claim still needs one.
+    #[test]
+    fn risk_ranking_leaves_out_justified_not_affected_entries() {
+        use crate::model::{VexJustification, VexState, VexStatus};
+        let unranked = |id: &str| {
+            let mut vuln = VulnerabilityRef::new(id.to_string(), VulnerabilitySource::Nvd);
+            vuln.severity = Some(Severity::Unknown);
+            vuln
+        };
+        let not_affected = |id: &str, justified: bool| {
+            let mut vex = VexStatus::new(VexState::NotAffected);
+            if justified {
+                vex.justification = Some(VexJustification::VulnerableCodeNotInExecutePath);
+            }
+            let mut vuln = unranked(id);
+            vuln.vex_status = Some(vex);
+            vuln
+        };
+        let finding = |vulns: Vec<VulnerabilityRef>| {
+            let mut sbom = conforming_sbom();
+            let primary_id = sbom.primary_component_id.clone().expect("primary set");
+            sbom.components
+                .get_mut(&primary_id)
+                .expect("primary resolves")
+                .vulnerabilities
+                .extend(vulns);
+            run(&sbom)
+                .into_iter()
+                .find(|v| v.rule_id == "SBOM-PCI-11-3-1-1-SEVERITY")
+        };
+
+        // Nothing is open, so nothing needs a ranking.
+        assert!(finding(vec![not_affected("CVE-2026-2000", true)]).is_none());
+
+        let bare = finding(vec![not_affected("CVE-2026-2001", false)])
+            .expect("a bare not_affected claim needs a ranking");
+        assert_eq!(
+            bare.counts,
+            Some(ViolationCounts {
+                affected: 1,
+                total: 1
+            })
+        );
+
+        let mut ranked =
+            VulnerabilityRef::new("CVE-2026-2003".to_string(), VulnerabilitySource::Nvd);
+        ranked.severity = Some(Severity::Low);
+        let mixed = finding(vec![
+            unranked("CVE-2026-2002"),
+            ranked,
+            not_affected("CVE-2026-2004", true),
+        ])
+        .expect("the open unranked entry fires");
+        assert_eq!(
+            mixed.counts,
+            Some(ViolationCounts {
+                affected: 1,
+                total: 2
+            })
+        );
+        assert!(
+            mixed.message.contains("1/2 embedded vulnerability entries")
+                && mixed.message.ends_with(
+                    "; 1 more entry has a justified not_affected VEX statement and needs none"
+                )
+                && !mixed.message.contains("CVE-2026-2004"),
+            "{}",
+            mixed.message
         );
     }
 

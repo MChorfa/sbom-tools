@@ -8,7 +8,8 @@
 //!    the same normalization path a production `validate` run does — not a
 //!    hand-built `NormalizedSbom` that may drift from what parsers actually
 //!    produce. A fixture can also carry a CRA sidecar, attached to the
-//!    checker like `--cra-sidecar`.
+//!    checker like `--cra-sidecar`, and a PQC deadline mode
+//!    ([`DeadlineFixture`]), set like `--pqc-mode deadline --as-of`.
 //!
 //! 2. **A format axis** ([`Encoding`], tests/common/rule_matrix_encodings.rs):
 //!    one fixture renders as CycloneDX JSON, CycloneDX XML, SPDX 2.3 JSON and
@@ -39,7 +40,17 @@
 //!    by every fixture in a matrix, in every encoding it runs in, must map
 //!    (via its registry SARIF identity) into the standard's declared rule
 //!    universe — a new check site that emits a new rule id forces the matrix
-//!    to be extended instead of silently escaping it.
+//!    to be extended instead of silently escaping it. The universe must be
+//!    the level's rule list (`rules_for_level`), so the matrix proves that
+//!    list: every listed rule fires in a case (or is skipped with a reason),
+//!    and no case emits a rule outside it. A check the result lists as not
+//!    evaluated must lie in the universe too, and report nothing.
+//!
+//! 5. **An every-level sweep**: each fixture, in every encoding it runs in,
+//!    is also checked at every other compliance level, and what each level
+//!    reports, or lists as not evaluated, must lie in that level's rule
+//!    list. Every level's list is thus held against the fixtures of every
+//!    matrix, not only its own.
 
 // Each per-standard matrix binary uses a subset of the DSL (mirrors the
 // existing tests/common/ffi_helpers.rs posture).
@@ -59,10 +70,10 @@ pub use encodings::{Encoding, Rendered};
 use sbom_tools::model::{CraSidecarMetadata, EolInfo, EolStatus, NormalizedSbom};
 use sbom_tools::parsers::{FormatDetector, parse_sbom_str};
 use sbom_tools::quality::{
-    ComplianceLevel, ComplianceResult, PassedCheck, RuleKind, Violation, ViolationSeverity,
-    rule_kind, rule_meta,
+    CnsaCategory, ComplianceLevel, ComplianceResult, PassedCheck, PqcMode, PqcProfile, RuleKind,
+    Violation, ViolationSeverity, rule_kind, rule_meta, rules_for_level,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Filler SHA-256 digest (64 hex chars) for conforming components.
 pub const SHA256_FILLER: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -73,6 +84,44 @@ pub const SHA512_FILLER: &str = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715d
 
 /// Filler MD5 digest (32 hex chars) for weak-hash cases.
 pub const MD5_FILLER: &str = "d41d8cd98f00b204e9800998ecf8427e";
+
+/// A creation timestamp that is not an RFC 3339 date-time. A timestamp rule
+/// reports it as it reports a missing one, quoting the value.
+pub const UNPARSEABLE_TIMESTAMP: &str = "2026-13-45 noon";
+
+/// SHA-256 values no hash rule counts, as `(case label, algorithm, value)`:
+/// an empty value, one that is not hexadecimal (a `sha256:` prefix on the
+/// filler), and one of the wrong length (an MD5-sized value). Every hash
+/// rule counts only plausible digests.
+pub const IMPLAUSIBLE_SHA256_DIGESTS: [(&str, &str, &str); 3] = [
+    ("empty SHA-256 digest", "SHA-256", ""),
+    (
+        "SHA-256 digest that is not hexadecimal",
+        "SHA-256",
+        "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ),
+    (
+        "SHA-256 digest of the wrong length",
+        "SHA-256",
+        "d41d8cd98f00b204e9800998ecf8427e",
+    ),
+];
+
+/// SHA-512 values no hash rule counts, as for
+/// [`IMPLAUSIBLE_SHA256_DIGESTS`]; the wrong-length one is SHA-256-sized.
+pub const IMPLAUSIBLE_SHA512_DIGESTS: [(&str, &str, &str); 3] = [
+    ("empty SHA-512 digest", "SHA-512", ""),
+    (
+        "SHA-512 digest that is not hexadecimal",
+        "SHA-512",
+        "not-a-digest-cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce",
+    ),
+    (
+        "SHA-512 digest of the wrong length",
+        "SHA-512",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ),
+];
 
 // ── Encoding omissions and differences shared by several matrices ─────────
 
@@ -129,6 +178,9 @@ pub struct ComponentFixture {
     pub cpe: Option<String>,
     /// `supplier.name`.
     pub supplier: Option<String>,
+    /// `manufacturer.name` (CycloneDX 1.6+; SPDX has no manufacturer
+    /// field).
+    pub manufacturer: Option<String>,
     /// `description`.
     pub description: Option<String>,
     /// `copyright` (SPDX `copyrightText`).
@@ -177,6 +229,7 @@ impl ComponentFixture {
             purl: Some(format!("pkg:npm/{name}@1.2.3")),
             cpe: None,
             supplier: Some("Acme Components Ltd".to_string()),
+            manufacturer: None,
             description: None,
             copyright: None,
             hashes: vec![("SHA-256".to_string(), SHA256_FILLER.to_string())],
@@ -357,6 +410,8 @@ pub struct CryptoAssetFixture {
     pub algorithm: Option<AlgorithmFixture>,
     /// `certificateProperties.signatureAlgorithmRef`.
     pub signature_algorithm_ref: Option<String>,
+    /// `certificateProperties.notValidAfter` (RFC 3339).
+    pub not_valid_after: Option<String>,
     /// `relatedCryptoMaterialProperties` as `(type, size in bits)`.
     pub material: Option<(String, Option<u32>)>,
     pub protocol: Option<ProtocolFixture>,
@@ -371,6 +426,7 @@ impl CryptoAssetFixture {
             oid: None,
             algorithm: None,
             signature_algorithm_ref: None,
+            not_valid_after: None,
             material: None,
             protocol: None,
         }
@@ -438,6 +494,13 @@ impl CryptoAssetFixture {
         self.protocol
             .as_mut()
             .unwrap_or_else(|| panic!("crypto asset {bom_ref:?} is not a protocol"))
+    }
+
+    /// Set a certificate's `notValidAfter` (RFC 3339).
+    #[must_use]
+    pub fn valid_until(mut self, not_valid_after: &str) -> Self {
+        self.not_valid_after = Some(not_valid_after.to_string());
+        self
     }
 
     /// Set the component name (defaults to the bom-ref).
@@ -592,10 +655,18 @@ pub struct SbomFixture {
     /// `metadata.manufacturer` `(name, contact email)` →
     /// `CreatorType::Organization`.
     pub manufacturer: Option<(String, Option<String>)>,
+    /// `metadata.supplier.name`, the supplier of the described product
+    /// (SPDX keeps the supplier on the described package instead).
+    pub supplier: Option<String>,
     /// `metadata.component` → `document.name` + primary component (joins
     /// `sbom.components` like any other component).
     pub primary: Option<ComponentFixture>,
     pub components: Vec<ComponentFixture>,
+    /// bom-refs of listed components the document also describes, beside
+    /// the primary: SPDX 2.3 `DESCRIBES` relationships and SPDX 3 Sbom
+    /// `rootElement`s (an SPDX document can describe several sibling
+    /// products; a CycloneDX document describes one).
+    pub described: Vec<String>,
     /// Cryptographic assets, rendered into `components[]` after
     /// [`Self::components`].
     pub crypto_assets: Vec<CryptoAssetFixture>,
@@ -625,6 +696,51 @@ pub struct SbomFixture {
     /// CRA sidecar metadata, attached to the checker by [`check`] the way
     /// `validate --cra-sidecar` attaches it.
     pub sidecar: Option<CraSidecarMetadata>,
+    /// The PQC deadline mode the checker judges by, the way `validate
+    /// --pqc-mode deadline` (with `--pqc-profile`, `--cnsa-category` and
+    /// `--as-of`) sets it; `None` keeps the readiness default at the pinned
+    /// test clock.
+    pub deadline: Option<DeadlineFixture>,
+}
+
+/// `validate --pqc-mode deadline` for a [`SbomFixture`]: the NIST PQC
+/// profile, the CNSA 2.0 category and the instant judged at.
+#[derive(Debug, Clone, Copy)]
+pub struct DeadlineFixture {
+    pub profile: PqcProfile,
+    pub cnsa_category: Option<CnsaCategory>,
+    /// RFC 3339 evaluation instant (`--as-of`).
+    pub as_of: &'static str,
+}
+
+impl DeadlineFixture {
+    /// Deadline mode under NIST IR 8547 at `as_of`, the strictest CNSA 2.0
+    /// category.
+    pub const fn nist(as_of: &'static str) -> Self {
+        Self {
+            profile: PqcProfile::Nist,
+            cnsa_category: None,
+            as_of,
+        }
+    }
+
+    /// Deadline mode with the federal deadlines at `as_of`.
+    pub const fn federal(as_of: &'static str) -> Self {
+        Self {
+            profile: PqcProfile::Federal,
+            cnsa_category: None,
+            as_of,
+        }
+    }
+
+    /// Deadline mode under the CNSA 2.0 timeline of `category` at `as_of`.
+    pub const fn cnsa(category: CnsaCategory, as_of: &'static str) -> Self {
+        Self {
+            profile: PqcProfile::Nist,
+            cnsa_category: Some(category),
+            as_of,
+        }
+    }
 }
 
 impl Default for SbomFixture {
@@ -639,8 +755,10 @@ impl Default for SbomFixture {
             tools: Vec::new(),
             authors: Vec::new(),
             manufacturer: None,
+            supplier: None,
             primary: None,
             components: Vec::new(),
+            described: Vec::new(),
             crypto_assets: Vec::new(),
             dependencies: Vec::new(),
             dynamic_links: Vec::new(),
@@ -650,6 +768,7 @@ impl Default for SbomFixture {
             signature: None,
             undeclared_spdx3_profiles: Vec::new(),
             sidecar: None,
+            deadline: None,
         }
     }
 }
@@ -682,6 +801,18 @@ impl SbomFixture {
     /// Mutable access to the CRA sidecar (panics when absent).
     pub fn sidecar_mut(&mut self) -> &mut CraSidecarMetadata {
         self.sidecar.as_mut().expect("fixture has no CRA sidecar")
+    }
+
+    /// List the component `name` twice: a second entry with its name,
+    /// version and purl, under the bom-ref `<bom-ref>-again`, or under the
+    /// same bom-ref when `same_ref` is set. The parsers merge the two
+    /// entries into one component (panics when there is no such component).
+    pub fn list_twice(&mut self, name: &str, same_ref: bool) {
+        let mut again = self.component_mut(name).clone();
+        if !same_ref {
+            again.bom_ref = format!("{}-again", again.bom_ref);
+        }
+        self.components.push(again);
     }
 
     /// Parse the CycloneDX JSON rendering through the real parser (see
@@ -772,6 +903,18 @@ fn check_sbom(
     let mut checker = clock::checker(level);
     if let Some(sidecar) = &fixture.sidecar {
         checker = checker.with_sidecar(sidecar.clone());
+    }
+    if let Some(deadline) = &fixture.deadline {
+        let as_of = chrono::DateTime::parse_from_rfc3339(deadline.as_of)
+            .expect("DeadlineFixture::as_of is RFC 3339")
+            .with_timezone(&chrono::Utc);
+        checker = checker
+            .with_as_of(as_of)
+            .with_pqc_mode(PqcMode::Deadline)
+            .with_pqc_profile(deadline.profile);
+        if let Some(category) = deadline.cnsa_category {
+            checker = checker.with_cnsa_category(category);
+        }
     }
     checker.check(sbom)
 }
@@ -1128,6 +1271,29 @@ impl RuleEntry {
         self
     }
 
+    /// One firing case at `severity` per digest no hash rule counts (see
+    /// [`IMPLAUSIBLE_SHA256_DIGESTS`]): `with_digest(algorithm, value)`
+    /// builds the case's fixture. A severity other than the registry's
+    /// default is a declared departure.
+    #[must_use]
+    pub fn with_implausible_digests(
+        mut self,
+        severity: ViolationSeverity,
+        digests: &[(&'static str, &'static str, &'static str)],
+        with_digest: impl Fn(&str, &str) -> SbomFixture,
+    ) -> Self {
+        let departs = rule_meta(self.id).is_some_and(|m| m.default_severity != severity);
+        for (label, algorithm, value) in digests {
+            self.push_firing(FiringCase {
+                label,
+                severity,
+                departs_from_registry_default: departs,
+                fixture: with_digest(algorithm, value),
+            });
+        }
+        self
+    }
+
     /// Additional silent case: another satisfying fixture that must not emit
     /// the row's identity.
     #[must_use]
@@ -1455,6 +1621,8 @@ impl RuleEntry {
 
 /// Run a per-standard rule matrix:
 ///
+/// 0. membership — `universe` must be the level's rule list
+///    (`rules_for_level`), which the steps below prove;
 /// 1. exhaustiveness — the rows must cover `universe` exactly (every rule id
 ///    tested or explicitly skipped, no duplicates, no strays);
 /// 2. per rule and per encoding — each firing fixture surfaces the row's id
@@ -1467,7 +1635,9 @@ impl RuleEntry {
 ///    load-bearing;
 /// 3. sweep — every violation and every passed check any fixture emits, in
 ///    any encoding, maps into `universe`, and every Info violation is a rule
-///    classified in tests/common/info_classification.rs.
+///    classified in tests/common/info_classification.rs;
+/// 4. every-level sweep — every other level, run over the same parsed
+///    fixture, reports only rules of its own list.
 ///
 /// The registry default severity is what the SARIF rule catalogue
 /// advertises, so a finding row needs a firing case at it (WP 1.2 finding
@@ -1483,6 +1653,15 @@ pub fn run_matrix(level: ComplianceLevel, universe: &[&str], entries: &[RuleEntr
         universe.len(),
         universe_set.len(),
         "[{level:?}] rule universe contains duplicates"
+    );
+    // The matrix proves the level's rule list (`rules_for_level`, the
+    // standard membership `sbom-tools rules` and SARIF rules[] show), so
+    // it must cover that list exactly.
+    let listed: BTreeSet<&str> = rules_for_level(level).iter().copied().collect();
+    assert_eq!(
+        universe_set, listed,
+        "[{level:?}] the matrix universe must be the level's rule list \
+         (left = universe, right = rules_for_level)"
     );
 
     let mut covered: BTreeSet<&str> = BTreeSet::new();
@@ -1520,8 +1699,10 @@ pub fn run_matrix(level: ComplianceLevel, universe: &[&str], entries: &[RuleEntr
     );
 
     // Every case in every encoding: the failures are collected, so one run
-    // shows each mismatch.
+    // shows each mismatch. A rule outside another level's list is reported
+    // once per (level, rule), naming the first fixture that showed it.
     let mut failures: Vec<String> = Vec::new();
+    let mut strays: BTreeMap<String, String> = BTreeMap::new();
     for entry in entries {
         match &entry.coverage {
             RuleCoverage::Tested { firing, .. } => check_finding_row(level, entry, firing),
@@ -1541,6 +1722,7 @@ pub fn run_matrix(level: ComplianceLevel, universe: &[&str], entries: &[RuleEntr
                         outcome,
                         difference,
                         &mut failures,
+                        &mut strays,
                     ),
                     Plan::Omit(reason) => check_omission_load_bearing(
                         level,
@@ -1554,6 +1736,7 @@ pub fn run_matrix(level: ComplianceLevel, universe: &[&str], entries: &[RuleEntr
             }
         }
     }
+    failures.extend(strays.into_values());
     assert!(
         failures.is_empty(),
         "[{level:?}] {count} matrix failure(s):\n\n{all}",
@@ -1632,7 +1815,8 @@ fn check_passing_row(level: ComplianceLevel, entry: &RuleEntry, passing: &[Passi
 }
 
 /// Run one case in one encoding: check its outcome, then sweep everything
-/// the result reports into the universe and the Info classification.
+/// the result reports into the universe and the Info classification, and
+/// what every other level reports for the same SBOM into that level's list.
 #[allow(clippy::too_many_arguments)]
 fn run_case(
     level: ComplianceLevel,
@@ -1643,6 +1827,7 @@ fn run_case(
     outcome: Outcome,
     difference: Option<&'static str>,
     failures: &mut Vec<String>,
+    strays: &mut BTreeMap<String, String>,
 ) {
     let id = entry.id;
     let label = case.label;
@@ -1680,6 +1865,49 @@ fn run_case(
         ));
     }
     sweep(level, universe, entry, label, encoding, &result, failures);
+    for &other in ComplianceLevel::all() {
+        if other != level {
+            let other_result = check_sbom(other, case.fixture, &sbom);
+            level_sweep(other, level, entry, label, encoding, &other_result, strays);
+        }
+    }
+}
+
+/// Every-level sweep: what `checked` reports for a fixture of the `level`
+/// matrix must lie in `checked`'s rule list (`rules_for_level`).
+fn level_sweep(
+    checked: ComplianceLevel,
+    level: ComplianceLevel,
+    entry: &RuleEntry,
+    label: &str,
+    encoding: Encoding,
+    result: &ComplianceResult,
+    strays: &mut BTreeMap<String, String>,
+) {
+    let listed = rules_for_level(checked);
+    // A check listed as not evaluated is one of the level's rules too.
+    let emitted = result
+        .violations
+        .iter()
+        .map(|v| (v.rule_id, v.sarif_rule_id()))
+        .chain(result.passed.iter().map(|p| (p.rule_id, p.sarif_rule_id())))
+        .chain(result.evaluated.iter().map(|e| (e.rule_id, e.rule_id)));
+    for (rule, sarif) in emitted {
+        if !listed.contains(&sarif) {
+            strays
+                .entry(format!("{checked:?} {sarif}"))
+                .or_insert_with(|| {
+                    format!(
+                        "[{checked:?}] reported {rule} (sarif {sarif}) for the fixture of {id} \
+                         ({label}) in the {level:?} matrix, in {enc}; the rule is not in \
+                         rules_for_level({checked:?}) — add it to that level's rule list in \
+                         src/quality/compliance/registry/mod.rs",
+                        id = entry.id,
+                        enc = encoding.name(),
+                    )
+                });
+        }
+    }
 }
 
 /// An omission must be load-bearing: a case that renders in the omitted
@@ -1758,6 +1986,25 @@ fn sweep(
             failures.push(format!(
                 "[{level:?}] fixture for {id} ({label}) in {enc} emitted unregistered rule \
                  {rule}",
+            ));
+        }
+    }
+    // A check the standard did not evaluate lies in its universe and
+    // reports nothing.
+    for entry in &result.evaluated {
+        let rule = entry.rule_id;
+        if !universe.contains(rule) {
+            failures.push(format!(
+                "[{level:?}] fixture for {id} ({label}) in {enc} lists {rule} as not \
+                 evaluated, outside the declared rule universe",
+            ));
+        }
+        if result.violations.iter().any(|v| v.rule_id == rule)
+            || result.passed.iter().any(|p| p.rule_id == rule)
+        {
+            failures.push(format!(
+                "[{level:?}] fixture for {id} ({label}) in {enc} lists {rule} as not \
+                 evaluated but reports it",
             ));
         }
     }

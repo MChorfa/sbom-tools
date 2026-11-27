@@ -2,8 +2,9 @@
 
 use super::{
     CanonicalId, ComponentExtensions, ComponentIdentifiers, ComponentType, CryptoProperties,
-    DependencyScope, DependencyType, DocumentMetadata, Ecosystem, ExternalReference,
-    FormatExtensions, Hash, LicenseInfo, Organization, VexStatus, VulnerabilityRef,
+    DependencyScope, DependencyType, DocumentMetadata, DuplicateComponent, Ecosystem,
+    ExternalReference, FormatExtensions, Hash, LicenseInfo, Organization, RekeyIndex, VexStatus,
+    VulnerabilityRef,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,13 @@ const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 ///
 /// This structure represents an SBOM in a format-agnostic way, allowing
 /// comparison between `CycloneDX` and SPDX documents.
+///
+/// Build one with [`Self::new`] or [`Default`] and set its fields, or
+/// deserialize it: it keeps derived state of its own (see
+/// [`Self::claim_canonical_id`]), so code outside the crate cannot build it
+/// with a struct literal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NormalizedSbom {
     /// Document-level metadata
     pub document: DocumentMetadata,
@@ -30,9 +37,37 @@ pub struct NormalizedSbom {
     /// Primary/root product component (`CycloneDX` metadata.component or SPDX documentDescribes)
     /// This identifies the main product that this SBOM describes, important for CRA compliance.
     pub primary_component_id: Option<CanonicalId>,
-    /// Number of canonical ID collisions encountered during parsing
+    /// The other components the document describes, besides the primary:
+    /// an SPDX document can describe several sibling products (SPDX 2
+    /// `documentDescribes` and `DESCRIBES` targets, SPDX 3 `rootElement`s).
+    /// A CycloneDX document describes one, `metadata.component`, the
+    /// primary. In document order, each once; see
+    /// [`Self::described_components`]. Additive: skipped in JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub described_root_ids: Vec<CanonicalId>,
+    /// The components the document lists more than once, keyed by canonical
+    /// id, in the order of their first repeat: how many entries each had,
+    /// their format ids and the fields they disagree on. Each component's
+    /// entries were merged into one (see [`Self::add_component`]).
+    /// Additive: serialized as a list of records, and skipped when empty.
+    #[serde(
+        default,
+        skip_serializing_if = "IndexMap::is_empty",
+        with = "super::merge::duplicate_list"
+    )]
+    pub duplicate_components: IndexMap<CanonicalId, DuplicateComponent>,
+    /// Number of canonical ID collisions encountered during parsing: the
+    /// entries merged into a component listed before them (see
+    /// [`Self::duplicate_components`]), plus the components another of a
+    /// different name or version replaced.
     #[serde(skip)]
     pub collision_count: usize,
+    /// The components [`Self::claim_canonical_id`] re-keyed, by the id they
+    /// share, so a later entry of one finds it (see `model::rekey`).
+    /// Derived while a document is read: not serialized, and empty in a
+    /// deserialized SBOM.
+    #[serde(skip)]
+    pub(crate) rekeyed: RekeyIndex,
 }
 
 impl NormalizedSbom {
@@ -46,7 +81,10 @@ impl NormalizedSbom {
             extensions: FormatExtensions::default(),
             content_hash: 0,
             primary_component_id: None,
+            described_root_ids: Vec::new(),
+            duplicate_components: IndexMap::new(),
             collision_count: 0,
+            rekeyed: RekeyIndex::default(),
         }
     }
 
@@ -86,61 +124,147 @@ impl NormalizedSbom {
 
     /// Add a component to the SBOM.
     ///
-    /// Returns `true` if a collision occurred (a component with the same canonical ID
-    /// was already present and has been overwritten). Collisions are logged as warnings.
+    /// A component whose canonical id is new is inserted, and `false` is
+    /// returned. One whose id a component of the same name and version
+    /// already holds is another entry of that component (the document lists
+    /// it twice; a name or version that is absent or not known, such as
+    /// `NOASSERTION`, agrees with any, see [`Component::is_same_component`]):
+    /// the two are merged ([`Component::merge_duplicate`]), so the result
+    /// does not depend on which entry came first, no entry's data is lost,
+    /// and a known value always wins over a placeholder. The duplicate is
+    /// recorded in [`Self::duplicate_components`] and counted in
+    /// [`Self::collision_count`], and `true` is returned.
+    ///
+    /// A component of a different known name or version under a taken id
+    /// replaces the one there (counted, and `true`). Parsers never pass one:
+    /// [`Self::claim_canonical_id`] gives it an id of its own first, and
+    /// gives a later entry of it that same id, so the two merge here.
     pub fn add_component(&mut self, component: Component) -> bool {
         let id = component.canonical_id.clone();
-        if let Some(existing) = self.components.get(&id) {
-            // Count genuinely different components that collide on canonical ID
-            if existing.identifiers.format_id != component.identifiers.format_id
-                || existing.name != component.name
-            {
-                self.collision_count += 1;
+        let Some(existing) = self.components.get_mut(&id) else {
+            if let Some((shared, base, suffix)) = self.rekeyed_from(&component) {
+                self.rekeyed
+                    .add(shared, id.clone(), &base, suffix, &component);
             }
             self.components.insert(id, component);
-            true
-        } else {
-            self.components.insert(id, component);
-            false
+            return false;
+        };
+        self.collision_count += 1;
+        if !existing.is_same_component(&component) {
+            *existing = component;
+            self.rekeyed.refresh(&id, existing);
+            return true;
         }
+        let first_format_id = existing.identifiers.format_id.clone();
+        let format_id = component.identifiers.format_id.clone();
+        let conflicts = existing.merge_duplicate(component);
+        // The merge can teach a re-keyed component its name or version.
+        self.rekeyed.refresh(&id, existing);
+        self.duplicate_components
+            .entry(id.clone())
+            .or_insert_with(|| DuplicateComponent::first_entry(id, first_format_id))
+            .count_entry(format_id, conflicts);
+        true
+    }
+
+    /// Whether `component`, about to be inserted, was re-keyed by
+    /// [`Self::claim_canonical_id`]: its id is `<shared>#<format id>` or
+    /// `<shared>#<format id>#<n>`, where a component already holds
+    /// `<shared>`, and its own identifiers do not give that id. Returns the
+    /// shared id, the re-key base (`<shared>#<format id>`) and the suffix.
+    fn rekeyed_from(&self, component: &Component) -> Option<(CanonicalId, String, Option<usize>)> {
+        let id = component.canonical_id.value();
+        if !id.contains('#') || component.identifiers.canonical_id() == component.canonical_id {
+            return None;
+        }
+        let tail = format!("#{}", component.identifiers.format_id);
+        let held = |shared: &str| {
+            let shared = CanonicalId::from_format_id(shared);
+            self.components.contains_key(&shared).then_some(shared)
+        };
+        if let Some(shared) = id.strip_suffix(tail.as_str()).and_then(held) {
+            return Some((shared, id.to_string(), None));
+        }
+        let (base, suffix) = id.rsplit_once('#')?;
+        let suffix = suffix.parse::<usize>().ok()?;
+        let shared = base.strip_suffix(tail.as_str()).and_then(held)?;
+        Some((shared, base.to_string(), Some(suffix)))
     }
 
     /// Settle the canonical ID `component` will be inserted under.
     ///
     /// Parsers call this before recording the ID in their reference maps.
     /// When another component already holds the same canonical ID but has a
-    /// different name or version, the two are distinct components that share
-    /// an identifier (two versions under one version-less purl, say).
+    /// different known name or version, the two are distinct components that
+    /// share an identifier (two versions under one version-less purl, say).
     /// Inserting would overwrite — silently dropping a component from every
     /// count and check — so `component` is re-keyed to an ID that appends its
-    /// format ID (bom-ref or SPDXID), and the clash is logged. A true
-    /// duplicate (same name and version) keeps the shared ID and is merged by
-    /// [`Self::add_component`] as before. Returns the ID to register.
+    /// format ID (bom-ref or SPDXID), then `#2`, `#3`, … while that ID is
+    /// taken by another component, and the clash is logged. A true
+    /// duplicate (the same name and version, where a name or version that is
+    /// absent or not known agrees with any; see
+    /// [`Component::is_same_component`]) keeps the ID its first entry got:
+    /// the shared ID, or, when the first entry was re-keyed, the re-keyed
+    /// one, under whatever format ID either entry has. Of several components
+    /// re-keyed from the shared ID that it agrees with, it takes the one
+    /// re-keyed first. [`Self::add_component`] then merges the entries: a
+    /// component listed twice beside another component under the same purl
+    /// is one component whether the other comes before both of its entries
+    /// or between them. Returns the ID to register.
+    ///
+    /// The re-keyed components are looked up in an index the SBOM keeps
+    /// while it is read, not by a scan, so a document with many components
+    /// under one ID parses in linear time. A deserialized SBOM starts
+    /// without that index: a later entry then finds a re-keyed component
+    /// only under its own format ID.
     pub fn claim_canonical_id(&self, component: &mut Component) -> CanonicalId {
         let distinct = self
             .components
             .get(&component.canonical_id)
-            .is_some_and(|existing| {
-                existing.name != component.name || existing.version != component.version
-            });
+            .is_some_and(|existing| !existing.is_same_component(component));
         if distinct {
+            // A later entry of a component re-keyed from this ID merges
+            // into it.
+            if let Some(id) = self
+                .rekeyed
+                .find(&component.canonical_id, component)
+                .filter(|id| {
+                    self.components
+                        .get(*id)
+                        .is_some_and(|holder| holder.is_same_component(component))
+                })
+            {
+                component.canonical_id = id.clone();
+                return id.clone();
+            }
             let base = format!(
                 "{}#{}",
                 component.canonical_id.value(),
                 component.identifiers.format_id
             );
             let mut candidate = CanonicalId::from_format_id(&base);
-            let mut n = 2;
-            while self.components.contains_key(&candidate) {
+            let mut n = self.rekeyed.next_suffix(&base);
+            // An ID taken by the same component is the one its first entry
+            // was re-keyed to (found here when the index does not have it,
+            // in a deserialized SBOM): reuse it, so the entries merge.
+            while self
+                .components
+                .get(&candidate)
+                .is_some_and(|holder| !holder.is_same_component(component))
+            {
                 candidate = CanonicalId::from_format_id(&format!("{base}#{n}"));
                 n += 1;
             }
-            tracing::warn!(
-                shared_id = %component.canonical_id,
-                component = %component.name,
-                kept_as = %candidate,
-                "distinct components share a canonical ID; keeping both"
-            );
+            // The clash was logged for the first entry; a repeat merges and
+            // is counted in the collision summary.
+            if !self.components.contains_key(&candidate) {
+                tracing::warn!(
+                    shared_id = %component.canonical_id,
+                    component = %component.name,
+                    kept_as = %candidate,
+                    "distinct components share a canonical ID; keeping both"
+                );
+            }
             component.canonical_id = candidate;
         }
         component.canonical_id.clone()
@@ -151,9 +275,11 @@ impl NormalizedSbom {
         if self.collision_count > 0 {
             tracing::info!(
                 collision_count = self.collision_count,
-                "Canonical ID collisions: {} distinct components resolved to the same ID \
-                 and were overwritten. Consider adding PURL identifiers to disambiguate.",
-                self.collision_count
+                duplicated_components = self.duplicate_components.len(),
+                "Canonical ID collisions: {} entries repeat a component listed before them \
+                 ({} components listed more than once); each component's entries were merged.",
+                self.collision_count,
+                self.duplicate_components.len()
             );
         }
     }
@@ -271,6 +397,33 @@ impl NormalizedSbom {
         self.primary_component_id = Some(id);
     }
 
+    /// Record another component the document describes (see
+    /// [`Self::described_root_ids`]). The primary component and an id
+    /// already recorded are skipped, so parsers can pass every described
+    /// id once the primary is set.
+    pub fn add_described_root(&mut self, id: CanonicalId) {
+        if self.primary_component_id.as_ref() != Some(&id) && !self.described_root_ids.contains(&id)
+        {
+            self.described_root_ids.push(id);
+        }
+    }
+
+    /// The components the document describes: the primary component, then
+    /// the other described roots, each once. Empty when the document names
+    /// no product (or the ids resolve to no component). Compliance checks
+    /// read manufacturer evidence, such as a security contact or a
+    /// certificate reference, from these components only.
+    #[must_use]
+    pub fn described_components(&self) -> Vec<&Component> {
+        let mut seen = std::collections::HashSet::new();
+        self.primary_component_id
+            .iter()
+            .chain(&self.described_root_ids)
+            .filter(|id| seen.insert(*id))
+            .filter_map(|id| self.components.get(id))
+            .collect()
+    }
+
     /// Get all unique ecosystems in the SBOM
     pub fn ecosystems(&self) -> Vec<&Ecosystem> {
         let mut ecosystems: Vec<_> = self
@@ -382,50 +535,6 @@ impl NormalizedSbom {
             .iter()
             .filter_map(|id| self.components.get(id))
             .collect()
-    }
-
-    /// Apply CRA sidecar metadata to supplement SBOM fields.
-    ///
-    /// Sidecar values only override SBOM fields if the SBOM field is None/empty.
-    /// This ensures SBOM data takes precedence when available.
-    pub fn apply_cra_sidecar(&mut self, sidecar: &super::CraSidecarMetadata) {
-        // Only apply if SBOM doesn't already have the value
-        if self.document.security_contact.is_none() {
-            self.document
-                .security_contact
-                .clone_from(&sidecar.security_contact);
-        }
-
-        if self.document.vulnerability_disclosure_url.is_none() {
-            self.document
-                .vulnerability_disclosure_url
-                .clone_from(&sidecar.vulnerability_disclosure_url);
-        }
-
-        if self.document.support_end_date.is_none() {
-            self.document.support_end_date = sidecar.support_end_date;
-        }
-
-        if self.document.name.is_none() {
-            self.document.name.clone_from(&sidecar.product_name);
-        }
-
-        // Add manufacturer as creator if not present
-        if let Some(manufacturer) = &sidecar.manufacturer_name {
-            let has_org = self
-                .document
-                .creators
-                .iter()
-                .any(|c| c.creator_type == super::CreatorType::Organization);
-
-            if !has_org {
-                self.document.creators.push(super::Creator {
-                    creator_type: super::CreatorType::Organization,
-                    name: manufacturer.clone(),
-                    email: sidecar.manufacturer_email.clone(),
-                });
-            }
-        }
     }
 }
 
@@ -737,6 +846,18 @@ pub struct Component {
     /// Cryptographic properties (CycloneDX 1.6+ cryptoProperties)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crypto_properties: Option<CryptoProperties>,
+    /// Whether the product needs the component at runtime: the CycloneDX
+    /// component `scope` (`required`, `optional`, `excluded`). SPDX states
+    /// it on the relationships instead, so an SPDX component is `Excluded`
+    /// when only development, build or test relationships bring it in
+    /// (SPDX 2.3 `DEV_DEPENDENCY_OF`, `BUILD_DEPENDENCY_OF`,
+    /// `TEST_DEPENDENCY_OF` and the `*_TOOL_OF` types; SPDX 3.0
+    /// `LifecycleScopedRelationship`s of scope `design`, `development`,
+    /// `build` or `test`), directly or through other such components. `None`
+    /// when the SBOM does not say. Compliance package rules leave `Excluded`
+    /// components out unless the run includes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DependencyScope>,
 }
 
 impl Component {
@@ -785,6 +906,7 @@ impl Component {
             ml_model: None,
             dataset: None,
             crypto_properties: None,
+            scope: None,
         }
     }
 

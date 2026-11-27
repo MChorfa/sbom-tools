@@ -38,8 +38,22 @@ pub struct DocumentMetadata {
     pub doc_version: Option<u32>,
     /// Creation timestamp
     pub created: DateTime<Utc>,
+    /// The creation timestamp as the document wrote it, kept when it does
+    /// not parse as an RFC 3339 date-time. `created` then holds the epoch
+    /// sentinel (see [`Self::has_known_timestamp`]), and the checks report
+    /// the value as unparseable instead of missing. `None` when the
+    /// timestamp parsed or is absent or blank. Additive: skipped in JSON
+    /// when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_unparsed: Option<String>,
     /// Creators/authors
     pub creators: Vec<Creator>,
+    /// The organization that supplied the product the document describes
+    /// (CycloneDX `metadata.supplier`), often its manufacturer. SPDX keeps
+    /// the supplier on the described package instead. Additive: skipped in
+    /// JSON when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supplier: Option<Organization>,
     /// Document name
     pub name: Option<String>,
     /// Security contact for vulnerability disclosure (CRA requirement)
@@ -54,8 +68,15 @@ pub struct DocumentMetadata {
     pub completeness_declaration: CompletenessDeclaration,
     /// Digital signature information (from CycloneDX signature field)
     pub signature: Option<SignatureInfo>,
-    /// Distribution classification (e.g., TLP: CLEAR, GREEN, AMBER, RED)
+    /// Distribution classification: the TLP label of CycloneDX 1.7
+    /// `metadata.distributionConstraints.tlp` (CLEAR, GREEN, AMBER, RED).
     pub distribution_classification: Option<String>,
+    /// The profiles an SPDX 3 document declares in `profileConformance`
+    /// (e.g. `core`, `software`, `security`), in document order. Empty for
+    /// other formats. Until v0.4.0 the SPDX 3 parser joined them into
+    /// `distribution_classification`. Additive: skipped in JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_conformance: Vec<String>,
     /// Number of data provenance citations (CycloneDX 1.7+)
     pub citations_count: usize,
 }
@@ -177,6 +198,24 @@ impl DocumentMetadata {
     pub fn has_known_timestamp(&self) -> bool {
         self.created.timestamp() > 0
     }
+
+    /// Parse a document's creation timestamp as an RFC 3339 date-time.
+    ///
+    /// Returns the instant, or the epoch sentinel when `raw` is absent or
+    /// does not parse (a deterministic fallback: `created` is folded into
+    /// the content hash, so a parse-time `now()` would make every parse of
+    /// the document unique), and the value itself when it is not blank and
+    /// does not parse (see [`Self::created_unparsed`]).
+    #[must_use]
+    pub(crate) fn parse_created(raw: Option<&str>) -> (DateTime<Utc>, Option<String>) {
+        match raw.map(|value| (value, DateTime::parse_from_rfc3339(value))) {
+            Some((_, Ok(created))) => (created.with_timezone(&Utc), None),
+            Some((value, Err(_))) if !value.trim().is_empty() => {
+                (DateTime::UNIX_EPOCH, Some(value.to_string()))
+            }
+            _ => (DateTime::UNIX_EPOCH, None),
+        }
+    }
 }
 
 impl Default for DocumentMetadata {
@@ -188,7 +227,9 @@ impl Default for DocumentMetadata {
             serial_number: None,
             doc_version: None,
             created: Utc::now(),
+            created_unparsed: None,
             creators: Vec::new(),
+            supplier: None,
             name: None,
             security_contact: None,
             vulnerability_disclosure_url: None,
@@ -197,6 +238,7 @@ impl Default for DocumentMetadata {
             completeness_declaration: CompletenessDeclaration::default(),
             signature: None,
             distribution_classification: None,
+            profile_conformance: Vec::new(),
             citations_count: 0,
         }
     }

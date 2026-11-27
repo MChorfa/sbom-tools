@@ -5,7 +5,9 @@
 
 use clap::ValueEnum;
 use sbom_tools::parse_sbom_str;
-use sbom_tools::quality::{ComplianceChecker, ComplianceResult, StandardSelector};
+use sbom_tools::quality::{
+    ComplianceChecker, ComplianceLevel, ComplianceResult, StandardSelector, ViolationSeverity,
+};
 
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -118,12 +120,146 @@ fn a_lone_primary_component_is_an_inventory() {
     }
 }
 
+/// The compliance engine's code, as the source scans below read it: every
+/// `.rs` file under src/quality/compliance/, at any depth, in path order,
+/// named by its path below that directory and cut at its first
+/// `#[cfg(test)]` (unit tests at the bottom of a file are not checker
+/// code). The file of an out-of-line test module (`#[cfg(test)] mod
+/// tests;`), and of every module below one, is test code as a whole and
+/// left out.
+fn compliance_code() -> Vec<(String, String)> {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+            .expect("compliance sources")
+            .map(|entry| entry.expect("dir entry").path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    /// The out-of-line modules (`mod name;`) `src` declares, each with
+    /// whether `#[cfg(test)]` is among its attributes.
+    fn modules(src: &str) -> Vec<(String, bool)> {
+        let (mut out, mut cfg_test) = (Vec::new(), false);
+        for line in src.lines() {
+            let mut rest = line.trim();
+            if rest == "#[cfg(test)]" {
+                cfg_test = true;
+                continue;
+            }
+            if rest.is_empty() || rest.starts_with("#[") {
+                continue;
+            }
+            for vis in ["pub(crate)", "pub(super)", "pub"] {
+                rest = rest.strip_prefix(vis).unwrap_or(rest).trim_start();
+            }
+            if let Some(name) = rest.strip_prefix("mod ").and_then(|d| d.strip_suffix(';')) {
+                out.push((name.trim().to_string(), cfg_test));
+            }
+            cfg_test = false;
+        }
+        out
+    }
+    /// The file the out-of-line module `name` declared in `parent` loads.
+    fn module_file(parent: &Path, name: &str) -> Option<PathBuf> {
+        let dir = match parent.file_stem()?.to_str()? {
+            "mod" => parent.parent()?.to_path_buf(),
+            stem => parent.parent()?.join(stem),
+        };
+        [
+            dir.join(format!("{name}.rs")),
+            dir.join(name).join("mod.rs"),
+        ]
+        .into_iter()
+        .find(|p| p.is_file())
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/quality/compliance");
+    let mut paths = Vec::new();
+    walk(&root, &mut paths);
+    let sources: Vec<(PathBuf, String)> = paths
+        .into_iter()
+        .map(|path| {
+            let src = std::fs::read_to_string(&path).expect("readable source");
+            (path, src)
+        })
+        .collect();
+    let mut tests: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut queue: Vec<PathBuf> = Vec::new();
+    for (path, src) in &sources {
+        for (name, cfg_test) in modules(src) {
+            if cfg_test
+                && let Some(file) = module_file(path, &name)
+                && tests.insert(file.clone())
+            {
+                queue.push(file);
+            }
+        }
+    }
+    while let Some(file) = queue.pop() {
+        let Some((_, src)) = sources.iter().find(|(path, _)| *path == file) else {
+            continue;
+        };
+        for (name, _) in modules(src) {
+            if let Some(child) = module_file(&file, &name)
+                && tests.insert(child.clone())
+            {
+                queue.push(child);
+            }
+        }
+    }
+    sources
+        .into_iter()
+        .filter(|(path, _)| !tests.contains(path))
+        .map(|(path, src)| {
+            let name = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let code = src.split("#[cfg(test)]").next().unwrap_or_default();
+            (name, code.to_string())
+        })
+        .collect()
+}
+
+/// The source scans read the whole engine: the files in subdirectories
+/// (the rule registry's family modules) as well as the top level, and no
+/// unit-test file.
+#[test]
+fn source_scans_read_the_whole_engine() {
+    let names: Vec<String> = compliance_code()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    for expected in ["mod.rs", "checker.rs", "registry/mod.rs", "registry/cra.rs"] {
+        assert!(
+            names.iter().any(|name| name == expected),
+            "{expected} is not scanned: {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|name| name.starts_with("tests/")),
+        "a unit-test file is scanned as checker code: {names:?}"
+    );
+}
+
 /// Source scan: a checker loop or count over every component must either
-/// carve out non-package components (`is_package_scoped` or
-/// `package_components`) or say why its rule covers them all, with an
+/// carve out non-package components (`judges_package`, `is_package_scoped`
+/// or `package_components`) or say why its rule covers them all, with an
 /// `All components:` comment just above. The carve-out stopped halfway
 /// through the standards once (review finding V5); this keeps the next
-/// package rule from forgetting it.
+/// package rule from forgetting it. `judges_package` also leaves out the
+/// components whose scope is excluded, which `is_package_scoped` alone
+/// does not.
 #[test]
 fn whole_inventory_walks_are_scoped_or_justified() {
     fn floor(s: &str, mut i: usize) -> usize {
@@ -132,16 +268,8 @@ fn whole_inventory_walks_are_scoped_or_justified() {
         }
         i
     }
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/quality/compliance");
     let mut offenders = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("compliance sources") {
-        let path = entry.expect("dir entry").path();
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).expect("readable source");
-        // Unit tests at the bottom of a file are not checker code.
-        let code = src.split("#[cfg(test)]").next().unwrap_or_default();
+    for (name, code) in compliance_code() {
         // Drop whitespace so multi-line method chains match one pattern.
         let flat: String = code.chars().filter(|c| !c.is_whitespace()).collect();
         for pattern in [
@@ -154,10 +282,10 @@ fn whole_inventory_walks_are_scoped_or_justified() {
                 let before = &flat[floor(&flat, at.saturating_sub(400))..at];
                 let after = &flat[at..floor(&flat, (at + 1200).min(flat.len()))];
                 let justified = before.contains("Allcomponents:");
-                let scoped =
-                    after.contains("is_package_scoped") || after.contains("package_components");
+                let scoped = after.contains("judges_package")
+                    || after.contains("is_package_scoped")
+                    || after.contains("package_components");
                 if !justified && !scoped {
-                    let name = path.file_name().unwrap_or_default().to_string_lossy();
                     offenders.push(format!("{name}: …{}…", &after[..floor(after, 60)]));
                 }
                 from = at + pattern.len();
@@ -255,24 +383,25 @@ fn non_package_components_never_draw_package_findings() {
 /// quality/metrics.rs, which SBOM-CRA-PRE-7-RQ-07-RE reads.
 #[test]
 fn checkers_never_use_the_raw_producer_test() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut sources: Vec<std::path::PathBuf> =
-        std::fs::read_dir(root.join("src/quality/compliance"))
-            .expect("compliance sources")
-            .map(|entry| entry.expect("dir entry").path())
-            .collect();
-    sources.push(root.join("src/quality/metrics.rs"));
+    let metrics = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/quality/metrics.rs"
+    ))
+    .expect("readable source");
+    let mut sources = compliance_code();
+    sources.push((
+        "src/quality/metrics.rs".to_string(),
+        metrics
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+    ));
     let mut offenders = Vec::new();
-    for path in sources {
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
-        let src = std::fs::read_to_string(&path).expect("readable source");
-        let code = src.split("#[cfg(test)]").next().unwrap_or_default();
+    for (name, code) in sources {
         for (n, line) in code.lines().enumerate() {
             let trimmed = line.trim_start();
             if !trimmed.starts_with("//") && line.contains(".has_producer(") {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
                 offenders.push(format!("{name}:{}: {}", n + 1, trimmed));
             }
         }
@@ -281,5 +410,111 @@ fn checkers_never_use_the_raw_producer_test() {
         offenders.is_empty(),
         "raw has_producer() in compliance code; use has_known_producer:\n  {}",
         offenders.join("\n  ")
+    );
+}
+
+/// Every parseable SBOM fixture's text, sorted by path, from the directories
+/// the snapshot harness walks.
+fn sbom_fixtures() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(FIXTURES_DIR);
+    let mut paths = Vec::new();
+    for dir in [
+        "aibom",
+        "compliance/regressions",
+        "cra",
+        "cyclonedx",
+        "showcase",
+        "spdx",
+        "spdx3",
+    ] {
+        walk(&root.join(dir), &mut paths);
+    }
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let rel = path
+                .strip_prefix(root)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let raw = std::fs::read_to_string(&path).ok()?;
+            parse_sbom_str(&raw).ok()?;
+            Some((rel, raw))
+        })
+        .collect()
+}
+
+/// The score counts an aggregate finding by its failing items. Most
+/// aggregate findings count those in `counts.affected`; a coverage finding
+/// ("Only X/Y components carry …") counts the covered ones, so its failing
+/// items are the others. A new coverage rule missing from the score's list
+/// of coverage rules would be weighed by the items that pass.
+#[test]
+fn aggregate_findings_weigh_their_failing_items() {
+    let mut coverage_rules = std::collections::BTreeSet::new();
+    let mut offenders = Vec::new();
+    for (rel, raw) in sbom_fixtures() {
+        let sbom = parse_sbom_str(&raw).expect("fixture parses");
+        for level in ComplianceLevel::all() {
+            let result = ComplianceChecker::new(*level)
+                .with_as_of(as_of())
+                .check(&sbom);
+            for v in &result.violations {
+                let Some(counts) = v.counts else {
+                    continue;
+                };
+                if v.severity == ViolationSeverity::Info {
+                    assert_eq!(v.failed_checks(), 0, "{rel} {}", v.rule_id);
+                    continue;
+                }
+                let coverage = v
+                    .message
+                    .contains(&format!("Only {}/{}", counts.affected, counts.total));
+                let failing = if coverage {
+                    coverage_rules.insert(v.rule_id);
+                    counts.total - counts.affected
+                } else {
+                    counts.affected
+                };
+                if v.failed_checks() != failing.max(1) {
+                    offenders.push(format!(
+                        "{rel} {level:?} {}: weighs {} for {}/{} ({})",
+                        v.rule_id,
+                        v.failed_checks(),
+                        counts.affected,
+                        counts.total,
+                        v.message
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "aggregate findings weighed by the wrong count:\n  {}",
+        offenders.join("\n  ")
+    );
+    // The corpus exercises every coverage rule.
+    assert_eq!(
+        coverage_rules.into_iter().collect::<Vec<_>>(),
+        [
+            "SBOM-CRA-PRE-7-RQ-07-RE",
+            "SBOM-FSCT-COPYRIGHT-COVERAGE",
+            "SBOM-FSCT-LICENSE-COVERAGE",
+        ]
     );
 }

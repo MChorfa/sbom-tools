@@ -18,6 +18,7 @@ jobs:
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
       version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     permissions:
       contents: read
       id-token: write
@@ -66,6 +67,15 @@ jobs:
 
           echo "version=${CRATE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Publishing version ${CRATE_VERSION}"
+
+          # A SemVer pre-release (0.4.0-rc.1) becomes a GitHub pre-release
+          # and stays out of the Homebrew tap.
+          if [[ "${CRATE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "${CRATE_VERSION} is a pre-release"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run tests
         run: cargo test --locked --all-features --verbose
@@ -196,7 +206,7 @@ jobs:
           EOF
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
       - name: Build release binary
         run: cargo build --release --locked --all-features --target ${{ matrix.target }}
@@ -272,7 +282,7 @@ jobs:
           toolchain: stable
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
       - name: Install cargo-sbom
         run: cargo install cargo-sbom --locked
@@ -350,9 +360,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.publish.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
+          # A pre-release never becomes the "Latest" release, which is what
+          # `gh release view` and sbom-tools-action's `version: latest` install.
+          if [[ "${PRERELEASE}" != "true" && "${PRERELEASE}" != "false" ]]; then
+            echo "::error::Unexpected prerelease output '${PRERELEASE}'"
+            exit 1
+          fi
           ASSETS=()
           ASSETS+=(sbom-tools.cdx.json)
           ASSETS+=(sbom-tools.spdx.json)
@@ -381,11 +398,14 @@ jobs:
             "${ASSETS[@]}" \
             --title "${TAG}" \
             "${NOTES_ARGS[@]}" \
+            --prerelease="${PRERELEASE}" \
             --verify-tag
 
   update-homebrew:
     name: Update Homebrew tap
     needs: [publish, release]
+    # The tap carries stable releases only.
+    if: needs.publish.outputs.prerelease == 'false'
     runs-on: macos-latest
     permissions:
       contents: read
@@ -505,6 +525,10 @@ jobs:
       - name: Tap and audit formula
         run: |
           brew tap sbom-tool/tap
+          # Homebrew refuses to load a formula from a tap that is not trusted
+          # ("Refusing to load formula ... from untrusted tap"); this failed
+          # the v0.4.0 run.
+          brew trust sbom-tool/tap
           # Overwrite the remote formula with the locally-updated version
           cp tap/Formula/sbom-tools.rb "$(brew --repo)/Library/Taps/sbom-tool/homebrew-tap/Formula/sbom-tools.rb"
           brew audit --formula sbom-tool/tap/sbom-tools

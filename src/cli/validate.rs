@@ -3,13 +3,16 @@
 //! Implements the `validate` subcommand for validating SBOMs against compliance standards.
 
 use crate::model::NormalizedSbom;
-use crate::pipeline::{OutputTarget, exit_codes, parse_sbom_with_context, write_output};
+use crate::pipeline::{
+    OutputTarget, exit_codes, is_stdin_path, parse_sbom_with_context, write_output,
+};
 use crate::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, StandardSelector, ViolationSeverity,
+    ComplianceLevel, ComplianceResult, ComplianceRunConfig, StandardSelector, ViolationSeverity,
 };
 use crate::reports::escape::sanitize_line;
 use crate::reports::{
-    ReportFormat, SarifOptions, generate_compliance_json, generate_compliance_sarif_with,
+    AssessedSbom, ReportFormat, SarifOptions, generate_compliance_json_at,
+    generate_compliance_sarif_with,
 };
 use anyhow::Result;
 use std::path::PathBuf;
@@ -45,14 +48,20 @@ pub enum ValidateJsonSchema {
 ///   `--fail-on-warning` is set). A standard that does not apply to the SBOM
 ///   counts as compliant unless `require_applicable` is set.
 /// - [`exit_codes::COMPLIANCE_ERRORS`] (1): one or more compliance errors
-///   found, or (with `require_applicable`) a standard did not apply
+///   found, a finding of a `fail_on` rule (`--fail-on`) at any severity, or
+///   (with `require_applicable`) a standard did not apply
 /// - [`exit_codes::COMPLIANCE_WARNINGS`] (2): warnings found with
 ///   `--fail-on-warning`
+///
+/// The codes follow the severities the rule settings (`rules`: `--rule`,
+/// the config file's `compliance.rules`) set, and a finding of a rule that
+/// is off counts toward none of them.
 ///
 /// These gate codes only apply to runs that completed a validation. A
 /// usage/configuration error surfaced from this function (unsupported output
 /// format, invalid `--as-of` or `--cra-product-class`, broken explicit
-/// sidecar) propagates as an `Err`, which the binary's `main()` maps to
+/// sidecar, `--pqc-profile` or `--cnsa-category` without
+/// `--pqc-mode deadline`) propagates as an `Err`, which the binary's `main()` maps to
 /// [`exit_codes::ERROR`] (3) — the code clap's own argument-parse errors
 /// exit with too, so exit 2 only ever means the warnings gate.
 ///
@@ -75,6 +84,9 @@ pub fn run_validate(
     sarif_category: Option<String>,
     sarif_include_passes: bool,
     sarif_max_results: usize,
+    pqc: super::PqcOptions,
+    rules: &super::RuleOptions,
+    fail_on: &[&'static str],
 ) -> Result<i32> {
     // `--summary` overrides `--output` (documented on the flag), so the
     // requested format is never rendered and must not be gated.
@@ -82,94 +94,65 @@ pub fn run_validate(
         super::ensure_output_format_supported("validate", output, VALIDATE_OUTPUT_FORMATS)?;
         super::check_sarif_flags(output, sarif_base.as_deref(), sarif_category.as_deref())?;
     }
-    // Pinned evaluation clock for deadline-sensitive checks (shared parser
-    // with `quality --as-of`).
-    let as_of: Option<chrono::DateTime<chrono::Utc>> = as_of.map(super::parse_as_of).transpose()?;
+    // The run's inputs: the pinned clock, the product class, the CRA
+    // sidecar (explicit, else found next to the SBOM), the PQC mode, the
+    // rule settings and the component scope, resolved like every other
+    // compliance command's. The run configuration hands each level the
+    // inputs it reads.
+    let compliance = super::compliance_run_config_for(
+        &sbom_path,
+        cra_sidecar_path.as_deref(),
+        cra_product_class.as_deref(),
+        as_of,
+        pqc,
+        rules,
+    )?;
+    // One instant for the whole run: `--as-of`, else the wall clock now, to
+    // the second. Every standard is judged at it, and the machine outputs
+    // state it (`as_of` in -o json, the OSCAL timestamps).
+    let judged_at = compliance.judged_at();
+    let compliance = compliance.with_as_of(judged_at);
     anyhow::ensure!(
         !standards.is_empty(),
         "no compliance standard selected; pass --standard (valid values: {})",
         StandardSelector::valid_values()
     );
+    let levels = selected_levels(&standards);
+    compliance.warn_on_unmatched_rules(&levels, "the selected standards");
+    warn_on_untrippable_fail_on(fail_on, &levels, &compliance);
 
     let parsed = parse_sbom_with_context(&sbom_path, false)?;
+    let results = compliance.check_levels(&levels, parsed.sbom());
 
-    // Load CRA sidecar — an explicit path is a hard error when broken,
-    // otherwise auto-discover next to the SBOM (best-effort).
-    let cra_sidecar = super::load_cra_sidecar(cra_sidecar_path.as_deref(), &sbom_path)?;
-
-    // Resolve effective product class: sidecar wins; otherwise CLI flag.
-    // An explicitly passed unrecognized class is a hard error (strict parse).
-    // Mismatch between explicit CLI flag and sidecar is reported as a Warning
-    // on stderr (not turned into a Violation — sidecar is authoritative).
-    let cli_class = super::parse_cra_product_class(cra_product_class.as_deref())?;
-    let sidecar_class = cra_sidecar.as_ref().and_then(|s| s.product_class);
-    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
-        && cli != side
-    {
-        tracing::warn!(
-            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
-            cli.label(),
-            side.label()
-        );
-    }
-    let effective_class = sidecar_class.or(cli_class);
-
-    let mut results = Vec::new();
-
-    for selector in &standards {
-        let level = selector.level();
-        let mut checker = ComplianceChecker::new(level);
-        if let Some(now) = as_of {
-            checker = checker.with_as_of(now);
-        }
-        // Sidecar metadata feeds the CRA family (manufacturer/disclosure/
-        // lifecycle fields), EUCC (certificate references), and the AI Act
-        // profile (the is_high_risk_ai flag escalates Annex IV findings).
-        if matches!(
-            level,
-            ComplianceLevel::CraPhase1
-                | ComplianceLevel::CraPhase2
-                | ComplianceLevel::CraOssSteward
-                | ComplianceLevel::EuccSubstantial
-                | ComplianceLevel::EuAiAct
-        ) && let Some(sc) = cra_sidecar.clone()
-        {
-            checker = checker.with_sidecar(sc);
-        }
-        // Product class drives severity calibration for the CRA phase checks.
-        if matches!(
-            level,
-            ComplianceLevel::CraPhase1 | ComplianceLevel::CraPhase2
-        ) && let Some(c) = effective_class
-        {
-            checker = checker.with_product_class(c);
-        }
-        results.push(checker.check(parsed.sbom()));
-    }
-
-    // Inputs that make machine output reproducible: OSCAL derives its UUIDs
-    // from the SBOM digest and stamps the --as-of instant. It also describes
-    // the SBOM document and the components its findings are about.
+    // Inputs that make machine output reproducible: -o json, SARIF and
+    // OSCAL describe the SBOM (its SHA-256, format, file name and how it was
+    // read) and state the instant it was judged at; OSCAL derives its UUIDs
+    // from both, and also describes the components its findings are about.
     // SARIF results point at the SBOM lines of their components, and list
     // the passed checks only under --sarif-include-passes.
+    let mut assessed = AssessedSbom::new(parsed.sbom(), parsed.raw_content().as_bytes());
+    if !is_stdin_path(&sbom_path) {
+        assessed = assessed.with_file_name(&sbom_path);
+    }
     let mut sarif = SarifOptions::new()
         .with_passes(sarif_include_passes)
         .with_max_results(sarif_max_results);
     if !summary && output == ReportFormat::Sarif {
-        sarif = sarif.with_artifact(super::sarif_artifact(
-            &sbom_path,
-            sarif_base.as_deref(),
-            parsed.sbom(),
-            parsed.raw_content(),
-        )?);
+        sarif = sarif
+            .with_artifact(super::sarif_artifact(
+                &sbom_path,
+                sarif_base.as_deref(),
+                parsed.sbom(),
+                parsed.raw_content(),
+            )?)
+            .with_subject(&assessed, judged_at);
         if let Some(category) = sarif_category {
             sarif = sarif.with_category(category);
         }
     }
     let provenance = OutputProvenance {
-        sbom: parsed.sbom(),
-        sbom_digest: sha256_hex(parsed.raw_content.as_bytes()),
-        as_of,
+        assessed,
+        judged_at,
         sarif,
     };
 
@@ -201,7 +184,13 @@ pub fn run_validate(
     // `--require-applicable`: a standard that did not evaluate the SBOM is
     // a failed gate, not a pass.
     let not_applicable = require_applicable && results.iter().any(|r| !r.is_applicable());
-    if has_errors || not_applicable {
+    // `--fail-on`: a finding of a named rule fails the run whatever its
+    // severity, so a warning or an info finding exits 1 too.
+    let fail_on_hits = fail_on_findings(&results, fail_on);
+    for (rule_id, findings) in &fail_on_hits {
+        tracing::info!("--fail-on {rule_id}: {findings} finding(s); exiting 1");
+    }
+    if has_errors || not_applicable || !fail_on_hits.is_empty() {
         return Ok(exit_codes::COMPLIANCE_ERRORS);
     }
     if fail_on_warning && has_warnings {
@@ -211,25 +200,77 @@ pub fn run_validate(
     Ok(exit_codes::SUCCESS)
 }
 
+/// The `fail_on` rules `results` report findings of, with how many each
+/// reports, in `fail_on` order.
+fn fail_on_findings(
+    results: &[ComplianceResult],
+    fail_on: &[&'static str],
+) -> Vec<(&'static str, usize)> {
+    fail_on
+        .iter()
+        .filter_map(|rule_id| {
+            let findings = results
+                .iter()
+                .flat_map(|r| &r.violations)
+                .filter(|v| v.rule_id == *rule_id)
+                .count();
+            (findings > 0).then_some((*rule_id, findings))
+        })
+        .collect()
+}
+
+/// Warn about each `--fail-on` rule that can never fail this run: no
+/// selected standard reports it, or the run's rule settings turn it off.
+fn warn_on_untrippable_fail_on(
+    fail_on: &[&'static str],
+    levels: &[ComplianceLevel],
+    compliance: &ComplianceRunConfig,
+) {
+    for rule_id in fail_on {
+        if !levels
+            .iter()
+            .any(|level| crate::quality::rules_for_level(*level).contains(rule_id))
+        {
+            tracing::warn!(
+                "--fail-on {rule_id} can never fail this run: the selected standards report no \
+                 {rule_id} finding"
+            );
+        } else if let Some((crate::quality::RuleSetting::Off, source)) =
+            compliance.rule_settings().get(rule_id)
+        {
+            tracing::warn!(
+                "--fail-on {rule_id} can never fail this run: {} turns the rule off",
+                source.label()
+            );
+        }
+    }
+}
+
+/// The levels `standards` select, each once, in the order it was first
+/// selected. A repeat (`--standard cra,cra-phase2` names CRA Phase 2 twice)
+/// would report every finding twice, and in SARIF as a second alert, so it is
+/// dropped with a warning on stderr.
+fn selected_levels(standards: &[StandardSelector]) -> Vec<ComplianceLevel> {
+    let (kept, repeats) = StandardSelector::dedup_by_level(standards);
+    for repeat in repeats {
+        tracing::warn!(
+            "standard {repeat} ({}) is selected more than once; checking it once",
+            repeat.level().name()
+        );
+    }
+    kept.into_iter().map(StandardSelector::level).collect()
+}
+
 /// What a machine-readable report needs to know about the run itself.
 struct OutputProvenance<'a> {
-    /// The validated SBOM.
-    sbom: &'a NormalizedSbom,
-    /// Lowercase hex SHA-256 of the SBOM bytes as read.
-    sbom_digest: String,
-    /// The pinned evaluation instant (`--as-of`), if any.
-    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    /// The validated SBOM, with the SHA-256 of the bytes read and the name
+    /// of its file.
+    assessed: AssessedSbom<'a>,
+    /// The instant every standard was judged at.
+    judged_at: chrono::DateTime<chrono::Utc>,
     /// How `-o sarif` renders the results: the SBOM file they point into,
     /// their category and whether passed checks are listed.
     sarif: SarifOptions,
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 fn write_compliance_output(
@@ -243,16 +284,19 @@ fn write_compliance_output(
 
     let content = match output {
         ReportFormat::Json => match json_schema {
-            ValidateJsonSchema::V2 => generate_compliance_json(std::slice::from_ref(result))?,
+            ValidateJsonSchema::V2 => generate_compliance_json_at(
+                std::slice::from_ref(result),
+                &provenance.assessed,
+                provenance.judged_at,
+            )?,
             ValidateJsonSchema::V1 => serde_json::to_string_pretty(&v1_result(result))
                 .map_err(|e| anyhow::anyhow!("Failed to serialize compliance JSON: {e}"))?,
         },
         ReportFormat::Sarif => generate_compliance_sarif_with(result, &provenance.sarif)?,
         ReportFormat::OscalJson => crate::reports::oscal::generate_assessment_results_at(
             std::slice::from_ref(result),
-            provenance.sbom,
-            &provenance.sbom_digest,
-            provenance.as_of,
+            &provenance.assessed,
+            provenance.judged_at,
         )?,
         _ => format_compliance_text(result),
     };
@@ -264,7 +308,8 @@ fn write_compliance_output(
 /// `result` as the deprecated `--json-schema v1` layout prints it: the
 /// result's own serialization without the passed checks, which that layout
 /// predates. A passed check simply does not appear there (it used to be an
-/// Info violation).
+/// Info violation). The checks not evaluated stay: they are a field of
+/// their own and change no other, so the layout keeps meaning what it did.
 fn v1_result(result: &ComplianceResult) -> ComplianceResult {
     let mut v1 = result.clone();
     v1.passed.clear();
@@ -286,6 +331,18 @@ struct ComplianceSummary {
     errors: usize,
     warnings: usize,
     info: usize,
+    /// Findings the rule settings turned off; omitted when none.
+    #[serde(skip_serializing_if = "is_zero")]
+    suppressed: usize,
+    /// Components the package rules left out for their excluded scope;
+    /// omitted when none.
+    #[serde(skip_serializing_if = "is_zero")]
+    excluded_components: usize,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 fn compliance_summary(result: &ComplianceResult) -> ComplianceSummary {
@@ -302,6 +359,8 @@ fn compliance_summary(result: &ComplianceResult) -> ComplianceSummary {
         errors: result.error_count,
         warnings: result.warning_count,
         info: result.info_count,
+        suppressed: result.suppressed_count(),
+        excluded_components: result.excluded_components,
     }
 }
 
@@ -325,7 +384,9 @@ fn write_multi_compliance_output(
 
     let content = match output {
         ReportFormat::Json => match json_schema {
-            ValidateJsonSchema::V2 => generate_compliance_json(results)?,
+            ValidateJsonSchema::V2 => {
+                generate_compliance_json_at(results, &provenance.assessed, provenance.judged_at)?
+            }
             ValidateJsonSchema::V1 => {
                 let v1: Vec<ComplianceResult> = results.iter().map(v1_result).collect();
                 serde_json::to_string_pretty(&v1)
@@ -337,9 +398,8 @@ fn write_multi_compliance_output(
         }
         ReportFormat::OscalJson => crate::reports::oscal::generate_assessment_results_at(
             results,
-            provenance.sbom,
-            &provenance.sbom_digest,
-            provenance.as_of,
+            &provenance.assessed,
+            provenance.judged_at,
         )?,
         _ => {
             let mut parts = Vec::new();
@@ -377,16 +437,26 @@ fn passed_checks_line(result: &ComplianceResult) -> Option<String> {
 }
 
 /// Render a compliance result as plain text, one finding per three lines:
-/// the finding, its message, and a `fix:` line with the remediation for the
-/// SBOM's format.
+/// the finding (its severity, rule id, category, requirement and element),
+/// its message, and a `fix:` line with the remediation for the SBOM's
+/// format. Before the `fix:` line, a finding that read a value adds an
+/// `observed:` line with the value and the field it was read from, a
+/// finding `--pqc-mode deadline` dates adds a `deadline:` line with the date
+/// and its source, and a finding whose rule the run sets (`--rule`) adds a
+/// `severity:` line naming the setting's source and the severity the check
+/// gave it. Under the status, an `Excluded:` line counts the components
+/// left out for their excluded scope. The checks the standard did not
+/// evaluate follow the findings, under `Not evaluated:`, one line per
+/// reason, and then the rules the settings turned off, under
+/// `Suppressed by settings:`, one line per rule.
 ///
-/// Requirement, element, message and the N/A reason can carry SBOM-supplied
-/// text (component names, versions, purls), so each passes through
-/// [`sanitize_line`]: a crafted name must not be able to start a new line
-/// (CI runners such as GitHub Actions parse a line beginning with `::error`
-/// as a workflow command) or smuggle terminal escape or bidi sequences. The
-/// remediation is sanitized too: a deserialized violation carries whatever
-/// text its payload held.
+/// Requirement, element, message, observed value and the N/A reason can
+/// carry SBOM-supplied text (component names, versions, purls), so each
+/// passes through [`sanitize_line`]: a crafted name must not be able to start
+/// a new line (CI runners such as GitHub Actions parse a line beginning with
+/// `::error` as a workflow command) or smuggle terminal escape or bidi
+/// sequences. The remediation, field and reasons are sanitized too: a
+/// deserialized result carries whatever text its payload held.
 fn format_compliance_text(result: &ComplianceResult) -> String {
     let mut lines = Vec::new();
     lines.push(format!("Compliance ({})", result.level.name()));
@@ -412,42 +482,141 @@ fn format_compliance_text(result: &ComplianceResult) -> String {
     if let Some(passed) = passed_checks_line(result) {
         lines.push(passed);
     }
+    if result.excluded_components > 0 {
+        lines.push(format!(
+            "Excluded: {} with scope excluded, left out of the package rules \
+             (--include-excluded-scope judges them)",
+            plural(result.excluded_components, "component", "components")
+        ));
+    }
     lines.push(String::new());
 
     if result.violations.is_empty() {
         lines.push("No violations found.".to_string());
-        return lines.join("\n");
     }
 
     for v in &result.violations {
-        let severity = match v.severity {
-            ViolationSeverity::Error => "ERROR",
-            ViolationSeverity::Warning => "WARN",
-            ViolationSeverity::Info => "INFO",
-        };
+        let severity = severity_label(v.severity);
         let element = v.element.as_deref().unwrap_or("-");
         lines.push(format!(
-            "[{}] {} | {} | {}",
+            "[{}] {} | {} | {} | {}",
             severity,
+            v.rule_id,
             v.category.name(),
             sanitize_line(&v.requirement),
             sanitize_line(element)
         ));
         lines.push(format!("  {}", sanitize_line(&v.message)));
+        if let Some(observed) = &v.observed {
+            let field = v
+                .field
+                .as_deref()
+                .map(|field| format!(" in {}", sanitize_line(field)))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  observed: \"{}\"{field}",
+                sanitize_line(observed)
+            ));
+        }
+        if let Some(deadline) = &v.deadline {
+            lines.push(format!(
+                "  deadline: {} ({})",
+                deadline.date,
+                sanitize_line(&deadline.source)
+            ));
+        }
+        if let Some(severity_override) = &v.severity_override {
+            lines.push(format!(
+                "  severity: {} from {} (default {})",
+                severity_label(v.severity),
+                severity_override.source.label(),
+                severity_label(severity_override.default)
+            ));
+        }
         lines.push(format!(
             "  fix: {}",
             sanitize_line(&v.remediation_guidance())
         ));
     }
 
+    if let Some(section) = not_evaluated_lines(result) {
+        lines.push(String::new());
+        lines.extend(section);
+    }
+    if let Some(section) = suppressed_lines(result) {
+        lines.push(String::new());
+        lines.extend(section);
+    }
+
     lines.join("\n")
 }
 
-/// Run the engine's NtiaMinimum check and print a compact PASSED/FAILED
-/// summary. Used by `view --validate-ntia`; gating errors are listed, each
-/// with a `fix:` line, and warnings go to the log.
-pub fn print_ntia_validation(sbom: &NormalizedSbom) {
-    let result = ComplianceChecker::new(ComplianceLevel::NtiaMinimum).check(sbom);
+/// The `Not evaluated:` section of a result that skipped checks: one line
+/// per reason, naming its rules in report order, so the four hardware
+/// checks a software-only SBOM skips share a line.
+fn not_evaluated_lines(result: &ComplianceResult) -> Option<Vec<String>> {
+    if result.evaluated.is_empty() {
+        return None;
+    }
+    let mut by_reason: Vec<(&str, Vec<&str>)> = Vec::new();
+    for entry in &result.evaluated {
+        match by_reason
+            .iter_mut()
+            .find(|(reason, _)| *reason == entry.reason)
+        {
+            Some((_, rules)) => rules.push(entry.rule_id),
+            None => by_reason.push((&entry.reason, vec![entry.rule_id])),
+        }
+    }
+    let mut lines = vec!["Not evaluated:".to_string()];
+    lines.extend(
+        by_reason
+            .into_iter()
+            .map(|(reason, rules)| format!("  {}: {}", rules.join(", "), sanitize_line(reason))),
+    );
+    Some(lines)
+}
+
+/// The label a finding line shows for `severity`.
+const fn severity_label(severity: ViolationSeverity) -> &'static str {
+    match severity {
+        ViolationSeverity::Error => "ERROR",
+        ViolationSeverity::Warning => "WARN",
+        ViolationSeverity::Info => "INFO",
+    }
+}
+
+/// `count` and the noun for it, singular for one.
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// The `Suppressed by settings:` section of a result whose rule settings
+/// turned findings off: one line per rule, with how many findings it
+/// dropped and where the `off` setting comes from. It follows
+/// `Not evaluated:`, the checks that did not run: a suppressed rule's check
+/// did run, and its findings exist.
+fn suppressed_lines(result: &ComplianceResult) -> Option<Vec<String>> {
+    if result.suppressed.is_empty() {
+        return None;
+    }
+    let mut lines = vec!["Suppressed by settings:".to_string()];
+    lines.extend(result.suppressed.iter().map(|rule| {
+        format!(
+            "  {}: {} turned off by {}",
+            sanitize_line(&rule.rule_id),
+            plural(rule.findings, "finding", "findings"),
+            rule.source.label()
+        )
+    }));
+    Some(lines)
+}
+
+/// Run the engine's NtiaMinimum check with `compliance`'s inputs and print a
+/// compact PASSED/FAILED summary. Used by `view --validate-ntia`; gating
+/// errors are listed, each with a `fix:` line, and warnings go to the log.
+pub fn print_ntia_validation(sbom: &NormalizedSbom, compliance: &ComplianceRunConfig) {
+    let result = compliance.check(ComplianceLevel::NtiaMinimum, sbom);
     for v in result.violations_by_severity(ViolationSeverity::Warning) {
         tracing::warn!("{}", v.message);
     }
@@ -467,10 +636,11 @@ pub fn print_ntia_validation(sbom: &NormalizedSbom) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     #[test]
     fn print_ntia_validation_does_not_panic_on_empty_sbom() {
-        print_ntia_validation(&NormalizedSbom::default());
+        print_ntia_validation(&NormalizedSbom::default(), &ComplianceRunConfig::default());
     }
 
     /// The text report counts passed checks under the status and lists none
@@ -484,7 +654,7 @@ mod tests {
             component_id: Some(format!("crypto/algorithm/{name}")),
             finding_detail: None,
             requirement: "FIPS 203/204/205: approved".to_string(),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
         };
         let result = ComplianceResult::new(ComplianceLevel::NistPqc, Vec::new())
             .with_passed(vec![pass("ML-KEM-1024"), pass("ML-DSA-87")]);
@@ -505,6 +675,95 @@ mod tests {
         assert!(!format_compliance_text(&none).contains("passed"));
         let one = none.with_passed(vec![pass("XMSS")]);
         assert!(format_compliance_text(&one).contains("\n1 check passed\n"));
+    }
+
+    fn text_of(level: ComplianceLevel, sbom: &str) -> String {
+        let sbom = crate::parse_sbom_str(sbom).expect("fixture parses");
+        let as_of = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+            .expect("valid instant")
+            .with_timezone(&chrono::Utc);
+        let result = crate::quality::ComplianceChecker::new(level)
+            .with_as_of(as_of)
+            .check(&sbom);
+        format_compliance_text(&result)
+    }
+
+    const SPDX_MINIMAL: &str = include_str!("../../tests/fixtures/spdx/minimal.spdx.json");
+
+    /// Each finding line names its rule, so a text finding matches its SARIF
+    /// alert and JSON entry; a finding that read a value says what and where.
+    #[test]
+    fn text_names_the_rule_and_the_observed_value() {
+        let text = text_of(ComplianceLevel::FdaMedicalDevice, SPDX_MINIMAL);
+        assert!(
+            text.lines()
+                .any(|l| l.starts_with("[ERROR] SBOM-FDA-HASH | Integrity Information | ")),
+            "{text}"
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let observed = lines
+            .iter()
+            .position(|l| *l == "  observed: \"SHA-256:abc123def456...\" in packages[].checksums[]")
+            .unwrap_or_else(|| panic!("no observed line in:\n{text}"));
+        assert!(lines[observed + 1].starts_with("  fix: "), "{text}");
+        assert!(!text.contains("Not evaluated:"), "{text}");
+    }
+
+    /// The checks a standard skipped follow the findings, one line per
+    /// reason naming its rules.
+    #[test]
+    fn text_lists_the_checks_not_evaluated() {
+        let text = text_of(ComplianceLevel::Cisa2026, SPDX_MINIMAL);
+        assert!(
+            text.ends_with(
+                "\n\nNot evaluated:\n  \
+                 SBOM-CISA2026-SIGNATURE: SPDX 2.x cannot carry a document signature\n  \
+                 SBOM-CISA2026-GENERATION-CONTEXT: SPDX 2.x has no field for the lifecycle phase\n  \
+                 SBOM-CISA2026-COVERAGE: SPDX 2.x cannot declare the completeness of its inventory"
+            ),
+            "{text}"
+        );
+
+        let text = text_of(
+            ComplianceLevel::CraPhase2,
+            include_str!("../../tests/fixtures/cra/cra-compliant.cdx.json"),
+        );
+        assert!(
+            text.contains(
+                "\n  SBOM-CRA-PRE-8-RQ-02-PRODUCER, SBOM-CRA-PRE-8-RQ-02-IDENTIFIER, \
+                 SBOM-CRA-PRE-8-RQ-02-FIRMWARE-VERSION, SBOM-CRA-PRE-8-RQ-02-DEVICE-FIRMWARE: \
+                 the SBOM lists no device, firmware or device-driver component"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n  SBOM-CRA-ANNEX-IV, SBOM-CRA-ANNEX-VIII: the check depends on"),
+            "{text}"
+        );
+    }
+
+    /// The text report cleans what a deserialized result carries, like any
+    /// other SBOM text: an observed value cannot start a line.
+    #[test]
+    fn text_cleans_an_observed_value() {
+        let violation: crate::quality::Violation = serde_json::from_value(serde_json::json!({
+            "severity": "Error", "category": "SupplierInfo", "message": "m", "element": null,
+            "requirement": "r", "rule_id": "SBOM-NTIA-SUPPLIER",
+            "field": "components[].supplier.name", "observed": "x\n::error::forged\u{1b}[31m"
+        }))
+        .expect("violation deserializes");
+        let result = ComplianceResult::new(ComplianceLevel::NtiaMinimum, vec![violation]);
+        let text = format_compliance_text(&result);
+        assert!(
+            text.contains(
+                "\n  observed: \"x\\n::error::forged[31m\" in components[].supplier.name\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.lines().any(|l| l.trim_start().starts_with("::")),
+            "{text}"
+        );
     }
 
     #[test]
@@ -537,6 +796,9 @@ mod tests {
                 None,
                 false,
                 crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+                crate::cli::PqcOptions::default(),
+                &crate::cli::RuleOptions::default(),
+                &[],
             )
             .expect_err("unsupported format must be rejected");
             let msg = err.to_string();
@@ -569,6 +831,9 @@ mod tests {
             None,
             false,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            &crate::cli::RuleOptions::default(),
+            &[],
         )
         .expect_err("empty standard list must be rejected");
         assert!(err.to_string().contains("no compliance standard selected"));
@@ -602,6 +867,9 @@ mod tests {
             None,
             false,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            &crate::cli::RuleOptions::default(),
+            &[],
         )
         .expect("--summary must override -o html instead of hard-erroring");
         let content = std::fs::read_to_string(out).unwrap();
@@ -637,6 +905,9 @@ mod tests {
             None,
             false,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            &crate::cli::RuleOptions::default(),
+            &[],
         )
         .expect_err("typo'd --cra-product-class must be a hard error");
         let msg = err.to_string();
@@ -674,8 +945,84 @@ mod tests {
             None,
             false,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            &crate::cli::RuleOptions::default(),
+            &[],
         )
         .expect("offset-less --as-of datetime must parse (assumed UTC)");
+    }
+
+    /// `--standard cra,cra-phase2` names CRA Phase 2 twice (clap parses both
+    /// spellings to `cra`). It is checked once: one result, and SARIF with no
+    /// repeated alert, byte-identical to `--standard cra`.
+    #[test]
+    fn a_standard_selected_twice_is_checked_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let sbom_path = dir.path().join("app.cdx.json");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/cra/cra-compliant.cdx.json"
+            ),
+            &sbom_path,
+        )
+        .unwrap();
+        let twice: Vec<StandardSelector> = ["cra", "cra-phase2"]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        let render = |standards: Vec<StandardSelector>, output: ReportFormat, name: &str| {
+            let out = dir.path().join(name);
+            run_validate(
+                sbom_path.clone(),
+                standards,
+                output,
+                Some(out.clone()),
+                false,
+                false,
+                None,
+                None,
+                Some("2026-10-12"),
+                false,
+                ValidateJsonSchema::V2,
+                None,
+                None,
+                false,
+                crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+                crate::cli::PqcOptions::default(),
+                &crate::cli::RuleOptions::default(),
+                &[],
+            )
+            .expect("validate runs");
+            std::fs::read_to_string(out).unwrap()
+        };
+
+        let json = render(twice.clone(), ReportFormat::Json, "twice.json");
+        let envelope: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(envelope["results"].as_array().unwrap().len(), 1, "{json}");
+        assert_eq!(
+            json,
+            render(vec![StandardSelector::Cra], ReportFormat::Json, "once.json")
+        );
+
+        let sarif = render(twice, ReportFormat::Sarif, "twice.sarif");
+        let log: serde_json::Value = serde_json::from_str(&sarif).unwrap();
+        let results = log["runs"][0]["results"].as_array().unwrap();
+        assert!(!results.is_empty(), "the fixture has CRA findings");
+        let mut keys = std::collections::HashSet::new();
+        for result in results {
+            let key = result["properties"]["findingKey"].as_str().unwrap();
+            assert!(keys.insert(key), "repeated SARIF result {key}");
+            assert!(!key.contains("#2"), "a numbered repeat: {key}");
+        }
+        assert_eq!(
+            sarif,
+            render(
+                vec![StandardSelector::Cra],
+                ReportFormat::Sarif,
+                "once.sarif"
+            )
+        );
     }
 
     #[test]
@@ -705,6 +1052,9 @@ mod tests {
             None,
             false,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            &crate::cli::RuleOptions::default(),
+            &[],
         )
         .expect_err("broken explicit sidecar must be a hard error");
         assert!(err.to_string().contains("Failed to load CRA sidecar"));

@@ -10,8 +10,11 @@ ENISA / industry guidance. Use it to:
 - **Engineers**: see which sidecar field (`CraSidecarMetadata`), SBOM
   field, or CycloneDX 1.6 [attestation](#attestation-evidence-cyclonedx-16-declarations)
   clears each violation.
-- **GRC / dashboards**: cross-reference SARIF `properties.standardIds`
-  and `properties.standardHelpUris` to produce control-mapping reports.
+- **GRC / dashboards**: cross-reference the standard references of each
+  finding to produce control-mapping reports: `standard_refs` in `-o json`,
+  `properties.standardRefs` in SARIF (the compact `standardIds` and
+  `standardHelpUris` are deprecated and go in v0.5.0), the `standard-ref`
+  properties and `reference` links of each OSCAL observation.
 
 > Generated and maintained alongside the sbom-tools source tree.
 > If a check or article moves, send a PR — the reverse map is the
@@ -26,6 +29,8 @@ ENISA / industry guidance. Use it to:
 | 2026-09-11    | Article 14 reporting obligations apply (`ComplianceLevel::CraPhase1`) — Art. 71(2) |
 | 2027-12-11    | Regulation applies in full (`ComplianceLevel::CraPhase2`) — Art. 71(2)             |
 
+You choose the phase by name, and sbom-tools never infers it from the date: `--standard cra-phase1` checks Phase 1 and `--standard cra` (or `cra-phase2`) checks Phase 2, while `--as-of` moves only the date-gated checks within the phase you chose.
+
 ## Compliance levels
 
 | `ComplianceLevel`           | sbom-tools `--standard` alias                                                                       | Scope                                                                                                            |
@@ -34,20 +39,47 @@ ENISA / industry guidance. Use it to:
 | `CraPhase2`                 | `cra` (default CRA meaning), `cra-phase2`                                                           | Full CRA compliance (regulation fully applies from 2027-12-11)                                                                        |
 | `CraOssSteward`             | `oss-steward`, `cra-oss-steward`, `cra-oss`, `cra-art24`, `art24`                                   | Article 24 lighter profile for open-source software stewards                                                     |
 | `BsiTr03183_2`              | `bsi`, `tr-03183`, `tr03183`, `bsi-tr-03183-2`                                                      | BSI TR-03183-2 (German national CRA-aligned baseline)                                                            |
-| `Cnsa2`                     | `cnsa2`, `cnsa-2`, `cnsa_2`, `cnsa2.0`                                                              | NSA CNSA 2.0 (post-quantum mandate for US national-security systems)                                             |
-| `NistPqc`                   | `pqc`, `nist-pqc`, `nist_pqc`                                                                       | NIST IR 8547 + FIPS 203/204/205 (PQC migration)                                                                  |
+| `Cnsa2`                     | `cnsa2`, `cnsa-2`, `cnsa_2`, `cnsa2.0`                                                              | NSA CNSA 2.0 (post-quantum mandate for US national-security systems, required by CNSSP 15; `--pqc-mode deadline` applies its 2025–2033 timeline) |
+| `NistPqc`                   | `pqc`, `nist-pqc`, `nist_pqc`                                                                       | NIST IR 8547 (final, Oct 2026) + FIPS 203/204/205 (PQC migration; `--pqc-mode deadline` applies its 2030/2035 milestones) |
 
 The `--cra-product-class` flag (or sidecar `productClass`) drives the
 [CRA-P3.2 calibration table](#cra-p32-product-class-severity-calibration)
 that scales severity for vendor-hash, EOL, cycles, DoC, EUCC, PSIRT,
-and module-certificate checks.
+and module-certificate checks of `CraPhase1` and `CraPhase2`.
+
+Every command that checks compliance (`validate`, `quality`, `view` and
+`diff` with their TUIs, `cra-docs`, and the compliance trend of `timeline`)
+hands each profile the same inputs: the CRA sidecar reaches the CRA,
+OSS-steward, EUCC and EU AI Act profiles, the product class reaches the two
+CRA phases only, and the PQC flags (`--pqc-mode`, `--pqc-profile`,
+`--cnsa-category`) reach the CNSA 2.0 and NIST PQC profiles only. Rule
+settings (`--rule`, `compliance.rules`) reach every profile that reports
+the rule, and every profile with package rules leaves components whose
+scope is excluded out of them unless `--include-excluded-scope`. The Article 24
+steward profile gets the sidecar without its `productClass` and
+`conformityAssessmentRoute`: the class picks a manufacturer's
+conformity-assessment procedure (Art. 32), which a steward does not
+follow. See [Inputs of a run](compliance-output.md#inputs-of-a-run).
 
 ## Reverse map
 
 Each row maps a sbom-tools `Violation::requirement` string to its
 regulatory anchor, the harmonised-standard requirement ID
 (prEN 40000-1-3 where known), the BSI section, and the canonical URL
-that ends up in SARIF `properties.standardHelpUris`.
+that ends up in each reference's `help_uri` (`-o json`), `helpUri`
+(SARIF `properties.standardRefs`) and `reference` link (OSCAL).
+
+The SBOM-content rules also cite the ENISA Technical Advisory for Software
+Bill of Materials (v1.10, 22 October 2026), after their CRA and prEN
+references. Its data model (§2.1.1) backs the creator, document
+identifier, component name, version, supplier, identifier, hash, licence
+and dependency rules; its formats (§2.1.2) the machine-readable format
+rule; its signing step (§2.2.1) the document-integrity rule; and its risk
+table (§3.2) the freshness, identifier and traceability rules.
+[STANDARDS_VERSIONS.md](STANDARDS_VERSIONS.md) lists the rules. The
+advisory is guidance: it says it does not "create or modify any legal,
+regulatory, or compliance obligations", so these references change no
+check.
 
 ### CRA Article 13 (essential requirements & SBOM-related obligations)
 
@@ -64,8 +96,8 @@ that ends up in SARIF `properties.standardHelpUris`.
 | `CRA Art. 13(7) / Annex I Part II (1): SBOM freshness`          | Art. 13(7); Annex I Part II (1)   | PRE-7-RQ-04         | §3.1             | regenerate SBOM on each release                           |
 | `CRA Annex I Part II (1): Machine-readable SBOM format`         | Annex I Part II (1)               | PRE-7-RQ-04         | §4               | parse-time check (CycloneDX 1.4+ / SPDX 2.3+)             |
 | `CRA Art. 13(5): Third-party due diligence (license tracking)`  | Art. 13(5)                        | PRE-7-RQ-05         | §5.2.2           | populate component `license` fields                       |
-| `CRA Art. 13(17): Vulnerability disclosure contact`             | Art. 13(17); Annex I Part II (6); Annex II (2) | RLS-2-RQ-01 | §5.2.5 (opt.) | `securityContact` / `vulnerabilityDisclosureUrl`          |
-| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` | Annex I Part II (5); Art. 13(8) | RLS-2-RQ-02      | —                | `coordinatedDisclosurePolicyUrl`                          |
+| `CRA Art. 13(17): Vulnerability disclosure contact`             | Art. 13(17); Annex I Part II (6); Annex II (2) | RLS-2-RQ-01 | §5.2.5 (opt.) | `securityContact` / `vulnerabilityDisclosureUrl` (or a security-contact, advisories or support reference on the product, see [manufacturer evidence](#manufacturer-evidence)); a [contact](#contacts) that reaches nobody does not count |
+| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` | Annex I Part II (5); Art. 13(8) | RLS-2-RQ-02      | —                | `coordinatedDisclosurePolicyUrl` (or an advisories reference on the product; a support link does not count, nor does a placeholder [contact](#contacts)) |
 | `CRA Art. 13(8): Support period / lifecycle management`         | Art. 13(8)                        | PRE-7-RQ-06         | —                | `supportEndDate` + EOL enrichment                         |
 | `CRA Art. 13(8) / 13(19): Support period disclosure`            | Art. 13(8); Art. 13(19); Annex II (7) | PRE-7-RQ-06     | —                | `supportEndDate`                                          |
 | `CRA Annex I Part II (1): Documented vulnerability information` | Annex I Part II (1)               | RLS-2-RQ-04         | —                | embedded vulnerabilities (or OSV / KEV / VEX enrichment), or a `vulnerability-assertion` / `exploitability-statement` external reference |
@@ -74,7 +106,7 @@ that ends up in SARIF `properties.standardHelpUris`.
 | `CRA Annex I Part II (1): Component version`                    | Annex I Part II (1)               | PRE-7-RQ-06         | §5.2.2           | component `version` fields                                |
 | `CRA Annex I Part II (1): Component supplier information`       | Annex I Part II (1)               | PRE-7-RQ-03         | §5.2.2           | component `supplier` fields                               |
 | `CRA Annex I Part II (4): Vulnerability metadata completeness`  | Annex I Part II (4)               | —                   | —                | vulnerability severity/CVSS + remediation detail, or a [justified VEX `not_affected` statement](#vex-not_affected-statements) |
-| `CRA Art. 13(16): Manufacturer identification`                  | Art. 13(16); Annex II (1)         | —                   | §5.2.1           | `manufacturerName` + `manufacturerEmail`                  |
+| `CRA Art. 13(16): Manufacturer identification`                  | Art. 13(16); Annex II (1)         | —                   | §5.2.1           | `manufacturerName` + `manufacturerEmail` (or, in the SBOM, an organization creator or the product's manufacturer or supplier, see [manufacturer evidence](#manufacturer-evidence)) |
 
 #### VEX `not_affected` statements
 
@@ -108,6 +140,10 @@ CycloneDX VEX document passed with `--vex` map all nine the same way, each
 to the closest of the five model justifications (see the table below). The
 CSAF reader ignores `flags` and `threats`, so a CSAF `known_not_affected`
 entry does not count yet. Before v0.4.0 every unrated vulnerability warned.
+The other standards' open-vulnerability checks skip the same statements, as
+tool policy kept the same across standards: `SBOM-FDA-SECURITY` does not
+count such a vulnerability as critical or high, and
+`SBOM-PCI-11-3-1-1-SEVERITY` does not ask it for a risk ranking.
 Sources: the FAQ as
 the Commission's Markdown conversion
 (<https://ec.europa.eu/newsroom/dae/redirection/document/123307>) and PDF
@@ -132,6 +168,10 @@ detail) in either path; it is no justification.
 | `CRA Art. 14(2)(a): 24-hour early-warning channel`          | Art. 14(2)(a) / 14(4)(a) | RLS-2-RQ-03 | `earlyWarningContact`                 |
 | `CRA Art. 14(2)(b): 72-hour notification channel`           | Art. 14(2)(b) / 14(4)(b) | RLS-2-RQ-03 | `incidentReportContact`               |
 | `CRA Art. 14(7): ENISA single reporting platform`           | Art. 14(7)     | RLS-2-RQ-03-RE      | `enisaReportingPlatformId` (the CSIRT designated as coordinator is enough) |
+
+The three channels are [contacts](#contacts): a placeholder such as `TBD`, or
+an address at `example.com`, `example.net` or `example.org`, is a missing
+channel, and the finding names it.
 
 Pre-deadline findings are emitted as `Info`; post-deadline they become
 `Warning` (or `Error` at `ImportantClass2`/`Critical` per the
@@ -169,16 +209,29 @@ of the deadline.
 
 | Requirement string                                          | CRA Annex                | prEN 40000-1-3      | What clears it                                          |
 |-------------------------------------------------------------|--------------------------|---------------------|---------------------------------------------------------|
-| `CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through` | Annex I Part II | PRE-7-RQ-07-RE | strong (SHA-256+) hash on vendor-supplied components |
+| `CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through` | Annex I Part II | PRE-7-RQ-07-RE | a [valid](#hash-values) hash on vendor-supplied components |
 | `CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier` | Annex I         | PRE-7-RQ-07         | PURL / CPE / SWID / SWHID on each component             |
 | `CRA Annex I Part II: Supply chain transparency`            | Annex I Part II          | PRE-7-RQ-01,03      | supplier on direct + transitive deps                    |
-| `CRA Annex I Part I (2)(f): Document signature/integrity`   | Annex I Part I (2)(f)    | —                   | serial number / digital signature / attestation hash    |
-| `CRA Annex I Part I (2)(f): Component integrity information (hash)` | Annex I Part I (2)(f) | —                | cryptographic hash (SHA-256+) per component             |
-| `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | sidecar EUCC evidence fields, a `Certification`/`Attestation` external ref with `eucc`/`common-criteria` URL, or a [CDXA attestation](#attestation-evidence-cyclonedx-16-declarations) naming EUCC / Common Criteria |
+| `CRA Annex I Part I (2)(f): Document signature/integrity`   | Annex I Part I (2)(f)    | —                   | a document signature with a value, or an attestation or certification reference on the product that carries a [valid](#hash-values) hash of the referenced document (a serial number does not count) |
+| `CRA Annex I Part I (2)(f): Component integrity information (hash)` | Annex I Part I (2)(f) | —                | a [valid](#hash-values) cryptographic hash (SHA-256+) per component |
+| `CRA Annex IV: EUCC reference (Common Criteria certificate)`| Annex IV                 | —                   | sidecar EUCC evidence fields, a `Certification`/`Attestation` external ref whose URL contains `eucc`, `common-criteria` or `commoncriteria` (any case; the keywords `SBOM-EUCC-CERTREF` and the conformity summary read too), or a [CDXA attestation](#attestation-evidence-cyclonedx-16-declarations) naming EUCC / Common Criteria |
 | `CRA Annex VII: Technical documentation`                    | Annex VII                | —                   | run `sbom-tools cra-docs <sbom> --output dossier/`     |
 | `CRA Annex V: EU Declaration of Conformity reference`       | Annex V                  | —                   | `Attestation`/`Certification` external ref OR `ceMarkingReference` |
 | `CRA Annex VIII: <Module> certificate reference`            | Annex VIII (Module B+C/H/EUCC) | —             | `Certification` external ref (the notified-body or certification-body certificate; an `Attestation` ref does not count) |
 | `CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware component inventory` | Annex I Part II   | PRE-8-RQ-02         | producer + identifier + firmware version on hardware    |
+
+The generic checks that the CRA profiles share with the other standards —
+the SBOM creator (`SBOM-CRA-CREATOR`), a document identifier
+(`SBOM-CRA-SERIAL`), component names (`SBOM-CRA-COMPONENT-NAME`), a spec
+version sbom-tools reads (`SBOM-CRA-SPEC-VERSION`,
+`SBOM-CRA-SPEC-VERSION-UNKNOWN`), element identifiers
+(`SBOM-CRA-ELEMENT-ID`) and one entry per component
+(`SBOM-CRA-DUPLICATE-COMPONENT`, an Info since v0.4.0) — cite Annex I Part II
+(1), the clause that asks for an SBOM of the product's components in a
+machine-readable format. They cited no clause before v0.4.0, so their
+findings carried no reference and no `help_uri`. A component the document
+lists more than once is merged into one before any check reads it (see
+[Duplicate components](compliance-output.md#duplicate-components)).
 
 External-reference types. The `Attestation`, `Certification`,
 `RiskAssessment`, `VulnerabilityAssertion` and `ExploitabilityStatement`
@@ -203,23 +256,133 @@ reference may be a self-attestation: it still serves as the Annex V
 Declaration of Conformity reference (and the Module C production-conformity
 statement), but not as the route's certificate.
 
+### Manufacturer evidence
+
+The checks that ask for the manufacturer's own evidence read it from the
+product only: the components the document describes. That is the primary
+component (CycloneDX `metadata.component`, SPDX 2 `documentDescribes` or a
+`DESCRIBES` relationship, SPDX 3 `rootElement`), plus every other product an
+SPDX document describes. A dependency's references never count, even when
+the dependency is in no dependency relationship: generators copy a
+third-party library's own advisories, support URL or certificate from its
+registry metadata, and a sparse `dependencies` section leaves the library
+without an incoming edge. Only a document that names no product falls back
+to the roots of its dependency graph (or, when the graph is fully cyclic, to
+every component).
+
+This scope applies to the security contact (Art. 13(17)), the CVD policy
+(Annex I Part II (5)), the risk assessment (Art. 13(2)), the EU Declaration
+of Conformity (Annex V), the module certificate (Annex VIII), the EUCC
+reference (Annex IV and `SBOM-EUCC-CERTREF`), the hashed attestation of the
+document-integrity check (Annex I Part I (2)(f)), the Art. 24 steward
+floors, the `conformity_summary` rows and `SBOM-EO14028-DISCLOSURE`. Before
+v0.4.0 every component without an incoming edge counted, and the DoC, risk
+assessment, certificate, EUCC and document-integrity checks read every
+component.
+
+The manufacturer (Art. 13(16), and the FDA device manufacturer) is named by
+any of:
+
+- an organization creator of the SBOM with a real name or email address
+  (CycloneDX `metadata.manufacturer`, SPDX `Organization:` creator, SPDX 3
+  `createdBy` organization);
+- the supplier of the product, CycloneDX `metadata.supplier`;
+- the manufacturer or supplier of a described component: CycloneDX
+  `metadata.component.manufacturer` (where CycloneDX 1.6 moved the
+  deprecated `metadata.manufacture`) or `metadata.component.supplier`, the
+  SPDX 2 described package's `supplier`, the SPDX 3 root package's
+  `suppliedBy`.
+
+Placeholders such as `NOASSERTION`, `TBD` or `unknown` name nobody. The
+sidecar `manufacturerName` still lowers the finding to Info. Before v0.4.0
+only an organization creator (with any name) or the sidecar counted.
+
+`sbom-tools cra-docs` names the manufacturer in the Declaration of
+Conformity from the same sources, in the same order: the sidecar's
+`manufacturerName` first (as for the product name), then the first of the
+sources above that gives a name. It writes `_TBD_` only when none does.
+The sidecar comes first because it is the manufacturer's own statement for
+the dossier, while the Art. 13(16) check only asks whether any source names
+the manufacturer, so the order changes no verdict. Before v0.4.0 it read
+only the first organization creator, whatever its name.
+
+The document's vulnerability-disclosure URL, which the CVD policy, EO 14028
+disclosure and PCI DSS checks read, comes from one rule in every format: the
+primary component's first advisories reference whose locator is a URL
+(`http://`, `https://` or `mailto:`) — CycloneDX `advisories`, SPDX 2
+SECURITY `advisory`, SPDX 3 `securityAdvisory`. A support reference never
+becomes the disclosure URL: a helpdesk is not a disclosure policy. Before
+v0.4.0 the CycloneDX parser also took a support link or any locator, and the
+SPDX 3 parser took nothing, so the same content passed in one format and
+failed in another.
+
+### Contacts
+
+A contact counts only when it reaches someone. A placeholder (`NOASSERTION`,
+`unknown`, `n/a`, `TBD`, an empty `mailto:` and the like) does not, nor does
+an address at one of the domains RFC 2606 reserves for documentation —
+`example.com`, `example.net`, `example.org` and the hosts under them, such as
+`psirt.example.com` — with or without a `mailto:` prefix. Every check that
+reads a contact applies this, in the SBOM and in the CRA sidecar: the
+security contact (Art. 13(17)), the CVD policy, the Art. 14 channels
+(`psirtUrl`, `earlyWarningContact`, `incidentReportContact`), the Art. 24
+steward floors, `SBOM-EO14028-DISCLOSURE`, `SBOM-PCI-6-3-2-VULN-EVIDENCE`
+and `SBOM-SSDF-PW6`, and the SBOM creator's email in `SBOM-FDA-CONTACT` and
+`SBOM-BSI-TR-03183-2-5-1-CONTACT` (BSI TR-03183-2 §5.2.1, which also takes
+the address or URL a creator's name carries). The finding names the value
+that did not count. A VDR or VEX reference is a document, not a contact,
+and is judged as before. Naming the creator, the author or the manufacturer
+still takes its name: only the checks that ask for a contact judge the
+address. Before v0.4.0 these checks took any value, except that PCI DSS
+rejected placeholders in the document's own fields; so the same contact
+passed one standard and failed another.
+
+Only those three second-level domains count as documentation addresses. The
+top-level domains RFC 2606 also reserves (`.example`, `.test`, `.invalid`,
+`.localhost`) do not: test data, this project's fixtures among it, uses
+them for a stand-in real domain such as `psirt@acme.example`, and generator
+templates do not ship them.
+
+### Hash values
+
+A hash counts only when its value can be the algorithm's digest: hexadecimal
+digits (either case), as many as the algorithm's output has — MD5 32, SHA-1
+40, SHA-224 56, SHA-256, SHA3-256, BLAKE2b-256 and Streebog-256 64, SHA-384,
+SHA3-384 and BLAKE2b-384 96, SHA-512, SHA3-512, BLAKE2b-512 and Streebog-512
+128 — and at least one for BLAKE3 or an unknown algorithm. Every hash rule
+of every standard applies this, from the CRA integrity and vendor-hash
+checks to the BSI SHA-512 gate, FDA, FSCT, CISA 2026, EO 14028, SSDF and the
+BSI SBOM-for-AI hash elements. An empty, non-hex or wrong-length value does
+not count, and the finding says why, e.g. "SHA-512 digest is not 128 hex
+characters". Before v0.4.0 only CISA 2026 checked the value, and only for
+hex digits. An empty CycloneDX XML `<hash>` element now parses as an empty
+digest instead of failing the whole document.
+
 ### Article 24 — open-source software steward floor
 
 | Requirement string                                          | CRA reference  | Cleared by                                            |
 |-------------------------------------------------------------|----------------|-------------------------------------------------------|
-| `CRA Art. 24: Vulnerability-handling process (steward floor)` | Art. 24      | `SecurityContact` / `Advisories` / `VulnerabilityAssertion` external ref OR `psirtUrl` / `vulnerabilityDisclosureUrl` |
-| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Annex I Part II (5) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` |
+| `CRA Art. 24: Vulnerability-handling process (steward floor)` | Art. 24      | `SecurityContact` / `Advisories` / `VulnerabilityAssertion` external ref OR `psirtUrl` / `vulnerabilityDisclosureUrl` (a [contact](#contacts) that reaches nobody does not count) |
+| `CRA Annex I Part II (5): Coordinated vulnerability disclosure policy` (relaxed to Warning under steward) | Annex I Part II (5) | `Advisories` external ref OR `coordinatedDisclosurePolicyUrl` (a [contact](#contacts) that reaches nobody does not count) |
 
 Article 24 *suppresses* manufacturer-only checks (Art. 13(16) email,
 Annex V DoC, Annex VIII certificate, Article 14 channels, hardware
-[PRE-8-RQ-02], vendor-hash carry-through).
+[PRE-8-RQ-02], vendor-hash carry-through). The steward profile takes no
+product class either: its results carry no `conformity_summary`, and
+`SBOM-CRA-CYCLES` stays a Warning whatever the class (before v0.4.0 a
+sidecar `productClass` reached it). `sbom-tools rules --standard
+oss-steward` lists the 15 rules the steward profile checks. The
+vulnerability-handling gate (`SBOM-CRA-ART-24`) cites Art. 24, with the
+EUR-Lex URL of the other CRA references; before v0.4.0 it cited nothing, so
+its findings had no reference and no `help_uri`.
 
 ## CRA-P3.2 product-class severity calibration
 
 When `--cra-product-class` (or sidecar `productClass`) is set, the
-severity of certain checks scales per Annex III/IV class. Selecting a
-class also implies a default conformity-assessment route (Annex VIII),
-overridable via sidecar `conformityAssessmentRoute`.
+severity of certain CRA Phase 1 and Phase 2 checks scales per Annex
+III/IV class. Selecting a class also implies a default
+conformity-assessment route (Annex VIII), overridable via sidecar
+`conformityAssessmentRoute`. The OSS-steward profile ignores both.
 
 The classes are those of the CRA: `important-class-1` is Annex III class I
 (19 product categories, from identity management systems and browsers to
@@ -248,6 +411,10 @@ the class from those descriptions.
 | EUCC reference                 | n/a     | n/a         | Info        | Error    |
 | PSIRT documented               | Warning | Warning     | Error       | Error    |
 | Module certificate reference   | n/a     | Warning (B+C) | Error (B+C/H) | Error (EUCC) |
+
+The cycle check (`SBOM-CRA-CYCLES`) counts the cycles of a dependency graph
+of any size. Until v0.4.0 it skipped every graph above 1,000,000 edges, which
+then passed.
 
 Default conformity routes per class:
 
@@ -289,10 +456,17 @@ violation messages.
 | `SBOM-CRA-ART-14-PSIRT` / `-EARLY-WARNING` / `-NOTIFICATION` / `-ENISA` channels + the `conformity_summary` PSIRT row | no | sidecar fields |
 
 The `conformity_summary` block is the Annex VIII checklist emitted next to
-`violations` by `validate --standard cra -o json`. It only appears once a
-product class is pinned — via `--cra-product-class` or the sidecar
-`productClass` — since the class picks the conformity route whose rows are
-listed. A row strengthened by attestation names the level it was satisfied
+`violations` by `validate --standard cra -o json` (and `cra-phase1`); SARIF
+carries it as the standard's `conformitySummary` and OSCAL as the result's
+`conformity-*` properties. It
+only appears once a product class is pinned — via `--cra-product-class` or
+the sidecar `productClass` — since the class picks the conformity route
+whose rows are listed, and never on `oss-steward` results. Without a pinned
+class, the result lists `SBOM-CRA-ANNEX-IV` and `SBOM-CRA-ANNEX-VIII` under
+`evaluated`, as checks that did not run, so their silence does not read as
+a pass. An SBOM without device, firmware or device-driver components lists
+the four `SBOM-CRA-PRE-8-RQ-02-*` hardware checks there too (see
+[Checks not evaluated](compliance-output.md#checks-not-evaluated)). A row strengthened by attestation names the level it was satisfied
 at:
 
 ```text
@@ -361,7 +535,7 @@ SARIF rule prefix: `SBOM-BSI-TR-03183-2-*`. Canonical URL:
 | §5.2.1         | Timestamp of the SBOM data compilation (Error)                            | `metadata.timestamp` / SPDX `created`                          |
 | §5.2.2         | Component name (Error) and version (Error)                                | `name` + `version` (filename / RFC 3339 date fallbacks)        |
 | §5.2.2         | Distribution licence(s) per component (Error)                             | `licenses[]` with SPDX identifiers                             |
-| §5.2.2         | Hash of the deployable component **as SHA-512** (Error when only other algorithms; Warning when absent, §3.2.1) | SHA-512 hash per component |
+| §5.2.2         | Hash of the deployable component **as SHA-512** (Error when only other algorithms or no [valid](#hash-values) SHA-512 digest; Warning when absent, §3.2.1) | SHA-512 hash (128 hex characters) per component |
 | §5.2.2         | Component creator (Warning, presence-level)                               | `supplier` / `author` per component                            |
 | §5.2.2         | Dependencies (Error) + completeness clearly indicated (Warning)           | `dependencies` graph + `compositions[].aggregate`              |
 | §5.2.4 (add.)  | Other unique identifiers — purl/CPE (Warning)                             | one of `purl` / `cpe` / `swid` / `swhid` per component         |
@@ -410,9 +584,21 @@ sbom-tools validate sbom.json --standard cra --cra-product-class important-class
 # Article 24 steward profile
 sbom-tools validate sbom.json --standard oss-steward
 
+# The rules each CRA profile checks, and one rule in full
+sbom-tools rules --standard cra-phase1,cra,oss-steward
+sbom-tools rules explain SBOM-CRA-ART-24
+
 # Pin the evaluation clock (Art. 14 deadline, SBOM age, EUCC / attestation
 # expiry) so CI runs are reproducible
 sbom-tools validate sbom.json --standard cra --as-of 2027-01-01
+
+# The TUIs take the same inputs and show the same verdicts
+sbom-tools view sbom.json --cra-product-class important-class-2 --as-of 2027-01-01
+sbom-tools diff old.json new.json --cra-product-class important-class-2 --as-of 2027-01-01
+
+# Relax one rule for this run, or gate on one rule whatever its severity
+sbom-tools validate sbom.json --standard cra --rule SBOM-CRA-ART-13-2=info
+sbom-tools validate sbom.json --standard cra --fail-on SBOM-CRA-PRE-7-RQ-07-RE
 
 # SARIF output for CI (with helpUri populated)
 sbom-tools validate sbom.json --standard cra -o sarif -O compliance.sarif
@@ -467,7 +653,7 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
 | CRA — Regulation (EU) 2024/2847    | https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng                                                                                                 |
 | prEN 40000-1-3 (in development)    | (CEN-CENELEC JTC 13 — paywalled draft; URLs unstable)                                                                                              |
 | BSI TR-03183-2 (v2.1.0)            | https://bsi.bund.de/dok/TR-03183-en                                                                                                                |
-| ENISA SBOM Implementation Guidance | https://www.enisa.europa.eu/publications/sbom-implementation-guidance                                                                              |
+| ENISA Technical Advisory for SBOM (v1.10, 2026-10-22, non-binding) | https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials                              |
 | NIST SP 800-218 SSDF               | https://doi.org/10.6028/NIST.SP.800-218                                                                                                            |
 | EO 14028                           | https://www.federalregister.gov/d/2021-10460                                                                                                       |
 | FDA premarket cybersecurity (final, 2026-02-03) | https://www.fda.gov/media/119933/download                                                                                          |
@@ -476,30 +662,46 @@ stems also tried (`app.cdx.json` → `app.cra.json` works).
 | OpenVEX                            | https://github.com/openvex/spec                                                                                                                    |
 | CISA KEV                           | https://www.cisa.gov/known-exploited-vulnerabilities-catalog                                                                                       |
 | OSV.dev                            | https://osv.dev                                                                                                                                    |
-| EUCC (Reg. (EU) 2024/482)          | https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng                                                                                             |
+| EUCC (Implementing Reg. (EU) 2024/482, as amended by 2024/3144 and 2025/2462) | https://eur-lex.europa.eu/eli/reg_impl/2024/482/oj/eng (consolidated text of 2025-12-29: https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:02024R0482-20251229) |
 | CycloneDX Attestations (CDXA)      | https://cyclonedx.org/capabilities/attestations/                                                                                                   |
 
 ## Where this map lives in the code
 
-- `rule_meta()` in `src/quality/compliance/registry.rs` (via `Violation::registry_standard_refs()`) —
+- `rule_meta()` in `src/quality/compliance/registry/mod.rs`, over the
+  rules the family modules beside it declare (via
+  `Violation::registry_standard_refs()`) —
   string → `(StandardKind, id)` mapping. Drives SARIF
   `properties.standardIds`.
-- `StandardKind::canonical_help_uri()` in `src/quality/compliance/mod.rs` —
+- `rules_for_level()` in `src/quality/compliance/registry/mod.rs` — the rules
+  each profile's checks can report (Phase 1, Phase 2 and the steward have
+  lists of their own), read from the profile's entry in the standards table
+  (`src/quality/compliance/standards.rs`). Drives SARIF `rules[]` and
+  `sbom-tools rules --standard`; the rule matrices prove each list.
+- `rule_catalog()` in `src/quality/compliance/catalog.rs` — the catalogue
+  `sbom-tools rules` prints: each rule's standards, references with URLs,
+  remediation and per-format field advice.
+- `StandardKind::canonical_help_uri()` in `src/quality/compliance/standard_ref.rs` —
   `(StandardKind, id)` → URL. Drives SARIF `helpUri` (a rule links the
   first of its references that has a URL) and `properties.standardHelpUris`.
 - `rule_help_uri()` in `src/reports/sarif/rules.rs` — rule-ID prefix → URL,
   the `runs[].tool.driver.rules[].helpUri` of a rule none of whose
   references has a URL, and of the rules outside the registry.
-- `ComplianceChecker::class_severity()` in `src/quality/compliance/mod.rs` —
+- `ComplianceChecker::class_severity()` in `src/quality/compliance/checker.rs` —
   P3.2 calibration table.
+- `ComplianceRunConfig::checker()` in `src/quality/compliance/run_config.rs` —
+  hands each profile the run's inputs (`--as-of`, CRA sidecar, product
+  class, PQC flags, rule settings, excluded scope) that its entry in the
+  standards table says it reads; every command and TUI builds its checkers
+  there.
 - `cli::run_cra_docs` in `src/cli/cra_docs.rs` — Annex V DoC + Annex VII tech-doc dossier
   generator.
 - `AttestationRuleFamily::classify()` in `src/model/attestation.rs` —
   `definitions.standards` entry → CRA / SSDF / EO 14028 rule family;
   `AttestationDeclarations::supported_requirements()` — the fail-closed
   filter behind "when an attestation counts".
-- `ComplianceContext::evidence_for()` in `src/quality/compliance/context.rs` —
-  the query the CRA / EUCC checks call.
+- `SbomEvidence::supported_requirements()` in
+  `src/quality/compliance/evidence/mod.rs` — the query the CRA / EUCC checks
+  call, judged once per run.
 - `ComplianceChecker::build_conformity_summary()` and
   `check_class_eucc_reference()` in `src/quality/compliance/cra.rs`,
   `standard_references_eucc()` / `cdxa_note()` in

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, Violation, ViolationCategory,
+    ComplianceLevel, ComplianceResult, ComplianceRunConfig, Violation, ViolationCategory,
     ViolationSeverity,
 };
 use crate::tui::shared::compliance as shared_compliance;
@@ -291,6 +291,18 @@ pub fn render_compliance(frame: &mut Frame, area: Rect, app: &mut ViewApp) {
 // Standard selector with violation counts
 // ---------------------------------------------------------------------------
 
+/// The line a filtered view shows under the standard selector: the
+/// component list is filtered, the verdicts cover the whole SBOM. `None`
+/// when the view lists every component.
+fn filtered_note(app: &ViewApp) -> Option<String> {
+    app.filtered_out().map(|(removed, total)| {
+        format!(
+            " Component list filtered ({} of {total} shown); verdicts cover the whole SBOM ",
+            total - removed
+        )
+    })
+}
+
 /// One tab segment: short label + optional violation count, pre-measured.
 struct StandardTab {
     label: String,
@@ -344,10 +356,15 @@ fn render_standard_selector(frame: &mut Frame, area: Rect, app: &ViewApp) {
         })
         .collect();
 
-    let block = Block::default()
+    let mut block = Block::default()
         .title(" Compliance Standards (\u{2190}/\u{2192} to switch) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(scheme.primary));
+    // A filtered view lists part of the SBOM, but the verdicts judge all of
+    // it, as `validate` does: say so in one line.
+    if let Some(note) = filtered_note(app) {
+        block = block.title_bottom(Line::styled(note, Style::default().fg(scheme.warning)));
+    }
     let inner_width = block.inner(area).width as usize;
     frame.render_widget(&block, area);
 
@@ -482,6 +499,13 @@ fn render_category_breakdown(frame: &mut Frame, area: Rect, result: &ComplianceR
             Style::default().fg(scheme.muted),
         ));
         status_line.push(passed);
+    }
+    for span in run_input_spans(result) {
+        status_line.push(Span::styled(
+            "  \u{00b7}  ",
+            Style::default().fg(scheme.muted),
+        ));
+        status_line.push(span);
     }
     let mut lines: Vec<Line> = vec![Line::from(status_line)];
 
@@ -660,7 +684,32 @@ fn compact_verdict_line(result: &ComplianceResult) -> Line<'static> {
         spans.push(Span::raw("  "));
         spans.push(passed);
     }
+    for span in run_input_spans(result) {
+        spans.push(Span::raw("  "));
+        spans.push(span);
+    }
     Line::from(spans)
+}
+
+/// "N suppressed" and "N excluded" in the muted color, for the findings the
+/// run's rule settings turned off and the components the package rules left
+/// out for their excluded scope, as the text report's `Suppressed:` and
+/// `Excluded:` lines count them. Neither is shown when zero.
+fn run_input_spans(result: &ComplianceResult) -> Vec<Span<'static>> {
+    let scheme = colors();
+    [
+        (result.suppressed_count(), "suppressed"),
+        (result.excluded_components, "excluded"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, what)| {
+        Span::styled(
+            format!("{count} {what}"),
+            Style::default().fg(scheme.text_muted),
+        )
+    })
+    .collect()
 }
 
 /// "N passed" in the success color, when `result` passed any check. Passed
@@ -1487,31 +1536,15 @@ impl StandardComplianceState {
     }
 }
 
-/// Compute compliance results for all standards.
-///
-/// `product_class` is the CLI-resolved effective CRA product class; it is
-/// applied to every checker (only the CRA-family checks consult it, and a
-/// sidecar-carried `productClass` still wins inside the checker) so the TUI
-/// renders the same severity-calibrated verdicts as the non-TUI report path.
+/// Compute compliance results for all standards with the view's run: each
+/// level gets the inputs `validate` would give it (see
+/// [`ComplianceRunConfig::checker`]), so the tab shows `validate`'s verdicts.
 #[must_use]
 pub fn compute_compliance_results(
     sbom: &crate::model::NormalizedSbom,
-    sidecar: Option<&crate::model::CraSidecarMetadata>,
-    product_class: Option<crate::model::CraProductClass>,
+    compliance: &ComplianceRunConfig,
 ) -> Vec<ComplianceResult> {
-    ComplianceLevel::all()
-        .iter()
-        .map(|level| {
-            let mut checker = ComplianceChecker::new(*level);
-            if let Some(sc) = sidecar {
-                checker = checker.with_sidecar(sc.clone());
-            }
-            if let Some(class) = product_class {
-                checker = checker.with_product_class(class);
-            }
-            checker.check(sbom)
-        })
-        .collect()
+    compliance.check_levels(ComplianceLevel::all(), sbom)
 }
 
 #[cfg(test)]
@@ -1576,6 +1609,44 @@ mod tests {
             text.contains("Violations"),
             "the violations list must still render at min size:\n{text}"
         );
+    }
+
+    /// A filtered view says that the verdicts cover the whole SBOM; an
+    /// unfiltered one says nothing.
+    #[test]
+    fn a_filtered_view_says_its_verdicts_cover_the_whole_sbom() {
+        pin_theme();
+        let (whole, profile) = demo_single();
+        let mut shown = whole.clone();
+        let total = shown.component_count();
+        let first = shown
+            .components
+            .keys()
+            .next()
+            .cloned()
+            .expect("a component");
+        shown.components.shift_remove(&first);
+        let mut app = ViewApp::new_filtered(
+            shown,
+            whole.clone(),
+            DEMO_NEW,
+            profile,
+            crate::quality::ComplianceRunConfig::default(),
+        );
+        let text = render_to_text(120, 33, |frame| {
+            render_compliance(frame, Rect::new(0, 0, 120, 33), &mut app);
+        });
+        let note = format!(
+            "Component list filtered ({} of {total} shown); verdicts cover the whole SBOM",
+            total - 1
+        );
+        assert!(text.contains(&note), "missing {note:?}:\n{text}");
+
+        let mut app = ViewApp::new(whole, DEMO_NEW, profile);
+        let text = render_to_text(120, 33, |frame| {
+            render_compliance(frame, Rect::new(0, 0, 120, 33), &mut app);
+        });
+        assert!(!text.contains("Component list filtered"), "{text}");
     }
 
     /// Rendered violation patterns must not contain the doubled space.

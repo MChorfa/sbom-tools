@@ -4,11 +4,13 @@ source: tests/compliance_snapshots.rs
 fixture: cyclonedx/sbom-cyclone-dx-json-01-kef-56-j-7-wc-3-hbket-0-rqa-1-qgbm-01-kef-58-v-9-j-8-smskdv-5-yb-7-qje-6-v.json
 as_of: 2026-10-12T00:00:00Z
 
-[Minimum] compliant · E0 W0 I0
-[Standard] NON-COMPLIANT · E3 W19 I0
-  E SBOM-NTIA-VERSION  7f4624d5-ef2d-4608-b2bb-f06428058ebf
-  E SBOM-NTIA-VERSION  89cce52e-31c3-4f9f-ab40-6a8362c750d1
-  E SBOM-NTIA-VERSION  bd69e55b-b840-4672-99ed-0da45799cc85
+[Minimum] compliant · E0 W0 I1
+  I SBOM-QUALITY-DUPLICATE-COMPONENT  - (21/3354)
+[Standard] NON-COMPLIANT · E3 W19 I1
+  E SBOM-QUALITY-VERSION  7f4624d5-ef2d-4608-b2bb-f06428058ebf
+  E SBOM-QUALITY-VERSION  89cce52e-31c3-4f9f-ab40-6a8362c750d1
+  E SBOM-QUALITY-VERSION  bd69e55b-b840-4672-99ed-0da45799cc85
+  I SBOM-QUALITY-DUPLICATE-COMPONENT  - (21/3354)
   W SBOM-QUALITY-IDENTIFIER  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   W SBOM-QUALITY-IDENTIFIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   W SBOM-QUALITY-IDENTIFIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
@@ -28,7 +30,7 @@ as_of: 2026-10-12T00:00:00Z
   W SBOM-QUALITY-LICENSE  pkg:generic/ntp/ntp@4.2.8p12
   W SBOM-QUALITY-LICENSE  pkg:generic/pupnp_project/pupnp@1.14.20
   W SBOM-QUALITY-SERIAL  -
-[NtiaMinimum] NON-COMPLIANT · E56 W0 I0
+[NtiaMinimum] NON-COMPLIANT · E56 W0 I1
   E SBOM-NTIA-IDENTIFIER  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   E SBOM-NTIA-IDENTIFIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   E SBOM-NTIA-IDENTIFIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
@@ -85,7 +87,8 @@ as_of: 2026-10-12T00:00:00Z
   E SBOM-NTIA-VERSION  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   E SBOM-NTIA-VERSION  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   E SBOM-NTIA-VERSION  bd69e55b-b840-4672-99ed-0da45799cc85
-[CraPhase1] NON-COMPLIANT · E7 W58 I54
+  I SBOM-NTIA-DUPLICATE-COMPONENT  - (21/3354)
+[CraPhase1] NON-COMPLIANT · E7 W57 I55
   E SBOM-CRA-ANNEX-I-IDENTIFIER  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   E SBOM-CRA-ANNEX-I-IDENTIFIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   E SBOM-CRA-ANNEX-I-IDENTIFIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
@@ -147,8 +150,8 @@ as_of: 2026-10-12T00:00:00Z
   I SBOM-CRA-ART-13-5  - (14/50)
   I SBOM-CRA-ART-13-8  -
   I SBOM-CRA-DOC-INTEGRITY  -
+  I SBOM-CRA-DUPLICATE-COMPONENT  - (21/3354)
   W SBOM-CRA-ANNEX-I-TRACEABILITY  7f4624d5-ef2d-4608-b2bb-f06428058ebf
-  W SBOM-CRA-ART-13-16  -
   W SBOM-CRA-ART-13-17-CONTACT  -
   W SBOM-CRA-ART-14-EARLY-WARNING  -
   W SBOM-CRA-ART-14-ENISA  -
@@ -205,7 +208,7 @@ as_of: 2026-10-12T00:00:00Z
   W SBOM-CRA-COMPONENT-SUPPLIER  pkg:generic/zlib/zlib@1.2.8
   W SBOM-CRA-SBOM-FRESHNESS  -
   W SBOM-CRA-SERIAL  -
-[CraPhase2] NON-COMPLIANT · E7 W7658 I55
+[CraPhase2] NON-COMPLIANT · E7 W7657 I56
   E SBOM-CRA-ANNEX-I-IDENTIFIER  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   E SBOM-CRA-ANNEX-I-IDENTIFIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   E SBOM-CRA-ANNEX-I-IDENTIFIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
@@ -267,10 +270,10 @@ as_of: 2026-10-12T00:00:00Z
   I SBOM-CRA-ART-13-5  - (14/50)
   I SBOM-CRA-ART-13-8  -
   I SBOM-CRA-DOC-INTEGRITY  -
+  I SBOM-CRA-DUPLICATE-COMPONENT  - (21/3354)
   I SBOM-CRA-LIFECYCLE  -
   W SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE  - (49/50)
   W SBOM-CRA-ANNEX-I-TRACEABILITY  7f4624d5-ef2d-4608-b2bb-f06428058ebf
-  W SBOM-CRA-ART-13-16  -
   W SBOM-CRA-ART-13-17-CONTACT  -
   W SBOM-CRA-ART-13-2  -
   W SBOM-CRA-ART-14-EARLY-WARNING  -
@@ -1124,7 +1127,7 @@ as_of: 2026-10-12T00:00:00Z
   W SBOM-CRA-VULN-METADATA  ff411469-d04c-4300-88e7-692680278435 ×6
   W SBOM-CRA-VULN-METADATA  ff45a565-b989-41c9-ba42-88ec32386aeb
   W SBOM-CRA-VULN-METADATA  ffe85aa6-22e2-440f-bf40-2301108252b1 ×6
-[FdaMedicalDevice] NON-COMPLIANT · E106 W4 I0
+[FdaMedicalDevice] NON-COMPLIANT · E106 W3 I1
   E SBOM-FDA-HASH  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   E SBOM-FDA-HASH  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   E SBOM-FDA-HASH  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
@@ -1231,9 +1234,9 @@ as_of: 2026-10-12T00:00:00Z
   E SBOM-FDA-VERSION  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   E SBOM-FDA-VERSION  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   E SBOM-FDA-VERSION  bd69e55b-b840-4672-99ed-0da45799cc85
+  I SBOM-FDA-DUPLICATE-COMPONENT  - (21/3354)
   W SBOM-FDA-CONTACT  -
   W SBOM-FDA-NAMESPACE  -
-  W SBOM-FDA-SUPPLIER  -
   W SBOM-FDA-SUPPORT  -
 [NistSsdf] NON-COMPLIANT · E1 W3 I1
   E SBOM-SSDF-PS2  - (50/50)
@@ -1260,7 +1263,7 @@ as_of: 2026-10-12T00:00:00Z
   W SBOM-BSI-TR-03183-2-5-4-MISSING  - (50/50)
   W SBOM-BSI-TR-03183-2-5-5-COMPLETENESS  -
   W SBOM-BSI-TR-03183-2-CREATOR  - (49/50)
-[CraOssSteward] NON-COMPLIANT · E8 W50 I50
+[CraOssSteward] NON-COMPLIANT · E8 W50 I51
   E SBOM-CRA-ANNEX-I-IDENTIFIER  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   E SBOM-CRA-ANNEX-I-IDENTIFIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   E SBOM-CRA-ANNEX-I-IDENTIFIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
@@ -1319,6 +1322,7 @@ as_of: 2026-10-12T00:00:00Z
   I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/xmlsoft/libxml2@2.10.4
   I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/zlib/zlib@1.2.11
   I SBOM-CRA-ANNEX-I-INTEGRITY  pkg:generic/zlib/zlib@1.2.8
+  I SBOM-CRA-DUPLICATE-COMPONENT  - (21/3354)
   W SBOM-CRA-ART-24-SUPPLIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   W SBOM-CRA-ART-24-SUPPLIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
   W SBOM-CRA-ART-24-SUPPLIER  bd69e55b-b840-4672-99ed-0da45799cc85
@@ -1526,59 +1530,60 @@ as_of: 2026-10-12T00:00:00Z
   W SBOM-FSCT-COPYRIGHT-COVERAGE  - (0/50)
   W SBOM-FSCT-HASH-PRIMARY-SHA2  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   W SBOM-FSCT-IDENTIFIER-MULTI  - (27/50)
-[Comprehensive] NON-COMPLIANT · E52 W69 I0
-  E SBOM-NTIA-SUPPLIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
-  E SBOM-NTIA-SUPPLIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
-  E SBOM-NTIA-SUPPLIER  bd69e55b-b840-4672-99ed-0da45799cc85
-  E SBOM-NTIA-SUPPLIER  pkg:generic/busybox/busybox@1.35.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/d-bus/d-bus@1.14.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/d-bus_project/d-bus@1.14.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/dbus-broker_project/dbus-broker@1.14.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/e2fsprogs_project/e2fsprogs@1.45.6
-  E SBOM-NTIA-SUPPLIER  pkg:generic/e2fsprogs_project/e2fsprogs@1.46.5
-  E SBOM-NTIA-SUPPLIER  pkg:generic/ext2_filesystems_utilities/e2fsprogs@1.45.6
-  E SBOM-NTIA-SUPPLIER  pkg:generic/ext2_filesystems_utilities/e2fsprogs@1.46.5
-  E SBOM-NTIA-SUPPLIER  pkg:generic/facebook/zstandard@1.5.2
-  E SBOM-NTIA-SUPPLIER  pkg:generic/freedesktop/dbus@1.14.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/freedesktop/libdbus@1.14.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/gcc@12.2.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/gcc@4.1.1
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/gcc@4.9.1
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/gcc@9.2.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/glibc@2.36
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/ncurses@6.3
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/zlib@1.2.11
-  E SBOM-NTIA-SUPPLIER  pkg:generic/gnu/zlib@1.2.8
-  E SBOM-NTIA-SUPPLIER  pkg:generic/haxx/curl@8.9.1
-  E SBOM-NTIA-SUPPLIER  pkg:generic/haxx/libcurl@8.9.1
-  E SBOM-NTIA-SUPPLIER  pkg:generic/isc/bind@9.18.24
-  E SBOM-NTIA-SUPPLIER  pkg:generic/json-c/json-c@0.13.99
-  E SBOM-NTIA-SUPPLIER  pkg:generic/json-c_project/json-c@0.13.99
-  E SBOM-NTIA-SUPPLIER  pkg:generic/libexpat_project/libexpat@2.2.9
-  E SBOM-NTIA-SUPPLIER  pkg:generic/libseccomp_project/libseccomp@2.5.4
-  E SBOM-NTIA-SUPPLIER  pkg:generic/libupnp_project/libupnp@1.14.20
-  E SBOM-NTIA-SUPPLIER  pkg:generic/libuv/libuv@1.45.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/libuv_project/libuv@1.45.0
-  E SBOM-NTIA-SUPPLIER  pkg:generic/lighttpd/lighttpd@1.4.54
-  E SBOM-NTIA-SUPPLIER  pkg:generic/linux/linux_kernel@5.4.62
-  E SBOM-NTIA-SUPPLIER  pkg:generic/marlam/msmtp@1.8.23
-  E SBOM-NTIA-SUPPLIER  pkg:generic/martin_lambers/msmtp@1.8.23
-  E SBOM-NTIA-SUPPLIER  pkg:generic/mit/kerberos_5@1.18.5
-  E SBOM-NTIA-SUPPLIER  pkg:generic/netfilter/iptables@1.4.21
-  E SBOM-NTIA-SUPPLIER  pkg:generic/ntp/ntp@4.2.8p12
-  E SBOM-NTIA-SUPPLIER  pkg:generic/openbsd/openssh@9.8p1
-  E SBOM-NTIA-SUPPLIER  pkg:generic/openssh/openssh@9.8p1
-  E SBOM-NTIA-SUPPLIER  pkg:generic/openssl/openssl@1.1.1w
-  E SBOM-NTIA-SUPPLIER  pkg:generic/pcre/pcre@8.33
-  E SBOM-NTIA-SUPPLIER  pkg:generic/pupnp_project/pupnp@1.14.20
-  E SBOM-NTIA-SUPPLIER  pkg:generic/stunnel/stunnel@5.54
-  E SBOM-NTIA-SUPPLIER  pkg:generic/systemd_project/systemd@251
-  E SBOM-NTIA-SUPPLIER  pkg:generic/xmlsoft/libxml2@2.10.4
-  E SBOM-NTIA-SUPPLIER  pkg:generic/zlib/zlib@1.2.11
-  E SBOM-NTIA-SUPPLIER  pkg:generic/zlib/zlib@1.2.8
-  E SBOM-NTIA-VERSION  7f4624d5-ef2d-4608-b2bb-f06428058ebf
-  E SBOM-NTIA-VERSION  89cce52e-31c3-4f9f-ab40-6a8362c750d1
-  E SBOM-NTIA-VERSION  bd69e55b-b840-4672-99ed-0da45799cc85
+[Comprehensive] NON-COMPLIANT · E52 W69 I1
+  E SBOM-QUALITY-SUPPLIER  89cce52e-31c3-4f9f-ab40-6a8362c750d1
+  E SBOM-QUALITY-SUPPLIER  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd
+  E SBOM-QUALITY-SUPPLIER  bd69e55b-b840-4672-99ed-0da45799cc85
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/busybox/busybox@1.35.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/d-bus/d-bus@1.14.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/d-bus_project/d-bus@1.14.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/dbus-broker_project/dbus-broker@1.14.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/e2fsprogs_project/e2fsprogs@1.45.6
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/e2fsprogs_project/e2fsprogs@1.46.5
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/ext2_filesystems_utilities/e2fsprogs@1.45.6
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/ext2_filesystems_utilities/e2fsprogs@1.46.5
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/facebook/zstandard@1.5.2
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/freedesktop/dbus@1.14.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/freedesktop/libdbus@1.14.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/gcc@12.2.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/gcc@4.1.1
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/gcc@4.9.1
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/gcc@9.2.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/glibc@2.36
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/ncurses@6.3
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/zlib@1.2.11
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/gnu/zlib@1.2.8
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/haxx/curl@8.9.1
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/haxx/libcurl@8.9.1
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/isc/bind@9.18.24
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/json-c/json-c@0.13.99
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/json-c_project/json-c@0.13.99
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/libexpat_project/libexpat@2.2.9
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/libseccomp_project/libseccomp@2.5.4
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/libupnp_project/libupnp@1.14.20
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/libuv/libuv@1.45.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/libuv_project/libuv@1.45.0
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/lighttpd/lighttpd@1.4.54
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/linux/linux_kernel@5.4.62
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/marlam/msmtp@1.8.23
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/martin_lambers/msmtp@1.8.23
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/mit/kerberos_5@1.18.5
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/netfilter/iptables@1.4.21
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/ntp/ntp@4.2.8p12
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/openbsd/openssh@9.8p1
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/openssh/openssh@9.8p1
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/openssl/openssl@1.1.1w
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/pcre/pcre@8.33
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/pupnp_project/pupnp@1.14.20
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/stunnel/stunnel@5.54
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/systemd_project/systemd@251
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/xmlsoft/libxml2@2.10.4
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/zlib/zlib@1.2.11
+  E SBOM-QUALITY-SUPPLIER  pkg:generic/zlib/zlib@1.2.8
+  E SBOM-QUALITY-VERSION  7f4624d5-ef2d-4608-b2bb-f06428058ebf
+  E SBOM-QUALITY-VERSION  89cce52e-31c3-4f9f-ab40-6a8362c750d1
+  E SBOM-QUALITY-VERSION  bd69e55b-b840-4672-99ed-0da45799cc85
+  I SBOM-QUALITY-DUPLICATE-COMPONENT  - (21/3354)
   W SBOM-QUALITY-HASH  7f4624d5-ef2d-4608-b2bb-f06428058ebf
   W SBOM-QUALITY-HASH  89cce52e-31c3-4f9f-ab40-6a8362c750d1
   W SBOM-QUALITY-HASH  bc45c2ff-643a-4ace-81ed-ba11d2e6a6bd

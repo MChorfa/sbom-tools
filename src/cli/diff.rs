@@ -47,6 +47,10 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
         config.output.sarif_base.as_deref(),
         config.output.sarif_category.as_deref(),
     )?;
+    // The compliance tab checks every standard.
+    config
+        .compliance
+        .warn_on_unmatched_rules(crate::quality::ComplianceLevel::all(), "the standards");
 
     // Stdin can only be consumed once, so a diff can read at most one side from "-".
     if is_stdin_path(&config.paths.old) && is_stdin_path(&config.paths.new) {
@@ -80,6 +84,14 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
             let osv_config = crate::pipeline::build_enrichment_config(&config.enrichment);
             let stats_old = crate::pipeline::enrich_sbom(old_parsed.sbom_mut(), &osv_config, quiet);
             let stats_new = crate::pipeline::enrich_sbom(new_parsed.sbom_mut(), &osv_config, quiet);
+            // `enrich_sbom` has already printed the cause to stderr.
+            super::require_vuln_data(
+                config.behavior.fail_on_vuln,
+                [&stats_old, &stats_new].iter().any(|s| {
+                    s.as_ref()
+                        .is_none_or(crate::enrichment::EnrichmentStats::is_incomplete)
+                }),
+            )?;
             if stats_old.is_none() || stats_new.is_none() {
                 enrichment_warnings.push("OSV vulnerability enrichment failed");
             }
@@ -212,6 +224,7 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
                 "Warning: enrichment requested but the 'enrichment' feature is not enabled. \
                  Rebuild with: cargo build --features enrichment"
             );
+            super::require_vuln_data(config.behavior.fail_on_vuln, true)?;
         }
     }
 
@@ -227,32 +240,33 @@ pub fn run_diff(config: DiffConfig) -> Result<i32> {
     let effective_output = auto_detect_format(config.output.format, &output_target);
 
     if effective_output == ReportFormat::Tui {
-        // Resolve the CRA sidecars (auto-discovered next to each SBOM unless
-        // it reads from stdin) so the compliance tab applies the same
-        // sidecar-driven verdicts as the non-TUI reports — most importantly
-        // EU AI Act high-risk escalation, which otherwise renders COMPLIANT
-        // in the TUI. Resolution is per-SBOM: each side of the diff is judged
-        // against its own adjacent metadata, identically to the report stage.
-        let old_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.old)?;
-        let new_sidecar = crate::pipeline::discover_cra_sidecar(&config.paths.new)?;
+        // Each side's compliance run: the shared `--as-of` and
+        // `--cra-product-class` plus the CRA sidecar auto-discovered next to
+        // that SBOM (unless it reads from stdin), identically to the report
+        // stage. The compliance tab then shows the verdicts `validate`
+        // reports for each side — most importantly EU AI Act high-risk
+        // escalation, which otherwise renders COMPLIANT in the TUI.
+        let old_compliance =
+            crate::pipeline::side_compliance(&config.compliance, &config.paths.old)?;
+        let new_compliance =
+            crate::pipeline::side_compliance(&config.compliance, &config.paths.new)?;
 
         let (old_sbom, old_raw) = old_parsed.into_parts();
         let (new_sbom, new_raw) = new_parsed.into_parts();
+        let mut app = App::new_diff_with_compliance(
+            result,
+            old_sbom,
+            new_sbom,
+            &old_raw,
+            &new_raw,
+            old_compliance,
+            new_compliance,
+        );
 
         #[cfg(feature = "enrichment")]
-        let mut app = {
-            let app = App::new_diff(result, old_sbom, new_sbom, &old_raw, &new_raw);
-            if let Some((stats_old, stats_new)) = enrichment_stats {
-                app.with_enrichment_stats(stats_old, stats_new)
-            } else {
-                app
-            }
-        };
-
-        #[cfg(not(feature = "enrichment"))]
-        let mut app = App::new_diff(result, old_sbom, new_sbom, &old_raw, &new_raw);
-
-        app = app.with_cra_sidecars(old_sidecar, new_sidecar);
+        if let Some((stats_old, stats_new)) = enrichment_stats {
+            app = app.with_enrichment_stats(stats_old, stats_new);
+        }
 
         // Set export template if configured
         app.export_template = config.output.export_template.clone();

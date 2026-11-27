@@ -1,44 +1,39 @@
 //! Small shared helpers reused across the compliance checkers.
 
+use std::borrow::Cow;
+
 use super::{Violation, ViolationCategory, ViolationSeverity};
-use crate::model::{Component, ComponentType, NormalizedSbom};
+use crate::model::{
+    Component, Creator, CreatorType, ExternalRefType, ExternalReference, Hash, HashAlgorithm,
+    NormalizedSbom, Organization, SbomFormat, VexState, VulnerabilityRef, is_known_contact,
+};
+// The placeholder and sentinel tests every check reads live in the model,
+// which merges a component's entries with the same classification.
+pub(crate) use crate::model::{is_declared_unknown, is_placeholder};
 
-/// The components package rules apply to: everything except files,
-/// snippets, cryptographic assets and services (see
-/// [`ComponentType::is_package_scoped`]). Every per-component package check
-/// iterates through this, so no standard can forget the carve-out.
-pub(crate) fn package_components(sbom: &NormalizedSbom) -> impl Iterator<Item = &Component> {
-    sbom.components
-        .values()
-        .filter(|c| c.component_type.is_package_scoped())
-}
-
-/// The inventory-absent finding for `rule_id`, or `None` when the SBOM lists
-/// at least one package-scoped component.
-///
-/// Package rules (version, supplier, identifier, hash, license) only judge
-/// package-scoped components, so a document with no components at all — or
-/// with only files, snippets or cryptographic assets — used to pass them
-/// vacuously, scoring like a perfect SBOM. Every standard that judges a
-/// software inventory reports that instead, as PCI DSS already did. The
-/// primary component counts: a leaf application with no dependencies is a
-/// legitimate inventory.
-pub(crate) fn inventory_absent_violation(
-    sbom: &NormalizedSbom,
+/// The inventory-absent finding for `rule_id` (see
+/// `ComplianceContext::inventory_absent_violation`) of a document whose
+/// package rules judge no component: it lists `total` components,
+/// `excluded` of them package-scoped (so all left out for their excluded
+/// scope), and `all_crypto` tells whether every one is a cryptographic
+/// asset.
+pub(crate) fn inventory_absent_finding(
+    total: usize,
+    excluded: usize,
+    all_crypto: impl FnOnce() -> bool,
     rule_id: &'static str,
     requirement: &str,
-) -> Option<Violation> {
-    if package_components(sbom).next().is_some() {
-        return None;
-    }
-    let total = sbom.components.len();
+) -> Violation {
     let message = if total == 0 {
         "SBOM lists no components; an empty document is not a software inventory".to_string()
+    } else if excluded > 0 {
+        format!(
+            "SBOM lists no software components besides {excluded} whose scope is excluded, \
+                 which the package rules leave out (--include-excluded-scope judges them); it is \
+                 not an inventory of what the product ships"
+        )
     } else {
-        let all_crypto = sbom
-            .components
-            .values()
-            .all(|c| c.component_type == ComponentType::Cryptographic);
+        let all_crypto = all_crypto();
         let what = if all_crypto {
             "cryptographic assets"
         } else {
@@ -52,8 +47,9 @@ pub(crate) fn inventory_absent_violation(
         }
         message
     };
-    Some(Violation {
+    Violation {
         severity: ViolationSeverity::Error,
+        severity_override: None,
         category: ViolationCategory::DocumentMetadata,
         message,
         element: None,
@@ -61,14 +57,50 @@ pub(crate) fn inventory_absent_violation(
         rule_id,
         component_id: None,
         counts: None,
-        standard_refs: Vec::new(),
+        standard_refs: Cow::Borrowed(&[]),
         remediation: None,
         finding_detail: None,
+        deadline: None,
+        field: None,
+        observed: None,
+    }
+}
+
+/// The longest SBOM value a finding message quotes, in characters. A longer
+/// value is cut, with an ellipsis.
+const MAX_QUOTED_CHARS: usize = 64;
+
+/// `value` as a finding message quotes it: cut to [`MAX_QUOTED_CHARS`]
+/// characters.
+fn quoted(value: &str) -> String {
+    let mut chars = value.chars();
+    let head: String = chars.by_ref().take(MAX_QUOTED_CHARS).collect();
+    if chars.next().is_some() {
+        format!("'{head}…'")
+    } else {
+        format!("'{head}'")
+    }
+}
+
+/// How a timestamp check names a creation timestamp the document wrote but
+/// that is not an RFC 3339 date-time: "an unparseable creation timestamp
+/// '…', not an RFC 3339 date-time". `None` when the document's timestamp
+/// parsed or is absent: a check without a known timestamp then reports it
+/// missing, and with one it reports the value, so a user does not look for a
+/// field they did set. `created_unparsed` is the timestamp value the
+/// document wrote but that does not parse.
+pub(crate) fn unparseable_timestamp_of(created_unparsed: Option<&str>) -> Option<String> {
+    created_unparsed.map(|value| {
+        format!(
+            "an unparseable creation timestamp {}, not an RFC 3339 date-time",
+            quoted(value)
+        )
     })
 }
 
-/// The freshness finding for an SBOM dated in the future, or `None` when its
-/// creation timestamp is missing or not later than `as_of`.
+/// The freshness finding for an SBOM dated in the future, or `None` when
+/// `created`, the document's creation timestamp when it has a known one, is
+/// missing or not later than `as_of`.
 ///
 /// Freshness checks measure the document's age at the evaluation instant. A
 /// timestamp after that instant gave a negative age, which read as "just
@@ -79,17 +111,14 @@ pub(crate) fn inventory_absent_violation(
 /// generators are common and the rest of the document is unaffected. There is
 /// no skew tolerance, as for attestation evidence created after `as_of`.
 /// `citation` prefixes the message, e.g. `"[PCI DSS 6.3.2]"`.
-pub(crate) fn future_timestamp_violation(
-    sbom: &NormalizedSbom,
+pub(crate) fn future_timestamp_violation_of(
+    created: Option<chrono::DateTime<chrono::Utc>>,
     as_of: chrono::DateTime<chrono::Utc>,
     rule_id: &'static str,
     citation: &str,
     requirement: &str,
 ) -> Option<Violation> {
-    let created = sbom.document.created;
-    if !sbom.document.has_known_timestamp() || created <= as_of {
-        return None;
-    }
+    let created = created.filter(|created| *created > as_of)?;
     // The message names only the document's timestamp: the evaluation
     // instant is the wall clock unless pinned, and would make the text
     // differ on every run.
@@ -107,44 +136,92 @@ pub(crate) fn future_timestamp_violation(
         rule_id,
         component_id: None,
         counts: None,
-        standard_refs: Vec::new(),
+        standard_refs: Cow::Borrowed(&[]),
         remediation: None,
         finding_detail: None,
+        severity_override: None,
+        deadline: None,
+        field: None,
+        observed: observed(&created.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
     })
 }
 
 /// Components whose external references can carry manufacturer-level
-/// evidence (security contact, CVD policy, disclosure process): the primary
-/// component when one is identified, otherwise the root components (no
-/// incoming dependency edge).
+/// evidence (security contact, CVD policy, disclosure process, risk
+/// assessment, certificates and attestations): the components the document
+/// describes — the primary component and the other described roots (see
+/// [`NormalizedSbom::described_components`]; an SPDX document can describe
+/// several sibling products).
 ///
 /// SBOM generators routinely copy upstream registry metadata — a third-party
-/// dependency's own GitHub advisories or support URL — onto dependency
-/// components; such references say nothing about the *manufacturer's*
-/// obligations and must not satisfy them.
+/// dependency's own GitHub advisories, support URL or certification — onto
+/// dependency components; such references say nothing about the
+/// *manufacturer's* obligations and must not satisfy them, wherever the
+/// dependency sits in the graph (a sparse `dependencies` section leaves
+/// third-party libraries with no incoming edge).
+///
+/// Only a document that names no product falls back to the roots of its
+/// dependency graph (no incoming edge), or, when the graph is fully cyclic,
+/// to every component, rather than making the evidence unsatisfiable.
 pub(crate) fn manufacturer_scope_components(sbom: &NormalizedSbom) -> Vec<&Component> {
-    let mut incoming = std::collections::HashSet::new();
-    for edge in &sbom.edges {
-        incoming.insert(&edge.to);
+    let described = sbom.described_components();
+    if !described.is_empty() {
+        return described;
     }
-    let primary = sbom.primary_component_id.as_ref();
-    // The primary component plus every root (no incoming edge): an SPDX
-    // document can DESCRIBE several sibling products, and each is
-    // manufacturer-scoped evidence — not just the first one the parser
-    // happened to promote to primary.
-    let scope: Vec<&Component> = sbom
+    let incoming: std::collections::HashSet<_> = sbom.edges.iter().map(|e| &e.to).collect();
+    let roots: Vec<&Component> = sbom
         .components
         .iter()
-        .filter(|(id, _)| primary.is_some_and(|p| p == *id) || !incoming.contains(id))
+        .filter(|(id, _)| !incoming.contains(id))
         .map(|(_, c)| c)
         .collect();
-    if scope.is_empty() {
+    if roots.is_empty() {
         // Fully cyclic graph with no identified primary: no component is
         // provably a dependency-only node, so fall back to scanning all
         // components rather than making manufacturer evidence unsatisfiable.
         return sbom.components.values().collect();
     }
-    scope
+    roots
+}
+
+/// Whether the SBOM names the product's manufacturer: an organization
+/// creator that is identified (see [`creator_identified`]), the supplier of
+/// the described product (CycloneDX `metadata.supplier`), or a known
+/// manufacturer or supplier on a component the document describes
+/// (CycloneDX `metadata.component.manufacturer` or `.supplier`, the SPDX
+/// described package's supplier). CycloneDX 1.6 moved the manufacturer of
+/// the product from `metadata.manufacture` to
+/// `metadata.component.manufacturer`. Placeholders such as `NOASSERTION` or
+/// `TBD` name nobody. The CRA sidecar is checked by the callers.
+pub(crate) fn manufacturer_identified(sbom: &NormalizedSbom) -> bool {
+    manufacturer_name(sbom).is_some()
+        || sbom
+            .document
+            .creators
+            .iter()
+            .any(|c| c.creator_type == CreatorType::Organization && creator_identified(c))
+}
+
+/// The manufacturer's name: the first one the sources of
+/// [`manufacturer_identified`] give, in its order. That is an organization
+/// creator of the SBOM, then the supplier of the described product
+/// (CycloneDX `metadata.supplier`), then the manufacturer or supplier of a
+/// component the document describes. Placeholders name nobody. `None` when
+/// no source gives a name, which includes an organization creator known only
+/// by its email address. The `cra-docs` dossier prints this name.
+pub(crate) fn manufacturer_name(sbom: &NormalizedSbom) -> Option<&str> {
+    sbom.document
+        .creators
+        .iter()
+        .filter(|c| c.creator_type == CreatorType::Organization)
+        .find_map(|c| known_value(Some(c.name.as_str())))
+        .or_else(|| known_organization_name(sbom.document.supplier.as_ref()))
+        .or_else(|| {
+            sbom.described_components().into_iter().find_map(|c| {
+                known_organization_name(c.manufacturer.as_ref())
+                    .or_else(|| known_organization_name(c.supplier.as_ref()))
+            })
+        })
 }
 
 /// Whether a component's name is real. Empty/whitespace and the SPDX
@@ -169,6 +246,45 @@ pub(crate) fn known_component_name(comp: &Component) -> bool {
     })
 }
 
+/// Why a spec-version check did not run: the document's version does not
+/// parse, so its range cannot be judged. Such a document gets no version
+/// finding, which used to read as a pass.
+pub(crate) const SPEC_VERSION_UNPARSED: &str =
+    "the document's spec version does not parse, so its range cannot be checked";
+
+/// The longest [`Violation::observed`] value, in characters, the `…` that
+/// marks a cut included.
+pub(crate) const OBSERVED_MAX_CHARS: usize = 200;
+
+/// `value`, read from the SBOM, as a finding's [`Violation::observed`]: the
+/// value as read, cut to [`OBSERVED_MAX_CHARS`] characters and ending in `…`
+/// when cut. An empty value stays empty: the field is there, with nothing in
+/// it. Like the finding's message and element, it is SBOM text kept as read:
+/// JSON and SARIF carry it as it is, and a human-readable output cleans it
+/// where it shows it (the text report and the TUI with `sanitize_line`).
+/// Returns `Some`, so an emission site writes `observed: observed(value)`,
+/// or `observed: field.and_then(observed)` for an optional field.
+pub(crate) fn observed(value: &str) -> Option<String> {
+    let mut chars = value.chars();
+    let mut text: String = chars.by_ref().take(OBSERVED_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        text.pop();
+        text.push('…');
+    }
+    Some(text)
+}
+
+/// The first of `hashes` whose digest does not count ([`digest_problem`]),
+/// as a finding's [`Violation::observed`]: `<algorithm>:<value as read>`,
+/// e.g. `SHA-256:d41d8cd98f00b204e9800998ecf8427e`. The message says why it
+/// does not count. `None` when every digest counts.
+pub(crate) fn observed_digest<'a>(hashes: impl IntoIterator<Item = &'a Hash>) -> Option<String> {
+    let hash = hashes
+        .into_iter()
+        .find(|h| digest_problem(&h.algorithm, &h.value).is_some())?;
+    observed(&format!("{}:{}", hash.algorithm, hash.value))
+}
+
 /// Render a slice of names as a comma-separated list, truncated with
 /// "…and N more" once `max` items are emitted. Keeps long-tail violation
 /// messages bounded for terminal/SARIF output.
@@ -180,47 +296,6 @@ pub(crate) fn truncate_list(items: &[String], max: usize) -> String {
         let rest = items.len() - max;
         format!("{head}, …and {rest} more")
     }
-}
-
-/// Placeholder values generators write instead of data (`TBD`, `N/A`, …).
-/// Unlike the explicit sentinels (see [`is_declared_unknown`]) they declare
-/// nothing, so they never satisfy an element in any standard. Curated
-/// conservatively so genuine values are never flagged; CISA FSCT §2.3.1
-/// calls these "ambiguous".
-const PLACEHOLDERS: &[&str] = &[
-    "tbd",
-    "to be determined",
-    "todo",
-    "n/a",
-    "n.a.",
-    "placeholder",
-    "unspecified",
-    "not specified",
-    "not available",
-    "unavailable",
-    "null",
-    "nil",
-    "undefined",
-    "xxx",
-    "-",
-    "--",
-    "?",
-];
-
-/// Whether `value` is a placeholder that declares nothing.
-pub(crate) fn is_placeholder(value: &str) -> bool {
-    let lower = value.trim().to_ascii_lowercase();
-    PLACEHOLDERS.contains(&lower.as_str())
-}
-
-/// Whether `value` is one of the explicit sentinels SPDX and CycloneDX
-/// producers write to assert that a value is unknown or absent
-/// (`NOASSERTION`, `NONE`, `UNKNOWN`).
-pub(crate) fn is_declared_unknown(value: &str) -> bool {
-    let v = value.trim();
-    v.eq_ignore_ascii_case("NOASSERTION")
-        || v.eq_ignore_ascii_case("NONE")
-        || v.eq_ignore_ascii_case("UNKNOWN")
 }
 
 /// What a field says about a required element.
@@ -261,6 +336,18 @@ pub(crate) fn has_known_value(value: &Option<String>) -> bool {
     known_value(value.as_deref()).is_some()
 }
 
+/// Whether an organization is present and its name is not a placeholder
+/// sentinel.
+pub(crate) fn has_known_organization(org: Option<&Organization>) -> bool {
+    known_organization_name(org).is_some()
+}
+
+/// The organization's trimmed name, when it is present and its name is not
+/// a placeholder sentinel.
+fn known_organization_name(org: Option<&Organization>) -> Option<&str> {
+    known_value(Some(org?.name.as_str()))
+}
+
 /// Whether a component carries real producer attribution: a supplier or
 /// manufacturer organization, or an author, whose name is not a placeholder
 /// sentinel. CycloneDX 1.6+ names the creating organization `manufacturer`
@@ -268,20 +355,317 @@ pub(crate) fn has_known_value(value: &Option<String>) -> bool {
 /// "the entity that creates, defines, and identifies components" as well as
 /// a supplier does.
 pub(crate) fn has_known_producer(comp: &crate::model::Component) -> bool {
-    let known_org = |org: &Option<crate::model::Organization>| {
-        org.as_ref()
-            .is_some_and(|o| known_value(Some(o.name.as_str())).is_some())
-    };
-    known_org(&comp.supplier) || known_org(&comp.manufacturer) || has_known_value(&comp.author)
+    has_known_organization(comp.supplier.as_ref())
+        || has_known_organization(comp.manufacturer.as_ref())
+        || has_known_value(&comp.author)
 }
 
-/// Whether the component carries at least one real license expression,
-/// declared or concluded (sentinels and placeholders do not count).
-pub(crate) fn has_known_license(comp: &Component) -> bool {
-    comp.licenses
-        .all_licenses()
+/// Whether `value` is a contact that reaches someone: present, known and no
+/// address at a documentation domain such as `example.com` (see
+/// [`crate::model::is_known_contact`], beside the placeholder list). Every
+/// check that reads a contact asks this: the vulnerability contacts in the
+/// SBOM and in the CRA sidecar, and the SBOM creator's email.
+pub(crate) fn known_contact(value: Option<&str>) -> bool {
+    value.is_some_and(is_known_contact)
+}
+
+/// Whether `r` is a contact reference whose locator reaches someone: a
+/// security contact, advisories or support reference (see
+/// [`known_contact`]).
+pub(crate) fn is_contact_reference(r: &ExternalReference) -> bool {
+    is_contact_type(&r.ref_type) && known_contact(Some(r.url.as_str()))
+}
+
+/// Whether `ref_type` is a contact reference type: a security contact,
+/// advisories or support reference.
+fn is_contact_type(ref_type: &ExternalRefType) -> bool {
+    matches!(
+        ref_type,
+        ExternalRefType::SecurityContact | ExternalRefType::Advisories | ExternalRefType::Support
+    )
+}
+
+/// The first vulnerability contact the SBOM gives that reaches nobody (see
+/// [`known_contact`]): its security contact, its disclosure URL, or the
+/// locator of a contact reference on a component of `scope`, the
+/// manufacturer scope (as [`manufacturer_scope_components`] gives it). A
+/// finding about a missing contact names it, so the reader sees why the
+/// contact did not count.
+pub(crate) fn unreachable_contact_in<'a>(
+    sbom: &'a NormalizedSbom,
+    scope: &[&'a Component],
+) -> Option<&'a str> {
+    let document = [
+        sbom.document.security_contact.as_deref(),
+        sbom.document.vulnerability_disclosure_url.as_deref(),
+    ];
+    document
+        .into_iter()
+        .flatten()
+        .chain(scope.iter().flat_map(|c| {
+            c.external_refs
+                .iter()
+                .filter(|r| is_contact_type(&r.ref_type))
+                .map(|r| r.url.as_str())
+        }))
+        .find(|value| !known_contact(Some(*value)))
+}
+
+/// The clause a contact finding appends when the SBOM gives a contact that
+/// reaches nobody (see [`unreachable_contact_in`]), or an empty string.
+/// `contact` is the first contact the SBOM gives that reaches nobody, if
+/// any.
+pub(crate) fn unreachable_contact_note_of(contact: Option<&str>) -> String {
+    contact.map_or_else(String::new, |value| {
+        format!(
+            "; the contact '{}' reaches nobody (a placeholder, or an address at example.com, \
+             example.net or example.org)",
+            value.trim()
+        )
+    })
+}
+
+/// The contacts a creator gives: its email address, and the address or URL
+/// its name carries. Creators have no URL field, so the CycloneDX parser
+/// folds a manufacturer's URL into the name when it has no email, and an
+/// author with only an email is named by it.
+pub(crate) fn creator_contacts(creator: &Creator) -> impl Iterator<Item = &str> {
+    let name = creator.name.as_str();
+    creator
+        .email
+        .as_deref()
+        .into_iter()
+        .chain((name.contains('@') || name.contains("://")).then_some(name))
+}
+
+/// The first of the creator contacts `values` that is given but reaches
+/// nobody (see [`known_contact`]).
+pub(crate) fn unreachable_creator<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> Option<&'a str> {
+    values.into_iter().find(|value| !known_contact(Some(value)))
+}
+
+/// A note naming the first of the creator contacts `values` that is given
+/// but reaches nobody (see [`unreachable_creator`]), for the message of a
+/// check that found no creator contact; empty when there is none.
+pub(crate) fn unreachable_creator_note<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    unreachable_creator(values).map_or_else(String::new, |value| {
+        format!(
+            "; the creator contact '{}' reaches nobody (a placeholder, or an address at \
+                 example.com, example.net or example.org)",
+            value.trim()
+        )
+    })
+}
+
+/// The clause a contact finding appends when the CRA sidecar gives a
+/// contact that reaches nobody (see [`known_contact`]), or an empty string.
+pub(crate) fn unreachable_sidecar_note(value: Option<&str>) -> String {
+    match value {
+        Some(v) if !known_contact(Some(v)) => format!(
+            "; the sidecar value '{}' reaches nobody (a placeholder, or an address at \
+             example.com, example.net or example.org)",
+            v.trim()
+        ),
+        _ => String::new(),
+    }
+}
+
+/// Whether `r` references the product's EUCC (Common Criteria) certificate:
+/// a certification or attestation reference whose URL names the scheme
+/// (`eucc`, `common-criteria` or `commoncriteria`, in any case). The CRA
+/// Annex IV check, the conformity summary's EUCC rows and
+/// SBOM-EUCC-CERTREF all ask this.
+pub(crate) fn is_eucc_reference(r: &ExternalReference) -> bool {
+    let url = r.url.to_ascii_lowercase();
+    matches!(
+        r.ref_type,
+        ExternalRefType::Certification | ExternalRefType::Attestation
+    ) && ["eucc", "common-criteria", "commoncriteria"]
         .iter()
-        .any(|l| known_value(Some(l.expression.as_str())).is_some())
+        .any(|keyword| url.contains(keyword))
+}
+
+/// Whether the SBOM carries an in-document signature with a value: a
+/// CycloneDX JSF signature or enveloped XML-DSig, or an SPDX 3 `verifiedUsing`
+/// signature on the document. Nothing is verified cryptographically; an
+/// entry without a value is no signature.
+pub(crate) fn document_signed(sbom: &NormalizedSbom) -> bool {
+    sbom.document
+        .signature
+        .as_ref()
+        .is_some_and(|s| s.has_value)
+}
+
+/// Whether the document is SPDX 2.x, whose data model has no field for
+/// three pieces of evidence some profiles ask for:
+/// - an in-document signature (CISA 2026 SBOM Author Signature, FSCT §2.4):
+///   SPDX 2.x defines no signature field, so its signatures live in
+///   detached files or envelopes, unlike CycloneDX JSF `signature` or SPDX 3
+///   `verifiedUsing` (see [`document_signed`]);
+/// - the lifecycle phase (CISA 2026 SBOM Generation Context): SPDX 2.x has
+///   no counterpart of CycloneDX `metadata.lifecycles` or SPDX 3
+///   `sbomType`, only free-text comments;
+/// - a completeness declaration (CISA 2026 Coverage): SPDX 2.x has no
+///   counterpart of CycloneDX `compositions` or SPDX 3 relationship
+///   `completeness`; a `NONE`/`NOASSERTION` relationship target speaks for
+///   one relationship, not for the inventory.
+///
+/// The rules looking for that evidence are gated off for SPDX 2.x, as the
+/// FSCT profile gates attributes a format cannot express. Unparseable SPDX
+/// versions count as 2.x: the SPDX 3 parser always records a 3.x version.
+pub(crate) fn is_spdx2(sbom: &NormalizedSbom) -> bool {
+    sbom.document.format == SbomFormat::Spdx
+        && sbom
+            .document
+            .spec_version_parsed()
+            .is_none_or(|v| v.major < 3)
+}
+
+/// Why a signature check did not run on SPDX 2.x (see [`is_spdx2`]): the
+/// reason CISA 2026's SBOM Author Signature and FSCT §2.4 give alike.
+pub(crate) const SPDX2_NO_SIGNATURE: &str = "SPDX 2.x cannot carry a document signature";
+
+/// Whether the vulnerability's own VEX statement is `not_affected` and names
+/// its justification (CycloneDX `analysis.justification`, OpenVEX
+/// `justification`, SPDX 3.0 `justificationType`).
+///
+/// The CRA FAQ (v1.4, 4.3.1) has the manufacturer judge a vulnerability's
+/// relevance for the product; where it "cannot be exploited", the
+/// manufacturer "may be expected, for example, to document the
+/// vulnerability, but may decide not to fix it with a dedicated update". A
+/// justified `not_affected` statement is that record (Annex I Part II (1)),
+/// and Annex I Part II (4), which asks for the severity and the remediation,
+/// covers fixed vulnerabilities. A bare `not_affected` claim gives no reason
+/// and counts for nothing, nor does a free-text detail without a
+/// justification. Only the vulnerability's own statement counts: the
+/// component-level VEX status sums up all of the component's statements and
+/// is no statement about this one. Every check that asks whether a
+/// vulnerability is still open (the CRA Phase 2 vulnerability checks,
+/// SBOM-FDA-SECURITY and SBOM-PCI-11-3-1-1-SEVERITY) skips such a
+/// vulnerability.
+pub(crate) fn justified_not_affected(vuln: &VulnerabilityRef) -> bool {
+    vuln.vex_status
+        .as_ref()
+        .is_some_and(|vex| vex.status == VexState::NotAffected && vex.justification.is_some())
+}
+
+/// How many hex digits a digest of `algorithm` has, when the algorithm fixes
+/// its output length. `None` for an extendable-output or unknown algorithm
+/// (BLAKE3, MD6, …). Algorithms the model has no variant for are matched by
+/// name, as the parsers keep it (SPDX `SHA224`, SPDX 3 `sha3_224`, …).
+fn digest_hex_digits(algorithm: &HashAlgorithm) -> Option<usize> {
+    match algorithm {
+        HashAlgorithm::Md5 => Some(32),
+        HashAlgorithm::Sha1 => Some(40),
+        HashAlgorithm::Sha256
+        | HashAlgorithm::Sha3_256
+        | HashAlgorithm::Blake2b256
+        | HashAlgorithm::Streebog256 => Some(64),
+        HashAlgorithm::Sha384 | HashAlgorithm::Sha3_384 | HashAlgorithm::Blake2b384 => Some(96),
+        HashAlgorithm::Sha512
+        | HashAlgorithm::Sha3_512
+        | HashAlgorithm::Blake2b512
+        | HashAlgorithm::Streebog512 => Some(128),
+        HashAlgorithm::Blake3 => None,
+        HashAlgorithm::Other(name) => {
+            let name: String = name
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_uppercase())
+                .collect();
+            match name.as_str() {
+                "SHA224" | "SHA3224" => Some(56),
+                "MD2" | "MD4" => Some(32),
+                "ADLER32" => Some(8),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Why `value` is not a plausible digest of `algorithm`, or `None` when it
+/// is (see [`plausible_digest`]), e.g. "SHA-512 digest is not 128 hex
+/// characters".
+pub(crate) fn digest_problem(algorithm: &HashAlgorithm, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Some(format!("{algorithm} digest is empty"));
+    }
+    if !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some(format!("{algorithm} digest is not hexadecimal"));
+    }
+    match digest_hex_digits(algorithm) {
+        Some(digits) if value.len() != digits => {
+            Some(format!("{algorithm} digest is not {digits} hex characters"))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `value` can be a digest of `algorithm`: hexadecimal digits only
+/// (upper or lower case; surrounding whitespace is ignored), as many as the
+/// algorithm's output has where the algorithm fixes it (MD5 32, SHA-1 40,
+/// SHA-224 56, SHA-256 / SHA3-256 / BLAKE2b-256 / Streebog-256 64, SHA-384 /
+/// SHA3-384 / BLAKE2b-384 96, SHA-512 / SHA3-512 / BLAKE2b-512 /
+/// Streebog-512 128), and at least one for a variable-length or unknown
+/// algorithm. Parsers keep a digest as the document gives it, so an empty
+/// or garbage value reaches the checks: every hash rule counts only
+/// plausible digests.
+pub(crate) fn plausible_digest(algorithm: &HashAlgorithm, value: &str) -> bool {
+    digest_problem(algorithm, value).is_none()
+}
+
+/// Why each of `hashes` that is no plausible digest does not count, each
+/// reason once, in order.
+pub(crate) fn digest_problems<'a>(hashes: impl IntoIterator<Item = &'a Hash>) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    for problem in hashes
+        .into_iter()
+        .filter_map(|h| digest_problem(&h.algorithm, &h.value))
+    {
+        if !problems.contains(&problem) {
+            problems.push(problem);
+        }
+    }
+    problems
+}
+
+/// `name` for a list in a finding message, followed by why its digests that
+/// are not plausible do not count: "libalpha (SHA-256 digest is empty)".
+/// Just `name` when every digest counts.
+pub(crate) fn name_with_digest_problems<'a>(
+    name: &str,
+    hashes: impl IntoIterator<Item = &'a Hash>,
+) -> String {
+    let problems = digest_problems(hashes);
+    if problems.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} ({})", problems.join("; "))
+    }
+}
+
+/// The tail of a coverage finding over `components`, which carry no
+/// plausible digest: the ones among them whose present hashes did not
+/// count, and why — "; hashes that do not count: libalpha (SHA-256 digest
+/// is empty)". Empty when none of them carries a hash at all, so the
+/// message of a document without bad digests is unchanged. Each component
+/// is given by its name and its hashes.
+pub(crate) fn invalid_digest_note_of<'a>(
+    components: impl IntoIterator<Item = (&'a str, &'a [Hash])>,
+) -> String {
+    let named: Vec<String> = components
+        .into_iter()
+        .filter(|(_, hashes)| !hashes.is_empty())
+        .map(|(name, hashes)| name_with_digest_problems(name, hashes))
+        .collect();
+    if named.is_empty() {
+        String::new()
+    } else {
+        format!("; hashes that do not count: {}", truncate_list(&named, 5))
+    }
 }
 
 /// Whether a creator identifies a real entity: a known name, or failing
@@ -325,6 +709,7 @@ pub(crate) fn is_valid_email_format(email: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::evidence::SbomEvidence;
     use super::*;
 
     #[test]
@@ -355,6 +740,358 @@ mod tests {
     }
 
     #[test]
+    fn plausible_digests_are_hex_of_the_algorithms_length() {
+        use HashAlgorithm as A;
+        let hex = |n: usize| "a".repeat(n);
+        for (algorithm, digits) in [
+            (A::Md5, 32),
+            (A::Sha1, 40),
+            (A::Other("SHA224".to_string()), 56),
+            (A::Other("sha3_224".to_string()), 56),
+            (A::Sha256, 64),
+            (A::Sha3_256, 64),
+            (A::Blake2b256, 64),
+            (A::Streebog256, 64),
+            (A::Sha384, 96),
+            (A::Sha3_384, 96),
+            (A::Blake2b384, 96),
+            (A::Sha512, 128),
+            (A::Sha3_512, 128),
+            (A::Blake2b512, 128),
+            (A::Streebog512, 128),
+        ] {
+            assert!(plausible_digest(&algorithm, &hex(digits)), "{algorithm}");
+            for wrong in [digits - 1, digits + 1, digits / 2] {
+                assert_eq!(
+                    digest_problem(&algorithm, &hex(wrong)),
+                    Some(format!("{algorithm} digest is not {digits} hex characters")),
+                    "{algorithm} with {wrong} digits"
+                );
+            }
+        }
+        // Upper and lower case both count; surrounding whitespace is ignored.
+        let mixed = "E3B0C44298FC1C149AFBF4C8996FB92427ae41e4649b934ca495991b7852b855";
+        assert!(plausible_digest(&A::Sha256, mixed));
+        assert!(plausible_digest(&A::Sha256, &format!(" {mixed}\n")));
+        // Variable-length and unknown algorithms: any non-empty hex.
+        for algorithm in [A::Blake3, A::Other("MD6".to_string())] {
+            assert!(plausible_digest(&algorithm, "ab"), "{algorithm}");
+            assert!(plausible_digest(&algorithm, &hex(200)), "{algorithm}");
+        }
+        assert_eq!(
+            digest_problem(&A::Sha512, ""),
+            Some("SHA-512 digest is empty".to_string())
+        );
+        assert_eq!(
+            digest_problem(&A::Sha256, "   "),
+            Some("SHA-256 digest is empty".to_string())
+        );
+        assert_eq!(
+            digest_problem(&A::Blake3, "not-a-digest"),
+            Some("BLAKE3 digest is not hexadecimal".to_string())
+        );
+        // A hex-looking value with a stray character is not hex.
+        assert_eq!(
+            digest_problem(&A::Sha256, &format!("{}g", hex(63))),
+            Some("SHA-256 digest is not hexadecimal".to_string())
+        );
+    }
+
+    /// An observed value is kept as read, like the message, and bounded,
+    /// the cut marked; an empty value stays empty. The outputs that show it
+    /// clean it.
+    #[test]
+    fn observed_values_are_kept_as_read_and_bounded() {
+        assert_eq!(observed("NOASSERTION").as_deref(), Some("NOASSERTION"));
+        assert_eq!(observed("").as_deref(), Some(""));
+        let hostile = "::warning::x\n\u{1b}[1m\u{7}\u{202e}c";
+        assert_eq!(observed(hostile).as_deref(), Some(hostile));
+        let exact = "x".repeat(OBSERVED_MAX_CHARS);
+        assert_eq!(observed(&exact), Some(exact.clone()));
+        let long = observed(&"é".repeat(OBSERVED_MAX_CHARS + 1)).expect("observed");
+        assert_eq!(long.chars().count(), OBSERVED_MAX_CHARS);
+        assert_eq!(long, format!("{}…", "é".repeat(OBSERVED_MAX_CHARS - 1)));
+    }
+
+    /// The digest a hash finding observes is the first that does not count,
+    /// with its algorithm. (The producer a finding observes is the
+    /// evidence's `Producer::observed`.)
+    #[test]
+    fn observed_digest_names_the_first_that_did_not_count() {
+        let sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let hashes = [
+            Hash::new(HashAlgorithm::Sha256, sha256.to_string()),
+            Hash::new(HashAlgorithm::Sha512, "abc".to_string()),
+            Hash::new(HashAlgorithm::Md5, String::new()),
+        ];
+        assert_eq!(observed_digest(&hashes).as_deref(), Some("SHA-512:abc"));
+        assert_eq!(observed_digest(&hashes[..1]), None);
+        assert_eq!(observed_digest(&hashes[2..]).as_deref(), Some("MD5:"));
+    }
+
+    #[test]
+    fn digest_problems_name_each_reason_once() {
+        let hashes = [
+            Hash::new(HashAlgorithm::Sha256, String::new()),
+            Hash::new(HashAlgorithm::Sha256, " ".to_string()),
+            Hash::new(HashAlgorithm::Sha512, "abc".to_string()),
+            Hash::new(
+                HashAlgorithm::Md5,
+                "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+            ),
+        ];
+        assert_eq!(
+            digest_problems(&hashes),
+            vec![
+                "SHA-256 digest is empty".to_string(),
+                "SHA-512 digest is not 128 hex characters".to_string(),
+            ]
+        );
+        assert_eq!(
+            name_with_digest_problems("lib", &hashes[2..]),
+            "lib (SHA-512 digest is not 128 hex characters)"
+        );
+        assert_eq!(name_with_digest_problems("lib", &hashes[3..]), "lib");
+    }
+
+    /// A component carrying one external reference of `ref_type`.
+    fn with_ref(name: &str, ref_type: crate::model::ExternalRefType) -> Component {
+        let mut c = Component::new(name.to_string(), name.to_string());
+        c.external_refs.push(ExternalReference {
+            ref_type,
+            url: format!("https://{name}.example/security"),
+            comment: None,
+            hashes: Vec::new(),
+        });
+        c
+    }
+
+    /// The scope is the described product: a third-party component outside
+    /// the dependency graph is no root of it once the document names the
+    /// product, and an SPDX document's other described roots join the
+    /// primary.
+    #[test]
+    fn manufacturer_scope_is_the_described_product() {
+        use crate::model::{DependencyEdge, DependencyType, ExternalRefType};
+        let mut sbom = NormalizedSbom::default();
+        let app = Component::new("app".to_string(), "app".to_string());
+        let lib = Component::new("lib".to_string(), "lib".to_string());
+        let orphan = with_ref("orphan", ExternalRefType::Advisories);
+        let (app_id, lib_id, orphan_id) = (
+            app.canonical_id.clone(),
+            lib.canonical_id.clone(),
+            orphan.canonical_id.clone(),
+        );
+        for c in [app, lib, orphan] {
+            sbom.add_component(c);
+        }
+        sbom.edges.push(DependencyEdge::new(
+            app_id.clone(),
+            lib_id,
+            DependencyType::DependsOn,
+        ));
+        let names = |sbom: &NormalizedSbom| -> Vec<String> {
+            manufacturer_scope_components(sbom)
+                .iter()
+                .map(|c| c.name.clone())
+                .collect()
+        };
+        // The evidence's manufacturer fact reads the references of this
+        // scope.
+        let advisories = |sbom: &NormalizedSbom| {
+            SbomEvidence::new(sbom, chrono::DateTime::UNIX_EPOCH)
+                .manufacturer()
+                .reference(|r| r.ref_type == ExternalRefType::Advisories)
+        };
+
+        // No product named: the graph roots, the orphan among them.
+        assert_eq!(names(&sbom), vec!["app", "orphan"]);
+        assert!(advisories(&sbom));
+
+        // The primary named: the orphan dependency's references no longer
+        // count for the product.
+        sbom.set_primary_component(app_id);
+        assert_eq!(names(&sbom), vec!["app"]);
+        assert!(!advisories(&sbom));
+
+        // A second described product is in scope, once.
+        sbom.add_described_root(orphan_id.clone());
+        sbom.add_described_root(orphan_id);
+        assert_eq!(names(&sbom), vec!["app", "orphan"]);
+        assert!(advisories(&sbom));
+    }
+
+    #[test]
+    fn the_manufacturer_is_named_by_a_creator_the_supplier_or_the_product() {
+        use crate::model::{Creator, CreatorType};
+        let mut sbom = NormalizedSbom::default();
+        let mut app = Component::new("app".to_string(), "app".to_string());
+        app.author = Some("Dana Developer".to_string());
+        let app_id = app.canonical_id.clone();
+        sbom.add_component(app);
+        sbom.set_primary_component(app_id.clone());
+        let mut lib = Component::new("lib".to_string(), "lib".to_string());
+        lib.supplier = Some(Organization::new("Upstream Ltd".to_string()));
+        sbom.add_component(lib);
+        // A dependency's supplier and the product's author name no
+        // manufacturer.
+        assert!(!manufacturer_identified(&sbom));
+
+        fn product<'a>(
+            sbom: &'a mut NormalizedSbom,
+            id: &crate::model::CanonicalId,
+        ) -> &'a mut Component {
+            sbom.components.get_mut(id).expect("the primary is listed")
+        }
+        for placeholder in ["NOASSERTION", "TBD", "n/a", " "] {
+            product(&mut sbom, &app_id).manufacturer =
+                Some(Organization::new(placeholder.to_string()));
+            assert!(!manufacturer_identified(&sbom), "{placeholder:?}");
+        }
+        product(&mut sbom, &app_id).manufacturer = Some(Organization::new("Acme GmbH".to_string()));
+        assert!(manufacturer_identified(&sbom));
+        product(&mut sbom, &app_id).manufacturer = None;
+        product(&mut sbom, &app_id).supplier = Some(Organization::new("Acme GmbH".to_string()));
+        assert!(manufacturer_identified(&sbom));
+        product(&mut sbom, &app_id).supplier = None;
+
+        sbom.document.supplier = Some(Organization::new("NOASSERTION".to_string()));
+        assert!(!manufacturer_identified(&sbom));
+        sbom.document.supplier = Some(Organization::new("Acme GmbH".to_string()));
+        assert!(manufacturer_identified(&sbom));
+        sbom.document.supplier = None;
+
+        let creator = |name: &str, email: Option<&str>| Creator {
+            creator_type: CreatorType::Organization,
+            name: name.to_string(),
+            email: email.map(str::to_string),
+        };
+        sbom.document.creators = vec![creator("NOASSERTION", None)];
+        assert!(!manufacturer_identified(&sbom));
+        sbom.document.creators = vec![creator("N/A", Some("psirt@acme.example"))];
+        assert!(
+            manufacturer_identified(&sbom),
+            "a known email identifies it"
+        );
+        sbom.document.creators = vec![creator("Acme GmbH", None)];
+        assert!(manufacturer_identified(&sbom));
+        sbom.document.creators[0].creator_type = CreatorType::Person;
+        assert!(
+            !manufacturer_identified(&sbom),
+            "a person creator is no organization"
+        );
+    }
+
+    /// The manufacturer's name comes from the first source that gives one,
+    /// in the order `manufacturer_identified` reads them, and exists exactly
+    /// when that test passes, but for a creator known by its email alone.
+    #[test]
+    fn the_manufacturer_name_follows_the_sources_in_order() {
+        use crate::model::{Creator, CreatorType};
+        let mut sbom = NormalizedSbom::default();
+        let mut app = Component::new("app".to_string(), "app".to_string());
+        app.supplier = Some(Organization::new("Product Supplier Ltd".to_string()));
+        app.manufacturer = Some(Organization::new("Product Maker GmbH".to_string()));
+        let app_id = app.canonical_id.clone();
+        sbom.add_component(app);
+        sbom.set_primary_component(app_id.clone());
+        assert_eq!(manufacturer_name(&sbom), Some("Product Maker GmbH"));
+
+        sbom.components
+            .get_mut(&app_id)
+            .expect("listed")
+            .manufacturer = Some(Organization::new("NOASSERTION".to_string()));
+        assert_eq!(manufacturer_name(&sbom), Some("Product Supplier Ltd"));
+
+        sbom.document.supplier = Some(Organization::new("Document Supplier AG".to_string()));
+        assert_eq!(manufacturer_name(&sbom), Some("Document Supplier AG"));
+
+        let organization = |name: &str, email: Option<&str>| Creator {
+            creator_type: CreatorType::Organization,
+            name: name.to_string(),
+            email: email.map(str::to_string),
+        };
+        sbom.document.creators = vec![
+            organization("TBD", Some("sbom@acme.example")),
+            organization("Acme Networks GmbH", None),
+        ];
+        assert_eq!(
+            manufacturer_name(&sbom),
+            Some("Acme Networks GmbH"),
+            "the first organization creator with a name, a placeholder skipped"
+        );
+
+        // A creator known only by its email identifies the manufacturer but
+        // gives no name.
+        let mut email_only = NormalizedSbom::default();
+        email_only.document.creators = vec![organization("N/A", Some("sbom@acme.example"))];
+        assert!(manufacturer_identified(&email_only));
+        assert_eq!(manufacturer_name(&email_only), None);
+        assert!(!manufacturer_identified(&NormalizedSbom::default()));
+        assert_eq!(manufacturer_name(&NormalizedSbom::default()), None);
+    }
+
+    /// The values themselves are judged beside the placeholder list
+    /// (`model::known`); this pins that the checks' helpers ask it.
+    #[test]
+    fn a_contact_must_reach_someone() {
+        assert!(known_contact(Some("psirt@acme.example")));
+        assert!(!known_contact(Some("NOASSERTION")));
+        assert!(!known_contact(Some("security@example.com")));
+        assert!(!known_contact(None));
+        let reference = |ref_type, url: &str| ExternalReference {
+            ref_type,
+            url: url.to_string(),
+            comment: None,
+            hashes: Vec::new(),
+        };
+        assert!(is_contact_reference(&reference(
+            ExternalRefType::Advisories,
+            "https://acme.example/advisories"
+        )));
+        assert!(!is_contact_reference(&reference(
+            ExternalRefType::Advisories,
+            "https://example.com/advisories"
+        )));
+        assert!(!is_contact_reference(&reference(
+            ExternalRefType::Vcs,
+            "https://acme.example/repo.git"
+        )));
+    }
+
+    #[test]
+    fn an_eucc_reference_names_the_scheme_in_its_url() {
+        let reference = |ref_type, url: &str| ExternalReference {
+            ref_type,
+            url: url.to_string(),
+            comment: None,
+            hashes: Vec::new(),
+        };
+        for url in [
+            "https://certification.enisa.europa.eu/eucc/certificates/1.pdf",
+            "https://lab.acme.example/Common-Criteria/cert.pdf",
+            "https://www.commoncriteriaportal.org/files/epfiles/cert.pdf",
+        ] {
+            assert!(is_eucc_reference(&reference(
+                ExternalRefType::Certification,
+                url
+            )));
+            assert!(is_eucc_reference(&reference(
+                ExternalRefType::Attestation,
+                url
+            )));
+            assert!(
+                !is_eucc_reference(&reference(ExternalRefType::Advisories, url)),
+                "only a certification or attestation reference is a certificate"
+            );
+        }
+        assert!(!is_eucc_reference(&reference(
+            ExternalRefType::Certification,
+            "https://notified-body.acme.example/certificates/0815.pdf"
+        )));
+    }
+
+    #[test]
     fn only_a_timestamp_after_the_evaluation_instant_is_future_dated() {
         let ts = |s: &str| {
             chrono::DateTime::parse_from_rfc3339(s)
@@ -362,13 +1099,17 @@ mod tests {
                 .with_timezone(&chrono::Utc)
         };
         let as_of = ts("2026-10-12T00:00:00Z");
-        let dated = |created: chrono::DateTime<chrono::Utc>| {
-            let mut sbom = NormalizedSbom::default();
-            sbom.document.created = created;
-            future_timestamp_violation(&sbom, as_of, "SBOM-PCI-6-3-2-FRESHNESS", "[PCI]", "req")
+        let dated = |created: Option<chrono::DateTime<chrono::Utc>>| {
+            future_timestamp_violation_of(
+                created,
+                as_of,
+                "SBOM-PCI-6-3-2-FRESHNESS",
+                "[PCI]",
+                "req",
+            )
         };
 
-        let future = dated(ts("2026-10-12T00:00:01Z")).expect("one second later is future");
+        let future = dated(Some(ts("2026-10-12T00:00:01Z"))).expect("one second later is future");
         assert_eq!(future.severity, ViolationSeverity::Warning);
         assert_eq!(future.rule_id, "SBOM-PCI-6-3-2-FRESHNESS");
         assert!(
@@ -385,10 +1126,12 @@ mod tests {
         );
 
         // The instant itself and anything earlier are not in the future, and
-        // a missing timestamp (the parsers' epoch sentinel) is reported by
-        // the missing-timestamp branch instead.
-        assert!(dated(as_of).is_none());
-        assert!(dated(ts("2026-01-01T00:00:00Z")).is_none());
-        assert!(dated(chrono::DateTime::UNIX_EPOCH).is_none());
+        // a missing timestamp (the parsers' epoch sentinel, which the
+        // evidence reads as no known timestamp) is reported by the
+        // missing-timestamp branch instead.
+        assert!(dated(Some(as_of)).is_none());
+        assert!(dated(Some(ts("2026-01-01T00:00:00Z"))).is_none());
+        assert!(dated(Some(chrono::DateTime::UNIX_EPOCH)).is_none());
+        assert!(dated(None).is_none());
     }
 }

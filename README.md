@@ -55,7 +55,7 @@ language bindings provide application access to the JSON-oriented C ABI.
 - **Compliance Validation** — 16 standards: NTIA, CISA 2026 Minimum Elements, FDA, CRA Phase 1 / Phase 2, NIST SSDF, EO 14028, CNSA 2.0, NIST PQC, BSI TR-03183-2, CRA Art. 24 OSS steward, EUCC, EU AI Act, BSI SBOM-for-AI, PCI DSS 6.3.2, and CISA FSCT 3rd ed.
 - **Attestation Evidence (CDXA)** — Parses `declarations` (assessors, attestations, claims, evidence, affirmation) from CycloneDX 1.6+ **JSON** — the XML parser does not ingest them yet — and lets a declaration satisfy an SSDF practice, a CRA conformity route, an EUCC certificate reference, or EO 14028 provenance. **Structural verification only** — signature *presence* is recorded, never cryptographically verified
 - **CBOM Quality Scoring** — Grade cryptographic inventory health across 8 categories: algorithm strength, PQC readiness, OID coverage, crypto completeness, key/certificate lifecycle, and cross-reference resolution, with hard caps for broken cryptography and compromised keys
-- **PQC Compliance** — CNSA 2.0 (NSA) and NIST IR 8547 post-quantum cryptography compliance checking with per-algorithm PASS/FAIL assessment
+- **PQC Compliance** — CNSA 2.0 (NSA) and NIST IR 8547 post-quantum cryptography compliance checking with per-algorithm PASS/FAIL assessment, and a deadline mode that judges each algorithm by its migration date (IR 8547 2030/2035, the federal EO 14412 deadlines, the CNSA 2.0 timeline)
 - **Cryptographic Inventory** — Parse CycloneDX 1.6/1.7 `cryptoProperties` (algorithms, certificates, keys, protocols) with auto-detection of CBOM vs SBOM profiles
 - **Fleet Comparison** — 1:N baseline comparison, timeline analysis across versions, and NxN matrix analysis, all with enrichment support
 - **Incremental Diff** — Section-selective recomputation for partial changes with cached matching results
@@ -145,14 +145,27 @@ Current ABI scope:
 - `detect_format` on raw content
 - Parse from file path or raw SBOM string into normalized JSON
 - Diff two normalized SBOM JSON payloads
-- Score a normalized SBOM JSON payload
+- Score a normalized SBOM JSON payload by profile (unchanged, for
+  compatibility), or score a raw SBOM with options: the document
+  `quality -o json` prints, byte for byte, with any `--profile`, a pinned
+  `as_of` and the compliance inputs
+- Validate a raw SBOM against compliance standards: the
+  `sbom-tools/compliance/v2` envelope `validate -o json` writes, byte for
+  byte, with the same inputs as options (standards, `as_of`, an inline CRA
+  sidecar, product class, PQC mode, rule settings, excluded scope). Its
+  `subject` hashes exactly the bytes passed in and names a file only when
+  the `file_name` option gives one
+- The compliance rule catalogue (`sbom-tools/rules/v1`, as `rules -o json`)
 
 Current ABI exclusions:
 
-- CLI subcommands
+- Other CLI subcommands
 - TUI and watch mode
 - Enrichment providers
-- Non-JSON report formats
+- Non-JSON report formats (SARIF, OSCAL, text)
+
+The options and payloads are described in
+[docs/compliance-output.md](docs/compliance-output.md#from-the-c-abi-and-the-bindings).
 
 Build the native Rust library before using a wrapper:
 
@@ -261,14 +274,30 @@ console.log(parsed);
 Memory and compatibility rules:
 
 - The Rust ABI owns returned memory and wrappers must call `sbom_tools_string_result_free` exactly once.
-- JSON payload shape is the compatibility contract for normalized SBOMs, diff results, and quality reports.
+- JSON payload shape is the compatibility contract for normalized SBOMs, diff results, quality reports, the compliance envelope and the rule catalogue.
 - Error codes are stable across Go, Swift, Python, and Node.js wrappers.
+- `version()` reports the ABI version, `2` since v0.4.0. A release raises it when it changes the contract incompatibly (a function, enum value or payload field removed, renamed or retyped); additions keep it, and wrappers must accept fields and variants they do not know. The header states the full rule.
 
 Typed helper APIs are available in each wrapper:
 
-- Go: `ParsePath`, `ParseString`, `Diff`, `Score` over typed payload structs
-- Swift: `parsePath`, `parseString`, `diff`, `score` over Codable payload structs
-- Python: typed version/format results and JSON-decoded parse, diff, and score values
+- Go: `ParsePath`, `ParseString`, `Diff`, `Score`, `ScoreWithOptions`, `Validate`, `RuleCatalog` over typed payload structs
+- Swift: `parsePath`, `parseString`, `diff`, `score`, `scoreWithOptions`, `validate`, `ruleCatalog` over Codable payload structs
+- Python: typed version/format results, `TypedDict` hints for the compliance envelope, the rule catalogue and the quality document, and JSON-decoded parse, diff, and score values
+- Node.js: TypeScript interfaces for the compliance envelope, the rule catalogue and the quality document
+
+Compliance from a binding (Python; the other wrappers are alike):
+
+```python
+from sbomtools import rule_catalog_json, validate_json
+
+with open("bom.cdx.json", encoding="utf-8") as file:
+    envelope = validate_json(file.read(), standards=["cra", "ntia"], as_of="2027-01-01")
+
+for result in envelope["results"]:
+    print(result["standard"], result["compliant"], result["counts"])
+
+rules = {rule["id"]: rule for rule in rule_catalog_json(["cra"])["rules"]}
+```
 
 Deduplication helper APIs are available in both wrappers:
 
@@ -371,6 +400,10 @@ sbom-tools query "log4j" --version "<2.17.0" fleet/*.json
 # Validate against multiple compliance standards
 sbom-tools validate sbom.json --standard ntia,cra,eo14028
 
+# List the rules a standard checks, or explain one rule
+sbom-tools rules --standard cra
+sbom-tools rules explain SBOM-CRA-ART-24
+
 # Assess quality with CI gate
 sbom-tools quality sbom.json --profile security --min-score 70
 
@@ -423,6 +456,7 @@ Compares two SBOMs and reports added, removed, and modified components with vers
 | `--detect-typosquats` | Flag components that look like known-package typosquats |
 | `--explain-matches` | Show why each component pair was matched |
 | `--severity <level>` | Filter by minimum severity (`critical`, `high`, `medium`, `low`) |
+| `--as-of <datetime>`, `--cra-product-class <class>`, `--pqc-mode`, `--pqc-profile`, `--cnsa-category` | Inputs of the compliance checks on both SBOMs (the TUI's compliance tab, the reports' CRA section): the evaluation clock (RFC 3339 or a date; default: the wall clock), the CRA product class and the PQC deadline mode. Each SBOM adds the CRA sidecar found next to it. Taken as `validate` takes them; see [Inputs of a run](docs/compliance-output.md#inputs-of-a-run) |
 | `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
 
 </details>
@@ -476,7 +510,13 @@ Launches an interactive TUI with component tree, vulnerability details, license 
 | `--enrich-eol` | Detect end-of-life status via endoflife.date API |
 | `--validate-ntia` | Validate against NTIA minimum elements |
 | `--bom-type <type>` | BOM type override (`sbom`, `cbom`, `aibom`). Auto-detected from content if omitted |
+| `--as-of <datetime>`, `--cra-product-class <class>`, `--cra-sidecar <path>`, `--pqc-mode`, `--pqc-profile`, `--cnsa-category` | Inputs of the compliance checks (the TUI's compliance tab, `--validate-ntia`, the reports' CRA section), taken as `validate` takes them; see [Inputs of a run](docs/compliance-output.md#inputs-of-a-run) |
 | `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
+
+`--severity`, `--vulnerable-only` and `--ecosystem` narrow the component list
+only. The compliance tab and its exports, the quality score, `--validate-ntia`
+and a report's CRA section judge the whole SBOM, so they report what
+`validate` reports; the compliance tab says when the list is filtered.
 
 </details>
 
@@ -494,10 +534,17 @@ Checks an SBOM against a compliance standard and reports missing fields or faili
 
 | Flag | Description |
 |------|-------------|
-| `--standard <std>` | Standard to validate: `ntia` (default), `cisa-2026`, `fda`, `cra` (= Phase 2), `cra-phase1`, `ssdf`, `eo14028`, `cnsa2`, `pqc`, `bsi`, `oss-steward`, `eucc`, `ai-act`, `bsi-ai`, `pci-dss`, `fsct` (comma-separated for multiple; aliases in `--help`) |
+| `--standard <std>` | Standard to validate: `ntia` (default), `cisa-2026`, `fda`, `cra` (= Phase 2), `cra-phase1`, `ssdf`, `eo14028`, `cnsa2`, `pqc`, `bsi`, `oss-steward`, `eucc`, `ai-act`, `bsi-ai`, `pci-dss`, `fsct` (comma-separated for multiple; a standard named twice is checked once; aliases in `--help`) |
+| `--as-of <datetime>`, `--cra-product-class <class>`, `--cra-sidecar <path>` | The evaluation clock (RFC 3339 or a date; default: the wall clock), the CRA Annex III/IV product class, and the CRA sidecar (default: `<sbom>.cra.{json,yaml}` next to the SBOM). Each standard reads only the inputs that apply to it; see [Inputs of a run](docs/compliance-output.md#inputs-of-a-run) |
 | `-o, --output <fmt>` | Output format: `summary` (default via `auto`), `json`, `sarif`, `oscal-json` |
 | `--require-applicable` | Exit `1` when a selected standard does not apply to the SBOM (e.g. `ai-act` on an SBOM without ML components); without it, such a standard is reported as N/A and exits `0` |
 | `--json-schema <v1\|v2>` | Layout of `-o json`: `v2` (default) is the `sbom-tools/compliance/v2` envelope; `v1` is the deprecated pre-0.4 layout, removed in v0.5.0 |
+| `--pqc-mode <readiness\|deadline>` | How `cnsa2` and `pqc` judge quantum-vulnerable cryptography: `readiness` (default) makes each one an error; `deadline` judges each by its migration date at `--as-of` (info, then warning, then error) and adds `deadline` and `deadline_source` to the finding; see [PQC deadline mode](docs/compliance-output.md#pqc-deadline-mode) |
+| `--pqc-profile <nist\|federal>` | With `--pqc-mode deadline`, whose dates `pqc` applies: `nist` (default, NIST IR 8547) or `federal` (EO 14412 / OMB M-26-15: PQC key establishment by 2030-12-31, signatures by 2031-12-31, TLS 1.3 by 2030-01-02) |
+| `--cnsa-category <category>` | With `--pqc-mode deadline`, the CNSA 2.0 equipment category whose timeline `cnsa2` applies: `software-signing`, `web-cloud`, `networking`, `operating-systems`, `niche`, `custom-legacy`; the strictest when unset |
+| `--rule <RULE=SETTING>` | Set a rule's severity for this run (`off`, `info`, `warning`, `error`; repeatable, e.g. `--rule SBOM-NTIA-SUPPLIER=warning`). The verdict, the counts, the score and the exit code follow it; each finding keeps the severity its check gave it as `default_severity`, and `off` counts the dropped findings under `suppressed`. Wins over the config file's `compliance.rules`; see [Rule settings](docs/compliance-output.md#rule-settings) |
+| `--fail-on <RULE>` | Exit `1` on any finding of this rule, whatever its severity (repeatable; config key `compliance.fail_on`) |
+| `--include-excluded-scope` | Also judge components whose scope is excluded (CycloneDX `scope: excluded`, SPDX development, build and test dependencies) by the package rules; by default they are left out and each result counts them in `excluded_components` |
 | `--sarif-include-passes` | With `-o sarif`, also report every check the SBOM passed (e.g. an approved post-quantum algorithm) as a result of `kind: "pass"`, level `none`. Off by default, so code scanning shows no pass as an alert |
 | `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
 
@@ -507,6 +554,20 @@ Checks an SBOM against a compliance standard and reports missing fields or faili
 and the schema is
 [`schemas/compliance/v2.schema.json`](schemas/compliance/v2.schema.json).
 Checks the SBOM passed are listed under `passed`, never as violations.
+Each result's `score` is 50–100 when the standard passes and 0–49 when it
+fails, scaled by the errors and warnings per element checked (see
+[Score](docs/compliance-output.md#score)). A violation names the field it
+checks in the SBOM's format (`field`) and the value it read there
+(`observed`, such as a `NOASSERTION` supplier), and the checks a standard
+did not evaluate on the SBOM are listed under `evaluated` with the reason
+(CISA 2026's signature check on SPDX 2.x, say). The envelope states the
+instant the standards were judged at (`as_of`) and the SBOM it judged
+(`subject`: its SHA-256, format, version and file name, and how the document
+was read, such as duplicate entries merged). `-o sarif` and `-o oscal-json`
+carry the same fields for every finding and every standard's verdict (see
+[Fields in every output](docs/compliance-output.md#fields-in-every-output)).
+The text report names the rule of each finding and lists the same checks
+under `Not evaluated:`.
 
 </details>
 
@@ -522,6 +583,27 @@ structural (signature-present) level. Every pre-existing self-declared
 evidence path stays valid, and documents without `declarations` are
 unaffected. See [`docs/STANDARDS_VERSIONS.md`](docs/STANDARDS_VERSIONS.md)
 for the exact edition, publication date, and citation behind every standard.
+
+### Rules
+
+```sh
+sbom-tools rules --standard bsi                  # What BSI TR-03183-2 checks
+sbom-tools rules explain SBOM-CRA-ART-24         # One rule in full
+sbom-tools rules -o json > rules.json            # The whole catalogue
+```
+
+Lists the compliance rules: every rule in the registry, or those of the
+standards `--standard` names (it takes the names and aliases `validate`
+takes). For each rule it shows the id, name, default severity, the standards
+that use it, its references with URLs, and the first sentence of its
+remediation. `rules explain <RULE_ID>` adds the full remediation and where
+the fix goes in CycloneDX, SPDX 2.x and SPDX 3.0. `-o markdown` writes a
+table, and `-o json` the `sbom-tools/rules/v1` document
+([`schemas/rules/v1.schema.json`](schemas/rules/v1.schema.json)). An unknown
+rule id or standard exits `3`. The rules a standard lists are the ones its
+`-o sarif` run declares in `rules[]`;
+[docs/compliance-output.md](docs/compliance-output.md#rule-catalogue)
+describes every field.
 
 ### Quality
 
@@ -552,6 +634,7 @@ Documented quirks live in [`docs/STANDARDS_VERSIONS.md`](docs/STANDARDS_VERSIONS
 | `-o, --output <fmt>` | Output format: `summary` (default via `auto`), `json`, `sarif`, `sbomqs-json` |
 | `--min-score <n>` | Fail if quality score is below threshold (0–100) |
 | `--fail-on-noncompliant` | Exit with code 1 if the profile's embedded compliance check reports the SBOM as non-compliant |
+| `--as-of <datetime>`, `--cra-product-class <class>`, `--cra-sidecar <path>`, `--pqc-mode`, `--pqc-profile`, `--cnsa-category` | Inputs of the embedded compliance check, taken as `validate` takes them; the clock also dates the score's age and expiry metrics, and `--pqc-mode` and `--pqc-profile` reach the `cbom` profile's NIST PQC check |
 | `--recommendations` | Show detailed improvement recommendations |
 | `--metrics` | Show detailed scoring metrics |
 | `--sarif-base <dir>`, `--sarif-category <name>`, `--sarif-max-results <n>` | Where `-o sarif` results point, the code-scanning category they report under, and the most results a run keeps (25,000 by default); see [SARIF and code scanning](#sarif-and-code-scanning) |
@@ -637,6 +720,12 @@ sbom-tools matrix sbom1.json sbom2.json sbom3.json
 
 Each command opens a full-screen dashboard: press `p`/`Tab` to switch panels, `v` for the variable-components drill-down (multi-diff), `Enter` for a pair diff (matrix), and `d` to compare adjacent versions (timeline).
 
+`timeline` takes the compliance inputs of a run as `validate` does
+(`--as-of`, `--cra-product-class`, the PQC flags, `--rule`,
+`--include-excluded-scope`, with the config file's defaults) and checks every
+SBOM of its compliance trend with them, so `--as-of` pins the trend.
+`diff-multi` and `matrix` check no compliance and take none of them.
+
 These three commands accept `-o auto|tui|json` only (`auto` = TUI on a TTY,
 JSON when piped); any other value is rejected as a usage error before any
 SBOM is parsed. `diff-multi` and `timeline` both key components by
@@ -671,7 +760,7 @@ sbom-tools completions fish > ~/.config/fish/completions/sbom-tools.fish
 
 ## Interactive TUI
 
-Both `diff` and `view` commands launch an interactive terminal UI by default when connected to a TTY.
+Both `diff` and `view` commands launch an interactive terminal UI by default when connected to a TTY. The compliance tab shows the verdicts `validate` reports for the same inputs: pass `--as-of`, `--cra-product-class`, the PQC flags (`--pqc-mode`, `--pqc-profile`, `--cnsa-category`) and, for `view`, `--cra-sidecar` as you would to `validate`.
 
 ### Diff Mode
 
@@ -806,14 +895,19 @@ format is gated). Both exit `3`.
 Which JSON payloads are a compatibility contract, and how firm it is
 (pre-1.0):
 
-- **Contractual payloads.** The normalized SBOM, diff results, and quality
-  reports, as emitted by the C ABI (`sbom_tools_parse_sbom_*_json`,
-  `sbom_tools_diff_*`, `sbom_tools_score_*`) and by the language bindings, and
-  the `-o json` output of `diff`, `diff-multi`, `matrix`, `timeline`,
-  `validate`, and `quality`. Field names are `snake_case` with no serde
+- **Contractual payloads.** The normalized SBOM, diff results, quality
+  reports, the compliance envelope and the rule catalogue, as emitted by the
+  C ABI (`sbom_tools_parse_sbom_*_json`, `sbom_tools_diff_*`,
+  `sbom_tools_score_*`, `sbom_tools_validate_json`,
+  `sbom_tools_rule_catalog_json`) and by the language bindings, and the
+  `-o json` output of `diff`, `diff-multi`, `matrix`, `timeline`,
+  `validate`, `quality` and `rules`. The ABI's validate envelope, quality
+  document (`sbom_tools_score_sbom_with_options_json`) and rule catalogue
+  are byte-identical to `validate -o json`, `quality -o json` and
+  `rules -o json`, pinned by `tests/ffi_compliance.rs`. Field names are `snake_case` with no serde
   renames; `Option` fields serialize as `null`, except a few additive blocks
-  (e.g. `crypto_properties`, `ml_model`-adjacent extensions) that are omitted
-  when absent.
+  (e.g. `crypto_properties`, `document.supplier`, `ml_model`-adjacent
+  extensions) that are omitted when absent.
 - **`view -o json` is a projection, not the normalized model.** It emits a
   `summary` block plus, per component, `name`, `version`, `ecosystem`,
   `licenses`, `supplier`, `dependency_kind`, `vulnerability_count`,
@@ -824,8 +918,12 @@ Which JSON payloads are a compatibility contract, and how firm it is
   `tests/ffi_schema_snapshots.rs`). It is the canonical model as JSON:
   `document`, `components[]` as `{canonical_id, component}` entries in SBOM
   order, `edges`, `extensions`, `content_hash`, `primary_component_id`,
-  `collision_count`. Lossless, and carries every parsed field including
-  `crypto_properties`.
+  `collision_count`, `described_root_ids` when an SPDX document
+  describes more than one product, and `duplicate_components` when the
+  document lists a component more than once (each omitted otherwise; see
+  [Duplicate components](docs/compliance-output.md#duplicate-components)).
+  `document.created_unparsed` keeps a creation timestamp that did not parse.
+  Lossless, and carries every parsed field including `crypto_properties`.
 
   ```sh
   sbom-tools convert --to normalized my.cbom.json | jq '.components[].component.crypto_properties'
@@ -868,13 +966,20 @@ with one run, shaped for GitHub code scanning:
 - **Every check is its own rule.** `ruleId` is the violation's `rule_id` from
   `validate -o json`. Each rule has a description, help text naming where the
   fix goes in each SBOM format, and a `helpUri` to the standard's text where
-  one is known.
+  one is known. `rules[]` lists exactly the rules of the standards checked,
+  the ones `sbom-tools rules --standard <std>` prints; `diff` and `view` list
+  the CRA Phase 2 rules they check against.
 - **Alerts survive edits.** `partialFingerprints` are derived from the
   finding's identity (standard, rule, component; see
   [finding identity](docs/compliance-output.md#finding-identity)), never from
   its line or message, so moving, reformatting or reordering the SBOM keeps
   its alerts. `properties.findingKey` and `properties.findingId` carry the
-  same identity.
+  same identity, and the other properties the finding's severity, rule,
+  references, field and observed value, remediation and help URI, as
+  `-o json` does. The run's properties carry each standard's verdict, keyed
+  by its canonical `--standard` value, with its counts, and `validate` adds
+  the instant (`asOf`) and the SBOM it judged (`subject`, and the SBOM's
+  SHA-256 in `artifacts`).
 - **One category per kind of run.** `automationDetails.id` is
   `sbom-tools/<standards>/` for `validate` (the canonical `--standard` values,
   sorted and joined by `+`, as in `sbom-tools/cra+ntia/`),
@@ -912,7 +1017,10 @@ every check has its own SARIF rule. The first upload after upgrading re-keys
 existing code-scanning alerts. `diff -o sarif` reports into the new SBOM
 only: the old SBOM's CRA findings are no longer results, and removed
 components point at the new SBOM. A run keeps at most 25,000 results unless
-`--sarif-max-results` says otherwise.
+`--sarif-max-results` says otherwise. `rules[]` lists only the rules of the
+standards checked; it used to list one shared catalogue of 107 CRA, BSI,
+EUCC and AI rules for every CRA-family, BSI, EUCC, AI and quality run, and
+for `diff` and `view`.
 
 The field-by-field mapping is in
 [docs/compliance-output.md](docs/compliance-output.md#sarif). Uploading to
@@ -1067,7 +1175,7 @@ jobs:
 | Code | Meaning |
 |------|---------|
 | `0` | Success (no changes detected, or run without `--fail-on-change`) |
-| `1` | Changes detected (`--fail-on-change`) / compliance errors, or a not-applicable standard under `--require-applicable` (`validate`) / quality score below `--min-score` or non-compliant with `--fail-on-noncompliant` (`quality`) / no query matches |
+| `1` | Changes detected (`--fail-on-change`) / compliance errors, a `--fail-on` finding, or a not-applicable standard under `--require-applicable` (`validate`) / quality score below `--min-score` or non-compliant with `--fail-on-noncompliant` (`quality`) / no query matches |
 | `2` | New vulnerabilities introduced (`--fail-on-vuln`) / compliance warnings (`validate --fail-on-warning`) |
 | `3` | Usage error (unknown flag or value, missing argument) or operational error (I/O, parse, config, invalid flag values) |
 | `4` | VEX coverage gaps found (`--fail-on-vex-gap`) |
@@ -1079,8 +1187,11 @@ Gate codes only apply to runs that completed successfully and produced their
 report. Every usage error (an unknown flag or standard, an invalid flag value,
 a missing argument) and every operational error — I/O, parse failures, an
 unsupported `-o` format for the command, an invalid `--as-of`/
-`--cra-product-class` value, a broken explicit `--cra-sidecar`, or an invalid
-config file — exits `3`, in every command. `--help` and `--version` exit `0`.
+`--cra-product-class` value, `--pqc-profile` or `--cnsa-category` without
+`--pqc-mode deadline`, an unknown `--rule` or `--fail-on` rule id, a broken
+explicit `--cra-sidecar`, or an invalid config file — exits `3`, in every
+command. `--help` and `--version` exit `0`. The compliance gates read the
+severities `--rule` sets.
 CI pipelines should therefore only interpret a nonzero exit as a gate verdict
 when the expected report output was produced.
 
@@ -1153,6 +1264,8 @@ cargo bench
 - [CRA compliance reverse-mapping](docs/CRA_COMPLIANCE.md) — every
   CRA / BSI / prEN check sbom-tools surfaces, mapped to its
   regulation, harmonised standard, sidecar field, and canonical URL
+- [Compliance output](docs/compliance-output.md) — the `validate -o json`
+  envelope, SARIF and OSCAL fields, and the `sbom-tools rules` catalogue
 - [TUI keyboard shortcuts](docs/TUI_SHORTCUTS.md) — every binding in the
   diff, multi-comparison, and view TUIs, with the guards that make a key
   mean different things on different tabs. `?` in the app shows the same

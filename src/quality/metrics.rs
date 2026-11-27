@@ -5,9 +5,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{
-    AlgorithmClass, CompletenessDeclaration, ComponentType, CreatorType, CryptoAssetType,
-    CryptoMaterialState, CryptoPrimitive, EolStatus, ExternalRefType, HashAlgorithm,
-    NormalizedSbom, StalenessLevel, classify_algorithm,
+    AlgorithmClass, CompletenessDeclaration, Component, ComponentType, CreatorType,
+    CryptoAssetType, CryptoMaterialState, CryptoPrimitive, EolStatus, ExternalRefType,
+    HashAlgorithm, NormalizedSbom, StalenessLevel, classify_algorithm,
 };
 use serde::{Deserialize, Serialize};
 
@@ -245,9 +245,13 @@ pub struct HashQualityMetrics {
     /// to verify CRA prEN 40000-1-3 `[PRE-7-RQ-07-RE]` (carry-through of
     /// vendor hashes).
     pub vendor_components_total: usize,
-    /// Vendor components that carry at least one hash entry.
+    /// Vendor components that carry at least one hash whose value is a
+    /// plausible digest (hex, as long as the algorithm's output): the
+    /// carry-through rule counts no empty or garbage value, as every
+    /// compliance hash rule does.
     pub vendor_components_with_hash: usize,
-    /// Vendor components that carry at least one strong hash (SHA-256+).
+    /// Vendor components that carry at least one strong hash (SHA-256+)
+    /// with a plausible digest.
     pub vendor_components_with_strong_hash: usize,
 }
 
@@ -255,6 +259,13 @@ impl HashQualityMetrics {
     /// Calculate hash quality metrics from an SBOM
     #[must_use]
     pub fn from_sbom(sbom: &NormalizedSbom) -> Self {
+        Self::from_components(sbom.components.values())
+    }
+
+    /// Calculate hash quality metrics over `components`, such as the
+    /// components a compliance run judges.
+    #[must_use]
+    pub fn from_components<'a>(components: impl IntoIterator<Item = &'a Component>) -> Self {
         let mut with_any = 0;
         let mut with_strong = 0;
         let mut with_weak_only = 0;
@@ -264,7 +275,7 @@ impl HashQualityMetrics {
         let mut vendor_with_hash = 0;
         let mut vendor_with_strong = 0;
 
-        for comp in sbom.components.values() {
+        for comp in components {
             // Vendor-component classification (independent of hash presence),
             // with the sentinel-aware producer test: a NOASSERTION or
             // placeholder supplier names no vendor, exactly like an absent one.
@@ -276,6 +287,17 @@ impl HashQualityMetrics {
                 && comp.identifiers.has_cra_identifier();
             if is_vendor {
                 vendor_total += 1;
+                let mut plausible = comp.hashes.iter().filter(|h| {
+                    crate::quality::compliance::plausible_digest(&h.algorithm, &h.value)
+                });
+                if let Some(first) = plausible.next() {
+                    vendor_with_hash += 1;
+                    if is_strong_hash(&first.algorithm)
+                        || plausible.any(|h| is_strong_hash(&h.algorithm))
+                    {
+                        vendor_with_strong += 1;
+                    }
+                }
             }
 
             if comp.hashes.is_empty() {
@@ -302,13 +324,6 @@ impl HashQualityMetrics {
                 with_strong += 1;
             } else if has_weak {
                 with_weak_only += 1;
-            }
-
-            if is_vendor {
-                vendor_with_hash += 1;
-                if has_strong {
-                    vendor_with_strong += 1;
-                }
             }
         }
 
@@ -821,7 +836,9 @@ impl VulnerabilityMetrics {
 // Dependency graph quality metrics
 // ============================================================================
 
-/// Maximum edge count before skipping expensive graph analysis
+/// Maximum edge count before skipping expensive graph analysis (depth,
+/// cycles, islands and the complexity index). The CRA cycle check does not
+/// read these metrics: it counts cycles in graphs of any size.
 const MAX_EDGES_FOR_GRAPH_ANALYSIS: usize = 1_000_000;
 
 // ============================================================================
@@ -903,7 +920,8 @@ pub struct DependencyMetrics {
     pub orphan_components: usize,
     /// Root components (no incoming deps, but has outgoing)
     pub root_components: usize,
-    /// Number of dependency cycles detected (SCCs with more than one node, plus self-loops)
+    /// Number of dependency cycles detected (SCCs with more than one node,
+    /// plus self-loops); 0 when graph analysis was skipped
     pub cycle_count: usize,
     /// Number of disconnected subgraphs (islands)
     pub island_count: usize,
@@ -997,8 +1015,9 @@ impl DependencyMetrics {
         // BFS from roots to compute depth
         let (max_depth, avg_depth) = compute_depth(&roots, &children);
 
-        // Iterative Tarjan SCC cycle detection
-        let cycle_count = detect_cycles(&all_ids, &children);
+        // Iterative Tarjan SCC cycle detection (the same count the CRA
+        // cycle check reads, which it computes for graphs of any size)
+        let cycle_count = super::cycles::dependency_cycle_count(sbom);
 
         // Union-Find for island/subgraph detection
         let island_count = count_islands(&all_ids, &sbom.edges);
@@ -1117,96 +1136,6 @@ fn compute_depth(
     };
 
     (Some(max_d), avg)
-}
-
-/// Iterative Tarjan SCC-based cycle detection.
-///
-/// Counts each strongly connected component with more than one node as a
-/// single cycle, plus single-node components with a self-loop. Uses explicit
-/// stacks instead of recursion so arbitrarily deep graphs cannot overflow
-/// the call stack.
-fn detect_cycles(all_nodes: &[&str], children: &HashMap<&str, Vec<&str>>) -> usize {
-    let mut index_of: HashMap<&str, usize> = HashMap::with_capacity(all_nodes.len());
-    for &node in all_nodes {
-        let next = index_of.len();
-        index_of.entry(node).or_insert(next);
-    }
-    for (&from, kids) in children {
-        let next = index_of.len();
-        index_of.entry(from).or_insert(next);
-        for &kid in kids {
-            let next = index_of.len();
-            index_of.entry(kid).or_insert(next);
-        }
-    }
-
-    let node_count = index_of.len();
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); node_count];
-    let mut has_self_loop = vec![false; node_count];
-    for (from, kids) in children {
-        let from_idx = index_of[from];
-        for kid in kids {
-            let kid_idx = index_of[kid];
-            if from_idx == kid_idx {
-                has_self_loop[from_idx] = true;
-            }
-            adjacency[from_idx].push(kid_idx);
-        }
-    }
-
-    const UNVISITED: usize = usize::MAX;
-    let mut order = vec![UNVISITED; node_count];
-    let mut lowlink = vec![0usize; node_count];
-    let mut on_stack = vec![false; node_count];
-    let mut scc_stack: Vec<usize> = Vec::new();
-    let mut call_stack: Vec<(usize, usize)> = Vec::new();
-    let mut next_order = 0usize;
-    let mut cycles = 0usize;
-
-    for start in 0..node_count {
-        if order[start] != UNVISITED {
-            continue;
-        }
-        call_stack.push((start, 0));
-        while let Some(frame) = call_stack.last_mut() {
-            let node = frame.0;
-            if frame.1 == 0 {
-                order[node] = next_order;
-                lowlink[node] = next_order;
-                next_order += 1;
-                scc_stack.push(node);
-                on_stack[node] = true;
-            }
-            if let Some(&target) = adjacency[node].get(frame.1) {
-                frame.1 += 1;
-                if order[target] == UNVISITED {
-                    call_stack.push((target, 0));
-                } else if on_stack[target] {
-                    lowlink[node] = lowlink[node].min(order[target]);
-                }
-            } else {
-                call_stack.pop();
-                if let Some(&(parent, _)) = call_stack.last() {
-                    lowlink[parent] = lowlink[parent].min(lowlink[node]);
-                }
-                if lowlink[node] == order[node] {
-                    let mut scc_size = 0usize;
-                    while let Some(member) = scc_stack.pop() {
-                        on_stack[member] = false;
-                        scc_size += 1;
-                        if member == node {
-                            break;
-                        }
-                    }
-                    if scc_size > 1 || has_self_loop[node] {
-                        cycles += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    cycles
 }
 
 /// Union-Find to count disconnected subgraphs (islands)
@@ -2893,64 +2822,6 @@ mod tests {
         };
         // 100 - 30 (2 * 15) = 70
         assert_eq!(metrics.quality_score(), Some(70.0));
-    }
-
-    #[test]
-    fn test_cycle_detection_no_cycles() {
-        let children: HashMap<&str, Vec<&str>> =
-            HashMap::from([("a", vec!["b"]), ("b", vec!["c"])]);
-        let all_nodes = vec!["a", "b", "c"];
-        // Linear chain has no SCC with more than one node
-        assert_eq!(detect_cycles(&all_nodes, &children), 0);
-    }
-
-    #[test]
-    fn test_cycle_detection_with_cycle() {
-        let children: HashMap<&str, Vec<&str>> =
-            HashMap::from([("a", vec!["b"]), ("b", vec!["c"]), ("c", vec!["a"])]);
-        let all_nodes = vec!["a", "b", "c"];
-        // a→b→c→a forms a single 3-node SCC = one cycle
-        assert_eq!(detect_cycles(&all_nodes, &children), 1);
-    }
-
-    #[test]
-    fn test_cycle_detection_deep_linear_chain_no_overflow() {
-        let n = 40_000usize;
-        let names: Vec<String> = (0..n).map(|i| format!("node-{i}")).collect();
-        let all_nodes: Vec<&str> = names.iter().map(String::as_str).collect();
-        let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
-        for w in all_nodes.windows(2) {
-            children.entry(w[0]).or_default().push(w[1]);
-        }
-        assert_eq!(detect_cycles(&all_nodes, &children), 0);
-    }
-
-    #[test]
-    fn test_cycle_detection_diamond_dag() {
-        let children: HashMap<&str, Vec<&str>> =
-            HashMap::from([("a", vec!["b", "c"]), ("b", vec!["d"]), ("c", vec!["d"])]);
-        let all_nodes = vec!["a", "b", "c", "d"];
-        assert_eq!(detect_cycles(&all_nodes, &children), 0);
-    }
-
-    #[test]
-    fn test_cycle_detection_multi_back_edge_scc_counts_once() {
-        let children: HashMap<&str, Vec<&str>> = HashMap::from([
-            ("a", vec!["b", "c"]),
-            ("b", vec!["a", "c"]),
-            ("c", vec!["a", "b"]),
-        ]);
-        let all_nodes = vec!["a", "b", "c"];
-        // One SCC with multiple back edges still counts as a single cycle
-        assert_eq!(detect_cycles(&all_nodes, &children), 1);
-    }
-
-    #[test]
-    fn test_cycle_detection_self_loop_counts_once() {
-        let children: HashMap<&str, Vec<&str>> =
-            HashMap::from([("a", vec!["a", "b"]), ("b", vec!["c"])]);
-        let all_nodes = vec!["a", "b", "c"];
-        assert_eq!(detect_cycles(&all_nodes, &children), 1);
     }
 
     #[test]

@@ -2,7 +2,12 @@
 //!
 //! Implements BSI TR-03183-2 **v2.1.0 (2025-08-20)**. Canonical document:
 //! <https://bsi.bund.de/dok/TR-03183-en>.
+//!
+//! The checks read the run's evidence (see [`super::evidence`]), never the
+//! SBOM itself; the run's own inputs (the excluded-scope choice) come from
+//! the checker.
 
+use super::shared::unparseable_timestamp_of;
 use super::*;
 
 impl ComplianceChecker {
@@ -24,17 +29,22 @@ impl ComplianceChecker {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn check_bsi_tr_03183_2(
         &self,
-        sbom: &NormalizedSbom,
-        violations: &mut Vec<Violation>,
+        ctx: &ComplianceContext<'_, '_>,
+        findings: &mut Findings,
     ) {
-        use crate::model::{
-            CompletenessDeclaration, CreatorType, HashAlgorithm, HashProvenance, SbomFormat,
-        };
+        use crate::model::{CompletenessDeclaration, CreatorType, SbomFormat};
+
+        let ev = ctx.ev;
+        let doc = ev.document();
+        let Findings {
+            violations,
+            not_evaluated,
+            ..
+        } = findings;
 
         // §5.2.2 per-component fields have nothing to judge without a
         // package-scoped component.
-        violations.extend(inventory_absent_violation(
-            sbom,
+        violations.extend(ctx.inventory_absent_violation(
             "SBOM-BSI-TR-03183-2-INVENTORY",
             "BSI TR-03183-2 §5.2.2: component inventory",
         ));
@@ -47,14 +57,16 @@ impl ComplianceChecker {
         // assesses the document as newly generated. Versions are compared
         // numerically (not by string prefix); an empty or unparseable
         // spec_version skips the gate rather than false-failing synthetic
-        // documents.
-        let minimum = match sbom.document.format {
+        // documents, and the result lists it as not evaluated.
+        let minimum = match doc.format {
             SbomFormat::CycloneDx => crate::model::SpecVersion::new(1, 6, 0),
             SbomFormat::Spdx => crate::model::SpecVersion::new(3, 0, 1),
         };
-        if let Some(actual) = sbom.document.spec_version_parsed()
-            && actual < minimum
-        {
+        let parsed = doc.spec_version;
+        if parsed.is_none() {
+            not_evaluated.push("SBOM-BSI-TR-03183-2-4", SPEC_VERSION_UNPARSED);
+        }
+        if parsed.is_some_and(|actual| actual < minimum) {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::FormatSpecific,
@@ -62,16 +74,20 @@ impl ComplianceChecker {
                     "[BSI TR-03183-2 §4] {} {} is not an eligible format for newly generated or \
                      updated SBOMs: CycloneDX >= 1.6 or SPDX >= 3.0.1 is required (the §7 \
                      transitional grace for v2.0.0 formats ended 2026-02-20)",
-                    sbom.document.format, sbom.document.spec_version
+                    doc.format, doc.spec_version_raw
                 ),
                 element: None,
                 requirement: "BSI TR-03183-2 §4: Eligible SBOM format and version".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-4",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: observed(&format!("{} {}", doc.format, doc.spec_version_raw)),
             });
         }
 
@@ -90,13 +106,7 @@ impl ComplianceChecker {
         // SBOM (the default output of common generators) has no creator in
         // the TR's sense, so both the presence Error and the contact Warning
         // consider only non-Tool (Person/Organization) creators.
-        let non_tool_creators: Vec<_> = sbom
-            .document
-            .creators
-            .iter()
-            .filter(|c| c.creator_type != CreatorType::Tool)
-            .collect();
-        if non_tool_creators.is_empty() {
+        if !doc.has_non_tool_creator {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
@@ -110,32 +120,47 @@ impl ComplianceChecker {
                 rule_id: "SBOM-BSI-TR-03183-2-5-1",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         } else {
-            let has_contact = non_tool_creators.iter().any(|c| {
-                known_value(c.email.as_deref()).is_some()
-                    || c.name.contains('@')
-                    || c.name.contains("://")
-            });
-            if !has_contact {
+            // The email, or the address or URL a creator's name carries,
+            // must reach someone (see `known_contact`), as every other
+            // contact check judges one.
+            let contacts = || {
+                doc.creators
+                    .iter()
+                    .map(|c| c.creator)
+                    .filter(|c| c.creator_type != CreatorType::Tool)
+                    .flat_map(creator_contacts)
+            };
+            if !contacts().any(|contact| known_contact(Some(contact))) {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::DocumentMetadata,
-                    message: "[BSI TR-03183-2 §5.2.1] SBOM creator carries neither an email \
-                              address nor a URL"
-                        .to_string(),
+                    message: format!(
+                        "[BSI TR-03183-2 §5.2.1] SBOM creator carries neither an email \
+                         address nor a URL{}",
+                        unreachable_creator_note(contacts())
+                    ),
                     element: None,
                     requirement: "BSI TR-03183-2 §5.2.1: Creator of the SBOM (email or URL)"
                         .to_string(),
                     rule_id: "SBOM-BSI-TR-03183-2-5-1-CONTACT",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: unreachable_creator(contacts()).and_then(observed),
                 });
             }
         }
@@ -143,20 +168,27 @@ impl ComplianceChecker {
         // §5.2.1 — Timestamp (required): date and time of the SBOM data
         // compilation. Parsers substitute the UNIX_EPOCH sentinel for a
         // missing/invalid timestamp (see `DocumentMetadata::has_known_timestamp`).
-        if !sbom.document.has_known_timestamp() {
+        if !doc.has_known_timestamp {
+            let message = unparseable_timestamp_of(doc.created_unparsed).map_or_else(
+                || "[BSI TR-03183-2 §5.2.1] SBOM creation timestamp missing or invalid".to_string(),
+                |gap| format!("[BSI TR-03183-2 §5.2.1] SBOM has {gap}"),
+            );
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[BSI TR-03183-2 §5.2.1] SBOM creation timestamp missing or invalid"
-                    .to_string(),
+                message,
                 element: None,
                 requirement: "BSI TR-03183-2 §5.2.1: Timestamp".to_string(),
                 rule_id: "SBOM-BSI-TR-03183-2-5-2",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: doc.created_unparsed.and_then(observed),
             });
         }
 
@@ -173,46 +205,43 @@ impl ComplianceChecker {
         // every component; the package fields (version, licence, creator,
         // hash, identifier) only to package-scoped components — files,
         // crypto assets and services carry none of them.
-        let total = sbom.components.len();
-        let package_total = package_components(sbom).count();
+        let total = ev.component_count();
+        let package_total = ctx.package_count();
         let mut nameless = 0usize;
         let mut without_version: Vec<String> = Vec::new();
         let mut without_license: Vec<String> = Vec::new();
         let mut non_spdx_license: Vec<String> = Vec::new();
+        // The first licence that is no SPDX expression, as written.
+        let mut first_non_spdx: Option<&str> = None;
         let mut without_creator = 0usize;
         let mut sha512_missing: Vec<String> = Vec::new();
         let mut without_hash = 0usize;
         let mut without_identifier: Vec<String> = Vec::new();
         let mut with_vulnerabilities = 0usize;
 
-        for comp in sbom.components.values() {
-            if !known_component_name(comp) {
+        for comp in ev.components() {
+            if !comp.name_known() {
                 nameless += 1;
             }
             // §3.1 vulnerability-information prohibition.
-            if !comp.vulnerabilities.is_empty() {
+            if comp.has_vulnerabilities() {
                 with_vulnerabilities += 1;
             }
-            if !comp.component_type.is_package_scoped() {
+            if !ctx.judges_package(&comp) {
                 continue;
             }
-            if !has_known_value(&comp.version) {
-                without_version.push(comp.name.clone());
+            if !comp.version().is_known() {
+                without_version.push(comp.name().to_string());
             }
 
             // Distribution licences (§5.2.2) named per §6.1 by SPDX
             // identifier/expression. `is_valid_spdx` is computed once at
             // parse time (lax mode), so the §6.1 naming check is cheap.
-            let known_licenses: Vec<_> = comp
-                .licenses
-                .all_licenses()
-                .into_iter()
-                .filter(|l| known_value(Some(l.expression.as_str())).is_some())
-                .collect();
-            if known_licenses.is_empty() {
-                without_license.push(comp.name.clone());
-            } else if known_licenses.iter().any(|l| !l.is_valid_spdx) {
-                non_spdx_license.push(comp.name.clone());
+            if !comp.licenses().is_known() {
+                without_license.push(comp.name().to_string());
+            } else if let Some(license) = comp.first_non_spdx_license() {
+                non_spdx_license.push(comp.name().to_string());
+                first_non_spdx.get_or_insert(license);
             }
 
             // Component creator (§5.2.2). The TR wants an email address (or
@@ -220,7 +249,7 @@ impl ComplianceChecker {
             // carries supplier/author presence but not reliably their
             // contact, so this is a presence-level check only — hence
             // Warning, not Error.
-            if !has_known_producer(comp) {
+            if !comp.producer().is_known() {
                 without_creator += 1;
             }
 
@@ -228,26 +257,20 @@ impl ComplianceChecker {
             // clause names the algorithm — "as SHA-512" — so SHA-256 (or any
             // other algorithm) alone does not satisfy the field. Only
             // author-attested hashes count: enrichment-fetched hashes are
-            // not part of the document under assessment.
-            let mut has_authored_hash = false;
-            let mut has_sha512 = false;
-            for h in &comp.hashes {
-                if h.provenance == HashProvenance::Authored {
-                    has_authored_hash = true;
-                    if h.algorithm == HashAlgorithm::Sha512 {
-                        has_sha512 = true;
-                    }
-                }
-            }
-            if !has_authored_hash {
+            // not part of the document under assessment. The SHA-512 must be
+            // a plausible digest (128 hex characters, see
+            // `plausible_digest`): an empty or garbage value is a present
+            // field that fails, named with the reason, not an omission.
+            let authored = comp.authored_hashes();
+            if !authored.facts.present {
                 without_hash += 1;
-            } else if !has_sha512 {
-                sha512_missing.push(comp.name.clone());
+            } else if !authored.facts.plausible_sha512 {
+                sha512_missing.push(name_with_digest_problems(comp.name(), authored.iter()));
             }
 
             // Other unique identifiers (§5.2.4, ADDITIONAL tier).
-            if !comp.identifiers.has_cra_identifier() {
-                without_identifier.push(comp.name.clone());
+            if !comp.ids().any() {
+                without_identifier.push(comp.name().to_string());
             }
         }
 
@@ -271,9 +294,13 @@ impl ComplianceChecker {
                     affected: nameless,
                     total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -298,9 +325,13 @@ impl ComplianceChecker {
                     affected: without_version.len(),
                     total: package_total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -323,9 +354,13 @@ impl ComplianceChecker {
                     affected: without_license.len(),
                     total: package_total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -349,9 +384,13 @@ impl ComplianceChecker {
                     affected: non_spdx_license.len(),
                     total: package_total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: first_non_spdx.and_then(observed),
             });
         }
 
@@ -373,9 +412,13 @@ impl ComplianceChecker {
                     affected: without_creator,
                     total: package_total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -386,8 +429,8 @@ impl ComplianceChecker {
                 category: ViolationCategory::IntegrityInfo,
                 message: format!(
                     "[BSI TR-03183-2 §5.2.2] {}/{package_total} component(s) carry hashes but none is \
-                     SHA-512 (the TR names the algorithm; SHA-256 or others alone do not \
-                     satisfy the required field): {}",
+                     a valid SHA-512 digest (the TR names the algorithm; SHA-256 or others alone \
+                     do not satisfy the required field): {}",
                     sha512_missing.len(),
                     truncate_list(&sha512_missing, 5)
                 ),
@@ -400,9 +443,13 @@ impl ComplianceChecker {
                     affected: sha512_missing.len(),
                     total: package_total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
         // No hash at all: §3.2.1 legitimately allows omitting even required
@@ -427,15 +474,19 @@ impl ComplianceChecker {
                     affected: without_hash,
                     total: package_total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // §5.2.2 — Dependencies on other components (required): explicit
         // relationship graph.
-        if sbom.edges.is_empty() && package_total > 1 {
+        if !ev.has_edges() && package_total > 1 {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DependencyInfo,
@@ -447,9 +498,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-BSI-TR-03183-2-5-5",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -460,7 +515,7 @@ impl ComplianceChecker {
         // and stays Unknown, so it warns here — the indication is genuinely
         // absent from the document.
         if matches!(
-            sbom.document.completeness_declaration,
+            doc.completeness,
             CompletenessDeclaration::Unknown | CompletenessDeclaration::NotSpecified
         ) {
             violations.push(Violation {
@@ -476,9 +531,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-BSI-TR-03183-2-5-5-COMPLETENESS",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -505,9 +564,13 @@ impl ComplianceChecker {
                     affected: without_identifier.len(),
                     total: package_total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -537,9 +600,13 @@ impl ComplianceChecker {
                     affected: with_vulnerabilities,
                     total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }

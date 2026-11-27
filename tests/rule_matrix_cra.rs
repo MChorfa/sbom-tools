@@ -3,16 +3,16 @@
 //! three had a per-rule matrix (the Error-level hardware rule
 //! SBOM-CRA-PRE-8-RQ-02 was never asserted).
 //!
-//! The CRA profiles have no dedicated SARIF slice: they share the CRA-family
-//! `COMPLIANCE_SARIF_RULE_IDS` catalogue with BSI, EUCC and the AI profiles,
-//! and emit three CRA ids the slice does not enumerate (`SBOM-CRA-CYCLES`,
-//! `SBOM-CRA-ANNEX-VIII`, `SBOM-CRA-ART-24-SUPPLIER`). Each universe below
-//! is therefore declared locally, from the check sites in generic.rs and
-//! cra.rs; `cra_universes_cover_the_cra_slice` ties them back to the slice.
-//! Every check is a rule of its own (until v0.4.0 most CRA findings shared
-//! the `SBOM-CRA-ANNEX-I` and `SBOM-CRA-GENERAL` SARIF rules), so every row
-//! names the rule one check reports. At Phase 1 no check emits
-//! `SBOM-CRA-LIFECYCLE` or `SBOM-CRA-VULN-METADATA`; those rows are skipped.
+//! Each universe below is declared locally, from the check sites in
+//! generic.rs and cra.rs; `run_matrix` requires it to equal the registry's
+//! list for the level (`rules_for_level`), and
+//! `cra_universes_cover_the_cra_family` ties the three to the `SBOM-CRA-*`
+//! rule family. Every check is a rule of its own (until v0.4.0 most CRA
+//! findings shared the `SBOM-CRA-ANNEX-I` and `SBOM-CRA-GENERAL` SARIF
+//! rules), so every row names the rule one check reports. The Phase 2-only
+//! checks (`SBOM-CRA-LIFECYCLE`, `SBOM-CRA-VULN-METADATA` and the others the
+//! Phase 2 universe adds) are in no Phase 1 row: no Phase 1 check emits
+//! them.
 //!
 //! The manufacturer fixtures carry a CRA sidecar with the Art. 14 reporting
 //! channels (the only place they can be declared); the pinned clock is past
@@ -28,16 +28,19 @@ mod rule_matrix;
 
 use rule_matrix::clock::{as_of, checker};
 use rule_matrix::{
-    CYCLONEDX_VERSION_CASE, ComponentFixture, Encoding, Outcome, RuleEntry, SHA256_FILLER,
-    SPDX_REFERENCES_CARRY_NO_HASH, SPDX_VERSION_CASE, SPDX3_AGENT_EMAILS_NOT_READ,
-    SPDX3_VALID_UNTIL_NOT_READ, SPDX23_HAS_NO_VULNERABILITIES, SbomFixture, VulnAnalysisFixture,
-    assert_no_violations_in, assert_spdx_version_unknown, check, render_violations, run_matrix,
+    CYCLONEDX_VERSION_CASE, ComponentFixture, Encoding, IMPLAUSIBLE_SHA256_DIGESTS, Outcome,
+    RuleEntry, SHA256_FILLER, SPDX_REFERENCES_CARRY_NO_HASH, SPDX_VERSION_CASE,
+    SPDX3_AGENT_EMAILS_NOT_READ, SPDX3_VALID_UNTIL_NOT_READ, SPDX23_HAS_NO_VULNERABILITIES,
+    SbomFixture, UNPARSEABLE_TIMESTAMP, VulnAnalysisFixture, assert_no_violations_in,
+    assert_spdx_version_unknown, check, render_violations, run_matrix,
 };
 use sbom_tools::model::{
     ConformityRoute, ControlAssertion, CraProductClass, CraSidecarMetadata, EolStatus,
 };
 use sbom_tools::parsers::parse_sbom_str;
-use sbom_tools::quality::{COMPLIANCE_SARIF_RULE_IDS, ComplianceLevel, ViolationSeverity as Sev};
+use sbom_tools::quality::{
+    ComplianceLevel, ViolationSeverity as Sev, all_rule_ids, generic_rule_id_for_level,
+};
 use std::collections::BTreeSet;
 
 const PHASE1: ComplianceLevel = ComplianceLevel::CraPhase1;
@@ -51,13 +54,11 @@ const PHASE1_RULE_UNIVERSE: &[&str] = &[
     "SBOM-CRA-SBOM-FRESHNESS",
     "SBOM-CRA-MACHINE-READABLE",
     "SBOM-CRA-ART-13-17-CONTACT",
-    "SBOM-CRA-VULN-METADATA",
     "SBOM-CRA-VULN-METADATA-PROFILE",
     "SBOM-CRA-ART-13-5",
     "SBOM-CRA-ART-13-5-PROFILE",
     "SBOM-CRA-ART-13-8",
     "SBOM-CRA-ART-13-8-EOL",
-    "SBOM-CRA-LIFECYCLE",
     "SBOM-CRA-LIFECYCLE-APPROACHING-EOL",
     "SBOM-CRA-ART-13-15-PRODUCT",
     "SBOM-CRA-COMPONENT-VERSION",
@@ -87,6 +88,7 @@ const PHASE1_RULE_UNIVERSE: &[&str] = &[
     "SBOM-CRA-SPEC-VERSION",
     "SBOM-CRA-SPEC-VERSION-UNKNOWN",
     "SBOM-CRA-ELEMENT-ID",
+    "SBOM-CRA-DUPLICATE-COMPONENT",
     "SBOM-CRA-PRE-8-RQ-02-PRODUCER",
     "SBOM-CRA-PRE-8-RQ-02-IDENTIFIER",
     "SBOM-CRA-PRE-8-RQ-02-FIRMWARE-VERSION",
@@ -96,8 +98,10 @@ const PHASE1_RULE_UNIVERSE: &[&str] = &[
     "SBOM-CRA-CYCLES",
 ];
 
-/// Phase 2 adds the full-application checks: CVD policy (Annex I Part II
-/// (5)) and the EU Declaration of Conformity reference (Annex V).
+/// Phase 2 adds the full-application checks: vulnerability severity and
+/// remediation (Annex I Part II (4)), CVD policy (Annex I Part II (5)),
+/// lifecycle evidence (Annex II (7)), the EU Declaration of Conformity
+/// reference (Annex V) and the risk assessment (Art. 13(2)).
 const PHASE2_RULE_UNIVERSE: &[&str] = &[
     "SBOM-CRA-SBOM-FRESHNESS",
     "SBOM-CRA-MACHINE-READABLE",
@@ -142,6 +146,7 @@ const PHASE2_RULE_UNIVERSE: &[&str] = &[
     "SBOM-CRA-SPEC-VERSION",
     "SBOM-CRA-SPEC-VERSION-UNKNOWN",
     "SBOM-CRA-ELEMENT-ID",
+    "SBOM-CRA-DUPLICATE-COMPONENT",
     "SBOM-CRA-PRE-8-RQ-02-PRODUCER",
     "SBOM-CRA-PRE-8-RQ-02-IDENTIFIER",
     "SBOM-CRA-PRE-8-RQ-02-FIRMWARE-VERSION",
@@ -167,16 +172,9 @@ const STEWARD_RULE_UNIVERSE: &[&str] = &[
     "SBOM-CRA-SPEC-VERSION",
     "SBOM-CRA-SPEC-VERSION-UNKNOWN",
     "SBOM-CRA-ELEMENT-ID",
+    "SBOM-CRA-DUPLICATE-COMPONENT",
     "SBOM-CRA-ART-24-SUPPLIER",
     "SBOM-CRA-CYCLES",
-];
-
-/// The CRA ids the shared slice does not enumerate (documented as
-/// slice-less in tests/rule_matrix_registry.rs).
-const SLICELESS_CRA_IDS: &[&str] = &[
-    "SBOM-CRA-CYCLES",
-    "SBOM-CRA-ANNEX-VIII",
-    "SBOM-CRA-ART-24-SUPPLIER",
 ];
 
 /// RFC 3339 timestamp `days` before the pinned test clock.
@@ -227,16 +225,18 @@ fn manufacturer_sidecar() -> CraSidecarMetadata {
 }
 
 /// A fixture that satisfies every CRA element of both manufacturer phases:
-/// a fresh (11-day-old) CycloneDX 1.6 document with a serial number, a tool
-/// and an organization creator with a valid email, the product as primary
-/// component wired to fully attributed, licensed and hashed components, an
-/// embedded (rated) vulnerability as the documented vulnerability
-/// information, and the manufacturer sidecar.
+/// a fresh (11-day-old), signed CycloneDX 1.6 document with a serial
+/// number, a tool and an organization creator with a valid email, the
+/// product as primary component wired to fully attributed, licensed and
+/// hashed components, an embedded (rated) vulnerability as the documented
+/// vulnerability information, and the manufacturer sidecar.
 fn base() -> SbomFixture {
     SbomFixture {
         spec_version: "1.6".to_string(),
         timestamp: Some(days_before_clock(11)),
         serial_number: Some("urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79".to_string()),
+        // The document's integrity protection (SBOM-CRA-DOC-INTEGRITY).
+        signature: Some(("ES256".to_string(), "c2lnbmF0dXJlLXZhbHVl".to_string())),
         tools: vec![("acme-sbom-tool".to_string(), "1.0.0".to_string())],
         manufacturer: Some((
             "Acme Networks GmbH".to_string(),
@@ -300,6 +300,13 @@ fn strip_hashes(s: &mut SbomFixture, names: &[&str]) {
     }
 }
 
+/// Give both vendor libraries one hash, `(alg, value)`, in place of theirs.
+fn with_vendor_digests(s: &mut SbomFixture, alg: &str, value: &str) {
+    for name in ["libalpha", "libbeta"] {
+        s.component_mut(name).hashes = vec![(alg.to_string(), value.to_string())];
+    }
+}
+
 /// Add `count` supplier-less transitive dependencies under libalpha.
 fn add_transitive_without_supplier(s: &mut SbomFixture, count: usize) {
     let names = ["libgamma", "libdelta", "libepsilon"];
@@ -337,6 +344,85 @@ fn with_product_ref(s: &mut SbomFixture, ref_type: &str, url: &str) {
         .external_refs
         .push((ref_type.to_string(), url.to_string()));
 }
+
+/// The upstream security references a generator copies onto a third-party
+/// library from its registry metadata.
+const UPSTREAM_SECURITY_CONTACT: (&str, &str) =
+    ("security-contact", "mailto:security@upstream.example");
+const UPSTREAM_ADVISORIES: (&str, &str) = (
+    "advisories",
+    "https://github.com/upstream/libupstream/security/advisories",
+);
+const UPSTREAM_SUPPORT: (&str, &str) = ("support", "https://upstream.example/support");
+
+/// The product's security-contact and advisories references, both naming
+/// `placeholder` instead of an address: they reach nobody.
+fn placeholder_contact_refs(placeholder: &str) -> Vec<(String, String)> {
+    vec![
+        ("security-contact".to_string(), placeholder.to_string()),
+        ("advisories".to_string(), placeholder.to_string()),
+    ]
+}
+
+/// The product's security-contact and advisories references at the
+/// documentation domain example.com: a template nobody filled in.
+fn documentation_domain_contact_refs() -> Vec<(String, String)> {
+    vec![
+        (
+            "security-contact".to_string(),
+            "mailto:security@example.com".to_string(),
+        ),
+        (
+            "advisories".to_string(),
+            "https://example.com/security/advisories".to_string(),
+        ),
+    ]
+}
+
+/// Add a third-party library that sits in no dependency relationship and
+/// carries its own upstream references `refs` as (type, URL). A sparse
+/// dependencies section leaves it with no incoming edge, but its references
+/// are its own: no manufacturer obligation counts them.
+fn with_orphan_refs(s: &mut SbomFixture, refs: &[(&str, &str)]) {
+    let mut lib = comp("libupstream");
+    lib.external_refs = refs
+        .iter()
+        .map(|(ref_type, url)| ((*ref_type).to_string(), (*url).to_string()))
+        .collect();
+    s.components.push(lib);
+}
+
+/// Add a second product the document describes beside the primary,
+/// carrying `refs` as (type, URL): an SPDX document can describe several
+/// sibling products, and each one's references are manufacturer evidence.
+fn with_described_product_refs(s: &mut SbomFixture, refs: &[(&str, &str)]) {
+    let mut product = comp("acme-router-cli");
+    product.component_type = "application".to_string();
+    product.external_refs = refs
+        .iter()
+        .map(|(ref_type, url)| ((*ref_type).to_string(), (*url).to_string()))
+        .collect();
+    s.described.push(product.bom_ref.clone());
+    s.components.push(product);
+}
+
+/// Neither an organization creator nor the product's supplier names the
+/// manufacturer.
+fn without_manufacturer(s: &mut SbomFixture) {
+    s.manufacturer = None;
+    s.primary_mut().supplier = None;
+}
+
+/// Only SPDX documents describe a second product.
+const SPDX_DESCRIBES_SEVERAL: &str = "a second described product: only SPDX documents describe \
+     several sibling products (CycloneDX describes metadata.component alone)";
+/// Only CycloneDX names a component's manufacturer.
+const CYCLONEDX_COMPONENT_MANUFACTURER: &str = "a component manufacturer: CycloneDX 1.6+ \
+     component.manufacturer has no SPDX counterpart the parsers read";
+/// Only CycloneDX names the document's supplier.
+const CYCLONEDX_DOCUMENT_SUPPLIER: &str = "the document's supplier: CycloneDX \
+     metadata.supplier has no SPDX counterpart (SPDX keeps the supplier on the described \
+     package)";
 
 /// Declare a VEX `analysis.response` on the baseline's embedded
 /// vulnerability (CVE-2026-1111), with an optional remediation text member
@@ -450,6 +536,9 @@ const SPDX23_NO_VULNERABILITY_STATEMENT: &str = "SPDX 2.3 carries no vulnerabili
      names no VDR or VEX reference, so it cannot state the vulnerability information";
 /// Only SPDX 3 declares profile conformance.
 const SPDX3_PROFILES: &str = "only SPDX 3 documents declare profile conformance";
+/// SPDX 2.3 can show no integrity protection.
+const SPDX23_NO_INTEGRITY_EVIDENCE: &str = "SPDX 2.3 has no in-document signature and its \
+     external references carry no hash, so no SPDX 2.3 document shows integrity protection";
 /// SPDX 3 states no VEX response.
 const SPDX3_NO_VEX_RESPONSE: &str = "the case is about a VEX response: SPDX 3 has no response \
      field (the parser infers one from the action statement text and builds no remediation \
@@ -480,6 +569,11 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             "SBOM 31 to 90 days old",
             Sev::Info,
             broken(|s| s.timestamp = Some(days_before_clock(41))),
+        )
+        .with_firing(
+            "unparseable timestamp",
+            Sev::Warning,
+            broken(|s| s.timestamp = Some(UNPARSEABLE_TIMESTAMP.to_string())),
         ),
         // Tool policy floor: CycloneDX 1.4+ / SPDX 2.3+.
         RuleEntry::tested(
@@ -499,8 +593,11 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             Encoding::SPDX,
             SPDX_VERSION_CASE,
         ),
-        // Only manufacturer-scope references count; the sidecar fallback
-        // relaxes to an Info.
+        // Only manufacturer-scope references count — the described
+        // products', not a dependency's, even one in no relationship; the
+        // sidecar fallback relaxes to an Info. A contact that reaches nobody
+        // counts nowhere, as for EO 14028 and PCI DSS: a placeholder or an
+        // address at a documentation domain (until v0.4.0 any value did).
         RuleEntry::tested(
             "SBOM-CRA-ART-13-17-CONTACT",
             Sev::Warning,
@@ -514,6 +611,59 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
                 s.primary_mut().external_refs.clear();
                 s.sidecar_mut().security_contact = Some("psirt@acme.example".to_string());
             }),
+        )
+        .with_firing(
+            "placeholder contacts (NOASSERTION)",
+            Sev::Warning,
+            broken(|s| s.primary_mut().external_refs = placeholder_contact_refs("NOASSERTION")),
+        )
+        .with_firing(
+            "placeholder contacts (n/a)",
+            Sev::Warning,
+            broken(|s| s.primary_mut().external_refs = placeholder_contact_refs("n/a")),
+        )
+        .with_firing(
+            "contacts at example.com",
+            Sev::Warning,
+            broken(|s| s.primary_mut().external_refs = documentation_domain_contact_refs()),
+        )
+        .with_firing(
+            "sidecar security contact at example.com",
+            Sev::Warning,
+            broken(|s| {
+                s.primary_mut().external_refs.clear();
+                s.sidecar_mut().security_contact = Some("security@example.com".to_string());
+            }),
+        )
+        .with_firing(
+            "contact references on an orphan dependency only",
+            Sev::Warning,
+            broken(|s| {
+                s.primary_mut().external_refs.clear();
+                with_orphan_refs(
+                    s,
+                    &[
+                        UPSTREAM_SECURITY_CONTACT,
+                        UPSTREAM_ADVISORIES,
+                        UPSTREAM_SUPPORT,
+                    ],
+                );
+            }),
+        )
+        .with_silent(
+            "advisories reference on a second described product",
+            broken(|s| {
+                s.primary_mut().external_refs.clear();
+                with_described_product_refs(
+                    s,
+                    &[("advisories", "https://acme.example/security/cli-advisories")],
+                );
+            }),
+        )
+        .case_only(
+            "advisories reference on a second described product",
+            Encoding::SPDX,
+            SPDX_DESCRIBES_SEVERAL,
         ),
         // Over half the components without a licence warns; fewer is an
         // Info.
@@ -563,19 +713,82 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             broken(|s| s.component_mut("libalpha").version = None),
             base(),
         ),
+        // An organization creator, the product's supplier or manufacturer,
+        // or the document's supplier names the manufacturer; a placeholder
+        // names nobody. The sidecar fallback relaxes to an Info.
         RuleEntry::tested(
             "SBOM-CRA-ART-13-16",
             Sev::Warning,
-            broken(|s| s.manufacturer = None),
+            broken(without_manufacturer),
             base(),
         )
         .with_departing_firing(
             "manufacturer provided via the CRA sidecar",
             Sev::Info,
             broken(|s| {
-                s.manufacturer = None;
+                without_manufacturer(s);
                 s.sidecar_mut().manufacturer_name = Some("Acme Networks GmbH".to_string());
             }),
+        )
+        .with_firing(
+            "placeholder product supplier (NOASSERTION)",
+            Sev::Warning,
+            broken(|s| {
+                without_manufacturer(s);
+                s.primary_mut().supplier = Some("NOASSERTION".to_string());
+            }),
+        )
+        .with_firing(
+            "placeholder product supplier (TBD)",
+            Sev::Warning,
+            broken(|s| {
+                without_manufacturer(s);
+                s.primary_mut().supplier = Some("TBD".to_string());
+            }),
+        )
+        .with_firing(
+            "placeholder product manufacturer (unknown)",
+            Sev::Warning,
+            broken(|s| {
+                without_manufacturer(s);
+                s.primary_mut().manufacturer = Some("unknown".to_string());
+            }),
+        )
+        .with_firing(
+            "placeholder organization creator (N/A)",
+            Sev::Warning,
+            broken(|s| {
+                without_manufacturer(s);
+                s.manufacturer = Some(("N/A".to_string(), None));
+            }),
+        )
+        .with_silent(
+            "manufacturer named only as the product's supplier",
+            broken(|s| s.manufacturer = None),
+        )
+        .with_silent(
+            "manufacturer named only as the product's manufacturer",
+            broken(|s| {
+                without_manufacturer(s);
+                s.primary_mut().manufacturer = Some("Acme Networks GmbH".to_string());
+            }),
+        )
+        .with_silent(
+            "manufacturer named only as the document's supplier",
+            broken(|s| {
+                without_manufacturer(s);
+                s.supplier = Some("Acme Networks GmbH".to_string());
+            }),
+        )
+        .case_only(
+            "manufacturer named only as the product's manufacturer",
+            Encoding::CYCLONEDX,
+            CYCLONEDX_COMPONENT_MANUFACTURER,
+        )
+        .case_only(
+            "manufacturer named only as the document's supplier",
+            Encoding::CYCLONEDX,
+            CYCLONEDX_DOCUMENT_SUPPLIER,
         ),
         RuleEntry::tested(
             "SBOM-CRA-ART-13-16-EMAIL",
@@ -666,27 +879,65 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             }),
             base(),
         ),
-        // Without a serial number, an attestation or certification
-        // reference that carries the hash of the referenced document is the
-        // integrity metadata; the same reference without a hash is not.
+        // A document signature with a value, or an attestation or
+        // certification reference on the product that carries a plausible
+        // hash of the referenced document, protects the document's
+        // integrity. A serial number only identifies it: until v0.4.0 it
+        // satisfied the check alone, and the signature was not read.
         RuleEntry::tested(
             "SBOM-CRA-DOC-INTEGRITY",
             Sev::Info,
-            broken(|s| s.serial_number = None),
+            broken(|s| s.signature = None),
             base(),
+        )
+        .with_firing(
+            "signature without a value",
+            Sev::Info,
+            broken(|s| s.signature = Some(("ES256".to_string(), String::new()))),
         )
         .with_firing(
             "attestation reference without a hash",
             Sev::Info,
             broken(|s| {
-                s.serial_number = None;
+                s.signature = None;
                 with_product_ref(s, "attestation", "https://acme.example/eu-doc-2026-001.pdf");
             }),
         )
-        .with_silent(
-            "attestation reference with a hash",
+        .with_firing(
+            "attestation reference with an empty hash",
+            Sev::Info,
             broken(|s| {
-                s.serial_number = None;
+                s.signature = None;
+                s.primary_mut().hashed_external_refs.push((
+                    "attestation".to_string(),
+                    "https://acme.example/eu-doc-2026-001.pdf".to_string(),
+                    vec![("SHA-256".to_string(), String::new())],
+                ));
+            }),
+        )
+        // A dependency's own attestation says nothing of this document.
+        .with_firing(
+            "hashed attestation reference on an orphan dependency only",
+            Sev::Info,
+            broken(|s| {
+                s.signature = None;
+                let mut lib = comp("libupstream");
+                lib.hashed_external_refs.push((
+                    "attestation".to_string(),
+                    "https://upstream.example/attestations/libupstream.pdf".to_string(),
+                    vec![("SHA-256".to_string(), SHA256_FILLER.to_string())],
+                ));
+                s.components.push(lib);
+            }),
+        )
+        .with_silent(
+            "signed document without a serial number",
+            broken(|s| s.serial_number = None),
+        )
+        .with_silent(
+            "attestation reference with a hash, no signature",
+            broken(|s| {
+                s.signature = None;
                 with_hashed_product_ref(
                     s,
                     "attestation",
@@ -695,9 +946,9 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             }),
         )
         .with_silent(
-            "certification-report reference with a hash",
+            "certification-report reference with a hash, no signature",
             broken(|s| {
-                s.serial_number = None;
+                s.signature = None;
                 with_hashed_product_ref(
                     s,
                     "certification-report",
@@ -705,13 +956,35 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
                 );
             }),
         )
+        .case_differs(
+            "silent",
+            &[Encoding::Spdx23Json],
+            Outcome::Fires(Sev::Info),
+            SPDX23_NO_INTEGRITY_EVIDENCE,
+        )
+        .case_differs(
+            "signed document without a serial number",
+            &[Encoding::Spdx23Json],
+            Outcome::Fires(Sev::Info),
+            SPDX23_NO_INTEGRITY_EVIDENCE,
+        )
         .case_only(
-            "attestation reference with a hash",
+            "attestation reference with an empty hash",
             Encoding::CYCLONEDX,
             SPDX_REFERENCES_CARRY_NO_HASH,
         )
         .case_only(
-            "certification-report reference with a hash",
+            "hashed attestation reference on an orphan dependency only",
+            Encoding::CYCLONEDX,
+            SPDX_REFERENCES_CARRY_NO_HASH,
+        )
+        .case_only(
+            "attestation reference with a hash, no signature",
+            Encoding::CYCLONEDX,
+            SPDX_REFERENCES_CARRY_NO_HASH,
+        )
+        .case_only(
+            "certification-report reference with a hash, no signature",
             Encoding::CYCLONEDX,
             SPDX_REFERENCES_CARRY_NO_HASH,
         ),
@@ -795,6 +1068,25 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
                 );
             }),
         )
+        // A dependency's own certificate does not cover the product.
+        .with_firing(
+            "certification-report reference on an orphan dependency only, Module B+C route",
+            Sev::Warning,
+            broken(|s| {
+                pin_class(
+                    s,
+                    CraProductClass::ImportantClass1,
+                    Some(ConformityRoute::ModuleBC),
+                );
+                with_orphan_refs(
+                    s,
+                    &[(
+                        "certification-report",
+                        "https://notified-body.example/certificates/libupstream-0815.pdf",
+                    )],
+                );
+            }),
+        )
         .with_departing_firing(
             "attestation reference only, important class II product",
             Sev::Error,
@@ -821,7 +1113,8 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
         ),
         // ── The generic path's checks ──────────────────────────────────────
         // Document metadata: no creator at all gates; a missing serial
-        // number warns (SBOM-CRA-DOC-INTEGRITY reports it beside).
+        // number warns (an identifier, no integrity evidence: the signed
+        // fixture keeps SBOM-CRA-DOC-INTEGRITY silent).
         RuleEntry::tested(
             "SBOM-CRA-CREATOR",
             Sev::Error,
@@ -890,17 +1183,37 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             broken(|s| bom_ref_is_name(s, "libalpha")),
             base(),
         ),
+        // A component listed twice, under a second bom-ref or under its own
+        // bom-ref again: the entries are merged, and one Info names it.
+        RuleEntry::tested(
+            "SBOM-CRA-DUPLICATE-COMPONENT",
+            Sev::Info,
+            broken(|s| s.list_twice("libalpha", false)),
+            base(),
+        )
+        .with_firing(
+            "the same bom-ref twice",
+            Sev::Info,
+            broken(|s| s.list_twice("libalpha", true)),
+        ),
         // Art. 14 channels past the 2026-09-11 deadline (the pinned clock):
         // each missing channel warns, escalated to Error for important class
         // II and critical products, and the ENISA platform finding warns at
         // every class — never an Error. art_14_findings_escalate_on_2026_09_11
         // and enisa_platform_finding_escalates_but_never_errors
         // (tests/pinned_clock_tests.rs) cover the pre-deadline Infos.
+        // A channel that reaches nobody is missing: a placeholder, or an
+        // address at a documentation domain.
         RuleEntry::tested(
             "SBOM-CRA-ART-14-PSIRT",
             Sev::Warning,
             broken(|s| s.sidecar_mut().psirt_url = None),
             base(),
+        )
+        .with_firing(
+            "placeholder PSIRT URL (TBD)",
+            Sev::Warning,
+            broken(|s| s.sidecar_mut().psirt_url = Some("TBD".to_string())),
         )
         .with_departing_firing(
             "important class II product",
@@ -916,6 +1229,13 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             broken(|s| s.sidecar_mut().early_warning_contact = None),
             base(),
         )
+        .with_firing(
+            "early-warning contact at example.com",
+            Sev::Warning,
+            broken(|s| {
+                s.sidecar_mut().early_warning_contact = Some("csirt@example.com".to_string());
+            }),
+        )
         .with_departing_firing(
             "important class II product",
             Sev::Error,
@@ -929,6 +1249,11 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             Sev::Warning,
             broken(|s| s.sidecar_mut().incident_report_contact = None),
             base(),
+        )
+        .with_firing(
+            "placeholder notification channel (n/a)",
+            Sev::Warning,
+            broken(|s| s.sidecar_mut().incident_report_contact = Some("n/a".to_string())),
         )
         .with_departing_firing(
             "important class II product",
@@ -1074,12 +1399,19 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
             broken(|s| s.primary_mut().purl = None),
             base(),
         ),
+        // Only plausible digests count: an empty, non-hex or wrong-length
+        // value is no integrity information.
         RuleEntry::tested(
             "SBOM-CRA-ANNEX-I-INTEGRITY",
             Sev::Info,
             broken(|s| s.component_mut("libalpha").hashes.clear()),
             base(),
-        ),
+        )
+        .with_implausible_digests(Sev::Info, &IMPLAUSIBLE_SHA256_DIGESTS, |alg, value| {
+            broken(|s| {
+                s.component_mut("libalpha").hashes = vec![(alg.to_string(), value.to_string())];
+            })
+        }),
         // No relationships at all gates; a primary outside the graph and an
         // orphan majority warn.
         RuleEntry::tested(
@@ -1190,6 +1522,21 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
                 );
             }),
         )
+        // A dependency's own EUCC certificate does not cover the product.
+        .with_departing_firing(
+            "critical product, EUCC certificate reference on an orphan dependency only",
+            Sev::Error,
+            broken(|s| {
+                pin_class(s, CraProductClass::Critical, None);
+                with_orphan_refs(
+                    s,
+                    &[(
+                        "certification-report",
+                        "https://certification.enisa.europa.eu/eucc/certificates/EUCC-UPSTREAM.pdf",
+                    )],
+                );
+            }),
+        )
         .with_silent(
             "critical product, certification-report reference to an EUCC certificate",
             broken(|s| {
@@ -1201,8 +1548,26 @@ fn manufacturer_rows() -> Vec<RuleEntry> {
                 );
             }),
         )
+        // The keywords SBOM-EUCC-CERTREF reads (one test for both).
+        .with_silent(
+            "critical product, certification-report reference to a commoncriteria URL",
+            broken(|s| {
+                pin_class(s, CraProductClass::Critical, None);
+                with_product_ref(
+                    s,
+                    "certification-report",
+                    "https://www.commoncriteriaportal.org/files/epfiles/acme-router-cert.pdf",
+                );
+            }),
+        )
         .case_differs(
             "critical product, certification-report reference to an EUCC certificate",
+            &[Encoding::Spdx23Json],
+            Outcome::Fires(Sev::Error),
+            SPDX23_NO_REFERENCE_TYPE,
+        )
+        .case_differs(
+            "critical product, certification-report reference to a commoncriteria URL",
             &[Encoding::Spdx23Json],
             Outcome::Fires(Sev::Error),
             SPDX23_NO_REFERENCE_TYPE,
@@ -1235,19 +1600,6 @@ fn cra_oss_steward_conforming_fixture_is_compliant_with_zero_violations() {
 fn cra_phase1_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
     let mut entries = manufacturer_rows();
     entries.extend([
-        RuleEntry::skipped(
-            "SBOM-CRA-VULN-METADATA",
-            "at Phase 1 no check emits SBOM-CRA-VULN-METADATA: the severity and \
-             remediation checks run only at Phase 2, and the one Phase 1 site, the \
-             SPDX 3.0 Security-profile note, reports SBOM-CRA-VULN-METADATA-PROFILE \
-             (its own row)",
-        ),
-        RuleEntry::skipped(
-            "SBOM-CRA-LIFECYCLE",
-            "at Phase 1 no check emits SBOM-CRA-LIFECYCLE: the lifecycle-evidence \
-             check runs only at Phase 2, and the approaching-EOL note reports \
-             SBOM-CRA-LIFECYCLE-APPROACHING-EOL (its own row)",
-        ),
         // A direct dependency without a supplier warns at Phase 1; a
         // transitive one is an Info under a key of its own.
         RuleEntry::tested(
@@ -1276,12 +1628,17 @@ fn cra_phase1_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.component_mut("libalpha").supplier = None),
         ),
         // Phase 1 gates only below 50% vendor-hash coverage: 1 of 3 warns,
-        // 2 of 3 is silent.
+        // 2 of 3 is silent. Only plausible digests count.
         RuleEntry::tested(
             "SBOM-CRA-PRE-7-RQ-07-RE",
             Sev::Warning,
             broken(|s| strip_hashes(s, &["libalpha", "libbeta"])),
             broken(|s| strip_hashes(s, &["libalpha"])),
+        )
+        .with_implausible_digests(
+            Sev::Warning,
+            &IMPLAUSIBLE_SHA256_DIGESTS,
+            |alg, value| broken(|s| with_vendor_digests(s, alg, value)),
         ),
     ]);
 
@@ -1541,6 +1898,7 @@ fn cra_phase2_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.component_mut("libalpha").supplier = None),
         ),
         // Phase 2: below 50% vendor-hash coverage gates, below 80% warns.
+        // Only plausible digests count.
         RuleEntry::tested_departing(
             "SBOM-CRA-PRE-7-RQ-07-RE",
             Sev::Error,
@@ -1551,7 +1909,10 @@ fn cra_phase2_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             "vendor hash coverage between 50% and 80%",
             Sev::Warning,
             broken(|s| strip_hashes(s, &["libalpha"])),
-        ),
+        )
+        .with_implausible_digests(Sev::Error, &IMPLAUSIBLE_SHA256_DIGESTS, |alg, value| {
+            broken(|s| with_vendor_digests(s, alg, value))
+        }),
         RuleEntry::tested(
             "SBOM-CRA-CVD-POLICY",
             Sev::Warning,
@@ -1572,6 +1933,70 @@ fn cra_phase2_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                 s.sidecar_mut().vulnerability_disclosure_url =
                     Some("https://acme.example/security/cvd".to_string());
             }),
+        )
+        // A dependency's advisories are not the product's policy, and a
+        // support link is none at all (before v0.4.0 the CycloneDX parser
+        // made it the disclosure URL, so only CycloneDX passed).
+        .with_firing(
+            "advisories reference on an orphan dependency only",
+            Sev::Warning,
+            broken(|s| {
+                s.primary_mut()
+                    .external_refs
+                    .retain(|(t, _)| t != "advisories");
+                with_orphan_refs(s, &[UPSTREAM_ADVISORIES]);
+            }),
+        )
+        .with_firing(
+            "support reference in place of the advisories",
+            Sev::Warning,
+            broken(|s| {
+                for (ref_type, url) in &mut s.primary_mut().external_refs {
+                    if ref_type == "advisories" {
+                        *ref_type = "support".to_string();
+                        *url = "https://acme.example/support".to_string();
+                    }
+                }
+            }),
+        )
+        // A policy URL that reaches nobody is no policy.
+        .with_firing(
+            "advisories reference at example.com",
+            Sev::Warning,
+            broken(|s| {
+                for (ref_type, url) in &mut s.primary_mut().external_refs {
+                    if ref_type == "advisories" {
+                        *url = "https://example.com/security/advisories".to_string();
+                    }
+                }
+            }),
+        )
+        .with_firing(
+            "sidecar CVD policy URL that is a placeholder",
+            Sev::Warning,
+            broken(|s| {
+                s.primary_mut()
+                    .external_refs
+                    .retain(|(t, _)| t != "advisories");
+                s.sidecar_mut().vulnerability_disclosure_url = Some("TBD".to_string());
+            }),
+        )
+        .with_silent(
+            "advisories reference on a second described product",
+            broken(|s| {
+                s.primary_mut()
+                    .external_refs
+                    .retain(|(t, _)| t != "advisories");
+                with_described_product_refs(
+                    s,
+                    &[("advisories", "https://acme.example/security/cli-advisories")],
+                );
+            }),
+        )
+        .case_only(
+            "advisories reference on a second described product",
+            Encoding::SPDX,
+            SPDX_DESCRIBES_SEVERAL,
         ),
         // Severity scales with the product class.
         RuleEntry::tested(
@@ -1601,6 +2026,21 @@ fn cra_phase2_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| {
                 s.sidecar_mut().ce_marking_reference = None;
                 with_product_ref(s, "attestation", "https://acme.example/eu-doc-2026-001.pdf");
+            }),
+        )
+        // A dependency's own attestation is not the product's declaration.
+        .with_firing(
+            "attestation reference on an orphan dependency only",
+            Sev::Info,
+            broken(|s| {
+                s.sidecar_mut().ce_marking_reference = None;
+                with_orphan_refs(
+                    s,
+                    &[(
+                        "attestation",
+                        "https://upstream.example/attestations/libupstream.pdf",
+                    )],
+                );
             }),
         )
         .with_silent(
@@ -1641,6 +2081,21 @@ fn cra_phase2_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                     s,
                     "risk-assessment",
                     "https://acme.example/docs/risk-assessment.pdf",
+                );
+            }),
+        )
+        // A dependency's own risk assessment is not the product's.
+        .with_firing(
+            "risk-assessment reference on an orphan dependency only",
+            Sev::Warning,
+            broken(|s| {
+                s.sidecar_mut().risk_assessment_url = None;
+                with_orphan_refs(
+                    s,
+                    &[(
+                        "risk-assessment",
+                        "https://upstream.example/docs/risk-assessment.pdf",
+                    )],
                 );
             }),
         )
@@ -1710,14 +2165,74 @@ fn cra_oss_steward_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                     ..CraSidecarMetadata::default()
                 });
             }),
+        )
+        .with_firing(
+            "advisories reference on an orphan dependency only",
+            Sev::Warning,
+            steward_broken(|s| {
+                s.primary_mut()
+                    .external_refs
+                    .retain(|(t, _)| t != "advisories");
+                with_orphan_refs(s, &[UPSTREAM_ADVISORIES]);
+            }),
+        )
+        .with_firing(
+            "sidecar CVD policy URL at example.com",
+            Sev::Warning,
+            steward_broken(|s| {
+                s.primary_mut()
+                    .external_refs
+                    .retain(|(t, _)| t != "advisories");
+                s.sidecar = Some(CraSidecarMetadata {
+                    coordinated_disclosure_policy_url: Some(
+                        "https://example.com/security/cvd-policy".to_string(),
+                    ),
+                    ..CraSidecarMetadata::default()
+                });
+            }),
         ),
         // ── The steward floors and the generic path's checks ───────────────
-        // The vulnerability-handling floor is an Error.
+        // The vulnerability-handling floor is an Error. A contact that
+        // reaches nobody is no process.
         RuleEntry::tested(
             "SBOM-CRA-ART-24",
             Sev::Error,
             steward_broken(|s| s.primary_mut().external_refs.clear()),
             steward_base(),
+        )
+        .with_firing(
+            "contacts at example.com",
+            Sev::Error,
+            steward_broken(|s| s.primary_mut().external_refs = documentation_domain_contact_refs()),
+        )
+        .with_firing(
+            "placeholder sidecar PSIRT URL",
+            Sev::Error,
+            steward_broken(|s| {
+                s.primary_mut().external_refs.clear();
+                s.sidecar = Some(CraSidecarMetadata {
+                    psirt_url: Some("NOASSERTION".to_string()),
+                    ..CraSidecarMetadata::default()
+                });
+            }),
+        )
+        .with_firing(
+            "vulnerability-handling references on an orphan dependency only",
+            Sev::Error,
+            steward_broken(|s| {
+                s.primary_mut().external_refs.clear();
+                with_orphan_refs(
+                    s,
+                    &[
+                        UPSTREAM_SECURITY_CONTACT,
+                        UPSTREAM_ADVISORIES,
+                        (
+                            "vulnerability-assertion",
+                            "https://upstream.example/security/vdr.json",
+                        ),
+                    ],
+                );
+            }),
         )
         .with_silent(
             "vulnerability-assertion (VDR) reference as the handling process",
@@ -1745,7 +2260,12 @@ fn cra_oss_steward_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Info,
             steward_broken(|s| s.component_mut("libalpha").hashes.clear()),
             steward_base(),
-        ),
+        )
+        .with_implausible_digests(Sev::Info, &IMPLAUSIBLE_SHA256_DIGESTS, |alg, value| {
+            steward_broken(|s| {
+                s.component_mut("libalpha").hashes = vec![(alg.to_string(), value.to_string())];
+            })
+        }),
         RuleEntry::tested(
             "SBOM-CRA-ANNEX-I-DEPENDENCY",
             Sev::Error,
@@ -1815,6 +2335,19 @@ fn cra_oss_steward_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             steward_broken(|s| bom_ref_is_name(s, "libalpha")),
             steward_base(),
         ),
+        // A component listed twice, under a second bom-ref or under its own
+        // bom-ref again: the entries are merged, and one Info names it.
+        RuleEntry::tested(
+            "SBOM-CRA-DUPLICATE-COMPONENT",
+            Sev::Info,
+            steward_broken(|s| s.list_twice("libalpha", false)),
+            steward_base(),
+        )
+        .with_firing(
+            "the same bom-ref twice",
+            Sev::Info,
+            steward_broken(|s| s.list_twice("libalpha", true)),
+        ),
     ];
 
     run_matrix(STEWARD, STEWARD_RULE_UNIVERSE, &entries);
@@ -1868,15 +2401,15 @@ fn steward_profile_runs_no_document_metadata_check() {
     }
 }
 
-/// The CRA universes are tied back to the shared slice: together they cover
-/// every `SBOM-CRA-*` id the slice enumerates, and the only ids they add are
-/// the documented slice-less ones.
+/// The CRA universes cover the CRA rule family: together they hold every
+/// `SBOM-CRA-*` rule but the fallback rule, which no check emits, and each
+/// universe holds only CRA rules.
 #[test]
-fn cra_universes_cover_the_cra_slice() {
-    let slice: BTreeSet<&str> = COMPLIANCE_SARIF_RULE_IDS
+fn cra_universes_cover_the_cra_family() {
+    let family: BTreeSet<&str> = all_rule_ids()
         .iter()
         .copied()
-        .filter(|id| id.starts_with("SBOM-CRA-"))
+        .filter(|id| id.starts_with("SBOM-CRA-") && *id != generic_rule_id_for_level(PHASE2))
         .collect();
     let universes: BTreeSet<&str> = PHASE1_RULE_UNIVERSE
         .iter()
@@ -1884,19 +2417,9 @@ fn cra_universes_cover_the_cra_slice() {
         .chain(STEWARD_RULE_UNIVERSE)
         .copied()
         .collect();
-    let sliceless: BTreeSet<&str> = SLICELESS_CRA_IDS.iter().copied().collect();
     assert_eq!(
-        universes
-            .difference(&slice)
-            .copied()
-            .collect::<BTreeSet<_>>(),
-        sliceless,
-        "CRA universe ids outside the shared slice must be exactly the slice-less ones"
-    );
-    assert!(
-        slice.is_subset(&universes),
-        "every SBOM-CRA-* id of the shared slice must sit in a CRA universe; missing: {:?}",
-        slice.difference(&universes).collect::<Vec<_>>()
+        universes, family,
+        "the CRA universes must hold exactly the SBOM-CRA-* rules but the fallback"
     );
 }
 

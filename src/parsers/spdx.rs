@@ -907,6 +907,13 @@ impl SpdxParser {
         if let Some(primary_id) = chosen.and_then(|id| id_map.get(*id)) {
             Self::set_primary_and_disclosure(&mut sbom, &primary_id.clone());
         }
+        // A document can describe several sibling products: every other
+        // described element is a described root beside the primary.
+        for id in &described {
+            if let Some(canonical_id) = id_map.get(*id) {
+                sbom.add_described_root(canonical_id.clone());
+            }
+        }
 
         // Convert relationships to dependency edges
         if let Some(relationships) = &spdx.relationships {
@@ -1016,29 +1023,23 @@ impl SpdxParser {
             sbom.document.support_end_date = Some(dt.with_timezone(&Utc));
         }
 
+        // Development, build and test dependencies (`DEV_DEPENDENCY_OF`
+        // and its kin) are not needed at runtime: the component scope
+        // CycloneDX states on the component.
+        super::mark_non_runtime_components(&mut sbom);
+
         sbom.calculate_content_hash();
         sbom
     }
 
     /// Set the primary component and lift its advisory reference into the
     /// document's vulnerability-disclosure URL (shared by the
-    /// documentDescribes and DESCRIBES/DESCRIBED_BY selection paths).
+    /// documentDescribes and DESCRIBES/DESCRIBED_BY selection paths). Only
+    /// a URL-shaped advisory counts — a bare CPE string or other identifier
+    /// must never become the disclosure URL (see `lift_disclosure_url`).
     fn set_primary_and_disclosure(sbom: &mut NormalizedSbom, primary_id: &CanonicalId) {
         sbom.set_primary_component(primary_id.clone());
-        if let Some(comp) = sbom.components.get(primary_id) {
-            for ext_ref in &comp.external_refs {
-                // Only URL-shaped locators qualify — a bare CPE string or
-                // other identifier must never become the disclosure URL.
-                if matches!(ext_ref.ref_type, ExternalRefType::Advisories)
-                    && sbom.document.vulnerability_disclosure_url.is_none()
-                    && (ext_ref.url.starts_with("http://")
-                        || ext_ref.url.starts_with("https://")
-                        || ext_ref.url.starts_with("mailto:"))
-                {
-                    sbom.document.vulnerability_disclosure_url = Some(ext_ref.url.clone());
-                }
-            }
-        }
+        super::lift_disclosure_url(sbom);
     }
 
     /// Convert SPDX creation info to `DocumentMetadata`
@@ -1049,18 +1050,18 @@ impl SpdxParser {
             .unwrap_or(&spdx.spdx_version)
             .to_string();
 
-        let created = spdx
-            .creation_info
-            .as_ref()
-            .and_then(|ci| ci.created.as_ref())
-            .and_then(|c| DateTime::parse_from_rfc3339(c).ok())
-            // Deterministic fallback: a document with a missing/invalid
-            // timestamp must hash identically on every parse (created is
-            // folded into the content hash; Utc::now() here made every
-            // parse of such a document content-unique, defeating diff
-            // identity and the incremental cache). Epoch is an honest
-            // "unknown" sentinel rather than a fabricated parse time.
-            .map_or(DateTime::UNIX_EPOCH, |dt| dt.with_timezone(&Utc));
+        // Deterministic fallback: a document with a missing or invalid
+        // timestamp must hash identically on every parse (created is folded
+        // into the content hash; Utc::now() here made every parse of such a
+        // document content-unique, defeating diff identity and the
+        // incremental cache). Epoch is an honest "unknown" sentinel rather
+        // than a fabricated parse time. An invalid value is kept, so the
+        // checks report it as unparseable rather than missing.
+        let (created, created_unparsed) = DocumentMetadata::parse_created(
+            spdx.creation_info
+                .as_ref()
+                .and_then(|ci| ci.created.as_deref()),
+        );
 
         let mut creators = Vec::new();
         if let Some(creation_info) = &spdx.creation_info {
@@ -1102,7 +1103,9 @@ impl SpdxParser {
             serial_number: spdx.document_namespace.clone(),
             doc_version: None, // SPDX has no document revision counter
             created,
+            created_unparsed,
             creators,
+            supplier: None, // SPDX keeps the supplier on the described package
             name: Some(spdx.name.clone()),
             security_contact: None,
             vulnerability_disclosure_url: None,
@@ -1111,6 +1114,7 @@ impl SpdxParser {
             completeness_declaration: crate::model::CompletenessDeclaration::Unknown,
             signature: None,
             distribution_classification: None,
+            profile_conformance: Vec::new(),
             citations_count: 0,
         }
     }
@@ -1933,6 +1937,76 @@ mod tests {
         assert_eq!(
             sbom.document.vulnerability_disclosure_url, None,
             "a CPE identifier must not become the disclosure URL"
+        );
+    }
+
+    /// documentDescribes and DESCRIBES/DESCRIBED_BY can name several
+    /// sibling products: the chosen primary plus every other resolvable
+    /// described element are the described components, each once.
+    #[test]
+    fn json_keeps_every_described_element() {
+        let sbom = SpdxParser::new()
+            .parse_str(
+                r#"{
+                "spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT",
+                "name": "products", "dataLicense": "CC0-1.0",
+                "documentDescribes": ["SPDXRef-a", "SPDXRef-missing"],
+                "packages": [
+                    {"SPDXID": "SPDXRef-a", "name": "a", "versionInfo": "1"},
+                    {"SPDXID": "SPDXRef-b", "name": "b", "versionInfo": "1"},
+                    {"SPDXID": "SPDXRef-c", "name": "c", "versionInfo": "1"},
+                    {"SPDXID": "SPDXRef-lib", "name": "lib", "versionInfo": "1"}
+                ],
+                "relationships": [
+                    {"spdxElementId": "SPDXRef-DOCUMENT",
+                     "relationshipType": "DESCRIBES",
+                     "relatedSpdxElement": "SPDXRef-b"},
+                    {"spdxElementId": "SPDXRef-c",
+                     "relationshipType": "DESCRIBED_BY",
+                     "relatedSpdxElement": "SPDXRef-DOCUMENT"},
+                    {"spdxElementId": "SPDXRef-DOCUMENT",
+                     "relationshipType": "DESCRIBES",
+                     "relatedSpdxElement": "SPDXRef-a"}
+                ]
+            }"#,
+            )
+            .expect("json should parse");
+        let names: Vec<&str> = sbom
+            .described_components()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    /// The shared disclosure-URL rule: a support reference never becomes
+    /// the disclosure URL, a URL-shaped SECURITY advisory does.
+    #[test]
+    fn json_support_reference_is_no_disclosure_url() {
+        let parse = |refs: &str| {
+            SpdxParser::new()
+                .parse_str(&format!(
+                    r#"{{
+                "spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT",
+                "name": "app", "dataLicense": "CC0-1.0",
+                "documentDescribes": ["SPDXRef-app"],
+                "packages": [{{"SPDXID": "SPDXRef-app", "name": "app",
+                               "externalRefs": [{refs}]}}]
+            }}"#
+                ))
+                .expect("json should parse")
+        };
+        let support = r#"{"referenceCategory": "OTHER", "referenceType": "support",
+                          "referenceLocator": "https://acme.example/support"}"#;
+        let advisory = r#"{"referenceCategory": "SECURITY", "referenceType": "advisory",
+                           "referenceLocator": "HTTPS://acme.example/advisories"}"#;
+        assert_eq!(parse(support).document.vulnerability_disclosure_url, None);
+        assert_eq!(
+            parse(&format!("{support}, {advisory}"))
+                .document
+                .vulnerability_disclosure_url
+                .as_deref(),
+            Some("HTTPS://acme.example/advisories")
         );
     }
 

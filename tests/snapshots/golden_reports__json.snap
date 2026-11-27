@@ -1,6 +1,5 @@
 ---
 source: tests/golden_reports.rs
-assertion_line: 144
 expression: "render(&JsonReporter::new())"
 ---
 {
@@ -46,16 +45,31 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "SBOM must have creator/tool information",
           "element": null,
+          "field": "metadata.authors[]",
           "requirement": "Document creator identification",
           "rule_id": "SBOM-CRA-CREATOR",
           "sarif_rule_id": "SBOM-CRA-CREATOR",
-          "remediation": "Identify who created the SBOM: a person, organization or tool. CycloneDX: add metadata.authors[] (name, email), metadata.manufacturer or metadata.tools."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
+            }
+          ],
+          "remediation": "Identify who created the SBOM: a person, organization or tool. CycloneDX: add metadata.authors[] (name, email), metadata.manufacturer or metadata.tools.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Warning",
           "category": "DocumentMetadata",
           "message": "[CRA Art. 13(16)] SBOM should identify the manufacturer (organization)",
           "element": null,
+          "field": "metadata.component.manufacturer",
           "requirement": "CRA Art. 13(16): Manufacturer identification",
           "rule_id": "SBOM-CRA-ART-13-16",
           "sarif_rule_id": "SBOM-CRA-ART-13-16",
@@ -71,7 +85,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Identify the manufacturer as an organization creator of the SBOM (Art. 13(16)); manufacturerName in the CRA sidecar lowers this to Info. CycloneDX: set metadata.manufacturer (name, contact[].email).",
+          "remediation": "Identify the manufacturer (Art. 13(16)): as the manufacturer or supplier of the product component, or as an organization creator of the SBOM; placeholders such as NOASSERTION do not count. manufacturerName in the CRA sidecar lowers this to Info. CycloneDX: set metadata.component.manufacturer (CycloneDX 1.6+) or metadata.supplier, or metadata.manufacturer for the organization that created the SBOM (name, contact[].email).",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -79,6 +93,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Art. 13(17)] SBOM should include a security contact or vulnerability disclosure reference",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Art. 13(17): Vulnerability disclosure contact",
           "rule_id": "SBOM-CRA-ART-13-17-CONTACT",
           "sarif_rule_id": "SBOM-CRA-ART-13-17-CONTACT",
@@ -99,7 +114,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Give the product a single point of contact for vulnerability reports (Art. 13(17)): a security contact or vulnerability-disclosure URL referenced from the product component. securityContact or vulnerabilityDisclosureUrl in the CRA sidecar lowers the finding to Info. CycloneDX: add a metadata.component.externalReferences[] entry of type security-contact (or advisories).",
+          "remediation": "Give the product a single point of contact for vulnerability reports (Art. 13(17)): a security contact or vulnerability-disclosure URL referenced from the product component. securityContact or vulnerabilityDisclosureUrl in the CRA sidecar lowers the finding to Info. A contact must reach someone: placeholders such as NOASSERTION, unknown, n/a or TBD, and addresses at example.com, example.net or example.org, do not count. CycloneDX: add a metadata.component.externalReferences[] entry of type security-contact (or advisories).",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -107,6 +122,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Art. 13(8) / 13(19)] Consider specifying a support end date for security updates",
           "element": null,
+          "field": "metadata.component.properties[]",
           "requirement": "CRA Art. 13(8) / 13(19): Support period disclosure",
           "rule_id": "SBOM-CRA-ART-13-8",
           "sarif_rule_id": "SBOM-CRA-ART-13-8",
@@ -136,6 +152,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.purl",
           "requirement": "CRA Annex I Part II (1): Product identifier traceability across updates",
           "rule_id": "SBOM-CRA-ANNEX-I-TRACEABILITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-TRACEABILITY",
@@ -148,6 +165,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-07"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§3.2",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Give the primary product component a PURL or CPE so it can be traced across updates (Annex I Part II (1)); a SWHID or SWID alone does not satisfy this check. CycloneDX: set metadata.component.purl (or cpe).",
@@ -158,6 +180,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Annex I Part II (5)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL)",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy",
           "rule_id": "SBOM-CRA-CVD-POLICY",
           "sarif_rule_id": "SBOM-CRA-CVD-POLICY",
@@ -177,7 +200,7 @@ expression: "render(&JsonReporter::new())"
               "id": "RLS-2-RQ-03-RE"
             }
           ],
-          "remediation": "Reference the coordinated vulnerability disclosure policy (Annex I Part II (5)) from the product component. In the CRA sidecar, coordinatedDisclosurePolicyUrl satisfies the open-source steward profile and vulnerabilityDisclosureUrl lowers the manufacturer finding to Info. CycloneDX: add a metadata.component.externalReferences[] entry of type advisories linking the policy.",
+          "remediation": "Reference the coordinated vulnerability disclosure policy (Annex I Part II (5)) from the product component. In the CRA sidecar, coordinatedDisclosurePolicyUrl satisfies the open-source steward profile and vulnerabilityDisclosureUrl lowers the manufacturer finding to Info. A placeholder URL or an address at example.com, example.net or example.org does not count. CycloneDX: add a metadata.component.externalReferences[] entry of type advisories linking the policy.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -185,6 +208,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Art. 13(8) / Annex II (7)] Consider including component lifecycle/end-of-support information",
           "element": null,
+          "field": "components[].properties[]",
           "requirement": "CRA Annex II (7): Component lifecycle status",
           "rule_id": "SBOM-CRA-LIFECYCLE",
           "sarif_rule_id": "SBOM-CRA-LIFECYCLE",
@@ -208,6 +232,7 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "[CRA Annex V] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Annex V: EU Declaration of Conformity reference",
           "rule_id": "SBOM-CRA-ANNEX-V",
           "sarif_rule_id": "SBOM-CRA-ANNEX-V",
@@ -226,10 +251,24 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "SBOM should have a serial number/unique identifier",
           "element": null,
+          "field": "serialNumber",
           "requirement": "Document unique identification",
           "rule_id": "SBOM-CRA-SERIAL",
           "sarif_rule_id": "SBOM-CRA-SERIAL",
-          "remediation": "Give the SBOM a unique document identifier. CycloneDX: set serialNumber (urn:uuid:…)."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
+            }
+          ],
+          "remediation": "Give the SBOM a unique document identifier. CycloneDX: set serialNumber (urn:uuid:…).",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Error",
@@ -237,6 +276,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I, [PRE-7-RQ-07]] Component 'acme-webapp' missing unique identifier (PURL/CPE/SWHID/SWID)",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.purl",
           "requirement": "CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier (PURL/CPE/SWHID/SWID)",
           "rule_id": "SBOM-CRA-ANNEX-I-IDENTIFIER",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-IDENTIFIER",
@@ -249,6 +289,16 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-07"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§3.2",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add a PURL, CPE, SWHID or SWID to each component for unique identification. PURLs are preferred (e.g., pkg:npm/lodash@4.17.21). CycloneDX: set components[].purl (or cpe, or swhid[]).",
@@ -260,6 +310,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'acme-webapp' missing supplier/manufacturer",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -272,6 +323,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -283,6 +339,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'acme-webapp' missing cryptographic hash (recommended for integrity)",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -291,6 +348,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -302,6 +364,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'lodash' missing supplier/manufacturer",
           "element": "lodash",
           "component_id": "pkg:npm/lodash@4.17.20",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -314,6 +377,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -325,6 +393,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'lodash' missing cryptographic hash (recommended for integrity)",
           "element": "lodash",
           "component_id": "pkg:npm/lodash@4.17.20",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -333,6 +402,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -344,6 +418,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'express' missing supplier/manufacturer",
           "element": "express",
           "component_id": "pkg:npm/express@4.17.1",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -356,6 +431,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -367,6 +447,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'express' missing cryptographic hash (recommended for integrity)",
           "element": "express",
           "component_id": "pkg:npm/express@4.17.1",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -375,6 +456,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -386,6 +472,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'moment' missing supplier/manufacturer",
           "element": "moment",
           "component_id": "pkg:npm/moment@2.29.1",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -398,6 +485,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -409,6 +501,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'moment' missing cryptographic hash (recommended for integrity)",
           "element": "moment",
           "component_id": "pkg:npm/moment@2.29.1",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -417,6 +510,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -428,6 +526,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'request' missing supplier/manufacturer",
           "element": "request",
           "component_id": "pkg:npm/request@2.88.2",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -440,6 +539,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -451,6 +555,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'request' missing cryptographic hash (recommended for integrity)",
           "element": "request",
           "component_id": "pkg:npm/request@2.88.2",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -459,6 +564,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -470,6 +580,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'axios' missing supplier/manufacturer",
           "element": "axios",
           "component_id": "pkg:npm/axios@0.21.1",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -482,6 +593,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -493,6 +609,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'axios' missing cryptographic hash (recommended for integrity)",
           "element": "axios",
           "component_id": "pkg:npm/axios@0.21.1",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -501,6 +618,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -512,6 +634,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'underscore' missing supplier/manufacturer",
           "element": "underscore",
           "component_id": "pkg:npm/underscore@1.12.0",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -524,6 +647,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -535,6 +663,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'underscore' missing cryptographic hash (recommended for integrity)",
           "element": "underscore",
           "component_id": "pkg:npm/underscore@1.12.0",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -543,6 +672,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -554,6 +688,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'jquery' missing supplier/manufacturer",
           "element": "jquery",
           "component_id": "pkg:npm/jquery@3.5.1",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -566,6 +701,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -577,6 +717,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'jquery' missing cryptographic hash (recommended for integrity)",
           "element": "jquery",
           "component_id": "pkg:npm/jquery@3.5.1",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -585,6 +726,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -596,6 +742,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'react' missing supplier/manufacturer",
           "element": "react",
           "component_id": "pkg:npm/react@17.0.1",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -608,6 +755,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -619,6 +771,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'react' missing cryptographic hash (recommended for integrity)",
           "element": "react",
           "component_id": "pkg:npm/react@17.0.1",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -627,6 +780,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -638,6 +796,7 @@ expression: "render(&JsonReporter::new())"
           "message": "Primary component 'acme-webapp' participates in no dependency relationship",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "dependencies[]",
           "requirement": "CRA Annex I: Dependency relationships",
           "rule_id": "SBOM-CRA-ANNEX-I-DEPENDENCY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-DEPENDENCY",
@@ -646,6 +805,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add dependency relationships between components: connect the primary component to its direct dependencies and keep most components inside the dependency graph. CycloneDX: add dependencies[] entries (ref plus dependsOn[]); an entry with an empty dependsOn records a component that has no dependencies.",
@@ -657,10 +821,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'acme-webapp' may be missing bom-ref",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "bom-ref",
+          "observed": "acme-webapp",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -668,10 +842,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'lodash' may be missing bom-ref",
           "element": "lodash",
           "component_id": "pkg:npm/lodash@4.17.20",
+          "field": "bom-ref",
+          "observed": "lodash",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -679,10 +863,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'express' may be missing bom-ref",
           "element": "express",
           "component_id": "pkg:npm/express@4.17.1",
+          "field": "bom-ref",
+          "observed": "express",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -690,10 +884,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'moment' may be missing bom-ref",
           "element": "moment",
           "component_id": "pkg:npm/moment@2.29.1",
+          "field": "bom-ref",
+          "observed": "moment",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -701,10 +905,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'request' may be missing bom-ref",
           "element": "request",
           "component_id": "pkg:npm/request@2.88.2",
+          "field": "bom-ref",
+          "observed": "request",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -712,10 +926,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'axios' may be missing bom-ref",
           "element": "axios",
           "component_id": "pkg:npm/axios@0.21.1",
+          "field": "bom-ref",
+          "observed": "axios",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -723,10 +947,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'underscore' may be missing bom-ref",
           "element": "underscore",
           "component_id": "pkg:npm/underscore@1.12.0",
+          "field": "bom-ref",
+          "observed": "underscore",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -734,10 +968,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'jquery' may be missing bom-ref",
           "element": "jquery",
           "component_id": "pkg:npm/jquery@3.5.1",
+          "field": "bom-ref",
+          "observed": "jquery",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -745,16 +989,27 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'react' may be missing bom-ref",
           "element": "react",
           "component_id": "pkg:npm/react@17.0.1",
+          "field": "bom-ref",
+          "observed": "react",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Warning",
           "category": "DocumentMetadata",
           "message": "[CRA Art. 13(7) / Annex I Part II (1)] SBOM is [N] days old; keep the documented component inventory current when components change",
           "element": null,
+          "observed": "[TIMESTAMP]",
           "requirement": "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness",
           "rule_id": "SBOM-CRA-SBOM-FRESHNESS",
           "sarif_rule_id": "SBOM-CRA-SBOM-FRESHNESS",
@@ -768,6 +1023,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part II (1)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§3.2",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Regenerate the SBOM when components are added, removed, or updated. CRA Art. 13(7) requires manufacturers to systematically document relevant cybersecurity aspects, and the Annex I Part II (1) SBOM must reflect the product's current components. A creation timestamp later than the evaluation date is reported like a missing one: correct the generator's clock or time zone.",
@@ -782,6 +1042,7 @@ expression: "render(&JsonReporter::new())"
             "affected": 1,
             "total": 9
           },
+          "field": "components[].licenses[]",
           "requirement": "CRA Art. 13(5): Third-party due diligence (license tracking)",
           "rule_id": "SBOM-CRA-ART-13-5",
           "sarif_rule_id": "SBOM-CRA-ART-13-5",
@@ -790,6 +1051,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraArticle",
               "id": "Art. 13(5)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Record license information for every component to support the Art. 13(5) due diligence on integrated third-party components. CycloneDX: add components[].licenses[] entries (license.id with an SPDX identifier, or an expression).",
@@ -804,6 +1070,7 @@ expression: "render(&JsonReporter::new())"
             "affected": 9,
             "total": 9
           },
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Transitive dependency supplier (recommended)",
           "rule_id": "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE",
@@ -820,6 +1087,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify the suppliers of transitive dependencies as well (recommended under PRE-7-RQ-03). CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -828,8 +1100,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Info",
           "category": "IntegrityInfo",
-          "message": "[CRA Annex I Part I (2)(f)] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash)",
+          "message": "[CRA Annex I Part I (2)(f)] SBOM carries no integrity protection: sign the document, or reference from the product an attestation or certification that carries its hash (a serial number identifies the document but does not protect it)",
           "element": null,
+          "field": "signature",
           "requirement": "CRA Annex I Part I (2)(f): Document signature/integrity",
           "rule_id": "SBOM-CRA-DOC-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-DOC-INTEGRITY",
@@ -838,9 +1111,14 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.2.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
-          "remediation": "Add document-level integrity metadata (Annex I Part I (2)(f)): a unique document serial number or namespace. CycloneDX: set serialNumber (urn:uuid:…).",
+          "remediation": "Protect the SBOM's integrity (Annex I Part I (2)(f)): sign the document, or reference from the product component an attestation or certification that carries the hash of the referenced document. A serial number identifies the document but does not protect its integrity. CycloneDX: sign the BOM (a JSF signature object at the document root in JSON, an enveloped XML-DSig <Signature> element on <bom> in XML), or add hashes[] to a metadata.component.externalReferences[] entry of type attestation or certification-report.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -848,6 +1126,7 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "[CRA Art. 13(2)] No documented risk assessment referenced — add an externalReference of type 'risk-assessment' or supply riskAssessmentUrl in the CRA sidecar",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Art. 13(2): Documented risk assessment",
           "rule_id": "SBOM-CRA-ART-13-2",
           "sarif_rule_id": "SBOM-CRA-ART-13-2",
@@ -876,7 +1155,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Document the public PSIRT URL that receives external vulnerability reports (Art. 14 reporting readiness): set psirtUrl in the CRA sidecar. This check reads only the sidecar.",
+          "remediation": "Document the public PSIRT URL that receives external vulnerability reports (Art. 14 reporting readiness): set psirtUrl in the CRA sidecar. This check reads only the sidecar; a placeholder such as TBD or an address at example.com, example.net or example.org does not count.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -899,7 +1178,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Document the channel for the 24-hour early warning of an actively exploited vulnerability or a severe incident (Art. 14(2)(a) / 14(4)(a)): set earlyWarningContact in the CRA sidecar. This check reads only the sidecar.",
+          "remediation": "Document the channel for the 24-hour early warning of an actively exploited vulnerability or a severe incident (Art. 14(2)(a) / 14(4)(a)): set earlyWarningContact in the CRA sidecar. This check reads only the sidecar; a placeholder such as TBD or an address at example.com, example.net or example.org does not count.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -922,7 +1201,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Document the channel for the 72-hour vulnerability and incident notifications (Art. 14(2)(b) / 14(4)(b)): set incidentReportContact in the CRA sidecar. This check reads only the sidecar.",
+          "remediation": "Document the channel for the 72-hour vulnerability and incident notifications (Art. 14(2)(b) / 14(4)(b)): set incidentReportContact in the CRA sidecar. This check reads only the sidecar; a placeholder such as TBD or an address at example.com, example.net or example.org does not count.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -942,6 +1221,38 @@ expression: "render(&JsonReporter::new())"
           ],
           "remediation": "Name the CSIRT designated as coordinator in enisaReportingPlatformId in the CRA sidecar: the one Art. 14(7) assigns by the manufacturer's main establishment and every notification selects on the ENISA Single Reporting Platform (https://portal.cra-srp.enisa.europa.eu/), through which Art. 14(1), (3) and (7) route notifications since 2026-09-11. Naming that CSIRT satisfies this finding. Do not register on the platform early to clear it: no registration is needed before a notification is due, and ENISA advises registering only then. A registration already made may be recorded instead. This check reads only the sidecar.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+        }
+      ],
+      "evaluated": [
+        {
+          "rule_id": "SBOM-CRA-ANNEX-IV",
+          "status": "not_evaluated",
+          "reason": "the check depends on the CRA product class, and none is pinned (--cra-product-class, or productClass in the CRA sidecar)"
+        },
+        {
+          "rule_id": "SBOM-CRA-ANNEX-VIII",
+          "status": "not_evaluated",
+          "reason": "the check depends on the CRA product class, and none is pinned (--cra-product-class, or productClass in the CRA sidecar)"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-PRODUCER",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-IDENTIFIER",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-FIRMWARE-VERSION",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-DEVICE-FIRMWARE",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
         }
       ],
       "error_count": 2,
@@ -971,16 +1282,31 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "SBOM must have creator/tool information",
           "element": null,
+          "field": "metadata.authors[]",
           "requirement": "Document creator identification",
           "rule_id": "SBOM-CRA-CREATOR",
           "sarif_rule_id": "SBOM-CRA-CREATOR",
-          "remediation": "Identify who created the SBOM: a person, organization or tool. CycloneDX: add metadata.authors[] (name, email), metadata.manufacturer or metadata.tools."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
+            }
+          ],
+          "remediation": "Identify who created the SBOM: a person, organization or tool. CycloneDX: add metadata.authors[] (name, email), metadata.manufacturer or metadata.tools.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Warning",
           "category": "DocumentMetadata",
           "message": "[CRA Art. 13(16)] SBOM should identify the manufacturer (organization)",
           "element": null,
+          "field": "metadata.component.manufacturer",
           "requirement": "CRA Art. 13(16): Manufacturer identification",
           "rule_id": "SBOM-CRA-ART-13-16",
           "sarif_rule_id": "SBOM-CRA-ART-13-16",
@@ -996,7 +1322,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Identify the manufacturer as an organization creator of the SBOM (Art. 13(16)); manufacturerName in the CRA sidecar lowers this to Info. CycloneDX: set metadata.manufacturer (name, contact[].email).",
+          "remediation": "Identify the manufacturer (Art. 13(16)): as the manufacturer or supplier of the product component, or as an organization creator of the SBOM; placeholders such as NOASSERTION do not count. manufacturerName in the CRA sidecar lowers this to Info. CycloneDX: set metadata.component.manufacturer (CycloneDX 1.6+) or metadata.supplier, or metadata.manufacturer for the organization that created the SBOM (name, contact[].email).",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -1004,6 +1330,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Art. 13(17)] SBOM should include a security contact or vulnerability disclosure reference",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Art. 13(17): Vulnerability disclosure contact",
           "rule_id": "SBOM-CRA-ART-13-17-CONTACT",
           "sarif_rule_id": "SBOM-CRA-ART-13-17-CONTACT",
@@ -1024,7 +1351,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Give the product a single point of contact for vulnerability reports (Art. 13(17)): a security contact or vulnerability-disclosure URL referenced from the product component. securityContact or vulnerabilityDisclosureUrl in the CRA sidecar lowers the finding to Info. CycloneDX: add a metadata.component.externalReferences[] entry of type security-contact (or advisories).",
+          "remediation": "Give the product a single point of contact for vulnerability reports (Art. 13(17)): a security contact or vulnerability-disclosure URL referenced from the product component. securityContact or vulnerabilityDisclosureUrl in the CRA sidecar lowers the finding to Info. A contact must reach someone: placeholders such as NOASSERTION, unknown, n/a or TBD, and addresses at example.com, example.net or example.org, do not count. CycloneDX: add a metadata.component.externalReferences[] entry of type security-contact (or advisories).",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -1032,6 +1359,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Art. 13(8) / 13(19)] Consider specifying a support end date for security updates",
           "element": null,
+          "field": "metadata.component.properties[]",
           "requirement": "CRA Art. 13(8) / 13(19): Support period disclosure",
           "rule_id": "SBOM-CRA-ART-13-8",
           "sarif_rule_id": "SBOM-CRA-ART-13-8",
@@ -1061,6 +1389,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Primary component 'acme-webapp' missing unique identifier (PURL/CPE) for cross-update traceability",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.purl",
           "requirement": "CRA Annex I Part II (1): Product identifier traceability across updates",
           "rule_id": "SBOM-CRA-ANNEX-I-TRACEABILITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-TRACEABILITY",
@@ -1073,6 +1402,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-07"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§3.2",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Give the primary product component a PURL or CPE so it can be traced across updates (Annex I Part II (1)); a SWHID or SWID alone does not satisfy this check. CycloneDX: set metadata.component.purl (or cpe).",
@@ -1083,6 +1417,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Annex I Part II (5)] SBOM should reference a coordinated vulnerability disclosure policy (advisories URL or disclosure URL)",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Annex I Part II (5): Coordinated vulnerability disclosure policy",
           "rule_id": "SBOM-CRA-CVD-POLICY",
           "sarif_rule_id": "SBOM-CRA-CVD-POLICY",
@@ -1102,7 +1437,7 @@ expression: "render(&JsonReporter::new())"
               "id": "RLS-2-RQ-03-RE"
             }
           ],
-          "remediation": "Reference the coordinated vulnerability disclosure policy (Annex I Part II (5)) from the product component. In the CRA sidecar, coordinatedDisclosurePolicyUrl satisfies the open-source steward profile and vulnerabilityDisclosureUrl lowers the manufacturer finding to Info. CycloneDX: add a metadata.component.externalReferences[] entry of type advisories linking the policy.",
+          "remediation": "Reference the coordinated vulnerability disclosure policy (Annex I Part II (5)) from the product component. In the CRA sidecar, coordinatedDisclosurePolicyUrl satisfies the open-source steward profile and vulnerabilityDisclosureUrl lowers the manufacturer finding to Info. A placeholder URL or an address at example.com, example.net or example.org does not count. CycloneDX: add a metadata.component.externalReferences[] entry of type advisories linking the policy.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -1110,6 +1445,7 @@ expression: "render(&JsonReporter::new())"
           "category": "SecurityInfo",
           "message": "[CRA Art. 13(8) / Annex II (7)] Consider including component lifecycle/end-of-support information",
           "element": null,
+          "field": "components[].properties[]",
           "requirement": "CRA Annex II (7): Component lifecycle status",
           "rule_id": "SBOM-CRA-LIFECYCLE",
           "sarif_rule_id": "SBOM-CRA-LIFECYCLE",
@@ -1133,6 +1469,7 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "[CRA Annex V] Missing reference to the EU Declaration of Conformity (attestation or certification external reference) for product class Default",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Annex V: EU Declaration of Conformity reference",
           "rule_id": "SBOM-CRA-ANNEX-V",
           "sarif_rule_id": "SBOM-CRA-ANNEX-V",
@@ -1151,10 +1488,24 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "SBOM should have a serial number/unique identifier",
           "element": null,
+          "field": "serialNumber",
           "requirement": "Document unique identification",
           "rule_id": "SBOM-CRA-SERIAL",
           "sarif_rule_id": "SBOM-CRA-SERIAL",
-          "remediation": "Give the SBOM a unique document identifier. CycloneDX: set serialNumber (urn:uuid:…)."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
+            }
+          ],
+          "remediation": "Give the SBOM a unique document identifier. CycloneDX: set serialNumber (urn:uuid:…).",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Error",
@@ -1162,6 +1513,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I, [PRE-7-RQ-07]] Component 'acme-webapp' missing unique identifier (PURL/CPE/SWHID/SWID)",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.purl",
           "requirement": "CRA Annex I / prEN 40000-1-3 [PRE-7-RQ-07]: Unique component identifier (PURL/CPE/SWHID/SWID)",
           "rule_id": "SBOM-CRA-ANNEX-I-IDENTIFIER",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-IDENTIFIER",
@@ -1174,6 +1526,16 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-07"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§3.2",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add a PURL, CPE, SWHID or SWID to each component for unique identification. PURLs are preferred (e.g., pkg:npm/lodash@4.17.21). CycloneDX: set components[].purl (or cpe, or swhid[]).",
@@ -1185,6 +1547,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'acme-webapp' missing supplier/manufacturer",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1197,6 +1560,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1208,6 +1576,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'acme-webapp' missing cryptographic hash (recommended for integrity)",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "metadata.component.hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1216,6 +1585,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1227,6 +1601,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'lodash' missing supplier/manufacturer",
           "element": "lodash",
           "component_id": "pkg:npm/lodash@4.17.21",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1239,6 +1614,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1250,6 +1630,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'lodash' missing cryptographic hash (recommended for integrity)",
           "element": "lodash",
           "component_id": "pkg:npm/lodash@4.17.21",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1258,6 +1639,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1269,6 +1655,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'express' missing supplier/manufacturer",
           "element": "express",
           "component_id": "pkg:npm/express@4.18.2",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1281,6 +1668,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1292,6 +1684,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'express' missing cryptographic hash (recommended for integrity)",
           "element": "express",
           "component_id": "pkg:npm/express@4.18.2",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1300,6 +1693,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1311,6 +1709,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'dayjs' missing supplier/manufacturer",
           "element": "dayjs",
           "component_id": "pkg:npm/dayjs@1.11.7",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1323,6 +1722,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1334,6 +1738,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'dayjs' missing cryptographic hash (recommended for integrity)",
           "element": "dayjs",
           "component_id": "pkg:npm/dayjs@1.11.7",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1342,6 +1747,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1353,6 +1763,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'axios' missing supplier/manufacturer",
           "element": "axios",
           "component_id": "pkg:npm/axios@1.4.0",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1365,6 +1776,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1376,6 +1792,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'axios' missing cryptographic hash (recommended for integrity)",
           "element": "axios",
           "component_id": "pkg:npm/axios@1.4.0",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1384,6 +1801,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1395,6 +1817,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'react' missing supplier/manufacturer",
           "element": "react",
           "component_id": "pkg:npm/react@18.2.0",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1407,6 +1830,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1418,6 +1846,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'react' missing cryptographic hash (recommended for integrity)",
           "element": "react",
           "component_id": "pkg:npm/react@18.2.0",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1426,6 +1855,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1437,6 +1871,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'typescript' missing supplier/manufacturer",
           "element": "typescript",
           "component_id": "pkg:npm/typescript@5.0.4",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1449,6 +1884,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1460,6 +1900,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'typescript' missing cryptographic hash (recommended for integrity)",
           "element": "typescript",
           "component_id": "pkg:npm/typescript@5.0.4",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1468,6 +1909,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1479,6 +1925,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'zod' missing supplier/manufacturer",
           "element": "zod",
           "component_id": "pkg:npm/zod@3.21.4",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1491,6 +1938,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1502,6 +1954,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'zod' missing cryptographic hash (recommended for integrity)",
           "element": "zod",
           "component_id": "pkg:npm/zod@3.21.4",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1510,6 +1963,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1521,6 +1979,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part II (1)] Component 'prisma' missing supplier/manufacturer",
           "element": "prisma",
           "component_id": "pkg:npm/prisma@4.15.0",
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II (1): Component supplier information",
           "rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
           "sarif_rule_id": "SBOM-CRA-COMPONENT-SUPPLIER",
@@ -1533,6 +1992,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify each component's supplier; placeholders such as NOASSERTION do not count. CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1544,6 +2008,7 @@ expression: "render(&JsonReporter::new())"
           "message": "[CRA Annex I Part I (2)(f)] Component 'prisma' missing cryptographic hash (recommended for integrity)",
           "element": "prisma",
           "component_id": "pkg:npm/prisma@4.15.0",
+          "field": "components[].hashes[]",
           "requirement": "CRA Annex I Part I (2)(f): Component integrity information (hash)",
           "rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-INTEGRITY",
@@ -1552,6 +2017,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add cryptographic hashes (SHA-256 or stronger) to components for integrity verification. CycloneDX: add components[].hashes[] entries with alg SHA-256, SHA-384 or SHA-512 and the content.",
@@ -1563,6 +2033,7 @@ expression: "render(&JsonReporter::new())"
           "message": "Primary component 'acme-webapp' participates in no dependency relationship",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "dependencies[]",
           "requirement": "CRA Annex I: Dependency relationships",
           "rule_id": "SBOM-CRA-ANNEX-I-DEPENDENCY",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-DEPENDENCY",
@@ -1571,6 +2042,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Add dependency relationships between components: connect the primary component to its direct dependencies and keep most components inside the dependency graph. CycloneDX: add dependencies[] entries (ref plus dependsOn[]); an entry with an empty dependsOn records a component that has no dependencies.",
@@ -1582,10 +2058,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'acme-webapp' may be missing bom-ref",
           "element": "acme-webapp",
           "component_id": "acme-webapp",
+          "field": "bom-ref",
+          "observed": "acme-webapp",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1593,10 +2079,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'lodash' may be missing bom-ref",
           "element": "lodash",
           "component_id": "pkg:npm/lodash@4.17.21",
+          "field": "bom-ref",
+          "observed": "lodash",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1604,10 +2100,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'express' may be missing bom-ref",
           "element": "express",
           "component_id": "pkg:npm/express@4.18.2",
+          "field": "bom-ref",
+          "observed": "express",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1615,10 +2121,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'dayjs' may be missing bom-ref",
           "element": "dayjs",
           "component_id": "pkg:npm/dayjs@1.11.7",
+          "field": "bom-ref",
+          "observed": "dayjs",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1626,10 +2142,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'axios' may be missing bom-ref",
           "element": "axios",
           "component_id": "pkg:npm/axios@1.4.0",
+          "field": "bom-ref",
+          "observed": "axios",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1637,10 +2163,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'react' may be missing bom-ref",
           "element": "react",
           "component_id": "pkg:npm/react@18.2.0",
+          "field": "bom-ref",
+          "observed": "react",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1648,10 +2184,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'typescript' may be missing bom-ref",
           "element": "typescript",
           "component_id": "pkg:npm/typescript@5.0.4",
+          "field": "bom-ref",
+          "observed": "typescript",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1659,10 +2205,20 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'zod' may be missing bom-ref",
           "element": "zod",
           "component_id": "pkg:npm/zod@3.21.4",
+          "field": "bom-ref",
+          "observed": "zod",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Info",
@@ -1670,16 +2226,27 @@ expression: "render(&JsonReporter::new())"
           "message": "Component 'prisma' may be missing bom-ref",
           "element": "prisma",
           "component_id": "pkg:npm/prisma@4.15.0",
+          "field": "bom-ref",
+          "observed": "prisma",
           "requirement": "CycloneDX: bom-ref for dependency tracking",
           "rule_id": "SBOM-CRA-ELEMENT-ID",
           "sarif_rule_id": "SBOM-CRA-ELEMENT-ID",
-          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name."
+          "standard_refs": [
+            {
+              "standard": "CraAnnex",
+              "id": "Annex I Part II (1)",
+              "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            }
+          ],
+          "remediation": "Give every element its own well-formed identifier, the one dependency relationships refer to. CycloneDX: set a bom-ref on every component, one that differs from the component's name.",
+          "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
           "severity": "Warning",
           "category": "DocumentMetadata",
           "message": "[CRA Art. 13(7) / Annex I Part II (1)] SBOM is [N] days old; keep the documented component inventory current when components change",
           "element": null,
+          "observed": "[TIMESTAMP]",
           "requirement": "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness",
           "rule_id": "SBOM-CRA-SBOM-FRESHNESS",
           "sarif_rule_id": "SBOM-CRA-SBOM-FRESHNESS",
@@ -1693,6 +2260,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part II (1)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§3.2",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Regenerate the SBOM when components are added, removed, or updated. CRA Art. 13(7) requires manufacturers to systematically document relevant cybersecurity aspects, and the Annex I Part II (1) SBOM must reflect the product's current components. A creation timestamp later than the evaluation date is reported like a missing one: correct the generator's clock or time zone.",
@@ -1707,6 +2279,7 @@ expression: "render(&JsonReporter::new())"
             "affected": 1,
             "total": 9
           },
+          "field": "components[].licenses[]",
           "requirement": "CRA Art. 13(5): Third-party due diligence (license tracking)",
           "rule_id": "SBOM-CRA-ART-13-5",
           "sarif_rule_id": "SBOM-CRA-ART-13-5",
@@ -1715,6 +2288,11 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraArticle",
               "id": "Art. 13(5)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Record license information for every component to support the Art. 13(5) due diligence on integrated third-party components. CycloneDX: add components[].licenses[] entries (license.id with an SPDX identifier, or an expression).",
@@ -1729,6 +2307,7 @@ expression: "render(&JsonReporter::new())"
             "affected": 9,
             "total": 9
           },
+          "field": "components[].supplier.name",
           "requirement": "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-03]: Transitive dependency supplier (recommended)",
           "rule_id": "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE",
           "sarif_rule_id": "SBOM-CRA-ANNEX-I-SUPPLY-CHAIN-TRANSITIVE",
@@ -1745,6 +2324,11 @@ expression: "render(&JsonReporter::new())"
             {
               "standard": "Pren40000_1_3",
               "id": "PRE-7-RQ-03"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.1.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
           "remediation": "Identify the suppliers of transitive dependencies as well (recommended under PRE-7-RQ-03). CycloneDX: set components[].supplier.name (or manufacturer.name, or authors[].name).",
@@ -1753,8 +2337,9 @@ expression: "render(&JsonReporter::new())"
         {
           "severity": "Info",
           "category": "IntegrityInfo",
-          "message": "[CRA Annex I Part I (2)(f)] Consider adding document-level integrity metadata (serial number, digital signature, or attestation with hash)",
+          "message": "[CRA Annex I Part I (2)(f)] SBOM carries no integrity protection: sign the document, or reference from the product an attestation or certification that carries its hash (a serial number identifies the document but does not protect it)",
           "element": null,
+          "field": "signature",
           "requirement": "CRA Annex I Part I (2)(f): Document signature/integrity",
           "rule_id": "SBOM-CRA-DOC-INTEGRITY",
           "sarif_rule_id": "SBOM-CRA-DOC-INTEGRITY",
@@ -1763,9 +2348,14 @@ expression: "render(&JsonReporter::new())"
               "standard": "CraAnnex",
               "id": "Annex I Part I (2)(f)",
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+            },
+            {
+              "standard": "EnisaSbomAdvisory",
+              "id": "§2.2.1",
+              "help_uri": "https://www.enisa.europa.eu/publications/enisa-technical-advisory-for-software-bill-of-materials"
             }
           ],
-          "remediation": "Add document-level integrity metadata (Annex I Part I (2)(f)): a unique document serial number or namespace. CycloneDX: set serialNumber (urn:uuid:…).",
+          "remediation": "Protect the SBOM's integrity (Annex I Part I (2)(f)): sign the document, or reference from the product component an attestation or certification that carries the hash of the referenced document. A serial number identifies the document but does not protect its integrity. CycloneDX: sign the BOM (a JSF signature object at the document root in JSON, an enveloped XML-DSig <Signature> element on <bom> in XML), or add hashes[] to a metadata.component.externalReferences[] entry of type attestation or certification-report.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -1773,6 +2363,7 @@ expression: "render(&JsonReporter::new())"
           "category": "DocumentMetadata",
           "message": "[CRA Art. 13(2)] No documented risk assessment referenced — add an externalReference of type 'risk-assessment' or supply riskAssessmentUrl in the CRA sidecar",
           "element": null,
+          "field": "metadata.component.externalReferences[]",
           "requirement": "CRA Art. 13(2): Documented risk assessment",
           "rule_id": "SBOM-CRA-ART-13-2",
           "sarif_rule_id": "SBOM-CRA-ART-13-2",
@@ -1801,7 +2392,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Document the public PSIRT URL that receives external vulnerability reports (Art. 14 reporting readiness): set psirtUrl in the CRA sidecar. This check reads only the sidecar.",
+          "remediation": "Document the public PSIRT URL that receives external vulnerability reports (Art. 14 reporting readiness): set psirtUrl in the CRA sidecar. This check reads only the sidecar; a placeholder such as TBD or an address at example.com, example.net or example.org does not count.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -1824,7 +2415,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Document the channel for the 24-hour early warning of an actively exploited vulnerability or a severe incident (Art. 14(2)(a) / 14(4)(a)): set earlyWarningContact in the CRA sidecar. This check reads only the sidecar.",
+          "remediation": "Document the channel for the 24-hour early warning of an actively exploited vulnerability or a severe incident (Art. 14(2)(a) / 14(4)(a)): set earlyWarningContact in the CRA sidecar. This check reads only the sidecar; a placeholder such as TBD or an address at example.com, example.net or example.org does not count.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -1847,7 +2438,7 @@ expression: "render(&JsonReporter::new())"
               "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
             }
           ],
-          "remediation": "Document the channel for the 72-hour vulnerability and incident notifications (Art. 14(2)(b) / 14(4)(b)): set incidentReportContact in the CRA sidecar. This check reads only the sidecar.",
+          "remediation": "Document the channel for the 72-hour vulnerability and incident notifications (Art. 14(2)(b) / 14(4)(b)): set incidentReportContact in the CRA sidecar. This check reads only the sidecar; a placeholder such as TBD or an address at example.com, example.net or example.org does not count.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
         },
         {
@@ -1867,6 +2458,38 @@ expression: "render(&JsonReporter::new())"
           ],
           "remediation": "Name the CSIRT designated as coordinator in enisaReportingPlatformId in the CRA sidecar: the one Art. 14(7) assigns by the manufacturer's main establishment and every notification selects on the ENISA Single Reporting Platform (https://portal.cra-srp.enisa.europa.eu/), through which Art. 14(1), (3) and (7) route notifications since 2026-09-11. Naming that CSIRT satisfies this finding. Do not register on the platform early to clear it: no registration is needed before a notification is due, and ENISA advises registering only then. A registration already made may be recorded instead. This check reads only the sidecar.",
           "help_uri": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng"
+        }
+      ],
+      "evaluated": [
+        {
+          "rule_id": "SBOM-CRA-ANNEX-IV",
+          "status": "not_evaluated",
+          "reason": "the check depends on the CRA product class, and none is pinned (--cra-product-class, or productClass in the CRA sidecar)"
+        },
+        {
+          "rule_id": "SBOM-CRA-ANNEX-VIII",
+          "status": "not_evaluated",
+          "reason": "the check depends on the CRA product class, and none is pinned (--cra-product-class, or productClass in the CRA sidecar)"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-PRODUCER",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-IDENTIFIER",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-FIRMWARE-VERSION",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
+        },
+        {
+          "rule_id": "SBOM-CRA-PRE-8-RQ-02-DEVICE-FIRMWARE",
+          "status": "not_evaluated",
+          "reason": "the SBOM lists no device, firmware or device-driver component"
         }
       ],
       "error_count": 2,

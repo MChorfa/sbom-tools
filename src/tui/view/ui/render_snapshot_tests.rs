@@ -14,6 +14,7 @@ use crate::tui::test_support::{
     AIBOM_BSI, DEMO_NEW, SIZES, aibom_single, demo_single, pin_theme, render_to_text,
 };
 use crate::tui::view::events::handle_key_event;
+use std::borrow::Cow;
 
 /// Build a `ViewApp` from the demo fixture with a deterministic tab.
 ///
@@ -544,7 +545,7 @@ fn compliance_verdict_counts_passed_checks_and_lists_none() {
         component_id: Some(format!("crypto/algorithm/{name}")),
         finding_detail: None,
         requirement: "FIPS 203/204/205: approved".to_string(),
-        standard_refs: Vec::new(),
+        standard_refs: Cow::Borrowed(&[]),
     };
     let mut app = demo_view_app(ViewTab::Compliance);
     let pqc_idx = ComplianceLevel::all()
@@ -1674,9 +1675,13 @@ fn pqc_cnsa_cell_ignores_non_error_violations() {
                     rule_id: "TEST-CNSA-PROBE",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 }],
             ),
             ComplianceResult::new(ComplianceLevel::NistPqc, vec![]),
@@ -2156,6 +2161,28 @@ fn overview_distributions_are_labelled_and_complete() {
     assert!(
         text.contains("unlicensed:"),
         "unlicensed components get their own labelled line:\n{text}"
+    );
+}
+
+/// SPDX 3 `profileConformance` renders as the document's profiles, not as
+/// a distribution classification: until v0.4.0 the parser stored the
+/// profiles in the TLP field, so they showed as "Distribution".
+#[test]
+fn overview_shows_spdx3_profiles_apart_from_the_distribution() {
+    let mut app = demo_view_app(ViewTab::Overview);
+    app.sbom.document.profile_conformance = vec![
+        "core".to_string(),
+        "software".to_string(),
+        "security".to_string(),
+    ];
+    let text = render_to_text(120, 40, |frame| render(frame, &mut app));
+    assert!(
+        text.contains("Profiles:     core, software, security"),
+        "the declared profiles get their own line:\n{text}"
+    );
+    assert!(
+        !text.contains("Distribution:"),
+        "no distribution classification is shown:\n{text}"
     );
 }
 

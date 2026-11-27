@@ -3,13 +3,16 @@
 //! Implements the `view` subcommand for viewing a single SBOM.
 
 use crate::config::ViewConfig;
-use crate::model::{BomProfile, NormalizedSbom, Severity};
+use crate::model::{BomProfile, CanonicalId, NormalizedSbom, Severity};
 use crate::pipeline::{
-    OutputTarget, auto_detect_format, parse_sbom_with_context, should_use_color, write_output,
+    OutputTarget, ParsedSbom, auto_detect_format, parse_sbom_with_context, should_use_color,
+    write_output,
 };
+use crate::quality::{ComplianceLevel, ComplianceRunConfig};
 use crate::reports::{ReportConfig, ReportFormat, create_reporter_with_options};
 use crate::tui::{ViewApp, run_view_tui};
 use anyhow::Result;
+use std::collections::HashSet;
 
 /// Run the view command
 #[allow(clippy::needless_pass_by_value)]
@@ -45,28 +48,10 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         parse_severity(s)?;
     }
 
-    // Resolve the CRA sidecar once for both the TUI and report paths: an
-    // explicit --cra-sidecar that fails to load is a hard error; auto-
-    // discovery next to the SBOM stays best-effort.
-    let cra_sidecar =
-        super::load_cra_sidecar(config.cra_sidecar_path.as_deref(), &config.sbom_path)?;
-
-    // Resolve the effective CRA product class once for both paths as well
-    // (the TUI branch used to silently drop the flag while the report path
-    // applied it): sidecar wins; an explicitly passed unrecognized value is
-    // a hard error.
-    let cli_class = super::parse_cra_product_class(config.cra_product_class.as_deref())?;
-    let sidecar_class = cra_sidecar.as_ref().and_then(|s| s.product_class);
-    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
-        && cli != side
-    {
-        tracing::warn!(
-            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
-            cli.label(),
-            side.label()
-        );
-    }
-    let effective_class = sidecar_class.or(cli_class);
+    // Resolve the compliance inputs once for the TUI, the reports and
+    // `--validate-ntia`, exactly as `validate` does (the TUI used to drop the
+    // clock and hand every standard the sidecar and the product class).
+    let compliance = compliance_run(&config)?;
 
     let mut parsed = parse_sbom_with_context(&config.sbom_path, false)?;
 
@@ -77,7 +62,15 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
     #[cfg(feature = "enrichment")]
     if config.enrichment.enabled {
         let osv_config = crate::pipeline::build_enrichment_config(&config.enrichment);
-        if crate::pipeline::enrich_sbom(parsed.sbom_mut(), &osv_config, false).is_none() {
+        let stats = crate::pipeline::enrich_sbom(parsed.sbom_mut(), &osv_config, false);
+        // `enrich_sbom` has already printed the cause to stderr.
+        super::require_vuln_data(
+            config.fail_on_vuln,
+            stats
+                .as_ref()
+                .is_none_or(crate::enrichment::EnrichmentStats::is_incomplete),
+        )?;
+        if stats.is_none() {
             enrichment_warnings.push("OSV vulnerability enrichment failed");
         }
     }
@@ -208,6 +201,7 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
             "Warning: enrichment requested but the 'enrichment' feature is not enabled. \
              Rebuild with: cargo build --features enrichment"
         );
+        super::require_vuln_data(config.fail_on_vuln, config.enrichment.enabled)?;
     }
 
     // Count vulnerabilities BEFORE display filters are applied: the
@@ -221,44 +215,34 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         .map(|c| c.vulnerabilities.len())
         .sum();
 
-    // Apply filters to SBOM
-    let filtered_count = apply_view_filters(parsed.sbom_mut(), &config)?;
-    if filtered_count > 0 {
-        tracing::info!(
-            "Filtered to {} components (removed {})",
-            parsed.sbom().component_count(),
-            filtered_count
-        );
-    }
+    // The display filters narrow the component list only. What judges the
+    // SBOM (--validate-ntia, the compliance tab and its exports, the
+    // quality score, the CRA section of a report) reads the whole SBOM,
+    // `whole`, so its verdicts are those of `validate`.
+    let whole = filter_view(&mut parsed, &config)?;
 
     // Run NTIA validation if requested
     if config.validate_ntia {
-        super::validate::print_ntia_validation(parsed.sbom());
+        let judged = whole.as_ref().unwrap_or_else(|| parsed.sbom());
+        super::validate::print_ntia_validation(judged, &compliance);
     }
 
     // Output the result
     let output_target = OutputTarget::from_option(config.output.file.clone());
     let effective_output = auto_detect_format(config.output.format, &output_target);
 
-    // Resolve BOM profile (CLI override or auto-detect)
+    // Resolve BOM profile (CLI override or auto-detect), of the whole SBOM
+    // like the quality score it picks the scoring profile for.
     let bom_profile = config
         .bom_profile
-        .unwrap_or_else(|| BomProfile::detect(parsed.sbom()));
+        .unwrap_or_else(|| BomProfile::detect(whole.as_ref().unwrap_or_else(|| parsed.sbom())));
     tracing::info!("BOM profile: {bom_profile}");
 
     if effective_output == ReportFormat::Tui {
-        // The compliance tab's OSS-Steward / EUCC / Article 14 /
-        // product-class checks render against the same sidecar metadata and
-        // effective product class the CLI report path uses (both resolved
-        // once at the top of `run_view`).
-        let (sbom, raw_content) = parsed.into_parts();
-        let mut app = ViewApp::new(sbom, &raw_content, bom_profile);
-        if let Some(sc) = cra_sidecar.clone() {
-            app = app.with_cra_sidecar(sc);
-        }
-        if let Some(c) = effective_class {
-            app = app.with_cra_product_class(c);
-        }
+        // The compliance tab, its exports and the quality tab judge the same
+        // run as `validate`: one clock, and the sidecar and product class
+        // only where `validate` applies them.
+        let mut app = view_app(parsed, whole, bom_profile, compliance);
         app.export_template = config.output.export_template.clone();
 
         // Show enrichment warnings in TUI footer
@@ -271,12 +255,13 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         run_view_tui(&mut app, config.output.no_color)?;
     } else {
         // SARIF results point at the SBOM lines of their components, found
-        // in the text before it is dropped.
+        // in the text before it is dropped. The CRA findings judge the whole
+        // SBOM, so its components are the ones to locate.
         let sarif_artifact = if effective_output == ReportFormat::Sarif {
             Some(super::sarif_artifact(
                 &config.sbom_path,
                 config.output.sarif_base.as_deref(),
-                parsed.sbom(),
+                whole.as_ref().unwrap_or_else(|| parsed.sbom()),
                 parsed.raw_content(),
             )?)
         } else {
@@ -285,9 +270,9 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
         parsed.drop_raw_content();
         output_view_report(
             &config,
-            cra_sidecar,
-            effective_class,
+            &compliance,
             parsed.sbom(),
+            whole.as_ref().unwrap_or_else(|| parsed.sbom()),
             &output_target,
             sarif_artifact,
         )?;
@@ -300,13 +285,84 @@ pub fn run_view(config: ViewConfig) -> Result<i32> {
     Ok(crate::pipeline::exit_codes::SUCCESS)
 }
 
-/// Apply view filters to the SBOM, returns number of components removed.
+/// The compliance run of `view`: its `--as-of`, `--cra-product-class`, CRA
+/// sidecar (`--cra-sidecar`, else the one next to the SBOM), PQC flags, rule
+/// settings and component scope, resolved by the helper `validate` uses.
+pub(crate) fn compliance_run(config: &ViewConfig) -> Result<ComplianceRunConfig> {
+    let run = super::compliance_run_config_for(
+        &config.sbom_path,
+        config.cra_sidecar_path.as_deref(),
+        config.cra_product_class.as_deref(),
+        config.as_of.as_deref(),
+        super::PqcOptions {
+            mode: config.pqc_mode.unwrap_or_default(),
+            profile: config.pqc_profile,
+            cnsa_category: config.cnsa_category,
+        },
+        &super::RuleOptions {
+            settings: config.rule_settings.clone(),
+            include_excluded_scope: config.include_excluded_scope,
+        },
+    )?;
+    // The compliance tab checks every standard.
+    run.warn_on_unmatched_rules(ComplianceLevel::all(), "the standards");
+    Ok(run)
+}
+
+/// Apply the view filters (`--severity`, `--ecosystem`,
+/// `--vulnerable-only`) to the listed SBOM, and return the whole SBOM it was
+/// when they removed a component: the SBOM the view's verdicts judge.
+/// `None` when nothing was removed, so the listed SBOM is whole.
+///
+/// # Errors
+///
+/// An unrecognized `--severity` value.
+pub(crate) fn filter_view(
+    parsed: &mut ParsedSbom,
+    config: &ViewConfig,
+) -> Result<Option<NormalizedSbom>> {
+    let removed = filtered_out(parsed.sbom(), config)?;
+    if removed.is_empty() {
+        return Ok(None);
+    }
+    let whole = parsed.sbom().clone();
+    remove_components(parsed.sbom_mut(), &removed);
+    tracing::info!(
+        "Filtered to {} components (removed {}); compliance and the quality score judge all {}",
+        parsed.sbom().component_count(),
+        removed.len(),
+        whole.component_count()
+    );
+    Ok(Some(whole))
+}
+
+/// The `view` TUI for `parsed`, the SBOM the filters left. With `whole`,
+/// the SBOM before filtering (see [`filter_view`]), the compliance tab, its
+/// exports and the quality score judge `whole`, as `validate` does; the
+/// tabs list `parsed`.
+pub(crate) fn view_app(
+    parsed: ParsedSbom,
+    whole: Option<NormalizedSbom>,
+    bom_profile: BomProfile,
+    compliance: ComplianceRunConfig,
+) -> ViewApp {
+    let (sbom, raw_content) = parsed.into_parts();
+    match whole {
+        Some(whole) => ViewApp::new_filtered(sbom, whole, &raw_content, bom_profile, compliance),
+        None => ViewApp::new_with_compliance(sbom, &raw_content, bom_profile, compliance),
+    }
+}
+
+/// Drop the components `removed` names, keeping the others in order.
+fn remove_components(sbom: &mut NormalizedSbom, removed: &HashSet<CanonicalId>) {
+    sbom.components.retain(|id, _| !removed.contains(id));
+}
+
+/// The canonical ids of the components the view filters remove.
 ///
 /// Errors if `--severity` carries an unrecognized value (which previously
 /// disabled severity filtering silently).
-pub fn apply_view_filters(sbom: &mut NormalizedSbom, config: &ViewConfig) -> Result<usize> {
-    let original_count = sbom.component_count();
-
+fn filtered_out(sbom: &NormalizedSbom, config: &ViewConfig) -> Result<HashSet<CanonicalId>> {
     // Parse minimum severity if provided (strict: unknown values hard-error)
     let min_severity = config
         .min_severity
@@ -318,7 +374,7 @@ pub fn apply_view_filters(sbom: &mut NormalizedSbom, config: &ViewConfig) -> Res
     let ecosystem_filter = config.ecosystem_filter.as_ref().map(|e| e.to_lowercase());
 
     // Collect keys to remove
-    let keys_to_remove: Vec<_> = sbom
+    let keys_to_remove = sbom
         .components
         .iter()
         .filter_map(|(key, comp)| {
@@ -358,13 +414,7 @@ pub fn apply_view_filters(sbom: &mut NormalizedSbom, config: &ViewConfig) -> Res
             None
         })
         .collect();
-
-    // Remove filtered components
-    for key in &keys_to_remove {
-        sbom.components.shift_remove(key);
-    }
-
-    Ok(original_count - sbom.component_count())
+    Ok(keys_to_remove)
 }
 
 /// Parse a `--severity` filter value strictly.
@@ -396,29 +446,21 @@ pub fn severity_meets_minimum(severity: &Severity, minimum: &Severity) -> bool {
     severity_order(severity) >= severity_order(minimum)
 }
 
-/// Output view report to file or stdout
+/// Output view report to file or stdout: the components of `sbom`, the SBOM
+/// the filters left, and the CRA verdict on `judged`, the whole SBOM.
 fn output_view_report(
     config: &ViewConfig,
-    sidecar: Option<crate::model::CraSidecarMetadata>,
-    effective_class: Option<crate::model::CraProductClass>,
+    compliance: &ComplianceRunConfig,
     sbom: &NormalizedSbom,
+    judged: &NormalizedSbom,
     output_target: &OutputTarget,
     sarif_artifact: Option<crate::reports::SarifArtifact>,
 ) -> Result<()> {
     let effective_output = auto_detect_format(config.output.format, output_target);
 
-    // Pre-compute CRA compliance once for reporters, using the sidecar and
-    // effective product class resolved in `run_view` (explicit values
-    // hard-error there; sidecar discovery is best-effort).
-    let mut checker =
-        crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::CraPhase2);
-    if let Some(sc) = sidecar {
-        checker = checker.with_sidecar(sc);
-    }
-    if let Some(c) = effective_class {
-        checker = checker.with_product_class(c);
-    }
-    let cra_result = checker.check(sbom);
+    // Pre-compute CRA compliance once for reporters, with the run resolved
+    // in `run_view` (explicit values hard-error there).
+    let cra_result = compliance.check(ComplianceLevel::CraPhase2, judged);
 
     let report_config = ReportConfig {
         report_types: vec![config.output.report_types],
@@ -513,24 +555,61 @@ mod tests {
             enrichment: crate::config::EnrichmentConfig::default(),
             cra_sidecar_path: None,
             cra_product_class: None,
+            as_of: None,
+            pqc_mode: None,
+            pqc_profile: None,
+            cnsa_category: None,
+            rule_settings: crate::quality::RuleSettings::new(),
+            include_excluded_scope: false,
         }
     }
 
     #[test]
-    fn test_apply_view_filters_no_filters() {
-        let mut sbom = NormalizedSbom::default();
+    fn test_view_filters_no_filters() {
+        let sbom = NormalizedSbom::default();
         let config = test_view_config(None);
 
-        let removed = apply_view_filters(&mut sbom, &config).expect("no filters should succeed");
-        assert_eq!(removed, 0);
+        let removed = filtered_out(&sbom, &config).expect("no filters should succeed");
+        assert!(removed.is_empty());
     }
 
     #[test]
-    fn test_apply_view_filters_invalid_severity_errors() {
-        let mut sbom = NormalizedSbom::default();
+    fn test_view_filters_invalid_severity_errors() {
+        let sbom = NormalizedSbom::default();
         let config = test_view_config(Some("banana"));
 
-        let err = apply_view_filters(&mut sbom, &config).expect_err("should reject");
+        let err = filtered_out(&sbom, &config).expect_err("should reject");
         assert!(err.to_string().contains("invalid --severity"));
+    }
+
+    /// A filter that removes components keeps the whole SBOM aside for the
+    /// verdicts; one that removes nothing keeps nothing aside.
+    #[test]
+    fn filter_view_keeps_the_whole_sbom_when_it_removes_components() {
+        use crate::model::{Component, VulnerabilityRef, VulnerabilitySource};
+        let mut sbom = NormalizedSbom::default();
+        let mut vulnerable = Component::new("axios".to_string(), "axios".to_string());
+        vulnerable.vulnerabilities.push(VulnerabilityRef::new(
+            "CVE-2023-45857".to_string(),
+            VulnerabilitySource::Osv,
+        ));
+        sbom.add_component(vulnerable);
+        sbom.add_component(Component::new("zod".to_string(), "zod".to_string()));
+        let parsed = || ParsedSbom::new(sbom.clone(), String::new());
+
+        let mut config = test_view_config(None);
+        let mut unfiltered = parsed();
+        assert!(
+            filter_view(&mut unfiltered, &config)
+                .expect("filters")
+                .is_none()
+        );
+        assert_eq!(unfiltered.sbom().component_count(), 2);
+
+        config.vulnerable_only = true;
+        let mut listed = parsed();
+        let whole = filter_view(&mut listed, &config).expect("filters");
+        assert_eq!(listed.sbom().component_count(), 1);
+        assert_eq!(whole.map(|w| w.component_count()), Some(2));
     }
 }

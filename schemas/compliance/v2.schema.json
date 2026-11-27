@@ -8,6 +8,8 @@
   "properties": {
     "schema": {"const": "sbom-tools/compliance/v2"},
     "tool": {"$ref": "#/$defs/tool"},
+    "as_of": {"type": "string", "format": "date-time", "description": "The instant every standard was judged at: --as-of, else the wall clock when the run started, to the second. RFC 3339 in UTC. `validate` always writes it."},
+    "subject": {"$ref": "#/$defs/subject"},
     "results": {
       "type": "array",
       "description": "One entry per checked standard, in --standard order.",
@@ -17,6 +19,29 @@
   },
   "$defs": {
     "count": {"type": "integer", "minimum": 0},
+    "subject": {
+      "type": "object",
+      "description": "The SBOM the results judge, and how its document was read. `validate` always writes it.",
+      "required": ["sha256", "format", "spec_version", "components", "duplicates", "timestamp_unparsed"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Lowercase hex SHA-256 of the bytes read."},
+        "format": {"enum": ["CycloneDX", "SPDX"]},
+        "spec_version": {"type": "string", "description": "The specification version the document declares, e.g. `1.6`, `2.3`, `3.0.1`."},
+        "file_name": {"type": "string", "minLength": 1, "description": "The SBOM file's name, without its directory. Absent for an SBOM read from standard input, and from the C ABI unless its `file_name` option names the file."},
+        "components": {"$ref": "#/$defs/count", "description": "The components the document lists, after the entries of a component listed more than once were merged into one."},
+        "duplicates": {
+          "type": "object",
+          "description": "The components the document lists more than once, whose entries were merged.",
+          "required": ["components", "entries", "conflicts"],
+          "properties": {
+            "components": {"$ref": "#/$defs/count", "description": "Components listed more than once."},
+            "entries": {"$ref": "#/$defs/count", "description": "Their entries, before the merge."},
+            "conflicts": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "description": "The fields the entries give two different real values, each once, sorted (e.g. `description`, `licenses.concluded`). The merged component keeps the value that sorts first."}
+          }
+        },
+        "timestamp_unparsed": {"type": "boolean", "description": "Whether the document has a creation timestamp that is no RFC 3339 date-time. The checks then count it as absent and quote it."}
+      }
+    },
     "tool": {
       "type": "object",
       "required": ["name", "version"],
@@ -34,22 +59,36 @@
         "applicable": {"type": "boolean", "description": "Whether the standard evaluated the SBOM. When false the standard did not apply: `compliant` stays true by contract and must not be read as a pass."},
         "not_applicable_reason": {"type": "string", "description": "Why the standard did not apply. Present exactly when `applicable` is false."},
         "compliant": {"type": "boolean", "description": "No error-severity violations. Meaningful only when `applicable` is true."},
-        "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "Compliance score; null exactly when `applicable` is false."},
+        "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "Compliance score: (50 when `compliant`, else 0) + floor(50 × checked / (checked + failed)), with `checked` and `failed` from `score_basis`. A compliant result scores 50–100, a non-compliant one 0–49; Info findings and passed checks never move it. Null exactly when `applicable` is false."},
+        "score_basis": {"$ref": "#/$defs/score_basis"},
         "counts": {"$ref": "#/$defs/counts"},
         "violations": {"type": "array", "items": {"$ref": "#/$defs/violation"}},
         "passed": {"type": "array", "description": "Checks the SBOM passed, such as an algorithm NIST approves for post-quantum use. Not violations: no severity count includes them. Empty when the standard passed no check or did not apply.", "items": {"$ref": "#/$defs/passed_check"}},
+        "evaluated": {"type": "array", "description": "Checks of the standard that did not run on this SBOM, each with the reason: the format or spec version cannot carry what the check reads, the version does not parse, the run's inputs leave it out, the SBOM lists none of the components it is about, or the SBOM is too large. Absent when every check ran, and for a standard that did not apply.", "minItems": 1, "items": {"$ref": "#/$defs/rule_evaluation"}},
+        "suppressed": {"type": "array", "minItems": 1, "description": "The rules whose findings the run's rule settings (--rule, the config file's compliance.rules) turned off, by rule id. Their findings count toward no severity, the verdict or the score. Absent when no finding was turned off.", "items": {"$ref": "#/$defs/suppressed_rule"}},
+        "excluded_components": {"type": "integer", "minimum": 1, "description": "Components the package rules left out because their scope is excluded (CycloneDX `scope: excluded`, an SPDX development, build or test dependency). Absent when none, under --include-excluded-scope, and for a standard without package rules (cnsa2, pqc, eucc, ai-act, bsi-ai)."},
         "conformity_summary": {"$ref": "#/$defs/conformity_summary"}
+      }
+    },
+    "score_basis": {
+      "type": "object",
+      "description": "What `score` is computed from. Present exactly when `applicable` is true.",
+      "required": ["checked", "failed"],
+      "properties": {
+        "checked": {"$ref": "#/$defs/count", "description": "Elements the standard checked: the document, plus the components in its scope (cryptographic assets for cnsa2 and pqc, ML models, datasets and components that look like ML models for ai-act and bsi-ai, none for eucc, package-scoped components for the others, less those left out for their excluded scope). At least 1."},
+        "failed": {"$ref": "#/$defs/count", "description": "Checks the errors and warnings failed: one per finding about one subject, and one per failing item for an aggregate finding (one with `counts`). Info findings fail none."}
       }
     },
     "counts": {
       "type": "object",
-      "description": "Violations per severity, and passed checks.",
+      "description": "Violations per severity, passed checks, and the findings rule settings turned off.",
       "required": ["error", "warning", "info", "passed"],
       "properties": {
         "error": {"$ref": "#/$defs/count"},
         "warning": {"$ref": "#/$defs/count"},
         "info": {"$ref": "#/$defs/count"},
-        "passed": {"$ref": "#/$defs/count", "description": "Entries of `passed`."}
+        "passed": {"$ref": "#/$defs/count", "description": "Entries of `passed`."},
+        "suppressed": {"type": "integer", "minimum": 1, "description": "Findings the rule settings turned off: the sum of `suppressed[].findings`. No other count includes them. Absent when none."}
       }
     },
     "passed_check": {
@@ -75,19 +114,35 @@
       "properties": {
         "finding_id": {"type": "string", "pattern": "^sbomtools:v1:[0-9a-f]{16}$", "description": "`sbomtools:v1:` followed by the first 16 hex digits of SHA-256(finding_key)."},
         "finding_key": {"type": "string", "pattern": "^[^|]+\\|[^|]+\\|", "description": "`<standard>|<rule_id>|<subject>`, or `<standard>|<rule_id>:<finding_detail>|<subject>` with `%`, `|` and `:` in the detail percent-encoded; the subject (everything after the second `|`) is `document` or the component's canonical id, prefixed `component:` when the id itself reads `document` or starts with `edge:` or `component:`."},
-        "severity": {"enum": ["Error", "Warning", "Info"]},
+        "severity": {"enum": ["Error", "Warning", "Info"], "description": "The severity the verdict, the counts, the score and the exit code read: the one the run's rule settings give the rule, if they set it."},
+        "default_severity": {"enum": ["Error", "Warning", "Info"], "description": "When the run's rule settings set the finding's rule (--rule, the config file's compliance.rules): the severity the check gave the finding. Present exactly when `severity_source` is."},
+        "severity_source": {"enum": ["config", "cli"], "description": "Where the setting that gives the finding its `severity` comes from: `config` (the config file) or `cli` (set by the invocation: a --rule flag or an ABI option). Present exactly when `default_severity` is."},
         "category": {"type": "string", "minLength": 1, "description": "Violation category, e.g. DocumentMetadata, ComponentIdentification, SupplierInfo."},
         "message": {"type": "string"},
         "element": {"type": ["string", "null"], "description": "Human-readable label of the offending element; not unique."},
         "component_id": {"type": "string", "description": "Canonical id of the offending component; absent for document-level and aggregate findings."},
         "finding_detail": {"type": "string", "description": "What tells this finding apart from the rule's other findings on the same subject: a value from the SBOM, such as the vulnerability id or the cipher suite, numbered (`#2`, `#3`, …) where the SBOM lists the entry twice. Absent when the rule reports at most one finding per subject."},
         "counts": {"$ref": "#/$defs/violation_counts"},
+        "deadline": {"type": "string", "format": "date", "description": "Under --pqc-mode deadline, the migration milestone a cnsa2 or pqc finding is judged against: the last day before its severity rises, or for an error the last day the algorithm was allowed. Absent in readiness mode and for a finding no schedule dates; present exactly when `deadline_source` is."},
+        "deadline_source": {"type": "string", "minLength": 1, "description": "The schedule that sets `deadline`, e.g. `NIST IR 8547 Table 4`. Present exactly when `deadline` is."},
+        "field": {"type": "string", "minLength": 1, "description": "Where the field the rule checks lives in the SBOM's own format, in its JSON shape: `components[].supplier.name` (CycloneDX; `metadata.component.…` for the primary component), `packages[].supplier` (SPDX 2.x), `suppliedBy` (SPDX 3.0). The registry's per-format field, as `sbom-tools rules explain` shows it. Absent when the rule names no field in the document's format."},
+        "observed": {"type": "string", "maxLength": 200, "description": "The value the check read from the SBOM, such as a placeholder supplier, a digest that does not count (`SHA-256:<value>`), a future timestamp or a rejected algorithm. SBOM text kept as read, like `message` and `element`: at most 200 characters, ending in `…` when cut. Absent when the field is missing or the check reads no single value."},
         "requirement": {"type": "string"},
         "rule_id": {"type": "string", "minLength": 1, "description": "Stable internal rule key."},
         "sarif_rule_id": {"type": "string", "minLength": 1, "description": "Rule id the SARIF output reports for this violation."},
         "standard_refs": {"type": "array", "items": {"$ref": "#/$defs/standard_ref"}},
-        "remediation": {"type": "string", "description": "How to fix the violation (populated by a later release)."},
-        "help_uri": {"type": "string", "description": "Documentation link for the rule (populated by a later release)."}
+        "remediation": {"type": "string", "description": "How to fix the violation, phrased for the SBOM's format."},
+        "help_uri": {"type": "string", "description": "The rule's documentation link: the URL of the first standard reference that has one, else the page of the rule's standard, as `sbom-tools rules` gives it."}
+      }
+    },
+    "rule_evaluation": {
+      "type": "object",
+      "description": "A check the standard did not evaluate on the SBOM. It reports no violation and no passed check.",
+      "required": ["rule_id", "status", "reason"],
+      "properties": {
+        "rule_id": {"type": "string", "minLength": 1, "description": "The rule of the check, one of the rules `sbom-tools rules --standard` lists for the standard."},
+        "status": {"enum": ["not_evaluated"], "description": "Always `not_evaluated`."},
+        "reason": {"type": "string", "minLength": 1, "description": "Why the check did not run, in sbom-tools' own words."}
       }
     },
     "violation_counts": {
@@ -97,6 +152,16 @@
       "properties": {
         "affected": {"$ref": "#/$defs/count"},
         "total": {"$ref": "#/$defs/count"}
+      }
+    },
+    "suppressed_rule": {
+      "type": "object",
+      "description": "A rule whose findings the run turned off (--rule RULE=off).",
+      "required": ["rule_id", "findings", "source"],
+      "properties": {
+        "rule_id": {"type": "string", "minLength": 1, "description": "The rule's id."},
+        "findings": {"type": "integer", "minimum": 1, "description": "How many of its findings the run dropped."},
+        "source": {"enum": ["config", "cli"], "description": "Where the `off` setting comes from: `config` (the config file) or `cli` (set by the invocation: a --rule flag or an ABI option)."}
       }
     },
     "standard_ref": {

@@ -2,9 +2,10 @@
 //! (BSI TR-03183-2 v2.1.0). The Error-level §5.2.1 timestamp (5-2) and
 //! §5.2.2 dependency (5-5) rules were previously never asserted.
 //!
-//! BSI shares the CRA-family `COMPLIANCE_SARIF_RULE_IDS` catalogue, so its
-//! universe is that slice's `SBOM-BSI-TR-03183-2-*` ids: a BSI rule added to
-//! the slice cannot land without a row here. Every id gets a firing fixture
+//! The universe is every registered `SBOM-BSI-TR-03183-2-*` rule but the
+//! fallback, which `run_matrix` requires to be the level's rule list
+//! (`rules_for_level`): a BSI rule added to the registry cannot land
+//! without a row here. Every id gets a firing fixture
 //! and a silent fixture (rendered in each of the four encodings and run
 //! through the real parser), or an explicit skip-with-reason. §4 admits SPDX
 //! from 3.0.1 only, so every SPDX 2.3 rendering also fails SBOM-BSI-TR-03183-2-4.
@@ -13,20 +14,25 @@
 mod rule_matrix;
 
 use rule_matrix::{
-    ComponentFixture, Encoding, Outcome, RuleEntry, SHA256_FILLER, SHA512_FILLER,
-    SPDX_VERSION_CASE, SPDX3_AGENT_EMAILS_NOT_READ, SPDX23_HAS_NO_COMPLETENESS,
-    SPDX23_HAS_NO_VULNERABILITIES, SbomFixture, assert_no_violations_in, run_matrix,
+    ComponentFixture, Encoding, IMPLAUSIBLE_SHA512_DIGESTS, Outcome, RuleEntry, SHA256_FILLER,
+    SHA512_FILLER, SPDX_VERSION_CASE, SPDX3_AGENT_EMAILS_NOT_READ, SPDX23_HAS_NO_COMPLETENESS,
+    SPDX23_HAS_NO_VULNERABILITIES, SbomFixture, UNPARSEABLE_TIMESTAMP, assert_no_violations_in,
+    run_matrix,
 };
-use sbom_tools::quality::{COMPLIANCE_SARIF_RULE_IDS, ComplianceLevel, ViolationSeverity as Sev};
+use sbom_tools::quality::{
+    ComplianceLevel, ViolationSeverity as Sev, all_rule_ids, generic_rule_id_for_level,
+};
 
 const LEVEL: ComplianceLevel = ComplianceLevel::BsiTr03183_2;
 
-/// The BSI rules of the shared CRA-family SARIF catalogue.
+/// The registered BSI rules but the fallback rule, which no check emits.
 fn bsi_universe() -> Vec<&'static str> {
-    COMPLIANCE_SARIF_RULE_IDS
+    all_rule_ids()
         .iter()
         .copied()
-        .filter(|id| id.starts_with("SBOM-BSI-TR-03183-2-"))
+        .filter(|id| {
+            id.starts_with("SBOM-BSI-TR-03183-2-") && *id != generic_rule_id_for_level(LEVEL)
+        })
         .collect()
 }
 
@@ -117,12 +123,28 @@ fn bsi_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.authors.clear()),
             base(),
         ),
-        // A creator is present but carries neither an email nor a URL.
+        // A creator is present but carries neither an email nor a URL, or
+        // only one that reaches nobody (as in every contact check).
         RuleEntry::tested(
             "SBOM-BSI-TR-03183-2-5-1-CONTACT",
             Sev::Warning,
             broken(|s| s.authors = vec![("Dana Author".to_string(), None)]),
             base(),
+        )
+        .with_firing(
+            "the creator's email is a placeholder",
+            Sev::Warning,
+            broken(|s| s.authors = vec![("Dana Author".to_string(), Some("n/a".to_string()))]),
+        )
+        .with_firing(
+            "the creator's email is at a documentation domain",
+            Sev::Warning,
+            broken(|s| {
+                s.authors = vec![(
+                    "Dana Author".to_string(),
+                    Some("dana@example.org".to_string()),
+                )];
+            }),
         )
         .case_only(
             "silent",
@@ -134,6 +156,11 @@ fn bsi_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Error,
             broken(|s| s.timestamp = None),
             base(),
+        )
+        .with_firing(
+            "unparseable timestamp",
+            Sev::Error,
+            broken(|s| s.timestamp = Some(UNPARSEABLE_TIMESTAMP.to_string())),
         ),
         // "unknown" without a corroborating PURL name segment is no name.
         RuleEntry::tested(
@@ -188,7 +215,15 @@ fn bsi_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
                     vec![("SHA-256".to_string(), SHA256_FILLER.to_string())];
             }),
             base(),
-        ),
+        )
+        // The SHA-512 must be a plausible digest: an empty, non-hex or
+        // wrong-length value is a present field that fails, not an
+        // omission (§3.2.1).
+        .with_implausible_digests(Sev::Error, &IMPLAUSIBLE_SHA512_DIGESTS, |alg, value| {
+            broken(|s| {
+                s.component_mut("libalpha").hashes = vec![(alg.to_string(), value.to_string())];
+            })
+        }),
         // No hash at all is a Warning (§3.2.1 allows omission when the
         // information cannot exist for the component).
         RuleEntry::tested(

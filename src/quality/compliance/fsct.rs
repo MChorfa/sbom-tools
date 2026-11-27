@@ -23,8 +23,10 @@
 //!   via `CreatorComment` per Table 1 and SPDX 3.0 via `Software.Sbom
 //!   .sbomType`, but neither evidence path is parsed here — the check is
 //!   gated to CycloneDX input.
-//! - `SBOM-FSCT-SIGNATURE`: SPDX has no in-band signature field; gated to
-//!   CycloneDX (JSF `signature`).
+//! - `SBOM-FSCT-SIGNATURE`: SPDX 2.x has no in-band signature field, so the
+//!   check skips it (see `is_spdx2`); CycloneDX (JSF or XML-DSig
+//!   `signature`) and SPDX 3 (`verifiedUsing` signature) are checked, as
+//!   `SBOM-CISA2026-SIGNATURE` checks them.
 //! - `SBOM-FSCT-DYNAMIC-DEPS`: dynamic/runtime/provided link relationships
 //!   are parsed only from SPDX relationships (`DYNAMIC_LINK`,
 //!   `RUNTIME_DEPENDENCY_OF`, `PROVIDED_DEPENDENCY_OF`); CycloneDX's
@@ -35,6 +37,9 @@
 //!   `PackageLicenseConcluded`; the CycloneDX 1.6
 //!   `licenses[].acknowledgement` field is not parsed, so the prong is gated
 //!   to SPDX input.
+//!
+//! A gated check is listed as not evaluated on the formats it skips, so its
+//! silence there does not read as a pass.
 //!
 //! Profile-policy heuristics (documented as policy, not standard text —
 //! "as many as possible"-style tiers are not crisply verifiable from the
@@ -59,13 +64,14 @@
 //!
 //! The rule catalogue for this profile lives in the registry
 //! (`SBOM-FSCT-*`, see `FSCT_SARIF_RULE_IDS`).
+//!
+//! The checks read the run's evidence (see [`super::evidence`]), never the
+//! SBOM itself.
 
+use super::evidence::SbomEvidence;
+use super::shared::unparseable_timestamp_of;
 use super::*;
-use crate::model::{
-    CanonicalId, CompletenessDeclaration, Component, CreatorType, DependencyType, ExternalRefType,
-    HashAlgorithm, HashProvenance, SbomFormat,
-};
-use std::collections::HashSet;
+use crate::model::{CompletenessDeclaration, CreatorType, SbomFormat};
 
 impl ComplianceChecker {
     // ════════════════════════════════════════════════════════════════════
@@ -75,13 +81,30 @@ impl ComplianceChecker {
     /// CISA FSCT 3e compliance checks: one evidence pass over the document,
     /// then per-tier emission (Minimum Expected → Error, Recommended
     /// Practice → Warning, Aspirational Goal → Info).
-    pub(crate) fn check_fsct(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
-        let evidence = FsctEvidence::collect(sbom);
-        fsct_minimum_expected(sbom, &evidence, violations);
-        fsct_recommended_practice(sbom, &evidence, violations);
-        fsct_aspirational_goals(sbom, &evidence, violations);
+    pub(crate) fn check_fsct(&self, ctx: &ComplianceContext<'_, '_>, findings: &mut Findings) {
+        let Findings {
+            violations,
+            not_evaluated,
+            ..
+        } = findings;
+        let evidence = FsctEvidence::collect(ctx);
+        fsct_minimum_expected(ctx.ev, &evidence, violations);
+        fsct_recommended_practice(ctx.ev, &evidence, violations);
+        fsct_aspirational_goals(ctx.ev, &evidence, violations, not_evaluated);
     }
 }
+
+/// Why SBOM-FSCT-DYNAMIC-DEPS did not run on CycloneDX (see the module docs).
+const CYCLONEDX_NO_DYNAMIC_DEPS: &str =
+    "a CycloneDX dependency graph cannot mark a dependency dynamic, runtime or provided";
+
+/// Why SBOM-FSCT-LICENSE-CONCLUDED did not run on CycloneDX.
+const CYCLONEDX_CONCLUDED_NOT_READ: &str = "sbom-tools reads concluded licenses from SPDX \
+     (PackageLicenseConcluded) only, not the CycloneDX licenses[].acknowledgement";
+
+/// Why SBOM-FSCT-SBOM-TYPE did not run on SPDX.
+const SPDX_SBOM_TYPE_NOT_READ: &str = "sbom-tools reads the SBOM type from CycloneDX \
+     metadata.lifecycles only, not from an SPDX document";
 
 /// Whether the completeness of the dependency enumeration is genuinely
 /// undeclared (no recorded assertion). Any explicit declaration — including
@@ -101,28 +124,8 @@ const fn completeness_undeclared(declaration: &CompletenessDeclaration) -> bool 
 // the graceful way to differentiate "no assertion" (data missing) from "no
 // value" (not applicable).
 
-/// Whether the component positively asserted it has no dependencies
-/// (CycloneDX dependency entry with an empty `dependsOn`, preserved by the
-/// parser as the `sbom-tools:declared-no-dependencies` property).
-fn declared_no_dependencies(comp: &Component) -> bool {
-    comp.extensions
-        .properties
-        .iter()
-        .any(|p| p.name == crate::parsers::DECLARED_NO_DEPENDENCIES_PROPERTY)
-}
-
-/// Count of distinct globally-unique identifier KINDS declared for a
-/// component (PURL / CPE / SWHID / SWID — the §2.2.2.4 named schemes the
-/// model carries).
-fn identifier_kind_count(comp: &Component) -> usize {
-    usize::from(comp.identifiers.purl.is_some())
-        + usize::from(!comp.identifiers.cpe.is_empty())
-        + usize::from(!comp.identifiers.swhid.is_empty())
-        + usize::from(comp.identifiers.swid.is_some())
-}
-
-/// Evidence gathered in a single pass over the SBOM, shared by the three
-/// tier emitters below.
+/// FSCT's view of the run's evidence: the lists and flags the three tier
+/// emitters below read, built in one walk over the inventory, in its order.
 struct FsctEvidence {
     /// All components (including File/snippet inventory entries).
     total: usize,
@@ -143,14 +146,16 @@ struct FsctEvidence {
     /// Package components with no globally unique identifier and no
     /// authored hash (accepted as intrinsic identifier per §2.2.2.4).
     without_identifier: Vec<String>,
-    /// Package components declaring fewer than two identifier kinds
-    /// (§2.2.2.4 Recommended, profile-policy threshold).
+    /// Package components declaring fewer than two identifier kinds, of
+    /// the §2.2.2.4 named schemes the model carries (PURL / CPE / SWHID /
+    /// SWID) (§2.2.2.4 Recommended, profile-policy threshold).
     fewer_than_two_identifier_kinds: Vec<String>,
-    /// Package components with no author-provided hash (§2.2.2.5 —
-    /// enrichment-fetched hashes are not author evidence).
+    /// Package components with no author-provided, plausible hash
+    /// (§2.2.2.5 — enrichment-fetched hashes are not author evidence), each
+    /// named with why its present hashes did not count.
     without_hash: Vec<String>,
     /// Package components that carry authored hashes but none from the
-    /// SHA-2 ≥256 family (§2.2.2.5 Recommended).
+    /// SHA-2 ≥256 family (§2.2.2.5 Recommended), named as `without_hash`.
     weak_hash_only: Vec<String>,
     /// Package components with no real license expression (§2.2.2.7).
     without_license: Vec<String>,
@@ -159,6 +164,8 @@ struct FsctEvidence {
     /// Components carrying ambiguous placeholder attribute values
     /// (§2.3.1), rendered as "name (field, …)".
     ambiguous_placeholders: Vec<String>,
+    /// The first ambiguous placeholder value read, as written ("TBD").
+    first_placeholder: Option<String>,
     /// Whether any component carries a concluded license (SPDX
     /// `PackageLicenseConcluded` — the §2.2.2.7 Aspirational attestation).
     has_concluded_license: bool,
@@ -178,7 +185,8 @@ struct FsctEvidence {
     all_direct_declared_leaf: bool,
     /// Whether the primary participates in the edge set at all.
     primary_in_edge_set: bool,
-    /// Non-primary components that appear in no dependency edge.
+    /// Non-primary package components that appear in no dependency edge,
+    /// whether or not they assert they have no dependencies.
     orphans: Vec<String>,
     /// Whether any edge carries a dynamic/runtime/provided relationship
     /// (the §2.2.2 / §2.2.2.6 Aspirational positive signal).
@@ -191,8 +199,9 @@ struct FsctEvidence {
 
 impl FsctEvidence {
     #[allow(clippy::too_many_lines)]
-    fn collect(sbom: &NormalizedSbom) -> Self {
-        let total = sbom.components.len();
+    fn collect(ctx: &ComplianceContext<'_, '_>) -> Self {
+        let ev = ctx.ev;
+        let total = ev.component_count();
         let mut pkg_total = 0usize;
         let mut nameless = 0usize;
         let mut without_version = Vec::new();
@@ -204,219 +213,143 @@ impl FsctEvidence {
         let mut without_license = Vec::new();
         let mut without_copyright = Vec::new();
         let mut ambiguous_placeholders = Vec::new();
+        let mut first_placeholder = None;
         let mut has_concluded_license = false;
+        let mut orphans = Vec::new();
 
-        for comp in sbom.components.values() {
+        for comp in ev.components() {
             // §2.2.2.1 applies to every inventory entry, File records
             // included (a file's name is exactly what identifies it).
-            if !known_component_name(comp) {
+            if !comp.name_known() {
                 nameless += 1;
             }
 
             // File/snippet entries and cryptographic assets are exempt from
             // the remaining per-component baseline attributes (see field doc
             // above).
-            if !comp.component_type.is_package_scoped() {
+            if !ctx.judges_package(&comp) {
                 continue;
             }
             pkg_total += 1;
 
-            let mut has_authored_hash = false;
-            let mut has_sha2_256_plus = false;
-            for h in &comp.hashes {
-                if h.provenance == HashProvenance::Authored {
-                    has_authored_hash = true;
-                    // §2.2.2.5 Recommended names the "SHA-2 family (SHA-256
-                    // and higher)". Deliberate literal reading: SHA-3 /
-                    // BLAKE / Streebog are not counted — accepting them
-                    // would extend beyond the document's text.
-                    if matches!(
-                        h.algorithm,
-                        HashAlgorithm::Sha256 | HashAlgorithm::Sha384 | HashAlgorithm::Sha512
-                    ) {
-                        has_sha2_256_plus = true;
-                    }
-                }
-            }
+            // Only author-provided, plausible digests count (see
+            // `plausible_digest`): an empty or garbage value is neither a
+            // hash nor an intrinsic identifier, and the findings name why.
+            // §2.2.2.5 Recommended names the "SHA-2 family (SHA-256 and
+            // higher)". Deliberate literal reading: SHA-3 / BLAKE /
+            // Streebog are not counted — accepting them would extend beyond
+            // the document's text.
+            let authored = comp.authored_hashes();
+            let has_authored_hash = authored.facts.plausible;
+            let has_sha2_256_plus = authored.facts.plausible_sha2_256_plus;
+            let named = || name_with_digest_problems(comp.name(), authored.iter());
 
             // §2.2.2.2: version, with the documented fallback — a component
             // without a unique version passes only via an authored hash.
-            if !has_known_value(&comp.version) && !has_authored_hash {
-                without_version.push(comp.name.clone());
+            if !comp.version().is_known() && !has_authored_hash {
+                without_version.push(comp.name().to_string());
             }
 
             // §2.2.2.3: Supplier declared. Raw presence counts — an
             // explicit `unknown`/`NOASSERTION` is a permitted (discouraged)
             // declaration that must be distinguished from silent absence.
-            let supplier_declared = comp
-                .supplier
-                .as_ref()
-                .is_some_and(|s| !s.name.trim().is_empty());
-            if !supplier_declared {
-                without_supplier.push(comp.name.clone());
+            if !comp.supplier_declared() {
+                without_supplier.push(comp.name().to_string());
             }
 
             // §2.2.2.4 Minimum: globally unique identifier (PURL/CPE/SWHID/
             // SWID) or the cryptographic hash as intrinsic identifier.
-            if !comp.identifiers.has_cra_identifier() && !has_authored_hash {
-                without_identifier.push(comp.name.clone());
+            let ids = comp.ids();
+            if !ids.any() && !has_authored_hash {
+                without_identifier.push(comp.name().to_string());
             }
             // §2.2.2.4 Recommended: ≥2 identifier kinds (profile policy).
-            if identifier_kind_count(comp) < 2 {
-                fewer_than_two_identifier_kinds.push(comp.name.clone());
+            if ids.count() < 2 {
+                fewer_than_two_identifier_kinds.push(comp.name().to_string());
             }
 
             // §2.2.2.5: authored hash present; weak-only inventory for the
             // Recommended tier.
             if has_authored_hash {
                 if !has_sha2_256_plus {
-                    weak_hash_only.push(comp.name.clone());
+                    weak_hash_only.push(named());
                 }
             } else {
-                without_hash.push(comp.name.clone());
+                without_hash.push(named());
             }
 
             // §2.2.2.7 / §2.2.2.8 coverage inputs.
-            if !has_known_license(comp) {
-                without_license.push(comp.name.clone());
+            if !comp.licenses().is_known() {
+                without_license.push(comp.name().to_string());
             }
-            if comp
-                .licenses
-                .concluded
-                .as_ref()
-                .is_some_and(|l| known_value(Some(l.expression.as_str())).is_some())
-            {
+            if comp.concluded_license().is_known() {
                 has_concluded_license = true;
             }
-            if !has_known_value(&comp.copyright) {
-                without_copyright.push(comp.name.clone());
+            if !comp.copyright().is_known() {
+                without_copyright.push(comp.name().to_string());
             }
 
             // §2.3.1: ambiguous placeholders (see `is_placeholder`).
+            let found = comp.placeholders();
             let mut fields = Vec::new();
-            if comp.version.as_deref().is_some_and(is_placeholder) {
-                fields.push("version");
+            let mut placeholders: Vec<&str> = Vec::new();
+            for (field, value) in [
+                ("version", found.version),
+                ("supplier", found.supplier),
+                ("license", found.license),
+                ("copyright", found.copyright),
+            ] {
+                if let Some(value) = value {
+                    fields.push(field);
+                    placeholders.push(value);
+                }
             }
-            if comp
-                .supplier
-                .as_ref()
-                .is_some_and(|s| is_placeholder(&s.name))
-            {
-                fields.push("supplier");
-            }
-            if comp
-                .licenses
-                .all_licenses()
-                .iter()
-                .any(|l| is_placeholder(&l.expression))
-            {
-                fields.push("license");
-            }
-            if comp.copyright.as_deref().is_some_and(is_placeholder) {
-                fields.push("copyright");
+            if first_placeholder.is_none() {
+                first_placeholder = placeholders.first().map(|p| (*p).to_string());
             }
             if !fields.is_empty() {
-                ambiguous_placeholders.push(format!("{} ({})", comp.name, fields.join(", ")));
+                ambiguous_placeholders.push(format!("{} ({})", comp.name(), fields.join(", ")));
+            }
+
+            // Relationships are a package-graph element: files, crypto
+            // assets and services need not appear in the dependency graph.
+            if !comp.touched() && !comp.is_primary() {
+                orphans.push(comp.name().to_string());
             }
         }
 
         // Graph evidence, scoped to the primary component (§2.2.1.4 makes
         // the primary the subject; when it is missing or unresolvable,
         // SBOM-FSCT-PRIMARY fires and the primary-scoped graph checks have
-        // no subject to reason about).
-        let primary_id: Option<&CanonicalId> = sbom
-            .primary_component_id
-            .as_ref()
-            .filter(|id| sbom.components.contains_key(*id));
-        let primary_resolvable = primary_id.is_some();
-        let primary_declared_no_deps = sbom
-            .primary_component()
-            .is_some_and(declared_no_dependencies);
-
-        let mut direct_edge_count = 0usize;
-        let mut unresolved_direct = Vec::new();
-        // Direct dependencies in edge order. The set only deduplicates; every
-        // walk goes through the ordered Vec so findings come out in the same
-        // order on every run (a HashSet walk reordered them between runs).
-        let mut direct_ids: Vec<&CanonicalId> = Vec::new();
-        let mut direct_seen: HashSet<&CanonicalId> = HashSet::new();
-        let mut primary_in_edge_set = false;
-        if let Some(primary) = primary_id {
-            for edge in &sbom.edges {
-                if &edge.from == primary {
-                    direct_edge_count += 1;
-                    if sbom.components.contains_key(&edge.to) {
-                        if direct_seen.insert(&edge.to) {
-                            direct_ids.push(&edge.to);
-                        }
-                    } else {
-                        unresolved_direct.push(edge.to.value().to_string());
-                    }
-                }
-                if &edge.from == primary || &edge.to == primary {
-                    primary_in_edge_set = true;
-                }
-            }
-        }
-        // Every component that has at least one outgoing edge, computed once:
-        // checking each direct dependency against all edges was quadratic on
-        // wide, flat graphs.
-        let edge_sources: HashSet<&CanonicalId> = sbom.edges.iter().map(|e| &e.from).collect();
-        let has_depth2_edges = direct_ids.iter().any(|id| edge_sources.contains(id));
-        let all_direct_declared_leaf = !direct_ids.is_empty()
-            && direct_ids.iter().all(|id| {
-                sbom.components
-                    .get(*id)
-                    .is_some_and(declared_no_dependencies)
-            });
-
-        let mut touched: HashSet<&CanonicalId> = HashSet::new();
-        for edge in &sbom.edges {
-            touched.insert(&edge.from);
-            touched.insert(&edge.to);
-        }
-        // Relationships are a package-graph element: files, crypto assets
-        // and services need not appear in the dependency graph.
-        let orphans: Vec<String> = sbom
-            .components
+        // no subject to reason about). The direct dependencies are in edge
+        // order, so findings come out in the same order on every run.
+        let graph = ev.graph();
+        let primary = ev.primary();
+        let primary_resolvable = primary.is_some();
+        let primary_declared_no_deps = primary.is_some_and(|p| p.declares_no_dependencies());
+        let primary_in_edge_set = primary.is_some_and(|p| p.touched());
+        let direct = || graph.direct.iter().map(|ix| ev.component(*ix));
+        let unresolved_direct = graph
+            .unresolved_direct
             .iter()
-            .filter(|(id, c)| {
-                c.component_type.is_package_scoped()
-                    && !touched.contains(id)
-                    && sbom.primary_component_id.as_ref() != Some(id)
-            })
-            .map(|(_, c)| c.name.clone())
+            .map(|id| id.value().to_string())
             .collect();
-
-        let has_dynamic_edge = sbom.edges.iter().any(|e| {
-            matches!(
-                e.relationship,
-                DependencyType::DynamicLink
-                    | DependencyType::RuntimeDependsOn
-                    | DependencyType::ProvidedDependsOn
-            )
-        });
+        let has_depth2_edges = direct().any(|d| d.has_outgoing());
+        let all_direct_declared_leaf =
+            !graph.direct.is_empty() && direct().all(|d| d.declares_no_dependencies());
 
         // §2.3.3 Recommended: a direct dependency's upstream SBOM data is
         // evidenced by nested transitive data (children edges, or a positive
         // no-dependencies assertion) or a BOM-type external reference.
-        let mut direct_without_upstream = Vec::new();
-        for id in &direct_ids {
-            let Some(comp) = sbom.components.get(*id) else {
-                continue;
-            };
-            if !comp.component_type.is_package_scoped() {
-                continue;
-            }
-            let has_children = edge_sources.contains(id);
-            let has_bom_ref = comp
-                .external_refs
-                .iter()
-                .any(|r| r.ref_type == ExternalRefType::Bom);
-            if !has_children && !declared_no_dependencies(comp) && !has_bom_ref {
-                direct_without_upstream.push(comp.name.clone());
-            }
-        }
+        let direct_without_upstream = direct()
+            .filter(|d| {
+                ctx.judges_package(d)
+                    && !d.has_outgoing()
+                    && !d.declares_no_dependencies()
+                    && !d.bom_reference()
+            })
+            .map(|d| d.name().to_string())
+            .collect();
 
         Self {
             total,
@@ -431,16 +364,17 @@ impl FsctEvidence {
             without_license,
             without_copyright,
             ambiguous_placeholders,
+            first_placeholder,
             has_concluded_license,
             primary_resolvable,
-            direct_edge_count,
+            direct_edge_count: graph.direct_edge_count,
             unresolved_direct,
             primary_declared_no_deps,
             has_depth2_edges,
             all_direct_declared_leaf,
             primary_in_edge_set,
             orphans,
-            has_dynamic_edge,
+            has_dynamic_edge: graph.dynamic_edge,
             direct_without_upstream,
         }
     }
@@ -461,22 +395,18 @@ impl FsctEvidence {
 
 #[allow(clippy::too_many_lines)]
 fn fsct_minimum_expected(
-    sbom: &NormalizedSbom,
+    ev: &SbomEvidence<'_>,
     evidence: &FsctEvidence,
     violations: &mut Vec<Violation>,
 ) {
     let total = evidence.total;
     let pkg_total = evidence.pkg_total;
+    let doc = ev.document();
 
     // §2.2.1.1 (Minimum) — Author Name: the entity that prompted the SBOM's
     // creation. A tool-only creator list does not satisfy the element, and
     // neither does an empty or placeholder name.
-    let has_person_or_org = sbom
-        .document
-        .creators
-        .iter()
-        .any(|c| c.creator_type != CreatorType::Tool && creator_identified(c));
-    if !has_person_or_org {
+    if !doc.has_identified_non_tool_creator {
         violations.push(Violation {
             severity: ViolationSeverity::Error,
             category: ViolationCategory::DocumentMetadata,
@@ -490,36 +420,59 @@ fn fsct_minimum_expected(
             rule_id: "SBOM-FSCT-AUTHOR",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: doc
+                .creators
+                .iter()
+                .find(|c| c.creator.creator_type != CreatorType::Tool)
+                .and_then(|c| observed(&c.creator.name)),
         });
     }
 
     // §2.2.1.2 (untiered = Minimum) — Timestamp. Parsers substitute the
     // UNIX_EPOCH sentinel for missing/unparseable timestamps, so the epoch
-    // reads as ABSENT, not as 1970.
-    if !sbom.document.has_known_timestamp() {
+    // reads as ABSENT, not as 1970. An unparseable value is quoted.
+    if !doc.has_known_timestamp {
+        let message = unparseable_timestamp_of(doc.created_unparsed).map_or_else(
+            || {
+                "[CISA FSCT 3e §2.2.1.2] SBOM creation timestamp missing or unparseable \
+                 (ISO 8601-style international format expected)"
+                    .to_string()
+            },
+            |gap| {
+                format!(
+                    "[CISA FSCT 3e §2.2.1.2] SBOM has {gap} (ISO 8601-style international \
+                     format expected)"
+                )
+            },
+        );
         violations.push(Violation {
             severity: ViolationSeverity::Error,
             category: ViolationCategory::DocumentMetadata,
-            message: "[CISA FSCT 3e §2.2.1.2] SBOM creation timestamp missing or unparseable \
-                      (ISO 8601-style international format expected)"
-                .to_string(),
+            message,
             element: None,
             requirement: "CISA FSCT 3e §2.2.1.2: Timestamp (Minimum Expected)".to_string(),
             rule_id: "SBOM-FSCT-TIMESTAMP",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: doc.created_unparsed.and_then(observed),
         });
     }
 
     // §2.2.1.4 — Primary Component: the subject of the SBOM must be
     // identified and resolve to a component in the inventory.
-    let primary = sbom.primary_component();
+    let primary = ev.primary();
     if primary.is_none() {
         violations.push(Violation {
             severity: ViolationSeverity::Error,
@@ -533,9 +486,13 @@ fn fsct_minimum_expected(
             rule_id: "SBOM-FSCT-PRIMARY",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -547,7 +504,7 @@ fn fsct_minimum_expected(
     if evidence.primary_resolvable
         && evidence.direct_edge_count == 0
         && !evidence.primary_declared_no_deps
-        && completeness_undeclared(&sbom.document.completeness_declaration)
+        && completeness_undeclared(doc.completeness)
     {
         violations.push(Violation {
             severity: ViolationSeverity::Error,
@@ -563,9 +520,13 @@ fn fsct_minimum_expected(
             rule_id: "SBOM-FSCT-DIRECT-DEPS",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
     // Direct-dependency edges whose target is not in the inventory: the
@@ -586,9 +547,13 @@ fn fsct_minimum_expected(
             rule_id: "SBOM-FSCT-DIRECT-DEPS",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -610,9 +575,13 @@ fn fsct_minimum_expected(
                 affected: evidence.nameless,
                 total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -637,9 +606,13 @@ fn fsct_minimum_expected(
                 affected: evidence.without_version.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -664,9 +637,13 @@ fn fsct_minimum_expected(
                 affected: evidence.without_supplier.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -694,9 +671,13 @@ fn fsct_minimum_expected(
                 affected: evidence.without_identifier.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -723,9 +704,13 @@ fn fsct_minimum_expected(
                 affected: evidence.without_hash.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -753,16 +738,20 @@ fn fsct_minimum_expected(
             rule_id: "SBOM-FSCT-RELATIONSHIP",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
     // §2.2.2.7 (Minimum) — license information for the Primary Component.
     // NOASSERTION placeholders do not satisfy this check.
     if let Some(primary) = primary {
-        if !has_known_license(primary) {
+        if !primary.licenses().is_known() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::LicenseInfo,
@@ -770,21 +759,25 @@ fn fsct_minimum_expected(
                     "[CISA FSCT 3e §2.2.2.7] Primary Component '{}' has no license information \
                      (SPDX license identifiers in standard form preferred; NOASSERTION does not \
                      satisfy)",
-                    primary.name
+                    primary.name()
                 ),
-                element: Some(primary.name.clone()),
+                element: Some(primary.name().to_string()),
                 requirement: "CISA FSCT 3e §2.2.2.7: License (Minimum Expected)".to_string(),
                 rule_id: "SBOM-FSCT-LICENSE-PRIMARY",
-                component_id: Some(primary.canonical_id.value().to_string()),
+                component_id: Some(primary.canonical_id().value().to_string()),
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // §2.2.2.8 (Minimum) — copyright notice for the Primary Component.
-        if !has_known_value(&primary.copyright) {
+        if !primary.copyright().is_known() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::LicenseInfo,
@@ -792,17 +785,21 @@ fn fsct_minimum_expected(
                     "[CISA FSCT 3e §2.2.2.8] Primary Component '{}' has no copyright notice \
                      (identifies the legal rights holder; SPDX: PackageCopyrightText; \
                      CycloneDX: component copyright)",
-                    primary.name
+                    primary.name()
                 ),
-                element: Some(primary.name.clone()),
+                element: Some(primary.name().to_string()),
                 requirement: "CISA FSCT 3e §2.2.2.8: Copyright Notice (Minimum Expected)"
                     .to_string(),
                 rule_id: "SBOM-FSCT-COPYRIGHT-PRIMARY",
-                component_id: Some(primary.canonical_id.value().to_string()),
+                component_id: Some(primary.canonical_id().value().to_string()),
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }
@@ -832,9 +829,13 @@ fn fsct_minimum_expected(
                 affected: evidence.ambiguous_placeholders.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: evidence.first_placeholder.as_deref().and_then(observed),
         });
     }
 }
@@ -850,23 +851,18 @@ fn fsct_minimum_expected(
 
 #[allow(clippy::too_many_lines)]
 fn fsct_recommended_practice(
-    sbom: &NormalizedSbom,
+    ev: &SbomEvidence<'_>,
     evidence: &FsctEvidence,
     violations: &mut Vec<Violation>,
 ) {
     let pkg_total = evidence.pkg_total;
+    let doc = ev.document();
 
     // §2.2.1.1 (Recommended) — the tool(s) and version(s) that assisted the
     // SBOM's creation. The parsers fold the tool version into the Tool
     // creator's name ("name version"), so a digit in the name is the
     // best-available version signal.
-    let tool_creators: Vec<_> = sbom
-        .document
-        .creators
-        .iter()
-        .filter(|c| c.creator_type == CreatorType::Tool)
-        .collect();
-    if tool_creators.is_empty() {
+    if !doc.has_tool_creator {
         violations.push(Violation {
             severity: ViolationSeverity::Warning,
             category: ViolationCategory::DocumentMetadata,
@@ -880,14 +876,15 @@ fn fsct_recommended_practice(
             rule_id: "SBOM-FSCT-AUTHOR-TOOL",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
-    } else if !tool_creators
-        .iter()
-        .any(|c| c.name.chars().any(|ch| ch.is_ascii_digit()))
-    {
+    } else if !doc.tool_name_has_digit {
         violations.push(Violation {
             severity: ViolationSeverity::Warning,
             category: ViolationCategory::DocumentMetadata,
@@ -901,9 +898,13 @@ fn fsct_recommended_practice(
             rule_id: "SBOM-FSCT-AUTHOR-TOOL",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -916,7 +917,7 @@ fn fsct_recommended_practice(
         && evidence.direct_edge_count > 0
         && !evidence.has_depth2_edges
         && !evidence.all_direct_declared_leaf
-        && completeness_undeclared(&sbom.document.completeness_declaration)
+        && completeness_undeclared(doc.completeness)
     {
         violations.push(Violation {
             severity: ViolationSeverity::Warning,
@@ -931,9 +932,13 @@ fn fsct_recommended_practice(
             rule_id: "SBOM-FSCT-TRANSITIVE-DEPS",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -960,37 +965,48 @@ fn fsct_recommended_practice(
                 affected: evidence.fewer_than_two_identifier_kinds.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
     // §2.2.2.5 (Recommended) — at least one hash of the Primary Component…
-    if let Some(primary) = sbom.primary_component() {
-        let primary_has_authored_hash = primary
-            .hashes
-            .iter()
-            .any(|h| h.provenance == HashProvenance::Authored);
-        if !primary_has_authored_hash {
+    if let Some(primary) = ev.primary() {
+        let authored = primary.authored_hashes();
+        if !authored.facts.plausible {
+            let mut message = format!(
+                "[CISA FSCT 3e §2.2.2.5] Primary Component '{}' has no author-provided \
+                 cryptographic hash",
+                primary.name()
+            );
+            let problems = digest_problems(authored.iter());
+            if !problems.is_empty() {
+                message.push_str(": ");
+                message.push_str(&problems.join("; "));
+            }
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::IntegrityInfo,
-                message: format!(
-                    "[CISA FSCT 3e §2.2.2.5] Primary Component '{}' has no author-provided \
-                     cryptographic hash",
-                    primary.name
-                ),
-                element: Some(primary.name.clone()),
+                message,
+                element: Some(primary.name().to_string()),
                 requirement: "CISA FSCT 3e §2.2.2.5: Primary Component hash (Recommended \
                               Practice)"
                     .to_string(),
                 rule_id: "SBOM-FSCT-HASH-PRIMARY-SHA2",
-                component_id: Some(primary.canonical_id.value().to_string()),
+                component_id: Some(primary.canonical_id().value().to_string()),
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }
@@ -1017,9 +1033,13 @@ fn fsct_recommended_practice(
                 affected: evidence.weak_hash_only.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1027,7 +1047,7 @@ fn fsct_recommended_practice(
     // flag inventory entries that appear in no dependency edge. Gated on a
     // non-empty edge set so a fully unwired SBOM surfaces through the
     // Minimum-tier relationship rules instead of firing three rules at once.
-    if !sbom.edges.is_empty() && !evidence.orphans.is_empty() {
+    if ev.has_edges() && !evidence.orphans.is_empty() {
         violations.push(Violation {
             severity: ViolationSeverity::Warning,
             category: ViolationCategory::DependencyInfo,
@@ -1048,9 +1068,13 @@ fn fsct_recommended_practice(
                 affected: evidence.orphans.len(),
                 total: evidence.pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1059,7 +1083,7 @@ fn fsct_recommended_practice(
     // and optional, with Unknown as the open-world default. SPDX 2.x has no
     // equivalent field, so the indication is genuinely absent there (same
     // posture as the BSI §5.2.2 completeness check).
-    if completeness_undeclared(&sbom.document.completeness_declaration) {
+    if completeness_undeclared(doc.completeness) {
         violations.push(Violation {
             severity: ViolationSeverity::Warning,
             category: ViolationCategory::DependencyInfo,
@@ -1074,9 +1098,13 @@ fn fsct_recommended_practice(
             rule_id: "SBOM-FSCT-COMPLETENESS",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1101,9 +1129,13 @@ fn fsct_recommended_practice(
                 affected: licensed,
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1128,9 +1160,13 @@ fn fsct_recommended_practice(
                 affected: copyrighted,
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1157,9 +1193,13 @@ fn fsct_recommended_practice(
             rule_id: "SBOM-FSCT-UPSTREAM-SBOM",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 }
@@ -1177,19 +1217,30 @@ fn fsct_recommended_practice(
 
 #[allow(clippy::too_many_lines)]
 fn fsct_aspirational_goals(
-    sbom: &NormalizedSbom,
+    ev: &SbomEvidence<'_>,
     evidence: &FsctEvidence,
     violations: &mut Vec<Violation>,
+    not_evaluated: &mut NotEvaluated,
 ) {
     let pkg_total = evidence.pkg_total;
+    let doc = ev.document();
+    let cyclonedx = *doc.format == SbomFormat::CycloneDx;
+    let spdx2 = doc.spdx2;
+    if cyclonedx {
+        not_evaluated.push("SBOM-FSCT-DYNAMIC-DEPS", CYCLONEDX_NO_DYNAMIC_DEPS);
+        not_evaluated.push("SBOM-FSCT-LICENSE-CONCLUDED", CYCLONEDX_CONCLUDED_NOT_READ);
+    } else {
+        not_evaluated.push("SBOM-FSCT-SBOM-TYPE", SPDX_SBOM_TYPE_NOT_READ);
+    }
+    if spdx2 {
+        not_evaluated.push("SBOM-FSCT-SIGNATURE", SPDX2_NO_SIGNATURE);
+    }
 
     // §2.2.1.3 — SBOM Type declared. Evidence-gated to CycloneDX: only the
     // CycloneDX parser populates lifecycle_phase (metadata.lifecycles);
     // SPDX 2.x's CreatorComment mapping and SPDX 3.0's sbomType are not
     // parsed, so SPDX input must not false-fail (see module docs).
-    if sbom.document.format == SbomFormat::CycloneDx
-        && known_value(sbom.document.lifecycle_phase.as_deref()).is_none()
-    {
+    if cyclonedx && !doc.lifecycle_phase.is_known() {
         violations.push(Violation {
             severity: ViolationSeverity::Info,
             category: ViolationCategory::DocumentMetadata,
@@ -1202,9 +1253,13 @@ fn fsct_aspirational_goals(
             rule_id: "SBOM-FSCT-SBOM-TYPE",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1212,7 +1267,7 @@ fn fsct_aspirational_goals(
     // uniquely identified. Evidence-gated to SPDX: dynamic/runtime/provided
     // link relationships are parsed only from SPDX relationships, so a
     // CycloneDX document can never carry the positive signal.
-    if sbom.document.format == SbomFormat::Spdx && !evidence.has_dynamic_edge {
+    if !cyclonedx && !evidence.has_dynamic_edge {
         violations.push(Violation {
             severity: ViolationSeverity::Info,
             category: ViolationCategory::DependencyInfo,
@@ -1228,9 +1283,13 @@ fn fsct_aspirational_goals(
             rule_id: "SBOM-FSCT-DYNAMIC-DEPS",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1255,16 +1314,19 @@ fn fsct_aspirational_goals(
                 affected: evidence.without_license.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
     // …including concluded-license attestation. Evidence-gated to SPDX
     // (PackageLicenseConcluded): the CycloneDX 1.6 licenses[].acknowledgement
     // field is not parsed, so CycloneDX input must not false-fail.
-    if sbom.document.format == SbomFormat::Spdx && pkg_total > 0 && !evidence.has_concluded_license
-    {
+    if !cyclonedx && pkg_total > 0 && !evidence.has_concluded_license {
         violations.push(Violation {
             severity: ViolationSeverity::Info,
             category: ViolationCategory::LicenseInfo,
@@ -1279,9 +1341,13 @@ fn fsct_aspirational_goals(
             rule_id: "SBOM-FSCT-LICENSE-CONCLUDED",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
@@ -1306,38 +1372,45 @@ fn fsct_aspirational_goals(
                 affected: evidence.without_copyright.len(),
                 total: pkg_total,
             }),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 
     // §2.4 (supplemental element, not a Baseline Attribute) — verifiable
-    // digital signature. Evidence-gated to CycloneDX (JSF signature); SPDX
-    // has no in-band signature field, so sidecar/envelope signatures are
-    // unobservable there.
-    if sbom.document.format == SbomFormat::CycloneDx
-        && !sbom
-            .document
-            .signature
-            .as_ref()
-            .is_some_and(|s| s.has_value)
-    {
+    // digital signature. §2.4 names no format ("authors must be able to
+    // digitally sign SBOMs"), so the check accepts the in-document signature
+    // of every format that can carry one, as SBOM-CISA2026-SIGNATURE does
+    // (`document_signed`): a CycloneDX JSF or XML-DSig signature, or an
+    // SPDX 3 verifiedUsing signature. SPDX 2.x has no in-band signature
+    // field, so its sidecar/envelope signatures are unobservable and the
+    // check skips it. Until v0.4.0 the check read CycloneDX only.
+    if !spdx2 && !doc.signed {
         violations.push(Violation {
             severity: ViolationSeverity::Info,
             category: ViolationCategory::IntegrityInfo,
             message: "[CISA FSCT 3e §2.4] SBOM carries no verifiable digital signature \
-                      (CycloneDX JSF signature) — supplemental authenticity/integrity \
-                      capability, not a Baseline Attribute"
+                      (CycloneDX JSF or XML-DSig signature, or SPDX 3 verifiedUsing \
+                      signature) — supplemental authenticity/integrity capability, not a \
+                      Baseline Attribute"
                 .to_string(),
             element: None,
             requirement: "CISA FSCT 3e §2.4: Authenticity and integrity (supplemental)".to_string(),
             rule_id: "SBOM-FSCT-SIGNATURE",
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         });
     }
 }

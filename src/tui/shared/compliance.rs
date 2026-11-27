@@ -1,6 +1,7 @@
 //! Shared compliance rendering functions used by both App (diff mode) and `ViewApp` (view mode).
 
 use crate::quality::ViolationSeverity;
+use crate::reports::escape::sanitize_line;
 use crate::tui::shared::text::wrapped_line_count;
 use crate::tui::theme::colors;
 use ratatui::{
@@ -35,16 +36,30 @@ pub fn render_violation_detail_overlay(
         ViolationSeverity::Info => ("INFO", scheme.info),
     };
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Severity:    ", Style::default().fg(scheme.muted)),
-            Span::styled(
-                severity_text,
-                Style::default()
-                    .fg(severity_color)
-                    .add_modifier(Modifier::BOLD),
+    let mut severity_line = vec![
+        Span::styled("Severity:    ", Style::default().fg(scheme.muted)),
+        Span::styled(
+            severity_text,
+            Style::default()
+                .fg(severity_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    // A rule the run sets (`--rule`, the config file): the severity the
+    // check gave the finding and where the setting comes from, as the text
+    // report's `severity:` line shows them.
+    if let Some(severity_override) = &violation.severity_override {
+        severity_line.push(Span::styled(
+            format!(
+                "  (default {}, from {})",
+                severity_override.default.name().to_uppercase(),
+                severity_override.source.label()
             ),
-        ]),
+            Style::default().fg(scheme.text_muted),
+        ));
+    }
+    let mut lines = vec![
+        Line::from(severity_line),
         Line::from(vec![
             Span::styled("Category:    ", Style::default().fg(scheme.muted)),
             Span::styled(violation.category.name(), Style::default().fg(scheme.text)),
@@ -75,6 +90,43 @@ pub fn render_violation_detail_overlay(
         Span::styled(violation.rule_id, Style::default().fg(scheme.accent)),
     ]));
 
+    // Where the checked field lives in the SBOM's format, and the value the
+    // check read there, as the JSON `field` / `observed` and the text
+    // report's `observed:` line show them. The value is SBOM text kept as
+    // read, so it is cleaned here, as in the text report: a crafted value
+    // can neither smuggle a terminal escape nor break the line.
+    if let Some(field) = &violation.field {
+        lines.push(Line::from(vec![
+            Span::styled("Field: ", Style::default().fg(scheme.muted)),
+            Span::styled(
+                sanitize_line(field).into_owned(),
+                Style::default().fg(scheme.text),
+            ),
+        ]));
+    }
+    if let Some(observed) = &violation.observed {
+        lines.push(Line::from(vec![
+            Span::styled("Observed: ", Style::default().fg(scheme.muted)),
+            Span::styled(
+                format!("\"{}\"", sanitize_line(observed)),
+                Style::default().fg(scheme.warning),
+            ),
+        ]));
+    }
+
+    // Under `--pqc-mode deadline`, the migration milestone the finding is
+    // judged against and the schedule that sets it, as the text report's
+    // `deadline:` line shows them.
+    if let Some(deadline) = &violation.deadline {
+        lines.push(Line::from(vec![
+            Span::styled("Deadline: ", Style::default().fg(scheme.muted)),
+            Span::styled(
+                format!("{} ({})", deadline.date, deadline.source),
+                Style::default().fg(scheme.text),
+            ),
+        ]));
+    }
+
     // Harmonised-standard / regulation references, e.g. "EU AI Act: Annex IV §2(d)".
     // Mirrors the markdown "Standard refs" column and the SARIF help_uri.
     if !violation.standard_refs.is_empty() {
@@ -82,7 +134,7 @@ pub fn render_violation_detail_overlay(
             "References:",
             Style::default().fg(scheme.muted),
         )));
-        for r in &violation.standard_refs {
+        for r in violation.standard_refs.iter() {
             let mut spans = vec![
                 Span::styled("  • ", Style::default().fg(scheme.muted)),
                 Span::styled(
@@ -205,9 +257,13 @@ mod tests {
             counts: None,
             requirement: "EU AI Act Annex IV".to_string(),
             rule_id: "SBOM-AIACT-ANNEX-IV-2D-DATASETS",
-            standard_refs: vec![StandardRef::new(StandardKind::EuAiAct, "Annex IV §2(d)")],
+            standard_refs: vec![StandardRef::new(StandardKind::EuAiAct, "Annex IV §2(d)")].into(),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         }
     }
 
@@ -252,13 +308,19 @@ mod tests {
                 StandardRef::new(StandardKind::CraAnnex, "Annex I Part II"),
                 StandardRef::new(StandardKind::Pren40000_1_3, "PRE-7-RQ-01"),
                 StandardRef::new(StandardKind::Pren40000_1_3, "PRE-7-RQ-03"),
-            ],
+            ]
+            .into(),
             remediation: Some(
                 crate::quality::rule_meta("SBOM-CRA-ANNEX-I-SUPPLY-CHAIN")
                     .expect("registered rule")
-                    .remediation_for(crate::quality::RemediationFormat::CycloneDx),
+                    .remediation_for(crate::quality::RemediationFormat::CycloneDx)
+                    .into(),
             ),
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         }
     }
 
@@ -311,10 +373,85 @@ mod tests {
         }
     }
 
+    /// A deadline-mode finding shows its deadline and source; a readiness
+    /// finding (no deadline) shows no such line.
+    #[test]
+    fn overlay_shows_the_deadline_of_a_dated_finding() {
+        let undated = ai_act_violation();
+        let text = render_to_text(100, 24, |frame| {
+            super::render_violation_detail_overlay(frame, frame.area(), &undated);
+        });
+        assert!(!text.contains("Deadline:"), "{text}");
+
+        let checker =
+            crate::quality::ComplianceChecker::new(crate::quality::ComplianceLevel::NistPqc)
+                .with_as_of(
+                    chrono::DateTime::parse_from_rfc3339("2031-06-01T00:00:00Z")
+                        .expect("valid instant")
+                        .with_timezone(&chrono::Utc),
+                )
+                .with_pqc_mode(crate::quality::PqcMode::Deadline);
+        let sbom = crate::parse_sbom_str(include_str!(
+            "../../../tests/fixtures/cyclonedx/cbom-pqc-calendar.cdx.json"
+        ))
+        .expect("fixture parses");
+        let result = checker.check(&sbom);
+        let dated = result
+            .violations
+            .iter()
+            .find(|v| v.deadline.is_some())
+            .expect("a dated finding");
+        let deadline = dated.deadline.as_ref().expect("dated");
+        let text = render_to_text(120, 40, |frame| {
+            super::render_violation_detail_overlay(frame, frame.area(), dated);
+        });
+        assert!(
+            text.contains(&format!(
+                "Deadline: {} ({})",
+                deadline.date, deadline.source
+            )),
+            "{text}"
+        );
+    }
+
+    /// The overlay names the field the rule checks and the value the check
+    /// read, when the finding carries them.
+    #[test]
+    fn overlay_shows_the_field_and_the_observed_value() {
+        let plain = ai_act_violation();
+        let text = render_to_text(100, 24, |frame| {
+            super::render_violation_detail_overlay(frame, frame.area(), &plain);
+        });
+        assert!(
+            !text.contains("Field:") && !text.contains("Observed:"),
+            "{text}"
+        );
+
+        let mut violation = ai_act_violation();
+        violation.field = Some("components[].supplier.name".into());
+        violation.observed = Some("NOASSERTION".to_string());
+        let text = render_to_text(100, 24, |frame| {
+            super::render_violation_detail_overlay(frame, frame.area(), &violation);
+        });
+        assert!(text.contains("Field: components[].supplier.name"), "{text}");
+        assert!(text.contains("Observed: \"NOASSERTION\""), "{text}");
+
+        // A crafted value is kept as read and cleaned where it is shown.
+        violation.observed = Some("::warning::forged\u{1b}[31m\u{7}\nnext".to_string());
+        let text = render_to_text(100, 24, |frame| {
+            super::render_violation_detail_overlay(frame, frame.area(), &violation);
+        });
+        assert!(
+            text.contains("Observed: \"\\::warning::forged[31m\\nnext\""),
+            "{text}"
+        );
+        assert!(!text.contains(['\u{1b}', '\u{7}']), "{text}");
+    }
+
     #[test]
     fn overlay_omits_references_when_empty() {
         let mut violation = ai_act_violation();
-        violation.standard_refs.clear();
+        violation.standard_refs = Vec::new().into();
         let text = render_to_text(100, 24, |frame| {
             super::render_violation_detail_overlay(frame, frame.area(), &violation);
         });

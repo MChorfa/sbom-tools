@@ -585,12 +585,25 @@ mod diff_alignment {
         // matching the CLI.
         let new = high_risk_ml_sbom();
         let old = high_risk_ml_sbom();
-        let mut app = App::new_diff(DiffResult::new(), old, new, "{}", "{}");
         let sidecar = CraSidecarMetadata {
             is_high_risk_ai: true,
             ..Default::default()
         };
-        app = app.with_cra_sidecars(Some(sidecar.clone()), Some(sidecar));
+        let as_of = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+            .expect("valid instant")
+            .with_timezone(&chrono::Utc);
+        let run = crate::quality::ComplianceRunConfig::new()
+            .with_as_of(as_of)
+            .with_sidecar(sidecar);
+        let mut app = App::new_diff_with_compliance(
+            DiffResult::new(),
+            old,
+            new,
+            "{}",
+            "{}",
+            run.clone(),
+            run,
+        );
 
         app.ensure_compliance_results();
 
@@ -1148,8 +1161,8 @@ fn diff_compliance_na_standard_renders_na_not_pass() {
 #[test]
 fn diff_compliance_header_uses_shared_score_formula() {
     // The header percentage must come from ComplianceResult::score()
-    // (100/(errors+warnings+1), Info-neutral) — the same formula the
-    // exports and markdown/HTML reports render — not a bespoke weighting.
+    // (`compliance_score`, Info-neutral) — the same formula the exports
+    // and markdown/HTML reports render — not a bespoke weighting.
     let mut app = demo_app(TabKind::Compliance);
     let idx = app.diff_compliance_state().selected_standard;
     app.ensure_compliance_results();
@@ -1171,6 +1184,53 @@ fn diff_compliance_header_uses_shared_score_formula() {
     assert!(
         text.contains(&format!("{old_pct}% \u{2192}")) && text.contains(&format!("{new_pct}%")),
         "header must render the shared score ({old_pct}% -> {new_pct}%):\n{text}"
+    );
+}
+
+/// The compliance tab counts what the run's inputs kept out of the
+/// violations, as the view tab does: the header shows the new side's
+/// suppressed findings and excluded components, and the overview both
+/// sides, old → new. A side with neither shows nothing.
+#[test]
+fn diff_compliance_counts_suppressed_findings_and_excluded_components() {
+    use crate::quality::{SettingSource, SuppressedRule};
+
+    let mut app = demo_app(TabKind::Compliance);
+    pin_snapshot_compliance(&mut app);
+    let idx = app.diff_compliance_state().selected_standard;
+    let baseline = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        !baseline.contains("Suppressed") && !baseline.contains("Excluded"),
+        "nothing kept out, nothing shown:\n{baseline}"
+    );
+
+    let suppressed = |findings| SuppressedRule {
+        rule_id: "SBOM-NTIA-SUPPLIER".to_string(),
+        findings,
+        source: SettingSource::Cli,
+    };
+    {
+        let old = &mut app.data.old_compliance_results.as_mut().expect("pinned")[idx];
+        old.suppressed = vec![suppressed(1)];
+        old.excluded_components = 1;
+        let new = &mut app.data.new_compliance_results.as_mut().expect("pinned")[idx];
+        new.suppressed = vec![suppressed(3)];
+        new.excluded_components = 2;
+    }
+    let text = render_to_text(120, 40, |frame| {
+        app.prepare_render();
+        render(frame, &mut app);
+    });
+    assert!(
+        text.contains("Suppressed: 3") && text.contains("Excluded: 2"),
+        "the header counts the new side:\n{text}"
+    );
+    assert!(
+        text.contains("Suppressed:   1 \u{2192} 3") && text.contains("Excluded:     1 \u{2192} 2"),
+        "the overview shows both sides:\n{text}"
     );
 }
 

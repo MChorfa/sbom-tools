@@ -7,14 +7,22 @@
 //! - **Verdict snapshots**, one per fixture: for each of the 19 levels, the
 //!   verdict, the severity counts and every finding as (severity, rule ID,
 //!   subject, counts), then the passed checks as `P` lines (rule ID,
-//!   subject) after a `P<n>` count on the header. Messages are left out so
-//!   rewording does not churn them. Fixtures with an auto-discovered CRA
-//!   sidecar are also run with it, for the levels the CLI feeds a sidecar
-//!   to.
+//!   subject) after a `P<n>` count on the header. A level that left
+//!   components out of its package rules for their excluded scope counts
+//!   them as `X<n>` on the header. Messages are left out so rewording does
+//!   not churn them. Fixtures with an auto-discovered CRA sidecar are also
+//!   run with it, for the levels the shared run configuration
+//!   (`ComplianceRunConfig`, which every CLI command and TUI uses) hands a
+//!   sidecar to, and fixtures with components whose scope is excluded are
+//!   also run with `--include-excluded-scope`.
 //! - **Byte snapshots** of the JSON (the v1 result array and the
 //!   `sbom-tools/compliance/v2` envelope), SARIF and OSCAL writers for six
 //!   pinned fixtures, plus a check that each writer is byte-identical across
 //!   runs.
+//! - **Deadline snapshots**, one per CBOM fixture: `cnsa2` and `pqc` under
+//!   `--pqc-mode deadline` at three dates and in four configurations, each
+//!   finding with its deadline and source. The verdict snapshots are the
+//!   readiness mode, the default.
 //!
 //! Everything runs at a pinned `as_of`, so no snapshot depends on today's
 //! date. Accept intended changes with `cargo insta review`.
@@ -22,14 +30,15 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use sbom_tools::model::{CraSidecarMetadata, NormalizedSbom};
+use sbom_tools::model::{CraSidecarMetadata, DependencyScope};
 use sbom_tools::parse_sbom_str;
 use sbom_tools::quality::{
-    ComplianceChecker, ComplianceLevel, ComplianceResult, StandardSelector, ViolationSeverity,
+    CnsaCategory, ComplianceLevel, ComplianceResult, ComplianceRunConfig, PqcMode, PqcProfile,
+    StandardSelector, ViolationSeverity,
 };
 use sbom_tools::reports::oscal::generate_assessment_results_at;
 use sbom_tools::reports::{
-    SarifArtifact, SarifArtifactLocation, SarifOptions, generate_compliance_json,
+    AssessedSbom, SarifArtifact, SarifArtifactLocation, SarifOptions, generate_compliance_json_at,
     generate_multi_compliance_sarif_with,
 };
 
@@ -50,31 +59,30 @@ const SBOM_DIRS: &[&str] = &[
     "spdx3",
 ];
 
-/// Levels the CLI hands a CRA sidecar to (see `cli/validate.rs`).
-const SIDECAR_LEVELS: &[ComplianceLevel] = &[
-    ComplianceLevel::CraPhase1,
-    ComplianceLevel::CraPhase2,
-    ComplianceLevel::CraOssSteward,
-    ComplianceLevel::EuccSubstantial,
-    ComplianceLevel::EuAiAct,
-];
-
 fn as_of() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339(AS_OF)
         .expect("valid AS_OF")
         .with_timezone(&chrono::Utc)
 }
 
-fn check(
-    sbom: &NormalizedSbom,
-    level: ComplianceLevel,
-    sidecar: Option<&CraSidecarMetadata>,
-) -> ComplianceResult {
-    let mut checker = ComplianceChecker::new(level).with_as_of(as_of());
-    if let Some(sc) = sidecar {
-        checker = checker.with_sidecar(sc.clone());
+/// The run a snapshot is judged with: the pinned clock, plus the fixture's
+/// auto-discovered CRA sidecar when it has one. The run configuration hands
+/// each level the inputs `validate` (and every other entry point) hands it.
+fn run(sidecar: Option<&CraSidecarMetadata>) -> ComplianceRunConfig {
+    let run = ComplianceRunConfig::new().with_as_of(as_of());
+    match sidecar {
+        Some(sc) => run.with_sidecar(sc.clone()),
+        None => run,
     }
-    checker.check(sbom)
+}
+
+/// The levels a run hands a CRA sidecar to, in report order.
+fn sidecar_levels() -> Vec<ComplianceLevel> {
+    ComplianceLevel::all()
+        .iter()
+        .copied()
+        .filter(|level| ComplianceRunConfig::sidecar_applies(*level))
+        .collect()
 }
 
 /// Every file under the SBOM directories, sorted, as (relative path, path).
@@ -180,9 +188,14 @@ fn render_verdict(out: &mut String, label: &str, result: &ComplianceResult) {
     } else {
         format!(" P{}", result.passed.len())
     };
+    let excluded = if result.excluded_components == 0 {
+        String::new()
+    } else {
+        format!(" X{}", result.excluded_components)
+    };
     let _ = writeln!(
         out,
-        "[{label}] {verdict} · E{} W{} I{}{passed}",
+        "[{label}] {verdict} · E{} W{} I{}{passed}{excluded}",
         result.error_count, result.warning_count, result.info_count
     );
     let findings: Vec<String> = result
@@ -243,16 +256,27 @@ fn verdict_snapshots_for_every_fixture_and_level() {
             .unwrap_or_else(|e| panic!("{rel}: sidecar does not load: {e}"));
 
         let mut out = format!("fixture: {rel}\nas_of: {AS_OF}\n\n");
-        for level in ComplianceLevel::all() {
-            render_verdict(&mut out, &format!("{level:?}"), &check(&sbom, *level, None));
+        for result in run(None).check_levels(ComplianceLevel::all(), &sbom) {
+            render_verdict(&mut out, &format!("{:?}", result.level), &result);
         }
         if let Some(sc) = sidecar.as_ref() {
             out.push_str("\nwith auto-discovered CRA sidecar:\n");
-            for level in SIDECAR_LEVELS {
+            for result in run(Some(sc)).check_levels(&sidecar_levels(), &sbom) {
+                render_verdict(&mut out, &format!("{:?} + sidecar", result.level), &result);
+            }
+        }
+        if sbom
+            .components
+            .values()
+            .any(|c| c.scope == Some(DependencyScope::Excluded))
+        {
+            out.push_str("\nwith --include-excluded-scope:\n");
+            let run = run(sidecar.as_ref()).with_include_excluded_scope(true);
+            for result in run.check_levels(ComplianceLevel::all(), &sbom) {
                 render_verdict(
                     &mut out,
-                    &format!("{level:?} + sidecar"),
-                    &check(&sbom, *level, Some(sc)),
+                    &format!("{:?} + excluded scope", result.level),
+                    &result,
                 );
             }
         }
@@ -275,17 +299,9 @@ const BYTE_FIXTURES: &[(&str, &[&str])] = &[
     ("cyclonedx/aibom-complete.cdx.json", &["ai-act", "bsi-ai"]),
 ];
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 /// The fixture text with CRLF line endings folded to LF. Windows checkouts
 /// convert line endings (the repo has no `.gitattributes`), which would change
-/// the SBOM digest that OSCAL UUIDs derive from.
+/// the SBOM digest the JSON subject states and OSCAL UUIDs derive from.
 fn lf_normalized(raw: &str) -> String {
     raw.replace("\r\n", "\n")
 }
@@ -303,17 +319,15 @@ fn render_outputs(rel: &str, standards: &[&str]) -> [(&'static str, String); 4] 
     let raw = std::fs::read_to_string(&path).expect("fixture readable");
     let sbom = parse_sbom_str(&raw).unwrap_or_else(|e| panic!("{rel} must parse: {e}"));
     let sidecar = CraSidecarMetadata::discover_for_sbom(&path).expect("sidecar loads");
-    let results: Vec<ComplianceResult> = standards
+    let levels: Vec<ComplianceLevel> = standards
         .iter()
         .map(|name| {
-            let level = name
-                .parse::<StandardSelector>()
+            name.parse::<StandardSelector>()
                 .expect("known standard")
-                .level();
-            let sc = sidecar.as_ref().filter(|_| SIDECAR_LEVELS.contains(&level));
-            check(&sbom, level, sc)
+                .level()
         })
         .collect();
+    let results = run(sidecar.as_ref()).check_levels(&levels, &sbom);
     // The `--json-schema v1` layout predates passed checks and leaves them
     // out, as `validate` does.
     let v1: Vec<ComplianceResult> = results
@@ -325,7 +339,11 @@ fn render_outputs(rel: &str, standards: &[&str]) -> [(&'static str, String); 4] 
         })
         .collect();
     let json = serde_json::to_string_pretty(&v1).expect("JSON serializes");
-    let envelope = generate_compliance_json(&results).expect("envelope serializes");
+    // The SBOM as `validate` reads it: its digest (of the LF-folded text, so
+    // a Windows checkout gives the same) and its file name.
+    let assessed = AssessedSbom::new(&sbom, lf_normalized(&raw).as_bytes()).with_file_name(rel);
+    let envelope =
+        generate_compliance_json_at(&results, &assessed, as_of()).expect("envelope serializes");
     // The SBOM as the CLI names it from the repository root.
     let artifact = SarifArtifact::new(
         SarifArtifactLocation::relative(format!("tests/fixtures/{rel}")),
@@ -334,16 +352,13 @@ fn render_outputs(rel: &str, standards: &[&str]) -> [(&'static str, String); 4] 
     );
     let sarif = generate_multi_compliance_sarif_with(
         &results,
-        &SarifOptions::new().with_artifact(artifact),
+        &SarifOptions::new()
+            .with_artifact(artifact)
+            .with_subject(&assessed, as_of()),
     )
     .expect("SARIF serializes");
-    let oscal = generate_assessment_results_at(
-        &results,
-        &sbom,
-        &sha256_hex(lf_normalized(&raw).as_bytes()),
-        Some(as_of()),
-    )
-    .expect("OSCAL serializes");
+    let oscal =
+        generate_assessment_results_at(&results, &assessed, as_of()).expect("OSCAL serializes");
     [
         ("json", json),
         ("json_v2", envelope),
@@ -375,5 +390,110 @@ fn writer_byte_snapshots_are_stable_and_deterministic() {
                 redact_version(text)
             );
         }
+    }
+}
+
+/// The CBOM fixtures deadline mode is pinned on: the calendar fixture, which
+/// exercises every schedule, and two others with real-world mixes.
+const DEADLINE_FIXTURES: &[&str] = &[
+    "cyclonedx/cbom-pqc-calendar.cdx.json",
+    "cyclonedx/cbom-pqc-transition.cdx.json",
+    "cyclonedx/cbom-cnsa2-violations.cdx.json",
+];
+
+/// The dates deadline mode is judged at: the review date, a date in NIST IR
+/// 8547's 2031–2035 deprecation window, and one after its disallowance.
+const DEADLINE_DATES: &[&str] = &[
+    "2026-10-12T00:00:00Z",
+    "2031-06-01T00:00:00Z",
+    "2036-06-01T00:00:00Z",
+];
+
+/// The deadline-mode configurations, as the `validate` flags name them.
+const DEADLINE_CONFIGS: &[(&str, ComplianceLevel, PqcProfile, Option<CnsaCategory>)] = &[
+    ("pqc", ComplianceLevel::NistPqc, PqcProfile::Nist, None),
+    (
+        "pqc --pqc-profile federal",
+        ComplianceLevel::NistPqc,
+        PqcProfile::Federal,
+        None,
+    ),
+    ("cnsa2", ComplianceLevel::Cnsa2, PqcProfile::Nist, None),
+    (
+        "cnsa2 --cnsa-category niche",
+        ComplianceLevel::Cnsa2,
+        PqcProfile::Nist,
+        Some(CnsaCategory::Niche),
+    ),
+];
+
+/// One deadline-mode block: the verdict line, then each finding as
+/// (severity, rule ID, subject, deadline and source), sorted.
+fn render_deadline_verdict(out: &mut String, label: &str, result: &ComplianceResult) {
+    let verdict = if result.is_compliant {
+        "compliant"
+    } else {
+        "NON-COMPLIANT"
+    };
+    let _ = writeln!(
+        out,
+        "[{label}] {verdict} · E{} W{} I{} P{}",
+        result.error_count,
+        result.warning_count,
+        result.info_count,
+        result.passed.len()
+    );
+    let findings: Vec<String> = result
+        .violations
+        .iter()
+        .map(|v| {
+            let deadline = v.deadline.as_ref().map_or_else(
+                || "undated".to_string(),
+                |d| format!("{} {}", d.date, d.source),
+            );
+            format!(
+                "{} {}  {}  {deadline}",
+                severity_letter(v.severity),
+                v.rule_id,
+                subject(v.component_id.as_deref(), v.element.as_deref()),
+            )
+        })
+        .collect();
+    write_sorted(out, findings);
+}
+
+#[test]
+fn deadline_mode_snapshots_for_the_cbom_fixtures() {
+    let mut settings = insta::Settings::clone_current();
+    settings.set_prepend_module_to_snapshot(true);
+    settings.set_omit_expression(true);
+    let _guard = settings.bind_to_scope();
+
+    for rel in DEADLINE_FIXTURES {
+        let raw =
+            std::fs::read_to_string(Path::new(FIXTURES_DIR).join(rel)).expect("fixture readable");
+        let sbom = parse_sbom_str(&raw).unwrap_or_else(|e| panic!("{rel} must parse: {e}"));
+        let mut out = format!("fixture: {rel}\n--pqc-mode deadline\n\n");
+        for (label, level, profile, category) in DEADLINE_CONFIGS {
+            for as_of in DEADLINE_DATES {
+                let instant = chrono::DateTime::parse_from_rfc3339(as_of)
+                    .expect("valid instant")
+                    .with_timezone(&chrono::Utc);
+                let mut run = ComplianceRunConfig::new()
+                    .with_as_of(instant)
+                    .with_pqc_mode(PqcMode::Deadline)
+                    .with_pqc_profile(*profile);
+                if let Some(category) = category {
+                    run = run.with_cnsa_category(*category);
+                }
+                let day = &as_of[..10];
+                render_deadline_verdict(
+                    &mut out,
+                    &format!("{label} @ {day}"),
+                    &run.check(*level, &sbom),
+                );
+            }
+        }
+        insta::assert_snapshot!(format!("deadline__{}", snapshot_name(rel)), out);
     }
 }

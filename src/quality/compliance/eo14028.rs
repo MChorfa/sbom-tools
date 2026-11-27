@@ -5,7 +5,13 @@
 //! mandate: OMB M-26-05 (2026-01-23) rescinded M-22-18 and M-23-16, the
 //! attestation policy built on §4(e), and the FAR Council withdrew FAR
 //! Case 2023-002 on 2026-03-06. The checks themselves are unchanged.
+//!
+//! The checks read the run's evidence (see [`super::evidence`]), never the
+//! SBOM itself.
 
+use super::shared::{
+    invalid_digest_note_of, unparseable_timestamp_of, unreachable_contact_note_of,
+};
 use super::ssdf::{cdxa_note, requirement_matches_id};
 use super::*;
 use crate::model::{AttestationRuleFamily, DefinedRequirement};
@@ -27,13 +33,20 @@ fn evidences_autogen_provenance(requirement: &DefinedRequirement) -> bool {
 
 impl ComplianceChecker {
     /// Executive Order 14028 Section 4 checks
-    pub(crate) fn check_eo14028(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+    pub(crate) fn check_eo14028(&self, ctx: &ComplianceContext<'_, '_>, findings: &mut Findings) {
         use crate::model::ExternalRefType;
+        let ev = ctx.ev;
+        let doc = ev.document();
+
+        let Findings {
+            violations,
+            not_evaluated,
+            ..
+        } = findings;
 
         // The component checks below have nothing to judge without a
         // package-scoped component.
-        violations.extend(inventory_absent_violation(
-            sbom,
+        violations.extend(ctx.inventory_absent_violation(
             "SBOM-EO14028-INVENTORY",
             "EO 14028 §4(e) practice: component inventory",
         ));
@@ -42,11 +55,9 @@ impl ComplianceChecker {
         // fully resolved at the injectable clock). Strengthens only: the
         // legacy tool-creator path below stays a valid SelfDeclared-level
         // fallback, and documents without declarations are unaffected.
-        let ctx = ComplianceContext::new(self, sbom);
-        let declarations = ctx.attestation_declarations();
-        let autogen_attested = ctx
-            .evidence_for(AttestationRuleFamily::Eo14028)
-            .iter()
+        let declarations = ctx.ev.attestation_declarations();
+        let autogen_attested = ev
+            .supported_requirements(AttestationRuleFamily::Eo14028)
             .any(|s| evidences_autogen_provenance(s.requirement));
 
         // Sec 4(e) — Machine-readable format: CycloneDX 1.4+, SPDX 2.2+.
@@ -54,53 +65,65 @@ impl ComplianceChecker {
         // names SPDX (then at 2.2) as an accepted format, so SPDX 2.2
         // documents are machine-readable under the EO. Versions compare
         // numerically ("1.10" is newer than "1.7", not "1.1"); an absent or
-        // unparseable version skips the gate instead of false-failing.
-        let minimum = match sbom.document.format {
+        // unparseable version skips the gate instead of false-failing, and
+        // the result lists it as not evaluated.
+        let minimum = match doc.format {
             crate::model::SbomFormat::CycloneDx => crate::model::SpecVersion::new(1, 4, 0),
             crate::model::SbomFormat::Spdx => crate::model::SpecVersion::new(2, 2, 0),
         };
-        let format_ok = sbom
-            .document
-            .spec_version_parsed()
-            .is_none_or(|v| v >= minimum);
-        if !format_ok {
+        let parsed = doc.spec_version;
+        if parsed.is_none() {
+            not_evaluated.push("SBOM-EO14028-FORMAT", SPEC_VERSION_UNPARSED);
+        }
+        if parsed.is_some_and(|v| v < minimum) {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::FormatSpecific,
                 message: format!(
                     "SBOM format {} {} is older than the machine-readable formats EO 14028 \
                     practice expects; use CycloneDX 1.4+, SPDX 2.2+, or SPDX 3.0+",
-                    sbom.document.format, sbom.document.spec_version
+                    doc.format, doc.spec_version_raw
                 ),
                 element: None,
                 requirement: "EO 14028 §4(e) practice: Machine-readable SBOM format".to_string(),
                 rule_id: "SBOM-EO14028-FORMAT",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: observed(&format!("{} {}", doc.format, doc.spec_version_raw)),
             });
         }
 
         // Sec 4(e) — NTIA baseline: creation timestamp. EO 14028 §4(e)
         // incorporates the NTIA minimum elements, which include Timestamp;
         // a missing/invalid source timestamp is stored as the UNIX_EPOCH
-        // sentinel (see `has_known_timestamp`).
-        if !sbom.document.has_known_timestamp() {
+        // sentinel (see `has_known_timestamp`); an invalid one is quoted.
+        if !doc.has_known_timestamp {
+            let message = unparseable_timestamp_of(doc.created_unparsed).map_or_else(
+                || "SBOM is missing a creation timestamp (NTIA required data field)".to_string(),
+                |gap| format!("SBOM has {gap} (NTIA required data field)"),
+            );
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
-                message: "SBOM is missing a creation timestamp (NTIA required data field)"
-                    .to_string(),
+                message,
                 element: None,
                 requirement: "EO 14028 §4(e) practice: Timestamp (NTIA baseline)".to_string(),
                 rule_id: "SBOM-EO14028-TIMESTAMP",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: doc.created_unparsed.and_then(observed),
             });
         }
 
@@ -108,19 +131,14 @@ impl ComplianceChecker {
         // A fresh CDXA attestation of an autogeneration/provenance
         // requirement in the EO 14028 family also satisfies the rule, at
         // Structural/SignaturePresent level.
-        let has_tool = sbom
-            .document
-            .creators
-            .iter()
-            .any(|c| c.creator_type == crate::model::CreatorType::Tool);
-        if !has_tool && !autogen_attested {
+        if !doc.has_tool_creator && !autogen_attested {
             let mut message =
                 "SBOM should be auto-generated by a tool; no tool creator identified".to_string();
             if let Some(note) = cdxa_note(
                 declarations,
                 AttestationRuleFamily::Eo14028,
                 &|_, r| evidences_autogen_provenance(r),
-                self.now(),
+                ev.as_of(),
                 "EO 14028 automated generation / provenance",
             ) {
                 message.push_str(&note);
@@ -134,14 +152,18 @@ impl ComplianceChecker {
                 rule_id: "SBOM-EO14028-AUTOGEN",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // Sec 4(e) — Creator identification
-        if sbom.document.creators.is_empty() {
+        if doc.creators.is_empty() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DocumentMetadata,
@@ -151,9 +173,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-EO14028-CREATOR",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -162,12 +188,9 @@ impl ComplianceChecker {
         // components are not flagged)
         // Package elements (identifier, version, hash, supplier) apply to
         // package-scoped components only; names apply to every component.
-        let packages: Vec<_> = package_components(sbom).collect();
+        let packages: Vec<_> = ctx.package_components().collect();
         let total = packages.len();
-        let without_id = packages
-            .iter()
-            .filter(|c| !c.identifiers.has_cra_identifier())
-            .count();
+        let without_id = packages.iter().filter(|c| !c.ids().any()).count();
         if without_id > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
@@ -183,20 +206,20 @@ impl ComplianceChecker {
                     affected: without_id,
                     total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // Sec 4(e) — NTIA baseline: component names
         // All components: every component needs a name, package or not.
-        let all_components = sbom.components.len();
-        let without_name = sbom
-            .components
-            .values()
-            .filter(|c| !known_component_name(c))
-            .count();
+        let all_components = ev.component_count();
+        let without_name = ev.components().filter(|c| !c.name_known()).count();
         if without_name > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
@@ -212,15 +235,19 @@ impl ComplianceChecker {
                     affected: without_name,
                     total: all_components,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // Sec 4(e) — Dependency relationships (between packages: crypto
         // assets and files need not join the dependency graph)
-        if total > 1 && sbom.edges.is_empty() {
+        if total > 1 && !ev.has_edges() {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
                 category: ViolationCategory::DependencyInfo,
@@ -231,18 +258,19 @@ impl ComplianceChecker {
                 rule_id: "SBOM-EO14028-DEPENDENCY",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // Sec 4(e) — Version information (placeholder values such as
         // NOASSERTION do not satisfy the element)
-        let without_version = packages
-            .iter()
-            .filter(|c| !has_known_value(&c.version))
-            .count();
+        let without_version = packages.iter().filter(|c| !c.version().is_known()).count();
         if without_version > 0 {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
@@ -258,19 +286,36 @@ impl ComplianceChecker {
                     affected: without_version,
                     total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
-        // Sec 4(e) — Cryptographic hashes for integrity
-        let without_hash = packages.iter().filter(|c| c.hashes.is_empty()).count();
-        if without_hash > 0 {
+        // Sec 4(e) — Cryptographic hashes for integrity. Only plausible
+        // digests count (see `plausible_digest`); the message names the
+        // components whose present hashes did not.
+        let without_hash: Vec<_> = packages
+            .iter()
+            .filter(|c| !c.hashes().facts.plausible)
+            .collect();
+        if !without_hash.is_empty() {
+            let mut message = format!(
+                "{}/{total} components missing cryptographic hashes",
+                without_hash.len()
+            );
+            message.push_str(&invalid_digest_note_of(
+                without_hash.iter().map(|c| (c.name(), c.hashes().raw)),
+            ));
+            let without_hash = without_hash.len();
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::IntegrityInfo,
-                message: format!("{without_hash}/{total} components missing cryptographic hashes"),
+                message,
                 element: None,
                 requirement: "EO 14028 §4(e) practice: Component integrity verification"
                     .to_string(),
@@ -280,46 +325,57 @@ impl ComplianceChecker {
                     affected: without_hash,
                     total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // Sec 4(e)(viii) — Vulnerability disclosure program. Component-level refs count
-        // only on the primary/root components — a dependency's upstream
-        // advisories URL is not the vendor's disclosure process.
-        let has_security_ref = sbom.document.security_contact.is_some()
-            || sbom.document.vulnerability_disclosure_url.is_some()
-            || manufacturer_scope_components(sbom).iter().any(|comp| {
-                comp.external_refs.iter().any(|r| {
-                    matches!(
-                        r.ref_type,
-                        ExternalRefType::SecurityContact | ExternalRefType::Advisories
-                    )
-                })
+        // only on the described product components — a dependency's
+        // upstream advisories URL is not the vendor's disclosure process. A
+        // contact counts only when it reaches someone (`known_contact`), as
+        // for the CRA and PCI DSS checks: until v0.4.0 any value did. A
+        // support reference does not count here (it does for CRA Art. 13(17)).
+        let has_security_ref = doc.security_contact_reaches
+            || doc.vulnerability_disclosure_url_reaches
+            || ev.manufacturer().reference(|r| {
+                matches!(
+                    r.ref_type,
+                    ExternalRefType::SecurityContact | ExternalRefType::Advisories
+                ) && is_contact_reference(r)
             });
         if !has_security_ref {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::SecurityInfo,
-                message: "No security contact or vulnerability disclosure reference found"
-                    .to_string(),
+                message: format!(
+                    "No security contact or vulnerability disclosure reference found{}",
+                    unreachable_contact_note_of(ev.manufacturer().unreachable_contact)
+                ),
                 element: None,
                 requirement: "EO 14028 §4(e)(viii) practice: Vulnerability disclosure program"
                     .to_string(),
                 rule_id: "SBOM-EO14028-DISCLOSURE",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: ev.manufacturer().unreachable_contact.and_then(observed),
             });
         }
 
         // Sec 4(e) — Supplier identification (placeholder values such as
         // NOASSERTION do not satisfy the element)
-        let without_supplier = packages.iter().filter(|c| !has_known_producer(c)).count();
+        let without_supplier = packages.iter().filter(|c| !c.producer().is_known()).count();
         if without_supplier > 0 {
             // Supplier Name is a REQUIRED NTIA minimum element, and the EO 14028
             // §4(e) practice incorporates the NTIA minimum elements — so a missing supplier
@@ -340,9 +396,13 @@ impl ComplianceChecker {
                     affected: without_supplier,
                     total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }

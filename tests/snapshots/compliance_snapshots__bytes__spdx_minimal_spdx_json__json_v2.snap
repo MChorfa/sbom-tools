@@ -7,13 +7,31 @@ source: tests/compliance_snapshots.rs
     "name": "sbom-tools",
     "version": "[VERSION]"
   },
+  "as_of": "2026-10-12T00:00:00Z",
+  "subject": {
+    "sha256": "112025cca042383bb7172ffe41f60033816a7f49e8be3d21de6b1955bcdb9b4e",
+    "format": "SPDX",
+    "spec_version": "2.3",
+    "file_name": "minimal.spdx.json",
+    "components": 2,
+    "duplicates": {
+      "components": 0,
+      "entries": 0,
+      "conflicts": []
+    },
+    "timestamp_unparsed": false
+  },
   "results": [
     {
       "standard": "ntia",
       "name": "NTIA Minimum Elements",
       "applicable": true,
       "compliant": false,
-      "score": 33,
+      "score": 30,
+      "score_basis": {
+        "checked": 3,
+        "failed": 2
+      },
       "counts": {
         "error": 2,
         "warning": 0,
@@ -29,6 +47,7 @@ source: tests/compliance_snapshots.rs
           "message": "Component 'lodash' missing supplier/manufacturer",
           "element": "lodash",
           "component_id": "pkg:npm/lodash@4.17.21",
+          "field": "packages[].supplier",
           "requirement": "NTIA: Supplier information",
           "rule_id": "SBOM-NTIA-SUPPLIER",
           "sarif_rule_id": "SBOM-NTIA-SUPPLIER",
@@ -50,6 +69,7 @@ source: tests/compliance_snapshots.rs
           "message": "Component 'express' missing supplier/manufacturer",
           "element": "express",
           "component_id": "pkg:npm/express@4.18.2",
+          "field": "packages[].supplier",
           "requirement": "NTIA: Supplier information",
           "rule_id": "SBOM-NTIA-SUPPLIER",
           "sarif_rule_id": "SBOM-NTIA-SUPPLIER",
@@ -71,10 +91,14 @@ source: tests/compliance_snapshots.rs
       "name": "CISA Framing Software Component Transparency (3rd ed.)",
       "applicable": true,
       "compliant": false,
-      "score": 16,
+      "score": 12,
+      "score_basis": {
+        "checked": 3,
+        "failed": 9
+      },
       "counts": {
         "error": 3,
-        "warning": 2,
+        "warning": 3,
         "info": 1,
         "passed": 0
       },
@@ -86,6 +110,7 @@ source: tests/compliance_snapshots.rs
           "category": "DependencyInfo",
           "message": "[CISA FSCT 3e §2.2.2/§2.3.3] No direct dependencies of the Primary Component are identified, and no completeness declaration covers their absence — identify all static direct dependencies or declare the enumeration's completeness",
           "element": null,
+          "field": "relationships[]",
           "requirement": "CISA FSCT 3e §2.2.2/§2.3.3: Direct dependencies (Minimum Expected)",
           "rule_id": "SBOM-FSCT-DIRECT-DEPS",
           "sarif_rule_id": "SBOM-FSCT-DIRECT-DEPS",
@@ -115,6 +140,7 @@ source: tests/compliance_snapshots.rs
             "affected": 2,
             "total": 2
           },
+          "field": "packages[].supplier",
           "requirement": "CISA FSCT 3e §2.2.2.3: Supplier Name (Minimum Expected)",
           "rule_id": "SBOM-FSCT-SUPPLIER",
           "sarif_rule_id": "SBOM-FSCT-SUPPLIER",
@@ -133,12 +159,13 @@ source: tests/compliance_snapshots.rs
           "finding_key": "fsct|SBOM-FSCT-HASH|document",
           "severity": "Error",
           "category": "IntegrityInfo",
-          "message": "[CISA FSCT 3e §2.2.2.5] 1/2 component(s) carry no author-provided cryptographic hash (enrichment-fetched hashes are not author evidence): express",
+          "message": "[CISA FSCT 3e §2.2.2.5] 2/2 component(s) carry no author-provided cryptographic hash (enrichment-fetched hashes are not author evidence): lodash (SHA-256 digest is not hexadecimal), express",
           "element": null,
           "counts": {
-            "affected": 1,
+            "affected": 2,
             "total": 2
           },
+          "field": "packages[].checksums[]",
           "requirement": "CISA FSCT 3e §2.2.2.5: Cryptographic Hash (Minimum Expected)",
           "rule_id": "SBOM-FSCT-HASH",
           "sarif_rule_id": "SBOM-FSCT-HASH",
@@ -163,6 +190,7 @@ source: tests/compliance_snapshots.rs
             "affected": 2,
             "total": 2
           },
+          "field": "packages[].externalRefs[]",
           "requirement": "CISA FSCT 3e §2.2.2.4: Unique Identifier multiplicity (Recommended Practice)",
           "rule_id": "SBOM-FSCT-IDENTIFIER-MULTI",
           "sarif_rule_id": "SBOM-FSCT-IDENTIFIER-MULTI",
@@ -174,6 +202,28 @@ source: tests/compliance_snapshots.rs
             }
           ],
           "remediation": "List as many globally unique identifiers as are available for the component. Heuristic: the >=2-distinct-identifier-kinds (PURL/CPE/SWHID/SWID) threshold is profile policy — 'as available' is unverifiable from the document alone. SPDX 2.x: add a packages[].externalRefs[] entry with referenceCategory PACKAGE-MANAGER, referenceType purl and a pkg: locator (or a SECURITY cpe23Type, or a PERSISTENT-ID swh entry).",
+          "help_uri": "https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024"
+        },
+        {
+          "finding_id": "sbomtools:v1:0982d91d387a30f1",
+          "finding_key": "fsct|SBOM-FSCT-HASH-PRIMARY-SHA2|pkg:npm/lodash@4.17.21",
+          "severity": "Warning",
+          "category": "IntegrityInfo",
+          "message": "[CISA FSCT 3e §2.2.2.5] Primary Component 'lodash' has no author-provided cryptographic hash: SHA-256 digest is not hexadecimal",
+          "element": "lodash",
+          "component_id": "pkg:npm/lodash@4.17.21",
+          "field": "packages[].checksums[]",
+          "requirement": "CISA FSCT 3e §2.2.2.5: Primary Component hash (Recommended Practice)",
+          "rule_id": "SBOM-FSCT-HASH-PRIMARY-SHA2",
+          "sarif_rule_id": "SBOM-FSCT-HASH-PRIMARY-SHA2",
+          "standard_refs": [
+            {
+              "standard": "CisaFsct",
+              "id": "§2.2.2.5",
+              "help_uri": "https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024"
+            }
+          ],
+          "remediation": "Provide at least one hash of the Primary Component, and use the cryptographically secure SHA-2 family (SHA-256 and higher) for hashed components; wherever less-secure hashes (MD5/SHA1) appear, add an additional cryptographically secure hash. SPDX 2.x: add packages[].checksums[] entries with algorithm SHA256, SHA384 or SHA512 and the checksumValue (PackageChecksum).",
           "help_uri": "https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024"
         },
         {
@@ -208,6 +258,7 @@ source: tests/compliance_snapshots.rs
           "category": "DependencyInfo",
           "message": "[CISA FSCT 3e §2.2.2/§2.2.2.6] No dynamic, runtime, or provided dependency relationships are identified (DYNAMIC_LINK / RUNTIME_DEPENDENCY_OF / PROVIDED_DEPENDENCY_OF) — readiness note for the aspirational goal of identifying dynamic and remote dependencies",
           "element": null,
+          "field": "relationships[]",
           "requirement": "CISA FSCT 3e §2.2.2/§2.2.2.6: Dynamic and remote dependencies (Aspirational Goal)",
           "rule_id": "SBOM-FSCT-DYNAMIC-DEPS",
           "sarif_rule_id": "SBOM-FSCT-DYNAMIC-DEPS",
@@ -227,7 +278,19 @@ source: tests/compliance_snapshots.rs
           "help_uri": "https://www.cisa.gov/resources-tools/resources/framing-software-component-transparency-2024"
         }
       ],
-      "passed": []
+      "passed": [],
+      "evaluated": [
+        {
+          "rule_id": "SBOM-FSCT-SBOM-TYPE",
+          "status": "not_evaluated",
+          "reason": "sbom-tools reads the SBOM type from CycloneDX metadata.lifecycles only, not from an SPDX document"
+        },
+        {
+          "rule_id": "SBOM-FSCT-SIGNATURE",
+          "status": "not_evaluated",
+          "reason": "SPDX 2.x cannot carry a document signature"
+        }
+      ]
     }
   ]
 }

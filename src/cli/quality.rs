@@ -6,8 +6,8 @@ use crate::config::EnrichmentConfig;
 use crate::pipeline::{OutputTarget, exit_codes, parse_sbom_with_context, write_output};
 use crate::quality::{QualityGrade, QualityReport, QualityScorer, ScoringProfile};
 use crate::reports::ReportFormat;
+use crate::reports::escape::sanitize_line;
 use anyhow::Result;
-use serde_json::json;
 use std::path::PathBuf;
 
 /// Output formats the `quality` command has a real renderer for.
@@ -60,6 +60,14 @@ pub struct QualityConfig {
     /// The most results the `-o sarif` run keeps (`--sarif-max-results`;
     /// `0` keeps every result).
     pub sarif_max_results: usize,
+    /// How the embedded compliance check judges quantum-vulnerable
+    /// cryptography (`--pqc-mode`, `--pqc-profile`, `--cnsa-category`); the
+    /// `cbom` profile's NIST PQC check reads it.
+    pub pqc: super::PqcOptions,
+    /// The rule settings and component scope of the embedded compliance
+    /// check (`--rule`, `--include-excluded-scope`), applied as `validate`
+    /// applies them.
+    pub rules: super::RuleOptions,
 }
 
 /// Run the quality command, returning the desired exit code.
@@ -88,6 +96,8 @@ pub fn run_quality(
     sarif_base: Option<PathBuf>,
     sarif_category: Option<String>,
     sarif_max_results: usize,
+    pqc: super::PqcOptions,
+    rules: super::RuleOptions,
 ) -> Result<i32> {
     let config = QualityConfig {
         sbom_path,
@@ -106,6 +116,8 @@ pub fn run_quality(
         sarif_base,
         sarif_category,
         sarif_max_results,
+        pqc,
+        rules,
     };
 
     run_quality_impl(config)
@@ -119,14 +131,22 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
         config.sarif_category.as_deref(),
     )?;
 
-    // Pinned evaluation clock for deadline-sensitive compliance checks
-    // (shared parser with `validate --as-of`). Parsed up front so a bad
-    // value fails before the SBOM is read.
-    let as_of: Option<chrono::DateTime<chrono::Utc>> = config
-        .as_of
-        .as_deref()
-        .map(super::parse_as_of)
-        .transpose()?;
+    // The embedded compliance check's inputs, resolved like `validate`'s
+    // before the SBOM is read, so a bad value fails first: the pinned clock,
+    // the product class, the CRA sidecar (explicit, else found next to the
+    // SBOM), the PQC mode, the rule settings and the component scope.
+    let compliance = super::compliance_run_config_for(
+        &config.sbom_path,
+        config.cra_sidecar_path.as_deref(),
+        config.cra_product_class.as_deref(),
+        config.as_of.as_deref(),
+        config.pqc,
+        &config.rules,
+    )?;
+    compliance.warn_on_unmatched_rules(
+        &[config.profile.compliance_level()],
+        "the profile's compliance checks",
+    );
 
     #[cfg_attr(not(feature = "enrichment"), allow(unused_mut))]
     let mut parsed = parse_sbom_with_context(&config.sbom_path, false)?;
@@ -155,34 +175,9 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
 
     tracing::info!("Running quality assessment with {:?} profile", profile);
 
-    // Honour explicit --cra-sidecar (hard error when broken); otherwise
-    // auto-discover next to the SBOM (best-effort).
-    let sidecar = super::load_cra_sidecar(config.cra_sidecar_path.as_deref(), &config.sbom_path)?;
-    // An explicitly passed unrecognized class is a hard error (strict parse).
-    let cli_class = super::parse_cra_product_class(config.cra_product_class.as_deref())?;
-    let sidecar_class = sidecar.as_ref().and_then(|s| s.product_class);
-    if let (Some(cli), Some(side)) = (cli_class, sidecar_class)
-        && cli != side
-    {
-        tracing::warn!(
-            "CRA product class mismatch: --cra-product-class={} but sidecar says {}; using sidecar.",
-            cli.label(),
-            side.label()
-        );
-    }
-    let effective_class = sidecar_class.or(cli_class);
-
-    let mut scorer = QualityScorer::new(profile);
-    if let Some(sc) = sidecar {
-        scorer = scorer.with_cra_sidecar(sc);
-    }
-    if let Some(c) = effective_class {
-        scorer = scorer.with_cra_product_class(c);
-    }
-    if let Some(t) = as_of {
-        scorer = scorer.with_as_of(t);
-    }
-    let report = scorer.score(parsed.sbom());
+    let report = QualityScorer::new(profile)
+        .with_compliance(compliance)
+        .score(parsed.sbom());
 
     // sbomqs-compat table for the human summary. Computed straight from the
     // NormalizedSbom (plus the raw document text for file-format /
@@ -198,7 +193,8 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
 
     // Build output based on format
     let output_text = match config.output {
-        ReportFormat::Json => format_quality_json(&report, &config),
+        // The C ABI's score-with-options call returns this same document.
+        ReportFormat::Json => crate::reports::generate_quality_json(&report, &config.sbom_path)?,
         ReportFormat::Sarif => {
             // SARIF results point at the SBOM lines of their components.
             let artifact = super::sarif_artifact(
@@ -268,36 +264,6 @@ fn run_quality_impl(config: QualityConfig) -> Result<i32> {
     }
 
     Ok(exit_codes::SUCCESS)
-}
-
-/// Format quality report as JSON
-fn format_quality_json(report: &QualityReport, config: &QualityConfig) -> String {
-    let not_applicable = report
-        .ai_readiness_metrics
-        .as_ref()
-        .is_some_and(crate::quality::AiReadinessMetrics::is_not_applicable);
-
-    // Serialize the report, then for an N/A AI-readiness result replace the
-    // overall_score/grade so machine consumers don't read a 0.0 / "F" as a real
-    // failing score (the standard 8-category pipeline did not run).
-    let mut report_value = serde_json::to_value(report).unwrap_or_default();
-    if not_applicable && let Some(obj) = report_value.as_object_mut() {
-        obj.insert("overall_score".to_string(), serde_json::Value::Null);
-        obj.insert(
-            "grade".to_string(),
-            serde_json::Value::String("N/A".to_string()),
-        );
-    }
-
-    let output = json!({
-        "tool": "sbom-tools",
-        "version": env!("CARGO_PKG_VERSION"),
-        "sbom": config.sbom_path.file_name().unwrap_or_default().to_string_lossy(),
-        "profile": config.profile.to_string(),
-        "applicable": !not_applicable,
-        "report": report_value,
-    });
-    serde_json::to_string_pretty(&output).unwrap_or_default()
 }
 
 /// Format quality report as SARIF 2.1.0
@@ -382,14 +348,7 @@ fn format_quality_report(
     };
 
     // Header
-    lines.push(format!(
-        "SBOM Quality Report: {}",
-        config
-            .sbom_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-    ));
+    lines.push(format!("SBOM Quality Report: {}", report_file_name(config)));
     lines.push(format!("Profile: {}", config.profile));
     lines.push(String::new());
 
@@ -564,6 +523,15 @@ fn format_quality_report(
     lines.join("\n")
 }
 
+/// The SBOM's file name for a text report header. A file name can come from
+/// a pull request like the SBOM itself, so it passes through
+/// [`sanitize_line`]: a crafted name must not start a workflow command or
+/// send a terminal escape.
+fn report_file_name(config: &QualityConfig) -> String {
+    let name = config.sbom_path.file_name().unwrap_or_default();
+    sanitize_line(&name.to_string_lossy()).into_owned()
+}
+
 /// Render the AI-readiness profile as a per-check pass/fail report.
 fn format_ai_readiness_report(
     report: &QualityReport,
@@ -576,14 +544,7 @@ fn format_ai_readiness_report(
     };
     let reset = if use_color { "\x1b[0m" } else { "" };
 
-    lines.push(format!(
-        "SBOM Quality Report: {}",
-        config
-            .sbom_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-    ));
+    lines.push(format!("SBOM Quality Report: {}", report_file_name(config)));
     lines.push(format!("Profile: {}", config.profile));
     lines.push(String::new());
 
@@ -664,6 +625,7 @@ fn format_ai_readiness_report(
 mod tests {
     use super::*;
     use crate::model::{Component, ComponentType, DocumentMetadata, MlModelInfo, NormalizedSbom};
+    use serde_json::json;
 
     /// Contract test: every documented `--profile` spelling parses to the
     /// right profile through the single shared parser (clap uses the same
@@ -744,6 +706,8 @@ mod tests {
                 None,
                 None,
                 crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+                crate::cli::PqcOptions::default(),
+                crate::cli::RuleOptions::default(),
             )
             .expect_err("unsupported format must be rejected");
             let msg = err.to_string();
@@ -787,6 +751,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect("sbomqs-json run must succeed");
         assert_eq!(code, exit_codes::SUCCESS);
@@ -832,6 +798,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect("summary run must succeed");
         assert_eq!(code, exit_codes::SUCCESS);
@@ -872,6 +840,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect_err("broken explicit sidecar must be a hard error");
         assert!(err.to_string().contains("Failed to load CRA sidecar"));
@@ -911,6 +881,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect("an N/A AI-readiness run must not error");
         assert_eq!(
@@ -943,6 +915,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect("the run itself must succeed");
         assert_eq!(code, exit_codes::COMPLIANCE_ERRORS);
@@ -971,6 +945,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect_err("typo'd --cra-product-class must be a hard error");
         let msg = err.to_string();
@@ -1000,6 +976,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect_err("invalid --as-of must be rejected");
         assert!(err.to_string().contains("invalid --as-of"));
@@ -1035,6 +1013,8 @@ mod tests {
             None,
             None,
             crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            crate::cli::PqcOptions::default(),
+            crate::cli::RuleOptions::default(),
         )
         .expect_err("a discovered-but-broken sidecar must hard-error");
         assert!(
@@ -1061,6 +1041,8 @@ mod tests {
             sarif_base: None,
             sarif_category: None,
             sarif_max_results: crate::reports::DEFAULT_SARIF_MAX_RESULTS,
+            pqc: crate::cli::PqcOptions::default(),
+            rules: crate::cli::RuleOptions::default(),
         }
     }
 
@@ -1124,7 +1106,11 @@ mod tests {
     fn test_format_quality_json_ai_readiness_na_is_not_misleading() {
         let sbom = NormalizedSbom::new(DocumentMetadata::default());
         let report = QualityScorer::new(ScoringProfile::AiReadiness).score(&sbom);
-        let out = format_quality_json(&report, &ai_config(ReportFormat::Json, None));
+        let out = crate::reports::generate_quality_json(
+            &report,
+            &ai_config(ReportFormat::Json, None).sbom_path,
+        )
+        .expect("renders");
         let value: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
         // N/A must not serialize as a real 0.0 / "F" score.
         assert_eq!(value["applicable"], json!(false));

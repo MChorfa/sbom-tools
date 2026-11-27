@@ -53,8 +53,9 @@ const fn build_long_version() -> &'static str {
 #[command(after_help = "EXIT CODES:
     0  Success / gate passed
     1  Gate failed: --fail-on-change, --min-score, --fail-on-noncompliant,
-       validate errors (or N/A under --require-applicable), query with no
-       matches, vex status/filter --actionable-only, verify audit-hashes gate
+       validate errors or --fail-on findings (or N/A under
+       --require-applicable), query with no matches, vex status/filter
+       --actionable-only, verify audit-hashes gate
     2  Vulnerabilities introduced (diff/view --fail-on-vuln); compliance
        warnings (validate --fail-on-warning)
     3  Usage error (unknown flag or value, missing argument) or operational
@@ -94,6 +95,8 @@ EXAMPLES:
   Quality and compliance:
     sbom-tools quality app.cdx.json --profile security --metrics
     sbom-tools validate app.cdx.json --standard ntia,cra,eo14028
+    sbom-tools rules --standard cra                # What a standard checks
+    sbom-tools rules explain SBOM-CRA-ART-24       # One rule in full
     sbom-tools license-check app.cdx.json --strict
 
   VEX operations:
@@ -337,6 +340,124 @@ fn seed_vex_enrichment(
     config
 }
 
+/// The compliance inputs every compliance-checking command takes (`validate`,
+/// `quality`, `view`, `diff`, `cra-docs`, and `timeline` for its compliance
+/// trend), defined once so the commands accept them identically and judge an
+/// SBOM the same way. `diff-multi` and `matrix` check no compliance, so they
+/// take none of them.
+#[derive(Args, Debug)]
+struct ComplianceRunArgs {
+    /// CRA Annex III/IV product class (drives severity calibration of the
+    /// CRA Phase 1 and Phase 2 checks).
+    /// One of: default, important-class-1, important-class-2, critical.
+    /// Implementing Regulation (EU) 2025/2392 gives the technical
+    /// description of each class's product categories.
+    /// A CRA sidecar's `productClass` wins over this flag.
+    #[arg(long, value_name = "CLASS")]
+    cra_product_class: Option<String>,
+
+    /// Pin the evaluation clock (RFC 3339, e.g. 2027-01-01T00:00:00Z or
+    /// 2027-01-01). Deadline-sensitive checks (CRA Art. 14 readiness, SBOM
+    /// age, EUCC certificate expiry, PQC deadlines) and the quality score
+    /// evaluate against this instant instead of the wall clock — reproducible
+    /// CI runs.
+    #[arg(long, value_name = "DATETIME")]
+    as_of: Option<String>,
+
+    /// How the CNSA 2.0 and NIST PQC checks judge quantum-vulnerable
+    /// cryptography: readiness (default) makes every such algorithm an
+    /// error; deadline judges each by its migration deadline at --as-of
+    /// (NIST IR 8547: info until it is deprecated after 2030, warning until
+    /// it is disallowed after 2035, error after; the CNSA 2.0 timeline for
+    /// cnsa2) and records the deadline on the finding
+    #[arg(long, value_enum, value_name = "MODE")]
+    pqc_mode: Option<sbom_tools::quality::PqcMode>,
+
+    /// With --pqc-mode deadline, whose deadlines the NIST PQC check applies:
+    /// nist (default, NIST IR 8547) or federal (also EO 14412 / OMB M-26-15
+    /// for high value assets and high impact systems: PQC key establishment
+    /// by 2030-12-31, PQC signatures by 2031-12-31, TLS 1.3 by 2030-01-02)
+    #[arg(long, value_enum, value_name = "PROFILE")]
+    pqc_profile: Option<sbom_tools::quality::PqcProfile>,
+
+    /// With --pqc-mode deadline, the CNSA 2.0 equipment category whose
+    /// timeline the CNSA 2.0 check applies (when CNSA 2.0 is to be preferred,
+    /// and when it is to be used exclusively). Unset: the strictest,
+    /// software-signing (2025, 2030)
+    #[arg(long, value_enum, value_name = "CATEGORY")]
+    cnsa_category: Option<sbom_tools::quality::CnsaCategory>,
+
+    /// Set a rule's severity for this run, or turn it off:
+    /// RULE=off|info|warning|error, e.g. --rule SBOM-NTIA-SUPPLIER=warning
+    /// (repeatable; `sbom-tools rules` lists the rule ids). The verdict, the
+    /// counts, the score and the exit code follow the severities it sets;
+    /// each finding keeps the severity its check gave it as
+    /// `default_severity`. `off` drops the rule's findings and counts them
+    /// under `suppressed`.
+    /// Wins over the config file's `compliance.rules` for its rule
+    #[arg(
+        long = "rule",
+        value_name = "RULE=SETTING",
+        value_parser = cli::parse_rule_setting_arg
+    )]
+    rule: Vec<(&'static str, sbom_tools::quality::RuleSetting)>,
+
+    /// Judge components whose scope is excluded by the package rules too
+    /// (version, supplier, license, hash, identifier, dependency graph).
+    /// CycloneDX `scope: excluded` (and an SPDX development, build or test
+    /// dependency) marks a component the product does not need at runtime;
+    /// by default those are left out, and each result says how many
+    #[arg(long)]
+    include_excluded_scope: bool,
+}
+
+impl ComplianceRunArgs {
+    /// The PQC inputs of the run, as the handlers take them: each flag, else
+    /// the config file's `compliance.pqc_mode`, `pqc_profile` and
+    /// `cnsa_category`.
+    fn pqc(&self, app: &AppConfig) -> Result<cli::PqcOptions> {
+        cli::PqcOptions::with_config_defaults(
+            self.pqc_mode,
+            self.pqc_profile,
+            self.cnsa_category,
+            &app.compliance,
+        )
+    }
+
+    /// The rule settings and component scope of the run: `--rule` over the
+    /// config file's `compliance.rules`, and `--include-excluded-scope` or
+    /// the file's `compliance.include_excluded_scope`.
+    fn rules(&self, app: &AppConfig) -> Result<cli::RuleOptions> {
+        cli::RuleOptions::from_flags(&self.rule, self.include_excluded_scope, &app.compliance)
+    }
+
+    /// The run every SBOM of a command that judges several is checked with:
+    /// these flags over the config file (`diff` adds each side's sidecar).
+    fn shared_run(&self, app: &AppConfig) -> Result<sbom_tools::quality::ComplianceRunConfig> {
+        cli::compliance_run_config(
+            self.cra_product_class
+                .as_deref()
+                .or(app.compliance.cra_product_class.as_deref()),
+            self.as_of.as_deref(),
+            self.pqc(app)?,
+            &self.rules(app)?,
+        )
+    }
+}
+
+/// The CRA sidecar flag of the commands that judge one SBOM. (`diff` judges
+/// each of its SBOMs against the sidecar found next to it.)
+#[derive(Args, Debug)]
+struct CraSidecarArgs {
+    /// Path to a CRA sidecar metadata file (JSON or YAML) supplying
+    /// security_contact, manufacturer, support_end_date, ce_marking_reference,
+    /// and similar CRA fields the SBOM itself doesn't carry. It feeds the
+    /// CRA, EUCC and EU AI Act checks only.
+    /// If omitted, sbom-tools auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
+    #[arg(long, value_name = "PATH")]
+    cra_sidecar: Option<PathBuf>,
+}
+
 /// Arguments for the `diff` subcommand
 #[derive(Parser)]
 #[command(after_help = "EXIT CODES:
@@ -492,6 +613,11 @@ struct DiffArgs {
     /// Streaming threshold in MB. Files larger than this use streaming mode.
     #[arg(long, default_value = "10")]
     streaming_threshold: u64,
+
+    // The compliance inputs of both SBOMs; each SBOM adds the CRA sidecar
+    // found next to it.
+    #[command(flatten)]
+    compliance: ComplianceRunArgs,
 }
 
 /// Arguments for the `view` subcommand
@@ -538,15 +664,20 @@ struct ViewArgs {
     #[arg(long)]
     validate_ntia: bool,
 
-    /// Filter by minimum vulnerability severity (critical, high, medium, low)
+    /// Filter by minimum vulnerability severity (critical, high, medium,
+    /// low). Like --vulnerable-only and --ecosystem, it filters the component
+    /// list only: compliance, the quality score and --validate-ntia judge the
+    /// whole SBOM, as validate does
     #[arg(long)]
     severity: Option<String>,
 
-    /// Only show components with vulnerabilities
+    /// Only show components with vulnerabilities (the list only; the
+    /// verdicts judge the whole SBOM)
     #[arg(long)]
     vulnerable_only: bool,
 
-    /// Filter by ecosystem (e.g., npm, cargo, pypi, maven)
+    /// Filter by ecosystem (e.g., npm, cargo, pypi, maven): the list only;
+    /// the verdicts judge the whole SBOM
     #[arg(long)]
     ecosystem: Option<String>,
 
@@ -558,18 +689,11 @@ struct ViewArgs {
     #[arg(long, value_name = "TYPE", value_parser = parse_bom_type)]
     bom_type: Option<sbom_tools::BomProfile>,
 
-    /// Path to a CRA sidecar metadata file (JSON or YAML).
-    /// If omitted, auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
-    #[arg(long, value_name = "PATH")]
-    cra_sidecar: Option<PathBuf>,
+    #[command(flatten)]
+    cra_sidecar: CraSidecarArgs,
 
-    /// CRA Annex III/IV product class (drives severity calibration).
-    /// One of: default, important-class-1, important-class-2, critical.
-    /// Implementing Regulation (EU) 2025/2392 gives the technical
-    /// description of each class's product categories.
-    /// Sidecar `productClass` wins over this flag.
-    #[arg(long, value_name = "CLASS")]
-    cra_product_class: Option<String>,
+    #[command(flatten)]
+    compliance: ComplianceRunArgs,
 
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
@@ -581,24 +705,30 @@ struct ViewArgs {
     0  Compliant (no errors; no warnings with --fail-on-warning). A standard
        that does not apply to the SBOM (N/A) also exits 0, unless
        --require-applicable
-    1  Compliance errors found (non-compliant), or a standard is N/A under
-       --require-applicable
+    1  Compliance errors found (non-compliant), a finding of a --fail-on
+       rule at any severity, or a standard is N/A under --require-applicable
     2  Compliance warnings found (only with --fail-on-warning)
     3  Usage error (unknown flag or standard, invalid flag value, missing
        argument) or operational error (unsupported output format, invalid
-       --as-of / --cra-product-class / --cra-sidecar, broken config file, I/O)
+       --as-of / --cra-product-class / --cra-sidecar, --pqc-profile or
+       --cnsa-category without --pqc-mode deadline, an unknown --rule or
+       --fail-on rule id, broken config file, I/O)
 
     The gate codes (0/1/2) only apply to runs that completed a
     validation — a nonzero exit is only a compliance verdict when the
-    expected report was produced.
+    expected report was produced. They follow the severities --rule (or
+    the config file's compliance.rules) sets.
 
 JSON OUTPUT:
     -o json emits the sbom-tools/compliance/v2 envelope (one object for any
     number of standards; schema: schemas/compliance/v2.schema.json). The
     pre-0.4 layout stays available with --json-schema v1 until v0.5.0.
-    Checks the SBOM passed (e.g. a NIST-approved PQC algorithm) are listed
-    under passed[], never as violations; -o sarif reports them only with
-    --sarif-include-passes.
+    The envelope states the instant every standard was judged at (as_of)
+    and the SBOM it judged (subject: SHA-256, format, file name, and how the
+    document was read). Checks the SBOM passed (e.g. a NIST-approved PQC
+    algorithm) are listed under passed[], never as violations; -o sarif
+    reports them only with --sarif-include-passes. -o sarif and -o
+    oscal-json carry the same fields for every finding and verdict.
 
 EXAMPLES:
     sbom-tools validate app.cdx.json                              # NTIA minimum
@@ -607,7 +737,10 @@ EXAMPLES:
     sbom-tools validate app.cdx.json --standard ntia -o sarif     # SARIF for CI
     sbom-tools validate app.cdx.json --standard ntia -o oscal-json # OSCAL assessment results
     sbom-tools validate app.cdx.json --fail-on-warning            # Strict CI gate
-    sbom-tools validate ai.cdx.json --standard ai-act --require-applicable")]
+    sbom-tools validate app.cdx.json --rule SBOM-NTIA-SUPPLIER=warning  # Relax one rule
+    sbom-tools validate app.cdx.json --fail-on SBOM-NTIA-SUPPLIER # Gate on one rule
+    sbom-tools validate ai.cdx.json --standard ai-act --require-applicable
+    sbom-tools validate cbom.json --standard pqc --pqc-mode deadline --as-of 2031-06-01  # PQC migration deadlines")]
 struct ValidateArgs {
     /// Path to the SBOM file
     sbom: PathBuf,
@@ -661,9 +794,18 @@ struct ValidateArgs {
     #[arg(long, value_name = "N")]
     sarif_max_results: Option<usize>,
 
-    /// Exit with non-zero code when warnings are found (not just errors)
+    /// Exit 2 when warnings are found (not just errors). Errors, and the
+    /// findings of a --fail-on rule, still exit 1
     #[arg(long)]
     fail_on_warning: bool,
+
+    /// Exit 1 (non-compliant) when the run reports any finding of this
+    /// rule, whatever its severity, info included (repeatable, e.g.
+    /// --fail-on SBOM-NTIA-SUPPLIER). It reads the severities --rule sets:
+    /// a rule that is `off` reports no finding, so it never trips. Adds to
+    /// the config file's `compliance.fail_on`
+    #[arg(long = "fail-on", value_name = "RULE", value_parser = cli::parse_fail_on_arg)]
+    fail_on: Vec<&'static str>,
 
     /// Exit 1 (non-compliant) when a selected standard does not apply to the
     /// SBOM, e.g. ai-act or bsi-ai on an SBOM without ML components. Without
@@ -686,27 +828,113 @@ struct ValidateArgs {
     #[arg(long)]
     summary: bool,
 
-    /// Path to a CRA sidecar metadata file (JSON or YAML) supplying
-    /// security_contact, manufacturer, support_end_date, ce_marking_reference,
-    /// and similar CRA fields the SBOM itself doesn't carry.
-    /// If omitted, sbom-tools auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
-    #[arg(long, value_name = "PATH")]
-    cra_sidecar: Option<PathBuf>,
+    #[command(flatten)]
+    cra_sidecar: CraSidecarArgs,
 
-    /// CRA Annex III/IV product class (drives severity calibration).
-    /// One of: default, important-class-1, important-class-2, critical.
-    /// Implementing Regulation (EU) 2025/2392 gives the technical
-    /// description of each class's product categories.
-    /// Sidecar `productClass` wins over this flag.
-    #[arg(long, value_name = "CLASS")]
-    cra_product_class: Option<String>,
+    #[command(flatten)]
+    compliance: ComplianceRunArgs,
+}
 
-    /// Pin the evaluation clock (RFC 3339, e.g. 2027-01-01T00:00:00Z or
-    /// 2027-01-01). Deadline-sensitive checks (CRA Art. 14 readiness, SBOM
-    /// age, EUCC certificate expiry) evaluate against this instant instead
-    /// of the wall clock — reproducible CI runs.
-    #[arg(long, value_name = "DATETIME")]
-    as_of: Option<String>,
+/// Arguments for the `rules` subcommand
+#[derive(Parser)]
+#[command(
+    args_conflicts_with_subcommands = true,
+    after_help = "EXIT CODES:
+    0  Success
+    3  Usage error (unknown flag, standard or rule id, missing argument)
+
+Each rule shows its id, name, default severity, the standards that use it,
+its references (with URLs) and the first sentence of its remediation. With
+--standard, the rules are listed in the order a `validate -o sarif` run of
+those standards declares them in rules[], followed by each standard's
+SBOM-<FAMILY>-GENERAL fallback rule, which a run declares only when it has a
+finding without a registered rule. Without --standard, every rule in the
+registry is listed, the quality profiles' SBOM-QUALITY-* rules included.
+
+JSON OUTPUT:
+    -o json emits the sbom-tools/rules/v1 document (schema:
+    schemas/rules/v1.schema.json); `rules explain <RULE_ID> -o json` emits the
+    same document with one rule.
+
+EXAMPLES:
+    sbom-tools rules                                # Every rule in the registry
+    sbom-tools rules --standard bsi                 # The rules BSI TR-03183-2 checks
+    sbom-tools rules --standard cra,oss-steward -o markdown
+    sbom-tools rules -o json | jq -r '.rules[] | select(.default_severity == \"Error\") | .id'
+    sbom-tools rules explain SBOM-CRA-ART-24        # One rule in full"
+)]
+struct RulesArgs {
+    #[command(subcommand)]
+    action: Option<RulesAction>,
+
+    /// Only the rules of these standards (comma-separated, or the flag
+    /// repeated). Accepts the names and aliases `validate --standard`
+    /// accepts; `cra` means CRA Phase 2
+    #[arg(
+        long,
+        value_name = "STANDARD",
+        value_parser = StandardSelectorParser,
+        value_delimiter = ','
+    )]
+    standard: Vec<StandardSelector>,
+
+    /// Output format
+    #[arg(short, long, value_enum, default_value_t = RulesFormat::Text)]
+    output: RulesFormat,
+}
+
+/// Sub-subcommands for the `rules` command
+#[derive(Subcommand)]
+enum RulesAction {
+    /// Show everything the registry records about one rule
+    Explain(RulesExplainArgs),
+}
+
+/// Arguments for `rules explain`
+#[derive(Parser)]
+#[command(after_help = "EXIT CODES:
+    0  Success
+    3  Usage error (unknown rule id, unknown flag, missing argument)
+
+Shows the rule's description, default severity, what it reports, the
+standards that use it, its references with URLs, its remediation, and where
+the fix goes in CycloneDX, SPDX 2.x and SPDX 3.0.
+
+EXAMPLES:
+    sbom-tools rules explain SBOM-CRA-ART-24
+    sbom-tools rules explain sbom-bsi-tr-03183-2-5-2 -o markdown
+    sbom-tools rules explain SBOM-NTIA-SUPPLIER -o json")]
+struct RulesExplainArgs {
+    /// The rule id, as `validate -o json` reports it in `rule_id` and
+    /// `-o sarif` in `ruleId` (case-insensitive)
+    #[arg(value_name = "RULE_ID", value_parser = cli::parse_rule_id)]
+    rule_id: &'static str,
+
+    /// Output format
+    #[arg(short, long, value_enum, default_value_t = RulesFormat::Text)]
+    output: RulesFormat,
+}
+
+/// Output format of `rules` and `rules explain`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum RulesFormat {
+    /// Human-readable text (default)
+    #[default]
+    Text,
+    /// The sbom-tools/rules/v1 JSON document
+    Json,
+    /// Markdown: a table of rules, or one rule's section
+    Markdown,
+}
+
+impl From<RulesFormat> for cli::RulesOutputFormat {
+    fn from(value: RulesFormat) -> Self {
+        match value {
+            RulesFormat::Text => Self::Text,
+            RulesFormat::Json => Self::Json,
+            RulesFormat::Markdown => Self::Markdown,
+        }
+    }
 }
 
 /// Output formats the multi-SBOM commands actually render.
@@ -821,6 +1049,7 @@ struct DiffMultiArgs {
 EXAMPLES:
     sbom-tools timeline v1.0.json v1.1.json v1.2.json             # Version evolution
     sbom-tools timeline releases/*.json --enrich-vulns -o json     # Vuln trend report
+    sbom-tools timeline releases/*.json --as-of 2027-01-01 -o json # Pinned compliance trend
     sbom-tools timeline *.json --fail-on-vuln --fail-on-change     # CI gate")]
 struct TimelineArgs {
     /// Paths to SBOMs in chronological order (oldest first)
@@ -874,6 +1103,9 @@ struct TimelineArgs {
     /// Exit with code 4 if introduced vulnerabilities lack VEX statements
     #[arg(long)]
     fail_on_vex_gap: bool,
+
+    #[command(flatten)]
+    compliance: ComplianceRunArgs,
 
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
@@ -957,7 +1189,8 @@ struct MatrixArgs {
     1  Overall score below --min-score, OR (with --fail-on-noncompliant) the SBOM is non-compliant
     3  Usage error (unknown flag or value, missing argument) or operational
        error (unsupported output format, invalid --as-of /
-       --cra-product-class / --cra-sidecar, broken config file, I/O)
+       --cra-product-class / --cra-sidecar, --pqc-profile or --cnsa-category
+       without --pqc-mode deadline, broken config file, I/O)
 
     The gate codes (0/1) only apply to runs that completed an assessment —
     a nonzero exit is only a quality/compliance verdict when the expected
@@ -1031,27 +1264,11 @@ struct QualityArgs {
     #[arg(long)]
     fail_on_noncompliant: bool,
 
-    /// Path to a CRA sidecar metadata file (JSON or YAML).
-    /// Consulted by the embedded CRA compliance check when running
-    /// `--profile cra`. Auto-discovered next to the SBOM if omitted.
-    #[arg(long, value_name = "PATH")]
-    cra_sidecar: Option<PathBuf>,
+    #[command(flatten)]
+    cra_sidecar: CraSidecarArgs,
 
-    /// CRA Annex III/IV product class (drives severity calibration).
-    /// One of: default, important-class-1, important-class-2, critical.
-    /// Implementing Regulation (EU) 2025/2392 gives the technical
-    /// description of each class's product categories.
-    /// Sidecar `productClass` wins over this flag.
-    #[arg(long, value_name = "CLASS")]
-    cra_product_class: Option<String>,
-
-    /// Pin the evaluation clock (RFC 3339, e.g. 2027-01-01T00:00:00Z or
-    /// 2027-01-01). Deadline-sensitive compliance checks embedded in the
-    /// quality report (CRA Art. 14 readiness, SBOM age, EUCC certificate
-    /// expiry) evaluate against this instant instead of the wall clock —
-    /// reproducible CI runs, mirroring `validate --as-of`.
-    #[arg(long, value_name = "DATETIME")]
-    as_of: Option<String>,
+    #[command(flatten)]
+    compliance: ComplianceRunArgs,
 
     #[command(flatten)]
     enrichment: SharedEnrichmentArgs,
@@ -1218,6 +1435,9 @@ enum Commands {
     /// Validate an SBOM against a compliance standard
     Validate(ValidateArgs),
 
+    /// List the compliance rules each standard checks, or explain one rule
+    Rules(RulesArgs),
+
     /// Compare a baseline SBOM against multiple targets (1:N comparison)
     DiffMulti(DiffMultiArgs),
 
@@ -1304,10 +1524,11 @@ enum Commands {
 impl Commands {
     /// Whether this command seeds a per-command config from the loaded
     /// `AppConfig`. Meta commands (config management, shell completions, man
-    /// page, schema generation) don't, so a broken or missing config file must
-    /// never block them — they get a lenient (unvalidated) load instead. Cache
-    /// management is likewise config-independent (it only touches the on-disk
-    /// cache) and must stay usable for recovery even with a broken config.
+    /// page, schema generation, the rule catalogue) don't, so a broken or
+    /// missing config file must never block them — they get a lenient
+    /// (unvalidated) load instead. Cache management is likewise
+    /// config-independent (it only touches the on-disk cache) and must stay
+    /// usable for recovery even with a broken config.
     const fn consumes_config(&self) -> bool {
         // Cache management is config-independent (it only touches the on-disk
         // cache) and must stay usable for recovery even with a broken config.
@@ -1317,7 +1538,11 @@ impl Commands {
         }
         !matches!(
             self,
-            Self::Config { .. } | Self::Completions { .. } | Self::ConfigSchema { .. } | Self::Man
+            Self::Config { .. }
+                | Self::Completions { .. }
+                | Self::ConfigSchema { .. }
+                | Self::Rules(_)
+                | Self::Man
         )
     }
 }
@@ -1698,18 +1923,11 @@ struct CraDocsArgs {
     #[arg(short, long, default_value = "cra-dossier")]
     output: PathBuf,
 
-    /// Path to a CRA sidecar metadata file (JSON or YAML).
-    /// If omitted, auto-discovers `<sbom>.cra.json|yaml` next to the SBOM.
-    #[arg(long, value_name = "PATH")]
-    cra_sidecar: Option<PathBuf>,
+    #[command(flatten)]
+    cra_sidecar: CraSidecarArgs,
 
-    /// CRA Annex III/IV product class.
-    /// One of: default, important-class-1, important-class-2, critical.
-    /// Implementing Regulation (EU) 2025/2392 gives the technical
-    /// description of each class's product categories.
-    /// Sidecar `productClass` wins.
-    #[arg(long, value_name = "CLASS")]
-    cra_product_class: Option<String>,
+    #[command(flatten)]
+    compliance: ComplianceRunArgs,
 
     /// Overwrite existing dossier files (by default a re-run refuses to
     /// clobber hand-completed documents)
@@ -1933,8 +2151,8 @@ fn main() {
     // 5 = license-check denial, 6 = --fail-on-kev, 7 = diff ML regression).
     if let Err(err) = run() {
         // Mirror the format the default `fn main() -> Result` termination
-        // prints: message plus the "Caused by:" chain.
-        eprintln!("Error: {err:?}");
+        // prints: message plus the "Caused by:" chain, each line cleaned.
+        eprintln!("Error: {}", sbom_tools::cli::error_report(&err));
         std::process::exit(exit_codes::ERROR);
     }
 }
@@ -2023,6 +2241,10 @@ fn run() -> Result<()> {
             if fail_on_kev {
                 enrichment.enable_kev = true;
             }
+            // The compliance inputs both SBOMs share, parsed like every other
+            // compliance command's (config-file fallback for the class, the
+            // PQC flags and the rule settings).
+            let compliance = args.compliance.shared_run(&app)?;
 
             let config = DiffConfig {
                 paths: DiffPaths {
@@ -2125,6 +2347,7 @@ fn run() -> Result<()> {
                     ),
                 },
                 enrichment,
+                compliance,
             };
 
             let exit_code = cli::run_diff(config)?;
@@ -2137,6 +2360,8 @@ fn run() -> Result<()> {
         Commands::View(args) => {
             let sm = sub_matches;
             let enrichment = seed_enrichment(&args.enrichment, sm, &app, offline);
+            let pqc = args.compliance.pqc(&app)?;
+            let rules = args.compliance.rules(&app)?;
 
             let config = ViewConfig {
                 sbom_path: args.sbom,
@@ -2166,12 +2391,18 @@ fn run() -> Result<()> {
                 enrichment,
                 cra_sidecar_path: args
                     .cra_sidecar
-                    .clone()
+                    .cra_sidecar
                     .or_else(|| app.compliance.cra_sidecar.clone()),
                 cra_product_class: args
+                    .compliance
                     .cra_product_class
-                    .clone()
                     .or_else(|| app.compliance.cra_product_class.clone()),
+                as_of: args.compliance.as_of,
+                pqc_mode: Some(pqc.mode),
+                pqc_profile: pqc.profile,
+                cnsa_category: pqc.cnsa_category,
+                rule_settings: rules.settings,
+                include_excluded_scope: rules.include_excluded_scope,
             };
             let exit_code = cli::run_view(config)?;
             if exit_code != 0 {
@@ -2210,6 +2441,24 @@ fn run() -> Result<()> {
                     cli::VALIDATE_OUTPUT_FORMATS,
                 ),
             );
+            let pqc = args.compliance.pqc(&app)?;
+            let rules = args.compliance.rules(&app)?;
+            // `--fail-on` adds to the config file's `compliance.fail_on`
+            // (validated at load, so a typo never gets here).
+            let mut fail_on = app
+                .compliance
+                .fail_on
+                .iter()
+                .map(|id| {
+                    cli::parse_fail_on_arg(id)
+                        .map_err(|e| anyhow::anyhow!("invalid `compliance.fail_on` {id}: {e}"))
+                })
+                .collect::<Result<Vec<&'static str>>>()?;
+            for id in &args.fail_on {
+                if !fail_on.contains(id) {
+                    fail_on.push(id);
+                }
+            }
             let exit_code = cli::run_validate(
                 args.sbom,
                 standards,
@@ -2218,10 +2467,12 @@ fn run() -> Result<()> {
                 resolve_bool(args.fail_on_warning, app.compliance.fail_on_warning),
                 args.summary,
                 args.cra_sidecar
+                    .cra_sidecar
                     .or_else(|| app.compliance.cra_sidecar.clone()),
-                args.cra_product_class
+                args.compliance
+                    .cra_product_class
                     .or_else(|| app.compliance.cra_product_class.clone()),
-                args.as_of.as_deref(),
+                args.compliance.as_of.as_deref(),
                 args.require_applicable,
                 args.json_schema,
                 args.sarif_base.or_else(|| app.output.sarif_base.clone()),
@@ -2231,6 +2482,9 @@ fn run() -> Result<()> {
                 args.sarif_max_results
                     .or(app.output.sarif_max_results)
                     .unwrap_or(sbom_tools::reports::DEFAULT_SARIF_MAX_RESULTS),
+                pqc,
+                &rules,
+                &fail_on,
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
@@ -2322,6 +2576,9 @@ fn run() -> Result<()> {
         Commands::Timeline(args) => {
             let sm = sub_matches;
             let enrichment = seed_enrichment(&args.enrichment, sm, &app, offline);
+            // The compliance run the trend checks every SBOM with, parsed
+            // like `diff`'s.
+            let compliance = args.compliance.shared_run(&app)?;
             let config = TimelineConfig {
                 sbom_paths: args.sboms,
                 output: OutputConfig {
@@ -2388,6 +2645,7 @@ fn run() -> Result<()> {
                 },
                 ecosystem_rules: app.ecosystem_rules.clone(),
                 enrichment,
+                compliance,
             };
             let exit_code = cli::run_timeline(config)?;
             if exit_code != 0 {
@@ -2499,6 +2757,8 @@ fn run() -> Result<()> {
                 args.profile
             };
             let enrichment = seed_enrichment(&args.enrichment, sm, &app, offline);
+            let pqc = args.compliance.pqc(&app)?;
+            let rules = args.compliance.rules(&app)?;
             let exit_code = cli::run_quality(
                 args.sbom,
                 profile,
@@ -2513,10 +2773,12 @@ fn run() -> Result<()> {
                 ),
                 resolve_bool(cli.no_color, app.output.no_color),
                 args.cra_sidecar
+                    .cra_sidecar
                     .or_else(|| app.compliance.cra_sidecar.clone()),
-                args.cra_product_class
+                args.compliance
+                    .cra_product_class
                     .or_else(|| app.compliance.cra_product_class.clone()),
-                args.as_of,
+                args.compliance.as_of,
                 enrichment,
                 args.sarif_base.or_else(|| app.output.sarif_base.clone()),
                 args.sarif_category
@@ -2524,6 +2786,8 @@ fn run() -> Result<()> {
                 args.sarif_max_results
                     .or(app.output.sarif_max_results)
                     .unwrap_or(sbom_tools::reports::DEFAULT_SARIF_MAX_RESULTS),
+                pqc,
+                rules,
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
@@ -2968,21 +3232,37 @@ fn run() -> Result<()> {
         // section supplies the sidecar path and product class when the CLI
         // flags are absent, so the dossier agrees with the validate verdict
         // produced under the same config.
-        Commands::CraDocs(args) => cli::run_cra_docs_with_force(
-            args.sbom,
-            args.output,
-            args.cra_sidecar
-                .or_else(|| app.compliance.cra_sidecar.clone()),
-            args.cra_product_class
-                .or_else(|| app.compliance.cra_product_class.clone()),
-            args.force,
-        ),
+        Commands::CraDocs(args) => {
+            let pqc = args.compliance.pqc(&app)?;
+            let rules = args.compliance.rules(&app)?;
+            cli::run_cra_docs_with_force(
+                args.sbom,
+                args.output,
+                args.cra_sidecar
+                    .cra_sidecar
+                    .or_else(|| app.compliance.cra_sidecar.clone()),
+                args.compliance
+                    .cra_product_class
+                    .or_else(|| app.compliance.cra_product_class.clone()),
+                args.compliance.as_of.as_deref(),
+                args.force,
+                pqc,
+                &rules,
+            )
+        }
 
         Commands::CraStandardsWatch(args) => cli::run_cra_standards_watch(
             cli::WatchOutputFormat::parse(args.format.as_str())?,
             args.check_online,
             args.timeout,
         ),
+
+        Commands::Rules(args) => match args.action {
+            Some(RulesAction::Explain(explain)) => {
+                cli::run_rules_explain(explain.rule_id, explain.output.into())
+            }
+            None => cli::run_rules(&args.standard, args.output.into()),
+        },
 
         Commands::Man => {
             let cmd = Cli::command();

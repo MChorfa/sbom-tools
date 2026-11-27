@@ -6,11 +6,21 @@
 //! meaning when a date passes: the 2026-09-11 CRA Art. 14 gate broke snapshot
 //! tests that way (#369). Tests build checkers with `checker(level)` from
 //! `tests/common/clock.rs` (src test modules have a local equivalent) or pin
-//! an explicit instant with `.with_as_of(...)` in the same expression. The
+//! an explicit instant with `.with_as_of(...)` in the same expression; a
+//! `ComplianceRunConfig::new()` in a test pins its clock the same way. The
 //! boundary tests below use explicit instants on both sides of each gate.
+//!
+//! A second lint keeps production code building every checker through
+//! `ComplianceRunConfig::checker`, the one place that decides which of a
+//! run's inputs each level gets.
+
+#[path = "common/source_mask.rs"]
+mod source_mask;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+use source_mask::mask;
 
 use sbom_tools::model::{CraProductClass, CraSidecarMetadata, NormalizedSbom};
 use sbom_tools::parsers::parse_sbom;
@@ -26,77 +36,10 @@ const CRA_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/
 // ============================================================================
 
 const CALL: &str = "ComplianceChecker::new(";
+/// What a test may build a checker from: a checker, or a run configuration
+/// whose checkers inherit its clock.
+const CALLS: &[&str] = &[CALL, "ComplianceRunConfig::new("];
 const PIN: &str = ".with_as_of(";
-
-/// `src` with comments and the contents of string and char literals blanked
-/// (newlines kept), so text inside them never counts as code.
-fn mask(src: &str) -> String {
-    let c: Vec<char> = src.chars().collect();
-    let mut out = c.clone();
-    let blank = |out: &mut Vec<char>, from: usize, to: usize| {
-        for ch in &mut out[from..to.min(c.len())] {
-            if *ch != '\n' {
-                *ch = ' ';
-            }
-        }
-    };
-    let mut i = 0;
-    while i < c.len() {
-        let next = c.get(i + 1).copied();
-        let end = match c[i] {
-            '/' if next == Some('/') => (i..c.len()).find(|&j| c[j] == '\n').unwrap_or(c.len()),
-            '/' if next == Some('*') => {
-                let (mut depth, mut j) = (1, i + 2);
-                while j < c.len() && depth > 0 {
-                    match (c[j], c.get(j + 1)) {
-                        ('/', Some('*')) => (depth, j) = (depth + 1, j + 2),
-                        ('*', Some('/')) => (depth, j) = (depth - 1, j + 2),
-                        _ => j += 1,
-                    }
-                }
-                j
-            }
-            '"' => {
-                let mut j = i + 1;
-                while j < c.len() && c[j] != '"' {
-                    j += if c[j] == '\\' { 2 } else { 1 };
-                }
-                j + 1
-            }
-            // A char literal; anything else after a quote is a lifetime.
-            '\'' if next == Some('\\') => (i + 3..c.len())
-                .find(|&j| c[j] == '\'')
-                .map_or(c.len(), |j| j + 1),
-            '\'' if c.get(i + 2) == Some(&'\'') => i + 3,
-            ch if ch.is_alphabetic() || ch == '_' => {
-                let start = i;
-                while i < c.len() && (c[i].is_alphanumeric() || c[i] == '_') {
-                    i += 1;
-                }
-                // Raw strings: r"…", r#"…"#, br"…".
-                let hashes = c[i..].iter().take_while(|&&h| h == '#').count();
-                let prefix: String = c[start..i].iter().collect();
-                if matches!(prefix.as_str(), "r" | "br") && c.get(i + hashes) == Some(&'"') {
-                    let closes =
-                        |j: usize| c[j] == '"' && (1..=hashes).all(|h| c.get(j + h) == Some(&'#'));
-                    let end = (i + hashes + 1..c.len())
-                        .find(|&j| closes(j))
-                        .map_or(c.len(), |j| j + 1 + hashes);
-                    blank(&mut out, start, end);
-                    i = end;
-                }
-                continue;
-            }
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
-        blank(&mut out, i, end);
-        i = end;
-    }
-    out.into_iter().collect()
-}
 
 /// Index of the `}` closing the block that opens at `open`.
 fn block_end(code: &str, open: usize) -> usize {
@@ -177,21 +120,79 @@ fn module_file(parent: &Path, name: &str) -> Option<PathBuf> {
     .find(|p| p.is_file())
 }
 
-/// Count the `ComplianceChecker::new(` calls inside `regions` of masked
-/// `code`, and return the lines of those whose expression does not also
-/// call `.with_as_of(`.
-fn unpinned_calls(code: &str, regions: &[(usize, usize)]) -> (usize, Vec<usize>) {
-    let (mut calls, mut unpinned) = (0, Vec::new());
-    for (at, _) in code.match_indices(CALL) {
-        if !regions.iter().any(|&(from, to)| (from..to).contains(&at)) {
-            continue;
+/// The names of the out-of-line modules (`mod name;`, with any visibility
+/// and attributes) a masked src/ file declares.
+fn declared_modules(code: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in code.lines() {
+        let mut rest = line.trim();
+        for vis in ["pub(crate)", "pub(super)", "pub"] {
+            rest = rest.strip_prefix(vis).unwrap_or(rest).trim_start();
         }
-        calls += 1;
-        if !code[at..expression_end(code, at)].contains(PIN) {
-            unpinned.push(code[..at].matches('\n').count() + 1);
+        if let Some(decl) = rest.strip_prefix("mod ")
+            && let Some(name) = decl.trim().strip_suffix(';')
+            && !name.is_empty()
+            && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
+        {
+            names.push(name.to_string());
         }
     }
+    names
+}
+
+/// The src/ files that are test code as a whole: the file of every
+/// out-of-line `#[cfg(test)] mod name;`, and every module such a file
+/// declares, at any depth. A test module's submodules exist only in test
+/// builds, whether or not they carry `#[cfg(test)]` of their own.
+fn test_module_files(src: &[(PathBuf, String)]) -> BTreeSet<PathBuf> {
+    let mut files: BTreeSet<PathBuf> = src
+        .iter()
+        .flat_map(|(path, code)| {
+            let (_, out_of_line) = cfg_test_modules(code);
+            out_of_line
+                .into_iter()
+                .filter_map(|name| module_file(path, &name))
+        })
+        .collect();
+    let mut queue: Vec<PathBuf> = files.iter().cloned().collect();
+    while let Some(file) = queue.pop() {
+        let Some((_, code)) = src.iter().find(|(path, _)| *path == file) else {
+            continue;
+        };
+        for name in declared_modules(code) {
+            if let Some(child) = module_file(&file, &name)
+                && files.insert(child.clone())
+            {
+                queue.push(child);
+            }
+        }
+    }
+    files
+}
+
+/// Count the `ComplianceChecker::new(` and `ComplianceRunConfig::new(` calls
+/// inside `regions` of masked `code`, and return the lines of those whose
+/// expression does not also call `.with_as_of(`, in line order.
+fn unpinned_calls(code: &str, regions: &[(usize, usize)]) -> (usize, Vec<usize>) {
+    let (mut calls, mut unpinned) = (0, Vec::new());
+    for call in CALLS {
+        for (at, _) in code.match_indices(call) {
+            if !regions.iter().any(|&(from, to)| (from..to).contains(&at)) {
+                continue;
+            }
+            calls += 1;
+            if !code[at..expression_end(code, at)].contains(PIN) {
+                unpinned.push(line_of(code, at));
+            }
+        }
+    }
+    unpinned.sort_unstable();
     (calls, unpinned)
+}
+
+/// The 1-based line of byte offset `at` in `code`.
+fn line_of(code: &str, at: usize) -> usize {
+    code[..at].matches('\n').count() + 1
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -218,8 +219,9 @@ fn masked(path: &Path) -> String {
 
 /// Every `ComplianceChecker::new(` in test code pins the clock in the same
 /// expression. Test code is every file under tests/, and the `#[cfg(test)]`
-/// modules under src/ (production code reads the wall clock by design;
-/// `--as-of` pins it). Doc examples are comments, so they are not scanned.
+/// modules under src/ with every module below an out-of-line one (see
+/// [`test_module_files`]); production code reads the wall clock by design
+/// (`--as-of` pins it). Doc examples are comments, so they are not scanned.
 #[test]
 fn every_test_checker_pins_the_clock() {
     let root = Path::new(ROOT);
@@ -251,16 +253,9 @@ fn every_test_checker_pins_the_clock() {
             (path, code)
         })
         .collect();
-    // An out-of-line `#[cfg(test)] mod name;` makes its whole file test code.
-    let test_module_files: BTreeSet<PathBuf> = src
-        .iter()
-        .flat_map(|(path, code)| {
-            let (_, out_of_line) = cfg_test_modules(code);
-            out_of_line
-                .into_iter()
-                .filter_map(|name| module_file(path, &name))
-        })
-        .collect();
+    // An out-of-line `#[cfg(test)] mod name;` makes its whole file test
+    // code, and the files of the modules below it.
+    let test_module_files = test_module_files(&src);
     for (path, code) in &src {
         if test_module_files.contains(path) {
             scan(path, code, &[(0, code.len())]);
@@ -275,13 +270,71 @@ fn every_test_checker_pins_the_clock() {
         calls >= 10,
         "the lint saw only {calls} ComplianceChecker::new calls; is it scanning?"
     );
+    // The modules of src/quality/compliance/tests/ are declared without a
+    // `#[cfg(test)]` of their own: the lint must still read them as tests.
+    assert!(
+        test_module_files.contains(&root.join("src/quality/compliance/tests/check.rs")),
+        "the lint does not read the submodules of a test module as test code"
+    );
     assert!(
         offenders.is_empty(),
-        "ComplianceChecker::new in a test without a pinned clock (the checker \
-         reads the wall clock, so the test changes meaning when a date passes). \
-         Use `checker(level)` from tests/common/clock.rs (or the test module's \
-         local helper), or pin an instant with `.with_as_of(...)` in the same \
-         expression:\n{}",
+        "ComplianceChecker::new or ComplianceRunConfig::new in a test without \
+         a pinned clock (the checker reads the wall clock, so the test changes \
+         meaning when a date passes). Use `checker(level)` from \
+         tests/common/clock.rs (or the test module's local helper), or pin an \
+         instant with `.with_as_of(...)` in the same expression:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Production code builds every checker through
+/// `ComplianceRunConfig::checker`, the one place that decides which of a
+/// run's inputs (clock, CRA sidecar, product class) a level gets. A checker
+/// built anywhere else would judge with inputs of its own: the TUIs once
+/// handed every level the sidecar and no clock, so they disagreed with
+/// `validate` on the same SBOM.
+#[test]
+fn production_checkers_come_from_the_run_configuration() {
+    let root = Path::new(ROOT);
+    let run_config = root.join("src/quality/compliance/run_config.rs");
+    let mut src_files = Vec::new();
+    rust_files(&root.join("src"), &mut src_files);
+    let src: Vec<(PathBuf, String)> = src_files
+        .into_iter()
+        .map(|path| {
+            let code = masked(&path);
+            (path, code)
+        })
+        .collect();
+    let test_module_files = test_module_files(&src);
+
+    let (mut run_config_calls, mut offenders) = (0, Vec::new());
+    for (path, code) in &src {
+        if test_module_files.contains(path) {
+            continue;
+        }
+        let (tests, _) = cfg_test_modules(code);
+        for (at, _) in code.match_indices(CALL) {
+            if tests.iter().any(|&(from, to)| (from..to).contains(&at)) {
+                continue;
+            }
+            if *path == run_config {
+                run_config_calls += 1;
+            } else {
+                let rel = path.strip_prefix(root).unwrap_or(path).display();
+                offenders.push(format!("  {rel}:{}", line_of(code, at)));
+            }
+        }
+    }
+    assert_eq!(
+        run_config_calls, 1,
+        "ComplianceRunConfig::checker builds the one production checker; is the lint scanning?"
+    );
+    assert!(
+        offenders.is_empty(),
+        "ComplianceChecker::new in production code: build the checker with \
+         ComplianceRunConfig::checker (or check with ComplianceRunConfig::check) \
+         so the level gets the run's inputs the way every entry point gives them:\n{}",
         offenders.join("\n")
     );
 }
@@ -315,6 +368,11 @@ mod tests {
         let mut e = ComplianceChecker::new(level);
         e = e.with_as_of(t);
     }
+
+    fn runs() {
+        let f = ComplianceRunConfig::new().with_as_of(t).checker(level);
+        let g = ComplianceRunConfig::new().with_sidecar(sc).check(level, &sbom);
+    }
 }
 
 #[cfg(test)]
@@ -323,15 +381,20 @@ mod render_tests;
     let code = mask(sample);
     let (inline, out_of_line) = cfg_test_modules(&code);
     assert_eq!(out_of_line, ["render_tests"]);
+    assert_eq!(
+        declared_modules(&code),
+        ["render_tests"],
+        "an inline module is no file of its own"
+    );
     let (calls, unpinned) = unpinned_calls(&code, &inline);
     assert_eq!(
-        calls, 5,
-        "a, b, c, d, e; not the production call or the literals"
+        calls, 7,
+        "a, b, c, d, e, f, g; not the production call or the literals"
     );
     assert_eq!(
         unpinned,
-        [21, 22, 23],
-        "c, d and e are not pinned in their expression"
+        [21, 22, 23, 29],
+        "c, d, e and g are not pinned in their expression"
     );
 }
 

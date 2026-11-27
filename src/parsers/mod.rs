@@ -97,6 +97,143 @@ pub(crate) const MAX_SBOM_FILE_SIZE: u64 = 512 * 1024 * 1024;
 /// checks treat such components as documented, not missing from the graph.
 pub const DECLARED_NO_DEPENDENCIES_PROPERTY: &str = "sbom-tools:declared-no-dependencies";
 
+/// Set the document's vulnerability-disclosure URL from the primary
+/// component, the one rule every parser applies: the first `advisories`
+/// reference (CycloneDX `advisories`, SPDX 2 SECURITY `advisory`/`fix`/`url`,
+/// SPDX 3 `securityAdvisory`) whose locator is a URL (`http://`, `https://`
+/// or `mailto:`). A bare CPE string or another identifier never becomes the
+/// disclosure URL, and neither does a `support` reference: a helpdesk is not
+/// a vulnerability-disclosure policy. A URL already set is kept. Call it
+/// once the primary component is in the SBOM.
+pub(crate) fn lift_disclosure_url(sbom: &mut NormalizedSbom) {
+    if sbom.document.vulnerability_disclosure_url.is_some() {
+        return;
+    }
+    let url = sbom.primary_component().and_then(|primary| {
+        primary
+            .external_refs
+            .iter()
+            .find(|r| {
+                r.ref_type == crate::model::ExternalRefType::Advisories && is_url_shaped(&r.url)
+            })
+            .map(|r| r.url.clone())
+    });
+    if url.is_some() {
+        sbom.document.vulnerability_disclosure_url = url;
+    }
+}
+
+/// Mark as `Excluded` (see [`crate::model::Component::scope`]) every
+/// component that only development, build or test relationships bring in.
+/// SPDX states whether the product needs a component at runtime on the
+/// relationships to it (SPDX 2.3 `DEV_DEPENDENCY_OF` and its kin, SPDX 3.0
+/// lifecycle-scoped relationships), where CycloneDX states it on the
+/// component (`scope`), so the SPDX parsers call this once every
+/// relationship is an edge.
+///
+/// A component is needed at runtime when a root reaches it through
+/// dependency or containment relationships that are not development, build
+/// or test ones. The roots are the components the document describes and
+/// the components no dependency or containment relationship points to. A
+/// component that such a non-runtime relationship reaches, directly or
+/// through the components it brings in, and that no runtime path reaches
+/// is marked. The described components are never marked, and a scope a
+/// component already has is kept.
+pub(crate) fn mark_non_runtime_components(sbom: &mut NormalizedSbom) {
+    use crate::model::{CanonicalId, DependencyEdge, DependencyScope, DependencyType as T};
+    use std::collections::{HashMap, HashSet};
+
+    let brings_in = |edge: &&DependencyEdge| {
+        matches!(
+            edge.relationship,
+            T::DependsOn
+                | T::OptionalDependsOn
+                | T::DevDependsOn
+                | T::BuildDependsOn
+                | T::TestDependsOn
+                | T::RuntimeDependsOn
+                | T::ProvidedDependsOn
+                | T::Contains
+                | T::DynamicLink
+                | T::StaticLink
+        )
+    };
+    let non_runtime = |edge: &DependencyEdge| {
+        matches!(
+            edge.relationship,
+            T::DevDependsOn | T::BuildDependsOn | T::TestDependsOn
+        ) || edge.scope == Some(DependencyScope::Excluded)
+    };
+    let edges: Vec<&DependencyEdge> = sbom.edges.iter().filter(brings_in).collect();
+    if !edges.iter().any(|edge| non_runtime(edge)) {
+        return;
+    }
+
+    let mut runtime_out: HashMap<&CanonicalId, Vec<&CanonicalId>> = HashMap::new();
+    let mut any_out: HashMap<&CanonicalId, Vec<&CanonicalId>> = HashMap::new();
+    let mut pointed_to: HashSet<&CanonicalId> = HashSet::new();
+    for edge in &edges {
+        any_out.entry(&edge.from).or_default().push(&edge.to);
+        if !non_runtime(edge) {
+            runtime_out.entry(&edge.from).or_default().push(&edge.to);
+        }
+        pointed_to.insert(&edge.to);
+    }
+    // Everything `starts` reaches through `out`, `starts` included.
+    fn reach<'a>(
+        starts: impl IntoIterator<Item = &'a CanonicalId>,
+        out: &HashMap<&'a CanonicalId, Vec<&'a CanonicalId>>,
+    ) -> HashSet<&'a CanonicalId> {
+        let mut seen: HashSet<&CanonicalId> = HashSet::new();
+        let mut stack: Vec<&CanonicalId> = starts.into_iter().collect();
+        while let Some(id) = stack.pop() {
+            if seen.insert(id) {
+                stack.extend(out.get(id).into_iter().flatten().copied());
+            }
+        }
+        seen
+    }
+
+    let described: HashSet<&CanonicalId> = sbom
+        .described_components()
+        .into_iter()
+        .map(|c| &c.canonical_id)
+        .collect();
+    let roots = sbom
+        .components
+        .keys()
+        .filter(|id| described.contains(id) || !pointed_to.contains(id));
+    let runtime = reach(roots, &runtime_out);
+    let non_runtime_starts = edges
+        .iter()
+        .filter(|edge| non_runtime(edge))
+        .map(|edge| &edge.to);
+    let marked: Vec<CanonicalId> = reach(non_runtime_starts, &any_out)
+        .into_iter()
+        .filter(|id| !runtime.contains(id) && !described.contains(id))
+        .cloned()
+        .collect();
+    for id in marked {
+        if let Some(comp) = sbom.components.get_mut(&id)
+            && comp.scope.is_none()
+        {
+            comp.scope = Some(DependencyScope::Excluded);
+        }
+    }
+}
+
+/// Whether a reference locator is a URL a reader can follow: `http://`,
+/// `https://` or `mailto:` (in any letter case) and something after it.
+fn is_url_shaped(locator: &str) -> bool {
+    let locator = locator.trim();
+    ["http://", "https://", "mailto:"].iter().any(|scheme| {
+        locator.len() > scheme.len()
+            && locator
+                .get(..scheme.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+    })
+}
+
 /// Strip a leading UTF-8 BOM (U+FEFF), if present.
 ///
 /// `str::trim()` does not remove U+FEFF (it is not `White_Space`), so a

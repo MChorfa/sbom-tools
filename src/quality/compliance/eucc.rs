@@ -1,4 +1,6 @@
-//! EUCC Substantial (Reg. (EU) 2024/482) reference-only profile checks.
+//! EUCC Substantial reference-only profile checks: Implementing Regulation
+//! (EU) 2024/482 as amended by Implementing Regulations (EU) 2024/3144 and
+//! 2025/2462 (consolidated text of 2025-12-29).
 
 use super::ssdf::{cdxa_note, standard_references_eucc};
 use super::*;
@@ -23,9 +25,10 @@ impl ComplianceChecker {
 
     pub(crate) fn check_eucc_substantial(
         &self,
-        sbom: &NormalizedSbom,
-        violations: &mut Vec<Violation>,
+        ctx: &ComplianceContext<'_, '_>,
+        findings: &mut Findings,
     ) {
+        let violations = &mut findings.violations;
         let sidecar = self.sidecar.as_ref();
 
         // 1. Common Criteria Protection Profile reference
@@ -42,9 +45,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-EUCC-PP",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -62,9 +69,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-EUCC-TOE",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -82,9 +93,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-EUCC-ITSEF",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -100,12 +115,16 @@ impl ComplianceChecker {
                     rule_id: "SBOM-EUCC-VALIDITY",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
-            Some(until) if until <= self.now() => {
+            Some(until) if until <= ctx.ev.as_of() => {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::DocumentMetadata,
@@ -118,12 +137,16 @@ impl ComplianceChecker {
                     rule_id: "SBOM-EUCC-VALIDITY",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: observed(&until.format("%Y-%m-%d").to_string()),
                 });
             }
-            Some(until) if until <= self.now() + chrono::Duration::days(180) => {
+            Some(until) if until <= ctx.ev.as_of() + chrono::Duration::days(180) => {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
                     category: ViolationCategory::DocumentMetadata,
@@ -136,44 +159,41 @@ impl ComplianceChecker {
                     rule_id: "SBOM-EUCC-VALIDITY",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: observed(&until.format("%Y-%m-%d").to_string()),
                 });
             }
             Some(_) => {}
         }
 
         // 5. EUCC Certification external ref (recommended) — checked
-        // structurally; satisfied when any component carries a Certification
-        // ref whose URL contains "eucc" or "common-criteria", OR when the
-        // document carries fresh, fully-resolved CDXA attestation evidence
-        // for a CRA-classified standard naming EUCC / Common Criteria
-        // (Structural/SignaturePresent level; the URL-substring scan remains
-        // the SelfDeclared fallback).
-        let ctx = ComplianceContext::new(self, sbom);
+        // structurally; satisfied when the described product carries a
+        // Certification or Attestation ref whose URL contains "eucc",
+        // "common-criteria" or "commoncriteria" (`is_eucc_reference`, the
+        // test the CRA Annex IV check shares; a dependency's own certificate
+        // does not cover the product), OR when the document carries fresh,
+        // fully-resolved CDXA attestation evidence for a CRA-classified
+        // standard naming EUCC / Common Criteria (Structural/SignaturePresent
+        // level; the URL-substring scan remains the SelfDeclared fallback).
+        // Until v0.4.0 this check did not read "commoncriteria".
         let cdxa_eucc_attested = ctx
-            .evidence_for(AttestationRuleFamily::Cra)
-            .iter()
+            .ev
+            .supported_requirements(AttestationRuleFamily::Cra)
             .any(|s| standard_references_eucc(s.standard));
-        let eucc_ref_present = cdxa_eucc_attested
-            || sbom.components.values().any(|c| {
-                c.external_refs.iter().any(|r| {
-                    let url = r.url.to_lowercase();
-                    matches!(
-                        r.ref_type,
-                        crate::model::ExternalRefType::Certification
-                            | crate::model::ExternalRefType::Attestation
-                    ) && (url.contains("eucc") || url.contains("common-criteria"))
-                })
-            });
+        let eucc_ref_present =
+            cdxa_eucc_attested || ctx.ev.manufacturer().reference(is_eucc_reference);
         if !eucc_ref_present {
             let mut message = "[EUCC] No Certification/Attestation external reference points at an EUCC URL (recommended)".to_string();
             if let Some(note) = cdxa_note(
-                ctx.attestation_declarations(),
+                ctx.ev.attestation_declarations(),
                 AttestationRuleFamily::Cra,
                 &|s, _| standard_references_eucc(s),
-                self.now(),
+                ctx.ev.as_of(),
                 "an EUCC / Common Criteria certification",
             ) {
                 message.push_str(&note);
@@ -187,9 +207,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-EUCC-CERTREF",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }

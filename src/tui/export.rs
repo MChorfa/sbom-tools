@@ -877,6 +877,7 @@ mod compliance_export_tests {
         Applicability, ComplianceLevel, ComplianceResult, Violation, ViolationCategory,
         ViolationSeverity,
     };
+    use std::borrow::Cow;
 
     const RULE_ID: &str = "SBOM-BSI-TR-03183-2-VERSION";
     /// Why the fixture's readiness standard did not apply.
@@ -892,9 +893,13 @@ mod compliance_export_tests {
             rule_id,
             component_id: None,
             counts: None,
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
             remediation: None,
             finding_detail: None,
+            severity_override: None,
+            deadline: None,
+            field: None,
+            observed: None,
         }
     }
 
@@ -952,7 +957,8 @@ mod compliance_export_tests {
         assert!(md.contains(RULE_ID), "markdown must carry stable rule ids");
         assert!(md.contains("NON-COMPLIANT"));
         assert!(md.contains("| Error |"), "severity via canonical label");
-        // Shared ComplianceResult::score(): 1 error → 100/(1+1) = 50.
+        // Shared ComplianceResult::score(): 1 error over the document alone
+        // → floor(50 × 1 / 2) = 25.
         let expected = format!("Score: {}%", results[0].score().expect("applicable score"));
         assert!(md.contains(&expected), "score must come from score()");
     }
@@ -996,7 +1002,7 @@ mod compliance_export_tests {
             component_id: Some("crypto/algorithm/ml-kem-1024".to_string()),
             finding_detail: None,
             requirement: "FIPS 203/204/205: approved".to_string(),
-            standard_refs: Vec::new(),
+            standard_refs: Cow::Borrowed(&[]),
         };
         let results = vec![
             ComplianceResult::new(ComplianceLevel::NistPqc, Vec::new()).with_passed(vec![pass]),

@@ -1,0 +1,405 @@
+//! Per-component facts: identifiers, producer, licences, hashes, the
+//! lifecycle properties, the vulnerability-management references, and the
+//! placeholders.
+
+use super::super::shared::{
+    ValueState, is_contact_reference, is_declared_unknown, is_placeholder, known_value,
+    plausible_digest, value_state,
+};
+use crate::model::{
+    Component, ComponentIdentifiers, ExternalRefType, Hash, HashAlgorithm, HashProvenance,
+    LicenseInfo,
+};
+
+/// Which identifier kinds a component declares: a PURL, a CPE, a SWHID, a
+/// SWID. Presence only, as the identifier checks read them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct IdKinds {
+    pub(crate) purl: bool,
+    pub(crate) cpe: bool,
+    pub(crate) swhid: bool,
+    pub(crate) swid: bool,
+}
+
+impl IdKinds {
+    pub(super) fn of(identifiers: &ComponentIdentifiers) -> Self {
+        Self {
+            purl: identifiers.purl.is_some(),
+            cpe: !identifiers.cpe.is_empty(),
+            swhid: !identifiers.swhid.is_empty(),
+            swid: identifiers.swid.is_some(),
+        }
+    }
+
+    /// Whether any is declared: the CRA-named identifier set
+    /// (`ComponentIdentifiers::has_cra_identifier`).
+    pub(crate) const fn any(self) -> bool {
+        self.purl || self.cpe || self.swhid || self.swid
+    }
+
+    /// How many of the four kinds are declared.
+    pub(crate) fn count(self) -> usize {
+        usize::from(self.purl)
+            + usize::from(self.cpe)
+            + usize::from(self.swhid)
+            + usize::from(self.swid)
+    }
+}
+
+/// What a component names as its producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Producer<'a> {
+    /// The best of what its supplier, manufacturer and author say: a real
+    /// value if any of them is one (`has_known_producer`), else an explicit
+    /// sentinel if any is one, else missing.
+    pub(crate) state: ValueState,
+    /// The value a finding quotes when the producer is not known: the first
+    /// of the supplier, manufacturer and author names that is present, as
+    /// read, typically a placeholder such as `TBD`. A finding's `observed`
+    /// value is `shared::observed` of it.
+    pub(crate) observed: Option<&'a str>,
+}
+
+impl<'a> Producer<'a> {
+    pub(super) fn new(component: &'a Component, state: ValueState) -> Self {
+        let observed = component
+            .supplier
+            .as_ref()
+            .map(|o| o.name.as_str())
+            .or_else(|| component.manufacturer.as_ref().map(|o| o.name.as_str()))
+            .or(component.author.as_deref());
+        Self { state, observed }
+    }
+
+    /// Whether the component names a real producer.
+    pub(crate) fn is_known(&self) -> bool {
+        self.state == ValueState::Known
+    }
+}
+
+/// The rank of a state when several fields speak for one element: a real
+/// value wins over a sentinel, and a sentinel over nothing.
+const fn rank(state: ValueState) -> u8 {
+    match state {
+        ValueState::Known => 0,
+        ValueState::DeclaredUnknown => 1,
+        ValueState::Missing => 2,
+    }
+}
+
+/// The producer state of `component` (see [`Producer::state`]): the best
+/// [`value_state`] of its supplier, manufacturer and author names. Every
+/// component is classified once per evidence, so the work is kept small: a
+/// component that gives none of the three is missing without a test, and
+/// the first real value settles it, so the names after it are not
+/// classified (classifying a value allocates).
+pub(super) fn producer_state(component: &Component) -> ValueState {
+    if component.supplier.is_none()
+        && component.manufacturer.is_none()
+        && component.author.is_none()
+    {
+        return ValueState::Missing;
+    }
+    let names = [
+        component.supplier.as_ref().map(|o| o.name.as_str()),
+        component.manufacturer.as_ref().map(|o| o.name.as_str()),
+        component.author.as_deref(),
+    ];
+    let mut best = ValueState::Missing;
+    for name in names.into_iter().flatten() {
+        match value_state(Some(name)) {
+            ValueState::Known => return ValueState::Known,
+            ValueState::DeclaredUnknown => best = ValueState::DeclaredUnknown,
+            ValueState::Missing => {}
+        }
+    }
+    best
+}
+
+/// A component's licences.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Licenses<'a> {
+    /// What the best of its declared and concluded licences says (see
+    /// [`license_state`]).
+    pub(crate) state: ValueState,
+    /// The licences as read, for a finding's message.
+    pub(crate) raw: &'a LicenseInfo,
+}
+
+impl<'a> Licenses<'a> {
+    pub(super) const fn new(raw: &'a LicenseInfo, state: ValueState) -> Self {
+        Self { state, raw }
+    }
+
+    /// Whether one of the licences is a real expression.
+    pub(crate) fn is_known(&self) -> bool {
+        self.state == ValueState::Known
+    }
+}
+
+/// The licence state of `component`: [`ValueState::Known`] when one of its
+/// licences, declared or concluded, is a real expression (an SPDX
+/// expression or a `LicenseRef-*`), [`ValueState::DeclaredUnknown`] when the
+/// best of them is a sentinel such as `NOASSERTION` (a CycloneDX licence
+/// with neither an id nor a name reads as one), and [`ValueState::Missing`]
+/// otherwise. Every licence check asks whether it is known, except CISA
+/// 2026, which also accepts the explicit unknown.
+pub(super) fn license_state(component: &Component) -> ValueState {
+    component
+        .licenses
+        .declared
+        .iter()
+        .chain(&component.licenses.concluded)
+        .map(|l| value_state(Some(l.expression.as_str())))
+        .min_by_key(|state| rank(*state))
+        .unwrap_or(ValueState::Missing)
+}
+
+/// Which of a component's hashes count. Only plausible digests count (see
+/// `shared::plausible_digest`), whoever added them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct HashFacts {
+    /// At least one hash is a plausible digest.
+    pub(crate) plausible: bool,
+    /// At least one plausible digest is of SHA-256 or a stronger algorithm:
+    /// SHA-2 and SHA-3 at 256 bits or more, BLAKE2b, BLAKE3 or Streebog.
+    pub(crate) plausible_strong: bool,
+    /// At least one plausible digest is of a NIST-approved algorithm: the
+    /// set of [`Self::plausible_strong`] without Streebog. The BSI/G7
+    /// SBOM-for-AI hash-algorithm check asks this.
+    pub(crate) plausible_nist_approved: bool,
+}
+
+impl HashFacts {
+    pub(super) fn of(hashes: &[Hash]) -> Self {
+        let mut facts = Self::default();
+        for hash in hashes
+            .iter()
+            .filter(|h| plausible_digest(&h.algorithm, &h.value))
+        {
+            facts.plausible = true;
+            facts.plausible_strong |= is_strong(&hash.algorithm);
+            facts.plausible_nist_approved |= is_nist_approved(&hash.algorithm);
+        }
+        facts
+    }
+}
+
+/// Whether `algorithm` is SHA-256 or stronger.
+const fn is_strong(algorithm: &HashAlgorithm) -> bool {
+    matches!(
+        algorithm,
+        HashAlgorithm::Sha256
+            | HashAlgorithm::Sha384
+            | HashAlgorithm::Sha512
+            | HashAlgorithm::Sha3_256
+            | HashAlgorithm::Sha3_384
+            | HashAlgorithm::Sha3_512
+            | HashAlgorithm::Blake2b256
+            | HashAlgorithm::Blake2b384
+            | HashAlgorithm::Blake2b512
+            | HashAlgorithm::Blake3
+            | HashAlgorithm::Streebog256
+            | HashAlgorithm::Streebog512
+    )
+}
+
+/// Whether `algorithm` is NIST-approved and SHA-256 or stronger: SHA-2 and
+/// SHA-3 at 256 bits or more, BLAKE2b or BLAKE3. Unlike [`is_strong`], it
+/// leaves out Streebog.
+const fn is_nist_approved(algorithm: &HashAlgorithm) -> bool {
+    matches!(
+        algorithm,
+        HashAlgorithm::Sha256
+            | HashAlgorithm::Sha384
+            | HashAlgorithm::Sha512
+            | HashAlgorithm::Sha3_256
+            | HashAlgorithm::Sha3_384
+            | HashAlgorithm::Sha3_512
+            | HashAlgorithm::Blake2b256
+            | HashAlgorithm::Blake2b384
+            | HashAlgorithm::Blake2b512
+            | HashAlgorithm::Blake3
+    )
+}
+
+/// A component's hashes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Hashes<'a> {
+    /// Which of them count.
+    pub(crate) facts: HashFacts,
+    /// The hashes as read, for a finding's message.
+    pub(crate) raw: &'a [Hash],
+}
+
+impl<'a> Hashes<'a> {
+    pub(super) const fn new(raw: &'a [Hash], facts: HashFacts) -> Self {
+        Self { facts, raw }
+    }
+}
+
+/// Whether `component` carries a lifecycle, end-of-life or end-of-support
+/// property with a real value. The property name is matched by token (`eol`,
+/// `lifecycle`) or by the spelled-out terms: a bare substring test let
+/// "geolocation" pass through its embedded "eol".
+pub(super) fn has_lifecycle_property(component: &Component) -> bool {
+    component.extensions.properties.iter().any(|p| {
+        let name_lower = p.name.to_lowercase();
+        let is_lifecycle_name = name_lower
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|t| t == "eol" || t == "lifecycle")
+            || name_lower.contains("end-of-life")
+            || name_lower.contains("end-of-support")
+            || name_lower.contains("endoflife")
+            || name_lower.contains("endofsupport");
+        is_lifecycle_name && known_value(Some(p.value.as_str())).is_some()
+    })
+}
+
+/// The first of `component`'s licences, declared then concluded (the order
+/// of `LicenseInfo::all_licenses`), that is a real expression but not a
+/// valid SPDX identifier or expression, as read. BSI TR-03183-2 §6.1 asks
+/// for licences named by SPDX identifier or expression.
+pub(super) fn first_non_spdx_license(component: &Component) -> Option<&str> {
+    component
+        .licenses
+        .declared
+        .iter()
+        .chain(&component.licenses.concluded)
+        // The SPDX test is a flag the parser set: read it before the value.
+        .filter(|l| !l.is_valid_spdx)
+        .find(|l| known_value(Some(l.expression.as_str())).is_some())
+        .map(|l| l.expression.as_str())
+}
+
+/// Which of a component's authored hashes count: the hashes the document
+/// itself carries (`HashProvenance::Authored`), not those enrichment fetched
+/// from a registry. BSI TR-03183-2, CISA 2026 and FSCT judge only these;
+/// the other hash rules count every hash (see [`HashFacts`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct AuthoredHashFacts {
+    /// The document carries at least one hash of the component.
+    pub(crate) present: bool,
+    /// At least one of them is a plausible SHA-512 digest (see
+    /// `shared::plausible_digest`).
+    pub(crate) plausible_sha512: bool,
+    /// At least one of them is a plausible digest.
+    pub(crate) plausible: bool,
+    /// At least one plausible digest is of SHA-256 or a stronger algorithm
+    /// (the set [`HashFacts::plausible_strong`] reads).
+    pub(crate) plausible_strong: bool,
+    /// At least one of them gives an explicit sentinel such as
+    /// `NOASSERTION` for its value: CISA 2026's way to state the hash is
+    /// unknown.
+    pub(crate) declared_unknown: bool,
+    /// At least one plausible digest is of the SHA-2 family at SHA-256 or
+    /// stronger: SHA-256, SHA-384 or SHA-512 (FSCT's reading; see
+    /// [`Self::plausible_strong`] for the wider set).
+    pub(crate) plausible_sha2_256_plus: bool,
+}
+
+impl AuthoredHashFacts {
+    pub(super) fn of(hashes: &[Hash]) -> Self {
+        let mut facts = Self::default();
+        for hash in authored(hashes) {
+            facts.present = true;
+            let plausible = plausible_digest(&hash.algorithm, &hash.value);
+            facts.plausible_sha512 |= hash.algorithm == HashAlgorithm::Sha512 && plausible;
+            facts.plausible |= plausible;
+            facts.plausible_strong |= plausible && is_strong(&hash.algorithm);
+            facts.declared_unknown |= is_declared_unknown(hash.value.trim());
+            facts.plausible_sha2_256_plus |= plausible
+                && matches!(
+                    hash.algorithm,
+                    HashAlgorithm::Sha256 | HashAlgorithm::Sha384 | HashAlgorithm::Sha512
+                );
+        }
+        facts
+    }
+}
+
+/// The hashes among `hashes` that the document itself carries, in document
+/// order.
+fn authored(hashes: &[Hash]) -> impl Iterator<Item = &Hash> {
+    hashes
+        .iter()
+        .filter(|h| h.provenance == HashProvenance::Authored)
+}
+
+/// A component's authored hashes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AuthoredHashes<'a> {
+    /// Which of them count.
+    pub(crate) facts: AuthoredHashFacts,
+    /// Every hash of the component, enriched ones included.
+    raw: &'a [Hash],
+}
+
+impl<'a> AuthoredHashes<'a> {
+    pub(super) const fn new(raw: &'a [Hash], facts: AuthoredHashFacts) -> Self {
+        Self { facts, raw }
+    }
+
+    /// The authored hashes as read, in document order, for a finding's
+    /// message.
+    pub(crate) fn iter(self) -> impl Iterator<Item = &'a Hash> {
+        authored(self.raw)
+    }
+}
+
+/// Whether `component` carries an external reference a vulnerability
+/// management process can start from: an advisories or security-contact
+/// reference that reaches someone (see `shared::is_contact_reference`), a
+/// vulnerability assertion (VEX or VDR), or a linked BOM. A VDR or a linked
+/// BOM is a document, not a contact, so it counts as given.
+pub(super) fn has_vulnerability_hook_reference(component: &Component) -> bool {
+    component.external_refs.iter().any(|r| match r.ref_type {
+        ExternalRefType::Advisories | ExternalRefType::SecurityContact => is_contact_reference(r),
+        ExternalRefType::VulnerabilityAssertion | ExternalRefType::Bom => true,
+        _ => false,
+    })
+}
+
+/// The fields of a component that hold an ambiguous placeholder such as
+/// `TBD` or `N/A` (see `shared::is_placeholder`): a value that neither
+/// gives the field nor declares it unknown. Each is the value as read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Placeholders<'a> {
+    pub(crate) version: Option<&'a str>,
+    /// The supplier's name.
+    pub(crate) supplier: Option<&'a str>,
+    /// The first of the licences, the declared ones before the concluded
+    /// one.
+    pub(crate) license: Option<&'a str>,
+    pub(crate) copyright: Option<&'a str>,
+}
+
+impl<'a> Placeholders<'a> {
+    pub(super) fn of(component: &'a Component) -> Self {
+        Self {
+            version: component.version.as_deref().filter(|v| is_placeholder(v)),
+            supplier: component
+                .supplier
+                .as_ref()
+                .map(|s| s.name.as_str())
+                .filter(|name| is_placeholder(name)),
+            license: component
+                .licenses
+                .declared
+                .iter()
+                .chain(&component.licenses.concluded)
+                .map(|l| l.expression.as_str())
+                .find(|expression| is_placeholder(expression)),
+            copyright: component.copyright.as_deref().filter(|c| is_placeholder(c)),
+        }
+    }
+}
+
+/// Whether `component` links an SBOM of its own: a BOM-type external
+/// reference.
+pub(super) fn has_bom_reference(component: &Component) -> bool {
+    component
+        .external_refs
+        .iter()
+        .any(|r| r.ref_type == ExternalRefType::Bom)
+}

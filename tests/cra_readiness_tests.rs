@@ -27,11 +27,13 @@ fn base_document_metadata() -> DocumentMetadata {
         serial_number: Some("urn:uuid:00000000-0000-0000-0000-000000000000".to_string()),
         doc_version: None,
         created: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        created_unparsed: None,
         creators: vec![Creator {
             creator_type: CreatorType::Organization,
             name: "Acme Corp".to_string(),
             email: Some("security@acme.example".to_string()),
         }],
+        supplier: None,
         name: Some("Acme Product".to_string()),
         security_contact: None,
         vulnerability_disclosure_url: None,
@@ -40,6 +42,7 @@ fn base_document_metadata() -> DocumentMetadata {
         completeness_declaration: CompletenessDeclaration::Unknown,
         signature: None,
         distribution_classification: None,
+        profile_conformance: Vec::new(),
         citations_count: 0,
     }
 }
@@ -371,7 +374,7 @@ const SIDECAR_PARITY_SBOM: &str = r#"{
     ]
 }"#;
 
-const SIDECAR_PARITY_SIDECAR: &str = r#"{ "securityContact": "security@example.com" }"#;
+const SIDECAR_PARITY_SIDECAR: &str = r#"{ "securityContact": "security@acme.example" }"#;
 
 /// Run `sbom-tools diff <old> <new> -o json` and return the parsed report.
 fn run_diff_json(old: &std::path::Path, new: &std::path::Path) -> serde_json::Value {

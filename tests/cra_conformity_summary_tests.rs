@@ -45,6 +45,33 @@ fn summary_present_at_default_class_lists_doc_and_module_a() {
     assert!(labels.contains(&"PSIRT contact (Art. 14)"));
 }
 
+/// Annex VIII lists the manufacturer's conformity-assessment procedures; an
+/// open-source steward (Art. 24) follows none, so the steward profile gets
+/// no summary even when a product class is pinned. Phase 1 still does.
+#[test]
+fn summary_only_for_the_cra_phase_profiles() {
+    let sidecar = CraSidecarMetadata {
+        product_class: Some(CraProductClass::ImportantClass1),
+        ..Default::default()
+    };
+    let sbom = NormalizedSbom::default();
+    let steward = checker(ComplianceLevel::CraOssSteward)
+        .with_sidecar(sidecar.clone())
+        .with_product_class(CraProductClass::Critical)
+        .check(&sbom);
+    assert!(
+        steward.conformity_summary.is_none(),
+        "no Annex VIII summary for the steward profile"
+    );
+    let phase1 = checker(ComplianceLevel::CraPhase1)
+        .with_sidecar(sidecar)
+        .check(&sbom);
+    assert_eq!(
+        phase1.conformity_summary.map(|s| s.product_class),
+        Some(CraProductClass::ImportantClass1)
+    );
+}
+
 #[test]
 fn summary_module_bc_includes_eu_type_examination() {
     let sidecar = CraSidecarMetadata {
@@ -127,7 +154,7 @@ fn doc_evidence_satisfied_by_attestation_external_ref() {
 fn psirt_evidence_satisfied_by_sidecar() {
     let sidecar = CraSidecarMetadata {
         product_class: Some(CraProductClass::ImportantClass1),
-        psirt_url: Some("https://example.com/psirt".to_string()),
+        psirt_url: Some("https://acme.example/psirt".to_string()),
         ..Default::default()
     };
     let result = checker(ComplianceLevel::CraPhase2)

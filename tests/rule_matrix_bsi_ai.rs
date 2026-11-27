@@ -1,9 +1,10 @@
 //! Registry-driven per-rule matrix for `ComplianceLevel::BsiSbomForAi`
 //! (BSI/G7 "SBOM for AI — Minimum Elements" readiness).
 //!
-//! BSI-AI shares the CRA-family `COMPLIANCE_SARIF_RULE_IDS` catalogue; its
-//! universe is that slice's `SBOM-BSIAI-*` ids, one per minimum element the
-//! profile checks, grouped below by the document's clusters (Metadata,
+//! The universe is every registered `SBOM-BSIAI-*` rule but the fallback,
+//! which `run_matrix` requires to be the level's rule list
+//! (`rules_for_level`): one per minimum element the profile checks,
+//! grouped below by the document's clusters (Metadata,
 //! System-Level, Models, Datasets, Infrastructure, Security).
 //!
 //! Three elements have no SBOM field today (system data flow, AI security
@@ -17,20 +18,23 @@
 mod rule_matrix;
 
 use rule_matrix::{
-    ComponentFixture, Encoding, MD5_FILLER, Outcome, RuleEntry, SPDX23_HAS_NO_AI_PROFILE,
-    SbomFixture, check_in, render_violations, run_matrix,
+    ComponentFixture, Encoding, IMPLAUSIBLE_SHA256_DIGESTS, MD5_FILLER, Outcome, RuleEntry,
+    SPDX23_HAS_NO_AI_PROFILE, SbomFixture, UNPARSEABLE_TIMESTAMP, check_in, render_violations,
+    run_matrix,
 };
-use sbom_tools::quality::{COMPLIANCE_SARIF_RULE_IDS, ComplianceLevel, ViolationSeverity as Sev};
+use sbom_tools::quality::{
+    ComplianceLevel, ViolationSeverity as Sev, all_rule_ids, generic_rule_id_for_level,
+};
 use std::collections::BTreeMap;
 
 const LEVEL: ComplianceLevel = ComplianceLevel::BsiSbomForAi;
 
-/// The BSI-AI rules of the shared CRA-family SARIF catalogue.
+/// The registered BSI-AI rules but the fallback rule, which no check emits.
 fn bsi_ai_universe() -> Vec<&'static str> {
-    COMPLIANCE_SARIF_RULE_IDS
+    all_rule_ids()
         .iter()
         .copied()
-        .filter(|id| id.starts_with("SBOM-BSIAI-"))
+        .filter(|id| id.starts_with("SBOM-BSIAI-") && *id != generic_rule_id_for_level(LEVEL))
         .collect()
 }
 
@@ -217,6 +221,11 @@ fn bsi_ai_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Error,
             broken(|s| s.timestamp = None),
             base(),
+        )
+        .with_firing(
+            "unparseable timestamp",
+            Sev::Error,
+            broken(|s| s.timestamp = Some(UNPARSEABLE_TIMESTAMP.to_string())),
         ),
         RuleEntry::tested(
             "SBOM-BSIAI-META-TOOL",
@@ -224,11 +233,19 @@ fn bsi_ai_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             broken(|s| s.tools.clear()),
             base(),
         ),
+        // A signature object without a value is no signature, as for CISA
+        // 2026, FSCT and the CRA document-integrity check (until v0.4.0 any
+        // signature object passed here).
         RuleEntry::tested(
             "SBOM-BSIAI-META-SIGNATURE",
             Sev::Info,
             broken(|s| s.signature = None),
             base(),
+        )
+        .with_firing(
+            "signature without a value",
+            Sev::Info,
+            broken(|s| s.signature = Some(("ES256".to_string(), String::new()))),
         ),
         // ── System-Level cluster ───────────────────────────────────────────
         RuleEntry::tested(
@@ -294,7 +311,13 @@ fn bsi_ai_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Error,
             broken(|s| model(s).hashes.clear()),
             base(),
-        ),
+        )
+        // Only plausible digests count.
+        .with_implausible_digests(Sev::Error, &IMPLAUSIBLE_SHA256_DIGESTS, |alg, value| {
+            broken(|s| {
+                model(s).hashes = vec![(alg.to_string(), value.to_string())];
+            })
+        }),
         // A weight hash that no NIST-approved algorithm produced.
         RuleEntry::tested(
             "SBOM-BSIAI-MODEL-HASH-ALGO",
@@ -385,6 +408,15 @@ fn bsi_ai_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Warning,
             broken(|s| dataset(s).hashes.clear()),
             base(),
+        )
+        .with_implausible_digests(
+            Sev::Warning,
+            &IMPLAUSIBLE_SHA256_DIGESTS,
+            |alg, value| {
+                broken(|s| {
+                    dataset(s).hashes = vec![(alg.to_string(), value.to_string())];
+                })
+            },
         ),
         with_placeholders(
             RuleEntry::tested(

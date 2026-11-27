@@ -20,8 +20,8 @@ mod rule_matrix;
 
 use rule_matrix::clock::checker;
 use rule_matrix::{
-    ComponentFixture, Encoding, MD5_FILLER, Outcome, RuleEntry, SHA256_FILLER,
-    SPDX23_HAS_NO_COMPLETENESS, SbomFixture, run_matrix,
+    ComponentFixture, Encoding, IMPLAUSIBLE_SHA256_DIGESTS, MD5_FILLER, Outcome, RuleEntry,
+    SHA256_FILLER, SPDX23_HAS_NO_COMPLETENESS, SbomFixture, UNPARSEABLE_TIMESTAMP, run_matrix,
 };
 use sbom_tools::parsers::parse_sbom_str;
 use sbom_tools::quality::{
@@ -107,10 +107,12 @@ fn copyright_everywhere(s: &mut SbomFixture) {
     }
 }
 
-/// The CycloneDX-only evidence gates (SBOM Type, signature).
+/// The CycloneDX-only evidence gate (SBOM Type).
 const CYCLONEDX_GATED: &str = "FSCT reads this attribute from CycloneDX only (its documented \
-     evidence gate): the SPDX parsers record no lifecycle phase, and FSCT does not consult the \
-     SPDX 3 verifiedUsing signature that CISA 2026 reads";
+     evidence gate): the SPDX parsers record no lifecycle phase";
+/// The signature gate: SPDX 2.x cannot carry an in-document signature.
+const SPDX23_HAS_NO_SIGNATURE: &str = "SPDX 2.3 has no in-document signature field, so FSCT, \
+     like CISA 2026, asks no SPDX 2.x document for one (CycloneDX and SPDX 3 are asked)";
 /// The SPDX-only evidence gates (dynamic links, concluded licences).
 const SPDX_GATED: &str = "FSCT reads this evidence from SPDX only (its documented evidence \
      gate): a CycloneDX document can carry no dynamic link or concluded licence the parser \
@@ -145,6 +147,11 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Error,
             broken(|s| s.timestamp = None),
             base(),
+        )
+        .with_firing(
+            "unparseable timestamp",
+            Sev::Error,
+            broken(|s| s.timestamp = Some(UNPARSEABLE_TIMESTAMP.to_string())),
         ),
         RuleEntry::tested(
             "SBOM-FSCT-SBOM-TYPE",
@@ -245,7 +252,13 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Error,
             broken(|s| s.component_mut("liba").hashes.clear()),
             base(),
-        ),
+        )
+        // Only plausible digests count.
+        .with_implausible_digests(Sev::Error, &IMPLAUSIBLE_SHA256_DIGESTS, |alg, value| {
+            broken(|s| {
+                s.component_mut("liba").hashes = vec![(alg.to_string(), value.to_string())];
+            })
+        }),
         // §2.2.2.5 Recommended has two sites sharing the id: hashless
         // primary, and components hashed only below SHA-256/SHA-2.
         RuleEntry::tested(
@@ -265,6 +278,17 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Warning,
             broken(|s| {
                 s.component_mut("liba").hashes = vec![("MD5".to_string(), MD5_FILLER.to_string())];
+            }),
+        )
+        // A primary whose only hash is no plausible digest has none.
+        .with_firing(
+            "primary hashed only with an empty SHA-256 digest",
+            Sev::Warning,
+            broken(|s| {
+                s.primary
+                    .as_mut()
+                    .expect("base fixture has a primary")
+                    .hashes = vec![("SHA-256".to_string(), String::new())];
             }),
         ),
         RuleEntry::tested(
@@ -408,12 +432,17 @@ fn fsct_rule_matrix_is_exhaustive_with_firing_and_silent_cases() {
             Sev::Info,
             broken(|s| s.signature = Some(("ES256".to_string(), String::new()))),
         )
-        .case_differs("firing", Encoding::SPDX, Outcome::Silent, CYCLONEDX_GATED)
+        .case_differs(
+            "firing",
+            &[Encoding::Spdx23Json],
+            Outcome::Silent,
+            SPDX23_HAS_NO_SIGNATURE,
+        )
         .case_differs(
             "signature without a value",
-            Encoding::SPDX,
+            &[Encoding::Spdx23Json],
             Outcome::Silent,
-            CYCLONEDX_GATED,
+            SPDX23_HAS_NO_SIGNATURE,
         ),
     ];
 

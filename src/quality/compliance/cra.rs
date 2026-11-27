@@ -3,9 +3,29 @@
 //! attestation / EUCC references, the Annex VIII conformity summary, and the
 //! Article 24 open-source-steward profile.
 
+use super::shared::{
+    future_timestamp_violation_of, invalid_digest_note_of, unparseable_timestamp_of,
+};
 use super::ssdf::{cdxa_note, standard_references_eucc};
 use super::*;
 use crate::model::{AttestationRuleFamily, EvidenceLevel};
+
+/// Why the class-conditional checks (EUCC reference, conformity-module
+/// certificate) did not run: they depend on the product class, which the
+/// run did not pin.
+const NO_PRODUCT_CLASS: &str = "the check depends on the CRA product class, and none is pinned \
+     (--cra-product-class, or productClass in the CRA sidecar)";
+
+/// The hardware checks of prEN 40000-1-3 [PRE-8-RQ-02].
+const HARDWARE_RULE_IDS: [&str; 4] = [
+    "SBOM-CRA-PRE-8-RQ-02-PRODUCER",
+    "SBOM-CRA-PRE-8-RQ-02-IDENTIFIER",
+    "SBOM-CRA-PRE-8-RQ-02-FIRMWARE-VERSION",
+    "SBOM-CRA-PRE-8-RQ-02-DEVICE-FIRMWARE",
+];
+
+/// Why the hardware checks did not run on a software-only SBOM.
+const NO_HARDWARE: &str = "the SBOM lists no device, firmware or device-driver component";
 
 impl ComplianceChecker {
     /// Build the per-route evidence checklist (CRA-P4.3). Each route lists
@@ -18,7 +38,7 @@ impl ComplianceChecker {
     /// presence bits keep satisfying at SelfDeclared.
     pub(crate) fn build_conformity_summary(
         &self,
-        sbom: &NormalizedSbom,
+        ctx: &ComplianceContext<'_, '_>,
     ) -> ConformityAssessmentSummary {
         use crate::model::{ConformityRoute, ExternalRefType};
         let class = self.effective_product_class();
@@ -27,11 +47,9 @@ impl ComplianceChecker {
         // CDXA attestation evidence classified into the CRA family, fresh
         // and fully resolved at the injectable clock. Empty for documents
         // without declarations, leaving every row exactly as before.
-        let ctx = ComplianceContext::new(self, sbom);
-        let cra_evidence = ctx.evidence_for(AttestationRuleFamily::Cra);
-        let cdxa_level = cra_evidence.iter().map(|s| s.evidence_level).max();
-        let cdxa_eucc_level = cra_evidence
-            .iter()
+        let cra_evidence = || ctx.ev.supported_requirements(AttestationRuleFamily::Cra);
+        let cdxa_level = cra_evidence().map(|s| s.evidence_level).max();
+        let cdxa_eucc_level = cra_evidence()
             .filter(|s| standard_references_eucc(s.standard))
             .map(|s| s.evidence_level)
             .max();
@@ -48,23 +66,14 @@ impl ComplianceChecker {
             None => (satisfied, detail.to_string()),
         };
 
+        // The rows read the same manufacturer-scope references as the
+        // Annex V / Annex VIII / Annex IV checks: a dependency's own
+        // certificate or attestation is not the product's.
         let any_ext = |needles: &[ExternalRefType]| -> bool {
-            sbom.components.values().any(|c| {
-                c.external_refs.iter().any(|r| {
-                    needles
-                        .iter()
-                        .any(|n| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(n))
-                })
-            })
-        };
-        let any_ext_url_contains = |types: &[ExternalRefType], substr: &str| -> bool {
-            sbom.components.values().any(|c| {
-                c.external_refs.iter().any(|r| {
-                    types
-                        .iter()
-                        .any(|t| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(t))
-                        && r.url.to_lowercase().contains(substr)
-                })
+            ctx.ev.manufacturer().reference(|r| {
+                needles
+                    .iter()
+                    .any(|n| std::mem::discriminant(&r.ref_type) == std::mem::discriminant(n))
             })
         };
 
@@ -85,18 +94,13 @@ impl ComplianceChecker {
         // (check_class_module_attestation).
         let certificate_present = any_ext(&[ExternalRefType::Certification]);
 
+        // The EUCC reference the Annex IV check and SBOM-EUCC-CERTREF read
+        // (`is_eucc_reference`).
         let eucc_present = self
             .sidecar
             .as_ref()
-            .is_some_and(|s| s.has_live_eucc_evidence_at(self.now()))
-            || any_ext_url_contains(
-                &[ExternalRefType::Certification, ExternalRefType::Attestation],
-                "eucc",
-            )
-            || any_ext_url_contains(
-                &[ExternalRefType::Certification, ExternalRefType::Attestation],
-                "common-criteria",
-            );
+            .is_some_and(|s| s.has_live_eucc_evidence_at(ctx.ev.as_of()))
+            || ctx.ev.manufacturer().reference(is_eucc_reference);
 
         let mut evidence: Vec<ConformityEvidence> = Vec::new();
         let (satisfied, detail) = cdxa(
@@ -168,7 +172,7 @@ impl ComplianceChecker {
                 let (satisfied, detail) = cdxa(
                     eucc_present,
                     cdxa_eucc_level,
-                    "Common Criteria certificate from an EUCC-accredited ITSEF — Certification external ref whose URL references EUCC or common-criteria.",
+                    "Common Criteria certificate from an EUCC-accredited ITSEF — Certification or Attestation external ref whose URL contains eucc, common-criteria or commoncriteria.",
                 );
                 evidence.push(ConformityEvidence {
                     label: "EUCC / Common Criteria certificate".to_string(),
@@ -191,7 +195,11 @@ impl ComplianceChecker {
         // Article 14 channels are required at all conformity routes once the
         // 2026-09-11 deadline applies; surface as evidence rows for
         // notified-body checklists.
-        let psirt = self.sidecar.as_ref().is_some_and(|s| s.psirt_url.is_some());
+        // A placeholder PSIRT URL reaches nobody (`known_contact`).
+        let psirt = self
+            .sidecar
+            .as_ref()
+            .is_some_and(|s| known_contact(s.psirt_url.as_deref()));
         evidence.push(ConformityEvidence {
             label: "PSIRT contact (Art. 14)".to_string(),
             detail: "Public PSIRT URL for receiving external vulnerability reports.".to_string(),
@@ -207,7 +215,15 @@ impl ComplianceChecker {
     }
 
     /// CRA gap checks: SBOM freshness (Art. 13(7)), 13(5), 13(9), Annex I Part II supply chain, document integrity
-    pub(crate) fn check_cra_gaps(&self, sbom: &NormalizedSbom, violations: &mut Vec<Violation>) {
+    pub(crate) fn check_cra_gaps(
+        &self,
+        ctx: &ComplianceContext<'_, '_>,
+        violations: &mut Vec<Violation>,
+        not_evaluated: &mut NotEvaluated,
+    ) {
+        let ev = ctx.ev;
+        let doc = ev.document();
+
         // B1: Art. 13(7) / Annex I Part II (1) — SBOM freshness. Keeping the
         // documented component inventory current is the systematic-
         // documentation duty applied to the SBOM element. A missing
@@ -215,25 +231,32 @@ impl ComplianceChecker {
         // must be reported as "missing", not as a bogus ~20000-day age. A
         // timestamp after the evaluation instant is no evidence of currency
         // either and warns like a missing one, instead of passing as fresh.
-        let now = self.now();
-        if !sbom.document.has_known_timestamp() {
+        let now = ev.as_of();
+        if !doc.has_known_timestamp {
+            let gap = unparseable_timestamp_of(doc.created_unparsed)
+                .unwrap_or_else(|| "no creation timestamp".to_string());
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
                 category: ViolationCategory::DocumentMetadata,
-                message: "[CRA Art. 13(7) / Annex I Part II (1)] SBOM has no creation timestamp; \
-                          keep the documented component inventory current when components change"
-                    .to_string(),
+                message: format!(
+                    "[CRA Art. 13(7) / Annex I Part II (1)] SBOM has {gap}; keep the documented \
+                     component inventory current when components change"
+                ),
                 element: None,
                 requirement: "CRA Art. 13(7) / Annex I Part II (1): SBOM freshness".to_string(),
                 rule_id: "SBOM-CRA-SBOM-FRESHNESS",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: doc.created_unparsed.and_then(observed),
             });
-        } else if let Some(future) = future_timestamp_violation(
-            sbom,
+        } else if let Some(future) = future_timestamp_violation_of(
+            doc.has_known_timestamp.then_some(doc.created),
             now,
             "SBOM-CRA-SBOM-FRESHNESS",
             "[CRA Art. 13(7) / Annex I Part II (1)]",
@@ -241,7 +264,7 @@ impl ComplianceChecker {
         ) {
             violations.push(future);
         } else {
-            let age_days = (now - sbom.document.created).num_days();
+            let age_days = (now - doc.created).num_days();
             if age_days > 90 {
                 violations.push(Violation {
                     severity: ViolationSeverity::Warning,
@@ -254,9 +277,16 @@ impl ComplianceChecker {
                     rule_id: "SBOM-CRA-SBOM-FRESHNESS",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: observed(
+                        &doc.created
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    ),
                 });
             } else if age_days > 30 {
                 violations.push(Violation {
@@ -270,9 +300,16 @@ impl ComplianceChecker {
                     rule_id: "SBOM-CRA-SBOM-FRESHNESS",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: observed(
+                        &doc.created
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    ),
                 });
             }
         }
@@ -284,9 +321,11 @@ impl ComplianceChecker {
         // Licence evidence and the supply-chain cohorts below concern
         // package-scoped components: crypto assets, files and services are
         // not third-party components with licences or suppliers.
-        let packages: Vec<_> = package_components(sbom).collect();
-        let total = packages.len();
-        let without_license = packages.iter().filter(|c| !has_known_license(c)).count();
+        let total = ctx.package_count();
+        let without_license = ctx
+            .package_components()
+            .filter(|c| !c.licenses().is_known())
+            .count();
         if without_license > 0 {
             let pct = (without_license * 100) / total.max(1);
             let severity = if pct > 50 {
@@ -309,9 +348,13 @@ impl ComplianceChecker {
                     affected: without_license,
                     total,
                 }),
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -319,19 +362,8 @@ impl ComplianceChecker {
         // (Formerly cited Art. 13(9), which is actually the 10-year
         // security-update availability obligation.)
         // SBOM should either contain vulnerability data or explicitly indicate "none known"
-        let has_vuln_data = sbom
-            .components
-            .values()
-            .any(|c| !c.vulnerabilities.is_empty());
-        let has_vuln_assertion = sbom.components.values().any(|comp| {
-            comp.external_refs.iter().any(|r| {
-                matches!(
-                    r.ref_type,
-                    crate::model::ExternalRefType::VulnerabilityAssertion
-                        | crate::model::ExternalRefType::ExploitabilityStatement
-                )
-            })
-        });
+        let has_vuln_data = !ev.vulnerabilities().is_empty();
+        let has_vuln_assertion = ev.has_vulnerability_assertion();
         if !has_vuln_data && !has_vuln_assertion {
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
@@ -346,9 +378,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-VULN-STATEMENT",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -361,33 +397,29 @@ impl ComplianceChecker {
         //   Error under CraPhase2, Warning otherwise.
         // - transitive missing supplier: Warning under CraPhase2 if >30%,
         //   Info otherwise.
-        if !sbom.edges.is_empty() {
+        if ev.has_edges() {
             // Direct dependencies that are packages: a TLS protocol or an
             // algorithm the product uses is not a supplier-bearing
             // dependency.
-            let direct_ids: std::collections::HashSet<_> = sbom
-                .direct_dependency_ids()
-                .into_iter()
-                .filter(|id| {
-                    sbom.components
-                        .get(id)
-                        .is_some_and(|c| c.component_type.is_package_scoped())
-                })
-                .collect();
+            let mut direct_total = 0;
             let mut direct_missing: Vec<String> = Vec::new();
             let mut transitive_missing: Vec<String> = Vec::new();
-            for comp in &packages {
+            for comp in ctx.package_components() {
+                let direct = comp.direct_dependency();
+                if direct {
+                    direct_total += 1;
+                }
                 // A NOASSERTION or placeholder supplier names nobody: the
                 // raw presence test let it satisfy this mandatory rule while
                 // SBOM-CRA-COMPONENT-SUPPLIER reported the same supplier
                 // missing.
-                if has_known_producer(comp) {
+                if comp.producer().is_known() {
                     continue;
                 }
-                if direct_ids.contains(&comp.canonical_id) {
-                    direct_missing.push(comp.name.clone());
+                if direct {
+                    direct_missing.push(comp.name().to_string());
                 } else {
-                    transitive_missing.push(comp.name.clone());
+                    transitive_missing.push(comp.name().to_string());
                 }
             }
 
@@ -414,11 +446,15 @@ impl ComplianceChecker {
                     // is the set of direct dependencies.
                     counts: Some(ViolationCounts {
                         affected: n,
-                        total: direct_ids.len(),
+                        total: direct_total,
                     }),
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
 
@@ -447,9 +483,13 @@ impl ComplianceChecker {
                         affected: transitive_n,
                         total: denom,
                     }),
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
         }
@@ -459,10 +499,13 @@ impl ComplianceChecker {
         // author and a PURL/CPE/SWHID/SWID) must carry the upstream-supplied
         // cryptographic hash through into the SBOM. Components without one of
         // those identifiers are excluded because nothing ties them to an
-        // upstream artefact.
+        // upstream artefact, as are the components the run leaves out for
+        // their excluded scope.
         {
-            let metrics = crate::quality::HashQualityMetrics::from_sbom(sbom);
-            if let Some(coverage) = metrics.vendor_hash_coverage() {
+            // All components: the cohort is classified by producer and
+            // identifier, whatever the component type.
+            let vendor = ctx.vendor_hash_coverage();
+            if let Some(coverage) = vendor.fraction() {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let pct = (coverage * 100.0).round() as usize;
 
@@ -525,13 +568,21 @@ impl ComplianceChecker {
                     (None, None) => (ViolationSeverity::Info, String::new()),
                 };
                 if !threshold_msg.is_empty() {
+                    // The coverage counts only plausible digests; name the
+                    // vendor components whose present hashes did not count.
+                    let mut message = format!(
+                        "[CRA Annex I, Part II / [PRE-7-RQ-07-RE]] Only {}/{} vendor-supplied components ({pct}%) carry an upstream hash — {threshold_msg}",
+                        vendor.with_hash, vendor.total
+                    );
+                    message.push_str(&invalid_digest_note_of(
+                        ctx.vendor_components()
+                            .filter(|c| !c.hashes().facts.plausible)
+                            .map(|c| (c.name(), c.hashes().raw)),
+                    ));
                     violations.push(Violation {
                         severity,
                         category: ViolationCategory::IntegrityInfo,
-                        message: format!(
-                            "[CRA Annex I, Part II / [PRE-7-RQ-07-RE]] Only {}/{} vendor-supplied components ({pct}%) carry an upstream hash — {threshold_msg}",
-                            metrics.vendor_components_with_hash, metrics.vendor_components_total
-                        ),
+                        message,
                         element: None,
                         requirement: "CRA Annex I Part II / prEN 40000-1-3 [PRE-7-RQ-07-RE]: Vendor hash carry-through".to_string(),
                         rule_id: "SBOM-CRA-PRE-7-RQ-07-RE",
@@ -539,46 +590,67 @@ impl ComplianceChecker {
                         // Coverage finding: mirrors the "X/Y carry an
                         // upstream hash" numbers printed in the message.
                         counts: Some(ViolationCounts {
-                            affected: metrics.vendor_components_with_hash,
-                            total: metrics.vendor_components_total,
+                            affected: vendor.with_hash,
+                            total: vendor.total,
                         }),
-                        standard_refs: Vec::new(),
+                        standard_refs: Cow::Borrowed(&[]),
                         remediation: None,
                         finding_detail: None,
+                        severity_override: None,
+                        deadline: None,
+                        field: None,
+                        observed: None,
                     });
                 }
             }
         }
 
         // B5: Annex I Part I (2)(f) — Document signature/integrity. The
-        // clause protects the integrity of data, commands, programs and
-        // configuration (it does not mention authenticity).
-        // Check for document-level hash, signature, or attestation
-        let has_doc_integrity = sbom.document.serial_number.is_some()
-            || sbom.components.values().any(|comp| {
-                comp.external_refs.iter().any(|r| {
-                    matches!(
-                        r.ref_type,
-                        crate::model::ExternalRefType::Attestation
-                            | crate::model::ExternalRefType::Certification
-                    ) && !r.hashes.is_empty()
-                })
-            });
-        if !has_doc_integrity {
+        // clause asks to "protect the integrity of stored, transmitted or
+        // otherwise processed data ... against any manipulation or
+        // modification not authorised by the user" (it does not mention
+        // authenticity). Integrity evidence is a document signature with a
+        // value (`document_signed`), or an attestation or certification
+        // reference on the described product that carries a plausible
+        // digest of the referenced document. A serial number identifies the
+        // document but protects nothing: until v0.4.0 it satisfied the check
+        // on its own, the document signature was not read, and any
+        // component's reference with any hash value counted.
+        let hashed_attestation = ev.manufacturer().reference(|r| {
+            matches!(
+                r.ref_type,
+                crate::model::ExternalRefType::Attestation
+                    | crate::model::ExternalRefType::Certification
+            ) && r
+                .hashes
+                .iter()
+                .any(|h| plausible_digest(&h.algorithm, &h.value))
+        });
+        if !doc.signed && !hashed_attestation {
+            let mut message = "[CRA Annex I Part I (2)(f)] SBOM carries no integrity protection: \
+                               sign the document, or reference from the product an attestation \
+                               or certification that carries its hash (a serial number \
+                               identifies the document but does not protect it)"
+                .to_string();
+            if doc.signature_present {
+                message.push_str("; the document signature has no value");
+            }
             violations.push(Violation {
                 severity: ViolationSeverity::Info,
                 category: ViolationCategory::IntegrityInfo,
-                message: "[CRA Annex I Part I (2)(f)] Consider adding document-level integrity \
-                    metadata (serial number, digital signature, or attestation with hash)"
-                    .to_string(),
+                message,
                 element: None,
                 requirement: "CRA Annex I Part I (2)(f): Document signature/integrity".to_string(),
                 rule_id: "SBOM-CRA-DOC-INTEGRITY",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -587,14 +659,15 @@ impl ComplianceChecker {
         // assessment. The SBOM (or sidecar) must reference it; absence is a
         // soft Warning under CraPhase2 (Annex V technical-doc requirement).
         if matches!(self.level, ComplianceLevel::CraPhase2) {
-            let has_ref_in_sbom = sbom.components.values().any(|comp| {
-                comp.external_refs
-                    .iter()
-                    .any(|r| matches!(r.ref_type, crate::model::ExternalRefType::RiskAssessment))
-            }) || sbom.document.creators.iter().any(|c| {
-                // Some SBOMs encode the methodology in the creator comment
-                c.name.to_lowercase().contains("risk assessment")
-            });
+            // The product's own risk assessment: a reference on the
+            // described product, not a dependency's.
+            let has_ref_in_sbom = ev
+                .manufacturer()
+                .reference(|r| matches!(r.ref_type, crate::model::ExternalRefType::RiskAssessment))
+                || doc.creators.iter().any(|c| {
+                    // Some SBOMs encode the methodology in the creator comment
+                    c.creator.name.to_lowercase().contains("risk assessment")
+                });
             let sidecar_has_ref = self
                 .sidecar
                 .as_ref()
@@ -609,9 +682,13 @@ impl ComplianceChecker {
                     rule_id: "SBOM-CRA-ART-13-2",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
         }
@@ -624,17 +701,14 @@ impl ComplianceChecker {
         // Obligations apply from 11 September 2026; before that, missing
         // channels surface as Info ("prepare ahead"); after that, Warning.
         if self.level.is_cra() {
-            self.check_article_14_readiness_at(self.now(), violations);
+            self.check_article_14_readiness_at(ev.as_of(), violations);
         }
 
         // B6: Art. 13(8) / Annex II (7) — Component lifecycle / EOL detection
         // If EOL enrichment data is present, warn about EOL components
-        let eol_count = package_components(sbom)
-            .filter(|c| {
-                c.eol
-                    .as_ref()
-                    .is_some_and(|e| e.status == crate::model::EolStatus::EndOfLife)
-            })
+        let eol_count = ctx
+            .package_components()
+            .filter(|c| c.eol_status() == Some(crate::model::EolStatus::EndOfLife))
             .count();
         if eol_count > 0 {
             let severity = if self.has_explicit_product_class() {
@@ -654,18 +728,19 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-ART-13-8-EOL",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
-        let approaching_eol_count = package_components(sbom)
-            .filter(|c| {
-                c.eol
-                    .as_ref()
-                    .is_some_and(|e| e.status == crate::model::EolStatus::ApproachingEol)
-            })
+        let approaching_eol_count = ctx
+            .package_components()
+            .filter(|c| c.eol_status() == Some(crate::model::EolStatus::ApproachingEol))
             .count();
         if approaching_eol_count > 0 {
             violations.push(Violation {
@@ -679,26 +754,24 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-LIFECYCLE-APPROACHING-EOL",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
-        // SPDX 3.0 profile conformance checks (Phase 6)
-        if sbom.document.format == crate::model::SbomFormat::Spdx
-            && sbom.document.spec_version.starts_with("3.")
-        {
+        // SPDX 3.0 profile conformance checks (Phase 6), for an SPDX
+        // document whose spec version, as written, starts with "3.".
+        if doc.spdx3_by_prefix {
             // Check if Security profile is declared when vulnerabilities are present
-            let has_vulns = sbom
-                .components
-                .values()
-                .any(|c| !c.vulnerabilities.is_empty());
-            let has_security_profile = sbom
-                .document
-                .distribution_classification
-                .as_ref()
-                .is_some_and(|p| p.to_lowercase().contains("security"));
+            let has_vulns = !ev.vulnerabilities().is_empty();
+            // The declared profiles (`DocumentMetadata::profile_conformance`;
+            // until v0.4.0 read from the distribution classification).
+            let has_security_profile = doc.security_profile_declared;
 
             if has_vulns && !has_security_profile {
                 violations.push(Violation {
@@ -713,25 +786,19 @@ impl ComplianceChecker {
                     rule_id: "SBOM-CRA-VULN-METADATA-PROFILE",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
 
             // Check if SimpleLicensing profile is declared when licenses are tracked
-            let has_licenses = sbom
-                .components
-                .values()
-                .any(|c| !c.licenses.declared.is_empty() || c.licenses.concluded.is_some());
-            let has_licensing_profile = sbom
-                .document
-                .distribution_classification
-                .as_ref()
-                .is_some_and(|p| {
-                    p.to_lowercase().contains("simplelicensing")
-                        || p.to_lowercase().contains("licensing")
-                });
+            let has_licenses = ev.components().any(|c| c.license_present());
+            let has_licensing_profile = doc.licensing_profile_declared;
 
             if has_licenses && !has_licensing_profile {
                 violations.push(Violation {
@@ -746,19 +813,28 @@ impl ComplianceChecker {
                     rule_id: "SBOM-CRA-ART-13-5-PROFILE",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
         }
 
         // CRA-P3.2: Class-conditional EUCC and Module-attestation references
         // (only fire when the operator pinned a product class — preserves
-        // pre-P3.2 behavior for callers that didn't opt in).
+        // pre-P3.2 behavior for callers that didn't opt in). Unpinned, the
+        // result says the two checks did not run.
         if self.has_explicit_product_class() {
-            self.check_class_eucc_reference(sbom, violations);
-            self.check_class_module_attestation(sbom, violations);
+            self.check_class_eucc_reference(ctx, violations);
+            self.check_class_module_attestation(ctx, violations);
+        } else {
+            for rule_id in ["SBOM-CRA-ANNEX-IV", "SBOM-CRA-ANNEX-VIII"] {
+                not_evaluated.push(rule_id, NO_PRODUCT_CLASS);
+            }
         }
 
         // CRA-P5.5: prEN 40000-1-2/1-4 controls-assertion sanity checks.
@@ -794,9 +870,13 @@ impl ComplianceChecker {
                     rule_id: "SBOM-CRA-ANNEX-I-CONTROLS",
                     component_id: None,
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: Some(id.clone()),
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
         }
@@ -808,7 +888,7 @@ impl ComplianceChecker {
     /// if missing (Annex IV mandates EUCC). Lower classes: skipped.
     pub(crate) fn check_class_eucc_reference(
         &self,
-        sbom: &NormalizedSbom,
+        ctx: &ComplianceContext<'_, '_>,
         violations: &mut Vec<Violation>,
     ) {
         let Some(severity) = self.class_severity(ClassCheck::EuccReference) else {
@@ -820,40 +900,32 @@ impl ComplianceChecker {
         let sidecar_has_eucc = self
             .sidecar
             .as_ref()
-            .is_some_and(|s| s.has_live_eucc_evidence_at(self.now()));
+            .is_some_and(|s| s.has_live_eucc_evidence_at(ctx.ev.as_of()));
         // Fresh, fully-resolved CDXA attestation of a CRA-classified
         // standard naming EUCC/Common Criteria satisfies at Structural/
         // SignaturePresent level; sidecar fields and URL-substring refs
         // remain valid SelfDeclared fallbacks.
-        let ctx = ComplianceContext::new(self, sbom);
         let cdxa_eucc_attested = ctx
-            .evidence_for(AttestationRuleFamily::Cra)
-            .iter()
+            .ev
+            .supported_requirements(AttestationRuleFamily::Cra)
             .any(|s| standard_references_eucc(s.standard));
+        // A reference counts on the described product only: a
+        // dependency's own EUCC certificate does not cover the product.
+        // The URL keywords are the ones SBOM-EUCC-CERTREF and the
+        // conformity summary read (`is_eucc_reference`).
         let has_eucc_ref = sidecar_has_eucc
             || cdxa_eucc_attested
-            || sbom.components.values().any(|comp| {
-                comp.external_refs.iter().any(|r| {
-                    let url_lower = r.url.to_lowercase();
-                    matches!(
-                        r.ref_type,
-                        crate::model::ExternalRefType::Certification
-                            | crate::model::ExternalRefType::Attestation
-                    ) && (url_lower.contains("eucc")
-                        || url_lower.contains("common-criteria")
-                        || url_lower.contains("commoncriteria"))
-                })
-            });
+            || ctx.ev.manufacturer().reference(is_eucc_reference);
         if !has_eucc_ref {
             let mut message = format!(
                 "[CRA Annex IV / EUCC] Product class {} requires (or strongly recommends) a reference to a Common Criteria / EUCC certificate or Target of Evaluation",
                 self.effective_product_class().label()
             );
             if let Some(note) = cdxa_note(
-                ctx.attestation_declarations(),
+                ctx.ev.attestation_declarations(),
                 AttestationRuleFamily::Cra,
                 &|s, _| standard_references_eucc(s),
-                self.now(),
+                ctx.ev.as_of(),
                 "an EUCC / Common Criteria certification",
             ) {
                 message.push_str(&note);
@@ -868,9 +940,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-ANNEX-IV",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }
@@ -888,7 +964,7 @@ impl ComplianceChecker {
     /// Severity scales with class.
     pub(crate) fn check_class_module_attestation(
         &self,
-        sbom: &NormalizedSbom,
+        ctx: &ComplianceContext<'_, '_>,
         violations: &mut Vec<Violation>,
     ) {
         use crate::model::ConformityRoute as R;
@@ -899,11 +975,12 @@ impl ComplianceChecker {
         if matches!(route, R::ModuleA) {
             return; // Module A self-assessment doesn't require external attestation
         }
-        let has_certificate = sbom.components.values().any(|comp| {
-            comp.external_refs
-                .iter()
-                .any(|r| matches!(r.ref_type, crate::model::ExternalRefType::Certification))
-        });
+        // The product's certificate: a dependency's own certification
+        // reference does not cover the product.
+        let has_certificate = ctx
+            .ev
+            .manufacturer()
+            .reference(|r| matches!(r.ref_type, crate::model::ExternalRefType::Certification));
         if !has_certificate {
             violations.push(Violation {
                 severity,
@@ -921,9 +998,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-ANNEX-VIII",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }
@@ -971,8 +1052,11 @@ impl ComplianceChecker {
 
         let sidecar = self.sidecar.as_ref();
 
-        let psirt_present = sidecar.is_some_and(|s| s.psirt_url.is_some());
-        if !psirt_present {
+        // A channel counts only when it reaches someone (`known_contact`):
+        // a placeholder such as TBD or an example.com address is no channel,
+        // and the finding names it (`unreachable_sidecar_note`).
+        let psirt = sidecar.and_then(|s| s.psirt_url.as_deref());
+        if !known_contact(psirt) {
             let prefix = if art_14_active {
                 "[CRA Art. 14] PSIRT URL missing — required to handle external vulnerability reports"
             } else {
@@ -981,21 +1065,25 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: post_deadline_severity,
                 category: ViolationCategory::SecurityInfo,
-                message: prefix.to_string(),
+                message: format!("{prefix}{}", unreachable_sidecar_note(psirt)),
                 element: None,
                 requirement: "CRA Art. 14: PSIRT contact for external vulnerability reports"
                     .to_string(),
                 rule_id: "SBOM-CRA-ART-14-PSIRT",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
-        let ew_present = sidecar.is_some_and(|s| s.early_warning_contact.is_some());
-        if !ew_present {
+        let early_warning = sidecar.and_then(|s| s.early_warning_contact.as_deref());
+        if !known_contact(early_warning) {
             let msg = if art_14_active {
                 "[CRA Art. 14(2)(a)] 24-hour early-warning channel missing — required when an actively-exploited vulnerability is identified"
             } else {
@@ -1004,20 +1092,24 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: post_deadline_severity,
                 category: ViolationCategory::SecurityInfo,
-                message: msg.to_string(),
+                message: format!("{msg}{}", unreachable_sidecar_note(early_warning)),
                 element: None,
                 requirement: "CRA Art. 14(2)(a): 24-hour early-warning channel".to_string(),
                 rule_id: "SBOM-CRA-ART-14-EARLY-WARNING",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
-        let ir_present = sidecar.is_some_and(|s| s.incident_report_contact.is_some());
-        if !ir_present {
+        let incident_report = sidecar.and_then(|s| s.incident_report_contact.as_deref());
+        if !known_contact(incident_report) {
             let msg = if art_14_active {
                 "[CRA Art. 14(2)(b) / 14(4)(b)] 72-hour notification channel missing — required for actively exploited vulnerabilities and severe incidents"
             } else {
@@ -1026,15 +1118,19 @@ impl ComplianceChecker {
             violations.push(Violation {
                 severity: post_deadline_severity,
                 category: ViolationCategory::SecurityInfo,
-                message: msg.to_string(),
+                message: format!("{msg}{}", unreachable_sidecar_note(incident_report)),
                 element: None,
                 requirement: "CRA Art. 14(2)(b): 72-hour notification channel".to_string(),
                 rule_id: "SBOM-CRA-ART-14-NOTIFICATION",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
@@ -1069,9 +1165,13 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-ART-14-ENISA",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
     }
@@ -1081,13 +1181,14 @@ impl ComplianceChecker {
     /// Implements CRA prEN 40000-1-3 `[PRE-8-RQ-02]`: hardware components must
     /// carry producer, component name, unique identifier, and firmware version
     /// where applicable. Operates on components classified as
-    /// `Device`, `Firmware`, or `DeviceDriver`. The check is silent when the
-    /// SBOM contains no hardware components, so software-only SBOMs are
-    /// unaffected.
+    /// `Device`, `Firmware`, or `DeviceDriver`. A software-only SBOM gets no
+    /// hardware finding, and the result lists the four checks as not
+    /// evaluated.
     pub(crate) fn check_hardware_components(
         &self,
-        sbom: &NormalizedSbom,
+        ctx: &ComplianceContext<'_, '_>,
         violations: &mut Vec<Violation>,
+        not_evaluated: &mut NotEvaluated,
     ) {
         use crate::model::ComponentType;
 
@@ -1099,34 +1200,41 @@ impl ComplianceChecker {
         };
 
         // All components: the filter selects hardware kinds by type.
-        let hardware_components: Vec<_> = sbom
-            .components
-            .values()
-            .filter(|c| is_hardware_kind(&c.component_type))
+        let hardware_components: Vec<_> = ctx
+            .ev
+            .components()
+            .filter(|c| is_hardware_kind(c.component_type()))
             .collect();
 
         if hardware_components.is_empty() {
+            for rule_id in HARDWARE_RULE_IDS {
+                not_evaluated.push(rule_id, NO_HARDWARE);
+            }
             return;
         }
 
         for comp in hardware_components {
             // 1) Producer (supplier or author) must be set
-            if !has_known_producer(comp) {
+            if !comp.producer().is_known() {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::SupplierInfo,
                     message: format!(
                         "[CRA prEN 40000-1-3 [PRE-8-RQ-02]] Hardware component '{}' missing producer (supplier or author)",
-                        comp.name
+                        comp.name()
                     ),
-                    element: Some(comp.name.clone()),
+                    element: Some(comp.name().to_string()),
                     requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware producer".to_string(),
                     rule_id: "SBOM-CRA-PRE-8-RQ-02-PRODUCER",
-                    component_id: Some(comp.canonical_id.value().to_string()),
+                    component_id: Some(comp.canonical_id().value().to_string()),
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: comp.producer().observed.and_then(observed),
                 });
             }
 
@@ -1135,69 +1243,78 @@ impl ComplianceChecker {
             // the canonical id's source: a component re-keyed after a
             // canonical-id collision has a format-specific canonical id and
             // still has its purl.
-            if !comp.identifiers.has_cra_identifier() {
+            if !comp.ids().any() {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::ComponentIdentification,
                     message: format!(
                         "[CRA prEN 40000-1-3 [PRE-8-RQ-02]] Hardware component '{}' missing unique identifier (PURL/CPE/SWHID/SWID)",
-                        comp.name
+                        comp.name()
                     ),
-                    element: Some(comp.name.clone()),
+                    element: Some(comp.name().to_string()),
                     requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Hardware identifier".to_string(),
                     rule_id: "SBOM-CRA-PRE-8-RQ-02-IDENTIFIER",
-                    component_id: Some(comp.canonical_id.value().to_string()),
+                    component_id: Some(comp.canonical_id().value().to_string()),
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
 
-            // 3) Firmware components must carry a version (the firmware version itself).
-            if matches!(comp.component_type, ComponentType::Firmware) && comp.version.is_none() {
+            // 3) Firmware components must carry a version (the firmware
+            // version itself). Any value counts here, unlike for
+            // SBOM-CRA-COMPONENT-VERSION.
+            if matches!(comp.component_type(), ComponentType::Firmware) && !comp.version_present() {
                 violations.push(Violation {
                     severity: ViolationSeverity::Error,
                     category: ViolationCategory::ComponentIdentification,
                     message: format!(
                         "[CRA prEN 40000-1-3 [PRE-8-RQ-02]] Firmware component '{}' missing firmware version",
-                        comp.name
+                        comp.name()
                     ),
-                    element: Some(comp.name.clone()),
+                    element: Some(comp.name().to_string()),
                     requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Firmware version".to_string(),
                     rule_id: "SBOM-CRA-PRE-8-RQ-02-FIRMWARE-VERSION",
-                    component_id: Some(comp.canonical_id.value().to_string()),
+                    component_id: Some(comp.canonical_id().value().to_string()),
                     counts: None,
-                    standard_refs: Vec::new(),
+                    standard_refs: Cow::Borrowed(&[]),
                     remediation: None,
                     finding_detail: None,
+                    severity_override: None,
+                    deadline: None,
+                    field: None,
+                    observed: None,
                 });
             }
 
             // 4) Devices: should declare a version, OR depend on a Firmware component.
-            if matches!(comp.component_type, ComponentType::Device) && comp.version.is_none() {
-                let has_firmware_dep = sbom.edges.iter().any(|e| {
-                    e.from == comp.canonical_id
-                        && sbom.components.get(&e.to).is_some_and(|child| {
-                            matches!(child.component_type, ComponentType::Firmware)
-                        })
-                });
+            if matches!(comp.component_type(), ComponentType::Device) && !comp.version_present() {
+                let has_firmware_dep = comp.depends_on_firmware();
                 if !has_firmware_dep {
                     violations.push(Violation {
                         severity: ViolationSeverity::Warning,
                         category: ViolationCategory::ComponentIdentification,
                         message: format!(
                             "[CRA prEN 40000-1-3 [PRE-8-RQ-02]] Device component '{}' has no version and no associated firmware component",
-                            comp.name
+                            comp.name()
                         ),
-                        element: Some(comp.name.clone()),
+                        element: Some(comp.name().to_string()),
                         requirement: "CRA prEN 40000-1-3 [PRE-8-RQ-02]: Device firmware association".to_string(),
                         rule_id: "SBOM-CRA-PRE-8-RQ-02-DEVICE-FIRMWARE",
-                        component_id: Some(comp.canonical_id.value().to_string()),
+                        component_id: Some(comp.canonical_id().value().to_string()),
                         counts: None,
-                        standard_refs: Vec::new(),
+                        standard_refs: Cow::Borrowed(&[]),
                         remediation: None,
                         finding_detail: None,
+                        severity_override: None,
+                        deadline: None,
+                        field: None,
+                        observed: None,
                     });
                 }
             }
@@ -1224,39 +1341,40 @@ impl ComplianceChecker {
     //
     // The check below runs the must-have subset and skips the rest.
 
-    pub(crate) fn check_cra_oss_steward(
-        &self,
-        sbom: &NormalizedSbom,
-        violations: &mut Vec<Violation>,
-    ) {
+    pub(crate) fn check_cra_oss_steward(&self, ctx: &ComplianceContext, findings: &mut Findings) {
+        let doc = ctx.ev.document();
+        let Findings {
+            violations,
+            not_evaluated,
+            ..
+        } = findings;
+
         // -- Must-haves (Article 24 floor) ----------------------------------
 
         // SBOM completeness — basic structural requirements (re-uses the
         // standard component check; manufacturer-only sub-checks are gated
         // off because we don't run check_cra_gaps for stewards).
-        self.check_components(sbom, violations);
-        self.check_dependencies(sbom, violations);
+        self.check_components(ctx, violations);
+        self.check_dependencies(ctx, violations);
 
         // Vulnerability-handling process (Annex I Part II): require either
         // a vulnerability-disclosure URL on the document or a SecurityContact
-        // / Advisories external reference on at least one component, OR
-        // sidecar-supplied PSIRT URL.
-        let has_vuln_handling = sbom.document.vulnerability_disclosure_url.is_some()
-            || sbom.document.security_contact.is_some()
-            || manufacturer_scope_components(sbom).iter().any(|c| {
-                c.external_refs.iter().any(|r| {
-                    matches!(
-                        r.ref_type,
-                        crate::model::ExternalRefType::SecurityContact
-                            | crate::model::ExternalRefType::Advisories
-                            | crate::model::ExternalRefType::VulnerabilityAssertion
-                    )
-                })
+        // / Advisories / VulnerabilityAssertion external reference on the
+        // described product, OR sidecar-supplied PSIRT URL. A contact
+        // counts only when it reaches someone (`known_contact`); a VDR
+        // reference is a document, not a contact.
+        let has_vuln_handling = doc.vulnerability_disclosure_url_reaches
+            || doc.security_contact_reaches
+            || ctx.ev.manufacturer().reference(|r| match r.ref_type {
+                crate::model::ExternalRefType::SecurityContact
+                | crate::model::ExternalRefType::Advisories => is_contact_reference(r),
+                crate::model::ExternalRefType::VulnerabilityAssertion => true,
+                _ => false,
             })
-            || self
-                .sidecar
-                .as_ref()
-                .is_some_and(|s| s.psirt_url.is_some() || s.vulnerability_disclosure_url.is_some());
+            || self.sidecar.as_ref().is_some_and(|s| {
+                known_contact(s.psirt_url.as_deref())
+                    || known_contact(s.vulnerability_disclosure_url.as_deref())
+            });
         if !has_vuln_handling {
             violations.push(Violation {
                 severity: ViolationSeverity::Error,
@@ -1268,23 +1386,26 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-ART-24",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // Coordinated vulnerability disclosure policy (Annex I Part II (5)):
-        // require either an Advisories reference or sidecar-supplied
-        // coordinated_disclosure_policy_url.
-        let has_cvd_policy = manufacturer_scope_components(sbom).iter().any(|c| {
-            c.external_refs
-                .iter()
-                .any(|r| matches!(r.ref_type, crate::model::ExternalRefType::Advisories))
+        // require either an Advisories reference on the described product
+        // or sidecar-supplied coordinated_disclosure_policy_url.
+        let has_cvd_policy = ctx.ev.manufacturer().reference(|r| {
+            matches!(r.ref_type, crate::model::ExternalRefType::Advisories)
+                && is_contact_reference(r)
         }) || self
             .sidecar
             .as_ref()
-            .is_some_and(|s| s.coordinated_disclosure_policy_url.is_some());
+            .is_some_and(|s| known_contact(s.coordinated_disclosure_policy_url.as_deref()));
         if !has_cvd_policy {
             violations.push(Violation {
                 severity: ViolationSeverity::Warning,
@@ -1296,14 +1417,18 @@ impl ComplianceChecker {
                 rule_id: "SBOM-CRA-CVD-POLICY",
                 component_id: None,
                 counts: None,
-                standard_refs: Vec::new(),
+                standard_refs: Cow::Borrowed(&[]),
                 remediation: None,
                 finding_detail: None,
+                severity_override: None,
+                deadline: None,
+                field: None,
+                observed: None,
             });
         }
 
         // Format-specific (CycloneDX/SPDX integrity, e.g., bomFormat field)
-        self.check_format_specific(sbom, violations);
+        self.check_format_specific(ctx, violations, not_evaluated);
 
         // -- Explicitly NOT enforced ----------------------------------------
         // - Manufacturer email contact (Art. 13(16))
